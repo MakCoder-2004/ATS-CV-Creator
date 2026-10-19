@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { appearanceSchema, settingsSchema, type Appearance, type WorkbenchAPI } from '../shared/appearance'
-import { evidenceRevisionSchema, profileMutationResultSchema, profileSnapshotSchema, uuidSchema, type ContactInput, type SkillInput } from '../shared/profile'
+import { evidenceRevisionSchema, profileEntryInputSchema, profileMutationResultSchema, profileSnapshotSchema, uuidSchema, type ContactInput, type ProfileEntryInput, type SkillInput } from '../shared/profile'
 
 const api: WorkbenchAPI = Object.freeze({
   async getSettings() {
@@ -23,6 +23,12 @@ const api: WorkbenchAPI = Object.freeze({
   },
   async deleteSkill(id: string) {
     return profileMutationResultSchema.parse(await ipcRenderer.invoke('profile:skill:delete', id))
+  },
+  async saveProfileEntry(input: ProfileEntryInput & { id?: string }) {
+    return profileMutationResultSchema.parse(await ipcRenderer.invoke('profile:entry:save', profileEntryInputSchema.extend({ id: uuidSchema.optional() }).parse(input)))
+  },
+  async deleteProfileEntry(id: string) {
+    return profileMutationResultSchema.parse(await ipcRenderer.invoke('profile:entry:delete', uuidSchema.parse(id)))
   },
   async getEvidenceHistory(id: string) {
     const revisions = await ipcRenderer.invoke('profile:history', uuidSchema.parse(id))

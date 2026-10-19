@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import type { ContactInput, EvidenceRevision, ProfileMutationResult, ProfileSnapshot, SkillInput } from './profile'
+import type { ContactInput, EvidenceRevision, ProfileEntryInput, ProfileMutationResult, ProfileSnapshot, SkillInput } from './profile'
 
 export const appearanceSchema = z.enum(['light', 'dark'])
 export type Appearance = z.infer<typeof appearanceSchema>
@@ -15,5 +15,7 @@ export interface WorkbenchAPI {
   deleteContact(id: string): Promise<ProfileMutationResult>
   saveSkill(input: SkillInput & { id?: string }): Promise<ProfileMutationResult>
   deleteSkill(id: string): Promise<ProfileMutationResult>
+  saveProfileEntry(input: ProfileEntryInput & { id?: string }): Promise<ProfileMutationResult>
+  deleteProfileEntry(id: string): Promise<ProfileMutationResult>
   getEvidenceHistory(id: string): Promise<EvidenceRevision[]>
 }

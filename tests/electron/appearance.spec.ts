@@ -14,7 +14,7 @@ test('workbench opens and remembers a keyboard-accessible appearance choice', as
     await expect(firstPage.locator('[data-ui-ready="true"]')).toBeVisible()
     await expect(firstPage.getByRole('heading', { name: 'Start with your experience' })).toBeVisible()
     await expect(firstPage.getByRole('button', { name: 'Use light mode' })).toHaveAttribute('aria-pressed', 'true')
-    expect(await firstPage.evaluate(() => Object.keys(window.workbench).sort())).toEqual(['deleteContact', 'deleteSkill', 'getEvidenceHistory', 'getProfile', 'getSettings', 'saveContact', 'saveSkill', 'setAppearance'])
+    expect(await firstPage.evaluate(() => Object.keys(window.workbench).sort())).toEqual(['deleteContact', 'deleteProfileEntry', 'deleteSkill', 'getEvidenceHistory', 'getProfile', 'getSettings', 'saveContact', 'saveProfileEntry', 'saveSkill', 'setAppearance'])
     expect(await firstPage.evaluate(() => typeof (window as Window & { require?: unknown }).require)).toBe('undefined')
     await firstPage.setViewportSize({ width: 680, height: 700 })
     await expect(firstPage.getByRole('button', { name: 'Use dark mode' })).toBeVisible()
