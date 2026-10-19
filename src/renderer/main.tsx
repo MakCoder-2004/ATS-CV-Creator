@@ -2,6 +2,7 @@ import React, { FormEvent, useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { BriefcaseBusiness, FileText, LayoutPanelLeft, Moon, Settings2, Sun, UserRound } from 'lucide-react'
 import type { Appearance } from '../shared/appearance'
+import { geminiModels, type GeminiModel, type GeminiSettings } from '../shared/gemini-settings'
 import type { ContactInput, ProfileSnapshot, SkillInput, SkillRecord } from '../shared/profile'
 import './style.css'
 
@@ -184,13 +185,30 @@ function App() {
   const [page, setPage] = useState<Page>('Tailor CV')
   const [error, setError] = useState('')
   const [ready, setReady] = useState(false)
+  const [gemini, setGemini] = useState<GeminiSettings | null>(null)
+  const [apiKey, setApiKey] = useState('')
+  const [geminiMessage, setGeminiMessage] = useState('')
+  const [geminiError, setGeminiError] = useState('')
   useEffect(() => {
-    window.workbench.getSettings().then(settings => { setAppearance(settings.appearance); setReady(true) }).catch(() => setError('Could not open workspace settings. Restart the app to retry.'))
+    window.workbench.getSettings().then(settings => { setAppearance(settings.appearance); setGemini(settings.gemini); setReady(true) }).catch(() => setError('Could not open workspace settings. Restart the app to retry.'))
   }, [])
   useEffect(() => { document.documentElement.dataset.appearance = appearance }, [appearance])
   async function changeAppearance(value: Appearance) {
     try { const saved = await window.workbench.setAppearance(value); setAppearance(saved.appearance); setError('') }
     catch { setError('Appearance could not be saved. Try again.') }
+  }
+  async function saveGeminiModel(value: GeminiModel) {
+    try { const saved = await window.workbench.setGeminiModel(value); setGemini(saved.gemini); setGeminiError(''); setGeminiMessage('Model preference saved. No provider request was sent.') }
+    catch { setGeminiError('Model preference could not be saved. Choose a supported Gemini model and try again.'); setGeminiMessage('') }
+  }
+  async function saveGeminiKey(event: FormEvent) {
+    event.preventDefault(); setGeminiMessage(''); setGeminiError('')
+    try { const saved = await window.workbench.saveGeminiApiKey(apiKey); setGemini(saved.gemini); setApiKey(''); setGeminiMessage('API key saved securely. No provider request was sent.') }
+    catch (error) { setGeminiError(error instanceof Error ? error.message : 'API key was not saved. Check secure storage and try again.') }
+  }
+  async function removeGeminiKey() {
+    try { const saved = await window.workbench.removeGeminiApiKey(); setGemini(saved.gemini); setApiKey(''); setGeminiError(''); setGeminiMessage('Saved API key removed. No provider request was sent.') }
+    catch { setGeminiError('The saved API key could not be removed. Try again.'); setGeminiMessage('') }
   }
   if (!ready && !error) return <div className="loading" role="status">Opening your workspace…</div>
   return <div className="workbench" data-ui-ready={ready ? 'true' : undefined}>
@@ -206,7 +224,17 @@ function App() {
       {error && <p role="alert" className="error">{error}</p>}
       <main id="content" tabIndex={-1}>
         <div className="title"><span className="context">Personal workspace</span><h1>{page === 'Tailor CV' ? 'Start with your experience' : page}</h1><p>{page === 'Tailor CV' ? 'Build your profile, then tailor a CV to a saved posting.' : page === 'Saved jobs' ? 'Your job postings and their drafts will live here.' : page === 'My profile' ? 'Keep the career facts that support your CV in one place.' : 'Choose how your workspace looks.'}</p></div>
-        {page === 'Tailor CV' ? <div className="columns"><section className="document-area" aria-label="CV document"><div className="document-toolbar"><span>CV document</span><span>Not started</span></div><div className="paper-wrap"><article className="paper"><div className="paper-header"><strong>Your name</strong><span>Your CV begins here</span></div><div className="paper-rule" /><h2>Education</h2><div className="paper-line" /><h2>Experience</h2><div className="paper-line" /><h2>Projects</h2><div className="paper-line" /><h2>Skills</h2><div className="paper-line" /><h2>Certificates</h2><div className="paper-line" /><p className="paper-hint">Add your career facts in My profile.</p></article></div></section><aside className="inspector" aria-label="Evidence and coverage"><div className="inspector-tabs"><span>Evidence</span><span>Coverage</span></div><div className="inspector-content"><h2>Nothing to inspect yet</h2><p>Once a draft is generated, select a paragraph to see its supporting profile evidence here.</p><div className="inspector-divider" /><h2>Qualification gaps</h2><p>Job requirements without supporting experience will appear as advisory gaps, not invented claims.</p></div></aside></div> : page === 'My profile' ? <ProfileEditor /> : <div className="empty-panel"><h2>{page === 'Settings' ? 'Appearance' : 'No saved postings'}</h2><p>{page === 'Settings' ? 'Use the Light and Dark controls in the header. Your choice is saved locally and restored when you reopen the app.' : 'Saving postings is not available in this first installable slice. Your workspace is ready for the next steps.'}</p></div>}
+        {page === 'Tailor CV' ? <div className="columns"><section className="document-area" aria-label="CV document"><div className="document-toolbar"><span>CV document</span><span>Not started</span></div><div className="paper-wrap"><article className="paper"><div className="paper-header"><strong>Your name</strong><span>Your CV begins here</span></div><div className="paper-rule" /><h2>Education</h2><div className="paper-line" /><h2>Experience</h2><div className="paper-line" /><h2>Projects</h2><div className="paper-line" /><h2>Skills</h2><div className="paper-line" /><h2>Certificates</h2><div className="paper-line" /><p className="paper-hint">Add your career facts in My profile.</p></article></div></section><aside className="inspector" aria-label="Evidence and coverage"><div className="inspector-tabs"><span>Evidence</span><span>Coverage</span></div><div className="inspector-content"><h2>Nothing to inspect yet</h2><p>Once a draft is generated, select a paragraph to see its supporting profile evidence here.</p><div className="inspector-divider" /><h2>Qualification gaps</h2><p>Job requirements without supporting experience will appear as advisory gaps, not invented claims.</p></div></aside></div> : page === 'My profile' ? <ProfileEditor /> : <div className="empty-panel"><h2>{page === 'Settings' ? 'Gemini and privacy' : 'No saved postings'}</h2>{page === 'Settings' ? <div className="settings-panel">
+          <p>Choose the Gemini model for future operations. Saving settings never sends a provider request.</p>
+          <label>Gemini model<select aria-label="Gemini model" value={gemini?.model ?? 'gemini-3.6-flash'} onChange={event => void saveGeminiModel(event.target.value as GeminiModel)}>{geminiModels.map(model => <option key={model} value={model}>{model}</option>)}</select></label>
+          <section className="credential-panel" aria-labelledby="credential-heading"><h3 id="credential-heading">Gemini API key</h3>
+            {gemini?.credential.configured ? <p role="status">An encrypted API key is saved on this device. Its value is never shown here.</p> : <p>No API key is saved.</p>}
+            {!gemini?.credential.secureStorageAvailable && <p className="privacy-warning" role="alert">Secure storage is unavailable. A key cannot be saved; CV Tailor will not store it in plaintext.</p>}
+            <form className="profile-form" onSubmit={event => void saveGeminiKey(event)}><label>API key<input aria-label="Gemini API key" type="password" autoComplete="new-password" value={apiKey} onChange={event => setApiKey(event.target.value)} disabled={!gemini?.credential.secureStorageAvailable} /></label><div className="form-actions"><button className="primary-button" type="submit" disabled={!gemini?.credential.secureStorageAvailable || !apiKey.trim()}>Save API key</button>{gemini?.credential.configured && <button className="secondary-button" type="button" onClick={() => void removeGeminiKey()}>Remove saved API key</button>}</div></form>
+          </section>
+          <p className="privacy-warning">Privacy limitation: Gemini's free tier is a cloud service and Google may use submitted data under its free-tier terms, which restrict personal, sensitive, or confidential information. Local key storage does not make generation private or anonymous and does not establish compliance. Review the outgoing data and provider terms before any future generation.</p>
+          {geminiError && <p className="profile-message error" role="alert">{geminiError}</p>}{geminiMessage && <p className="profile-message success" role="status">{geminiMessage}</p>}
+        </div> : <p>Saving postings is not available in this first installable slice. Your workspace is ready for the next steps.</p>}</div>}
       </main>
     </div>
   </div>
