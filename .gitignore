@@ -1,0 +1,14 @@
+# Local agent configuration and skill inventory
+/.agents/
+/.claude/
+/skills-lock.json
+
+# Personal CV documents and generated exports
+*.pdf
+*.doc
+*.docx
+
+# Local environment
+.env
+.env.*
+!.env.example
