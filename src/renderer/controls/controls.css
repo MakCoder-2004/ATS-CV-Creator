@@ -23,20 +23,22 @@
 .field-select-check { position: absolute; right: 10px; display: flex; color: var(--link); }
 .field-select-scroll { display: flex; justify-content: center; width: 100%; height: 22px; color: var(--muted); background: var(--surface); border: 0; }
 .month-year-input-wrap { position: relative; }
-.month-year-trigger { padding-right: 40px; }
+.month-year-trigger { padding-right: 16px; }
+.month-year-input-wrap:has(.month-year-clear) .month-year-trigger { padding-right: 54px; }
 .month-year-trigger > svg { color: var(--muted); flex: 0 0 auto; }
 .month-year-placeholder { color: var(--muted); }
-.month-year-clear { position: absolute; top: 50%; right: 8px; transform: translateY(-50%); display: grid; place-items: center; width: 28px; height: 28px; border: 0; border-radius: 5px; color: var(--muted); background: transparent; }
+.month-year-clear { position: absolute; top: 50%; right: 6px; transform: translateY(-50%); display: grid; place-items: center; width: 36px; height: 36px; border: 0; border-radius: 5px; color: var(--muted); background: transparent; }
 .month-year-clear:hover { color: var(--ink); background: var(--raised); }
-.month-year-popover { width: 280px; padding: 12px; }
-.month-year-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 34px; margin-bottom: 8px; }
+.form-grid > .field-control:has(.month-year-trigger[data-state="open"]) { padding-bottom: 218px; }
+.month-year-popover { width: 280px; padding: 10px; }
+.month-year-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 30px; margin-bottom: 6px; }
 .month-year-heading button, .month-year-title { border: 0; color: var(--ink); background: transparent; }
 .month-year-nav { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 5px; }
 .month-year-nav:hover, .month-year-title:hover { background: var(--raised); }
 .month-year-nav:disabled { opacity: .4; cursor: not-allowed; }
 .month-year-title { display: flex; align-items: center; gap: 7px; border-radius: 5px; padding: 5px 8px; font-weight: 700; }
-.month-year-months { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
-.month-year-months button, .month-year-years button { min-height: 38px; border: 0; border-radius: 5px; color: var(--ink); background: transparent; }
+.month-year-months { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
+.month-year-months button, .month-year-years button { min-height: 32px; border: 0; border-radius: 5px; color: var(--ink); background: transparent; }
 .month-year-months button:hover, .month-year-years button:hover { color: var(--link); background: var(--raised); }
 .month-year-months button.is-selected, .month-year-years button[aria-selected=true] { color: white; background: var(--blue); }
 .month-year-years-heading { display: flex; align-items: center; justify-content: space-between; margin: 0 0 6px; color: var(--muted); font-size: 12px; }
@@ -46,7 +48,7 @@
 .month-year-years { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
 .month-year-range { padding: 14px 4px; color: var(--muted); font-size: 12px; text-align: center; }
 .month-year-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
-.month-year-this-year { width: 100%; min-height: 36px; margin-top: 7px; border: 0; border-top: 1px solid var(--line); color: var(--link); background: transparent; font: inherit; font-size: 12px; font-weight: 650; }
+.month-year-this-year { width: 100%; min-height: 32px; margin-top: 6px; border: 0; border-top: 1px solid var(--line); color: var(--link); background: transparent; font: inherit; font-size: 12px; font-weight: 650; }
 .month-year-this-year:hover { background: var(--raised); }
 @keyframes control-pop-in { from { opacity: 0; transform: translateY(-2px) scale(.99); } to { opacity: 1; transform: translateY(0) scale(1); } }
 @media (prefers-reduced-motion: reduce) { .field-select-content, .month-year-popover { animation: none; } }

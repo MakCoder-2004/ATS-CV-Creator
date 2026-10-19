@@ -18,7 +18,15 @@ test('workbench opens and remembers a keyboard-accessible appearance choice', as
     await expect(firstPage.getByRole('button', { name: 'Use light mode' })).toHaveAttribute('aria-pressed', 'true')
     expect(await firstPage.evaluate(() => Object.keys(window.workbench).sort())).toEqual(['deleteContact', 'deleteExperience', 'deleteProfileEntry', 'deleteProject', 'deleteSkill', 'getEvidenceHistory', 'getExperience', 'getProfile', 'getSettings', 'listJobs', 'openJob', 'removeGeminiApiKey', 'saveContact', 'saveExperience', 'saveGeminiApiKey', 'saveJob', 'saveProfileEntry', 'saveProject', 'saveSkill', 'setAppearance', 'setGeminiModel'])
     expect(await firstPage.evaluate(() => typeof (window as Window & { require?: unknown }).require)).toBe('undefined')
-    await firstPage.setViewportSize({ width: 680, height: 700 })
+    for (const [width, columns] of [[680, 4], [375, 2]]) {
+      await firstPage.setViewportSize({ width, height: 700 })
+      const nav = firstPage.getByRole('navigation', { name: 'Main navigation' })
+      const rows = await nav.locator('button').evaluateAll(buttons => buttons.map(button => Math.round(button.getBoundingClientRect().top)))
+      expect(new Set(rows).size).toBe(4 / columns)
+      expect(rows.slice(0, columns).every(top => top === rows[0])).toBe(true)
+      await expect(firstPage.getByRole('group', { name: 'Color appearance' })).toBeVisible()
+      expect(await firstPage.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width)
+    }
     await expect(firstPage.getByRole('button', { name: 'Use dark mode' })).toBeVisible()
     await firstPage.getByRole('button', { name: 'Use dark mode' }).focus()
     await firstPage.keyboard.press('Enter')
