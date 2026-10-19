@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { hashOutboundScope, type OutboundBundle } from '../shared/outbound-consent'
+import type { OutboundBundle } from '../shared/outbound-consent'
 
 interface ConsentRecord { id: string; runId: string; scopeHash: string; createdAt: string; revoked: boolean }
 export function createOutboundConsentEngine() {
@@ -20,7 +20,7 @@ export function createOutboundConsentEngine() {
       const runConsents = [...records.values()].filter(record => record.runId === runId)
       const consent = runConsents.find(record => !record.revoked)
       if (!consent) throw new Error(runConsents.length ? 'Consent was revoked for this run.' : 'No active consent exists for this run.')
-      if (consent.scopeHash !== bundle.scopeHash || hashOutboundScope(bundle.outgoing) !== bundle.scopeHash) throw new Error('Authorization scope is stale or has expanded.')
+      if (consent.scopeHash !== bundle.scopeHash || !bundle.verifyIntegrity()) throw new Error('Authorization scope is stale or has expanded.')
       if (bundle.containsRestoredIdentifier(payload)) throw new Error('Restored identifier is not authorized for outbound payloads.')
       const leaves: string[] = []
       const collect = (value: unknown) => { if (typeof value === 'string') leaves.push(value); else if (Array.isArray(value)) value.forEach(collect); else if (value && typeof value === 'object') Object.values(value as Record<string, unknown>).forEach(collect) }
@@ -32,7 +32,7 @@ export function createOutboundConsentEngine() {
       const runConsents = [...records.values()].filter(record => record.runId === runId)
       const consent = runConsents.find(record => !record.revoked)
       if (!consent) throw new Error(runConsents.length ? 'Consent was revoked for this run.' : 'No active consent exists for this run.')
-      if (consent.scopeHash !== bundle.scopeHash || intermediate.scopeHash !== bundle.scopeHash || hashOutboundScope(bundle.outgoing) !== bundle.scopeHash) throw new Error('Workflow intermediate scope is stale or expanded.')
+      if (consent.scopeHash !== bundle.scopeHash || intermediate.scopeHash !== bundle.scopeHash || !bundle.verifyIntegrity()) throw new Error('Workflow intermediate scope is stale or expanded.')
       if (bundle.containsRestoredIdentifier(intermediate.value)) throw new Error('Restored identifier is not authorized for outbound payloads.')
       return intermediate.value
     }

@@ -1,9 +1,9 @@
 import { createHash } from 'node:crypto'
 
 export interface ConsentSource {
-  job: { id: string; revision: number; title: string; company: string; description: string }
+  job: { id: string; revision: string | number; title: string; company: string; description: string }
   profile: {
-    revision: number
+    revision: string | number
     contact: { fullName: string; email?: string; phone?: string; location?: string; [key: string]: unknown } | null
     experience: Array<{ id: string; revision: number; kind?: string; title: string; organization: string; startDate?: string; endDate?: string; description: string; factualItems?: Array<{ id?: string; revision?: number; text: string }> }>
     projects: Array<{ id: string; revision: number; name: string; description: string; factualItems?: Array<{ id?: string; revision?: number; text: string }>; technologies?: Array<{ id?: string; revision?: number; text: string }>; links?: unknown[] }>
@@ -22,6 +22,7 @@ export interface OutboundBundle {
   readonly restoreIdentifiers: (text: string) => string
   readonly containsRestoredIdentifier: (value: unknown) => boolean
   readonly isAuthorizedText: (text: string) => boolean
+  readonly verifyIntegrity: () => boolean
 }
 
 function deepFreeze<T>(value: T): T {
@@ -71,6 +72,7 @@ export function prepareOutboundBundle(source: ConsentSource): OutboundBundle {
   }
   const model = { name: source.model.name, ...(source.model.temperature === undefined ? {} : { temperature: source.model.temperature }), ...(source.model.topP === undefined ? {} : { topP: source.model.topP }), ...(source.model.maxOutputTokens === undefined ? {} : { maxOutputTokens: source.model.maxOutputTokens }), ...(source.model.thinkingLevel === undefined ? {} : { thinkingLevel: source.model.thinkingLevel }) }
   const evidence = [...source.profile.experience, ...source.profile.projects, ...source.profile.skills, ...source.profile.education, ...(source.profile.certificates ?? [])]
+  const scope = { jobId: source.job.id, jobRevision: source.job.revision, profileRevision: source.profile.revision, evidenceRevisions: evidence.flatMap(item => [['id' in item ? item.id : undefined, item.revision], ...('factualItems' in item ? (item.factualItems ?? []).map(child => [child.id, child.revision]) : []), ...('technologies' in item ? (item.technologies ?? []).map(child => [child.id, child.revision]) : [])]).filter(([id]) => id !== undefined) }
   const outgoing = {
     job: { title: scrub(source.job.title), description: scrub(source.job.description) },
     profile: {
@@ -80,11 +82,11 @@ export function prepareOutboundBundle(source: ConsentSource): OutboundBundle {
       education: source.profile.education.map(item => ({ title: scrub(item.title), institution: item.institution ? scrub(item.institution) : undefined, field: item.field ? scrub(item.field) : undefined, description: item.description ? scrub(item.description) : undefined })),
       certificates: (source.profile.certificates ?? []).map(item => ({ title: scrub(item.title), issuer: item.issuer ? scrub(item.issuer) : undefined, description: item.description ? scrub(item.description) : undefined }))
     },
-    model,
-    scope: { jobId: source.job.id, jobRevision: source.job.revision, profileRevision: source.profile.revision, evidenceRevisions: evidence.map(item => [item.id, item.revision]).filter(([id]) => id !== undefined) }
+    model
   }
   const frozen = deepFreeze(outgoing)
-  const scopeHash = digest(frozen)
+  const frozenScope = deepFreeze(scope)
+  const scopeHash = digest({ outgoing: frozen, scope: frozenScope })
   const containsRestoredIdentifier = (value: unknown): boolean => {
     if (typeof value === 'string') return identifiers.some(({ value: identifier }) => identifier.length > 2 && value.toLocaleLowerCase().includes(identifier.toLocaleLowerCase())) || /\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b/.test(value) || /\b(?:\+?\d[\d ().-]{7,}\d)\b/.test(value) || /\b(?:19|20)\d{2}-(?:0[1-9]|1[0-2])(?:-(?:0[1-9]|[12]\d|3[01]))?\b/.test(value)
     if (Array.isArray(value)) return value.some(containsRestoredIdentifier)
@@ -95,7 +97,7 @@ export function prepareOutboundBundle(source: ConsentSource): OutboundBundle {
   const collectStrings = (value: unknown) => { if (typeof value === 'string') authorizedStrings.add(value); else if (Array.isArray(value)) value.forEach(collectStrings); else if (value && typeof value === 'object') Object.values(value as Record<string, unknown>).forEach(collectStrings) }
   collectStrings(frozen)
   const isAuthorizedText = (text: string) => authorizedStrings.has(text) || [...authorizedStrings].some(allowed => allowed.length > 0 && text.includes(allowed) && text.replaceAll(allowed, '').replace(/\[\[(?:PERSON|CONTACT|EMPLOYER|PROJECT|INSTITUTION)_\d+\]\]/g, '').trim().length === 0)
-  return Object.freeze({ id: scopeHash, scopeHash, outgoing: frozen, preview: deepFreeze({ warnings: ['Unstructured posting and career text can still identify you; review the complete outgoing preview.'], residualSensitivityNotice: 'Residual sensitivity may remain in free text; this bundle does not guarantee anonymity.' }), restoreIdentifiers: (text: string) => [...restore].reduce((result, [token, value]) => result.replaceAll(token, value), text), containsRestoredIdentifier, isAuthorizedText })
+  return Object.freeze({ id: scopeHash, scopeHash, outgoing: frozen, verifyIntegrity: () => digest({ outgoing: frozen, scope: frozenScope }) === scopeHash, preview: deepFreeze({ warnings: ['Unstructured posting and career text can still identify you; review the complete outgoing preview.'], residualSensitivityNotice: 'Residual sensitivity may remain in free text; this bundle does not guarantee anonymity.' }), restoreIdentifiers: (text: string) => [...restore].reduce((result, [token, value]) => result.replaceAll(token, value), text), containsRestoredIdentifier, isAuthorizedText })
 }
 
 export const hashOutboundScope = digest

@@ -25,6 +25,8 @@ describe('outbound consent public contract', () => {
     expect(wire).toContain('[[PERSON_1]]')
     expect(wire).toContain('[[PROJECT_1]]')
     expect(wire).not.toContain('DO_NOT_SEND_KEY')
+    expect(wire).not.toContain('job-1')
+    expect(wire).not.toContain('exp-1')
     expect(bundle.preview.warnings).toEqual(expect.arrayContaining([expect.stringMatching(/identify/i)]))
     expect(bundle.restoreIdentifiers('[[EMPLOYER_1]] / [[PROJECT_1]]')).toBe('Northstar Labs / Orion Ledger')
     expect(bundle.outgoing.job.description).toContain('[DATE_OMITTED]')

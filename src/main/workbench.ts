@@ -11,6 +11,10 @@ import { experienceInputSchema, experienceRecordSchema, experienceSnapshotSchema
 import { jobInputSchema, jobRecordSchema, jobSaveResultSchema } from '../shared/jobs'
 import type { JobRecord } from '../shared/jobs'
 import { profileExchangeSchema, type ProfileExchange } from '../shared/profile-exchange'
+import { prepareOutboundBundle, type ConsentSource, type OutboundBundle } from '../shared/outbound-consent'
+import { createOutboundConsentEngine } from './outbound-consent'
+import type { OutboundConsentAction, OutboundConsentPreview } from '../shared/outbound-consent-contract'
+import { outboundConsentActionSchema, outboundConsentPreviewSchema } from '../shared/outbound-consent-contract'
 
 export interface SecureStorage {
   isEncryptionAvailable(): boolean
@@ -37,7 +41,7 @@ function reconcileNestedItems(items: NestedInput[], previous: NestedRecord[], ow
 }
 
 /** One workspace per userData directory. Opening a workspace applies forward-only migrations. */
-export function createWorkbench(userData: string, secureStorage: SecureStorage = unavailableSecureStorage): { api: WorkbenchStorageAPI; close(): void } {
+export function createWorkbench(userData: string, secureStorage: SecureStorage = unavailableSecureStorage): { api: WorkbenchStorageAPI; authorizeOutboundPayload<T>(runId: string, payload: T): T; close(): void } {
   mkdirSync(userData, { recursive: true })
   const db = new Database(join(userData, 'workbench.sqlite'))
   db.pragma('journal_mode = WAL')
@@ -51,7 +55,8 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
     CREATE TABLE IF NOT EXISTS evidence_revisions (id TEXT NOT NULL, revision INTEGER NOT NULL, action TEXT NOT NULL CHECK(action IN ('created','updated','deleted')), snapshot TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(id, revision));
     CREATE TABLE IF NOT EXISTS profile_experience (id TEXT PRIMARY KEY, revision INTEGER NOT NULL, data TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS profile_projects (id TEXT PRIMARY KEY, revision INTEGER NOT NULL, data TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, data TEXT NOT NULL);`)
+    CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, data TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS outbound_consents (id TEXT PRIMARY KEY, run_id TEXT NOT NULL UNIQUE, scope_hash TEXT NOT NULL, created_at TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0);`)
   db.prepare('INSERT OR IGNORE INTO schema_migrations (version) VALUES (1), (2), (4), (5)').run()
 
   const readProfile = (): ProfileSnapshot => {
@@ -130,6 +135,17 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       if (historyRows.length && (historyRows[0].revision > record.revision || (matchingRevision && !isDeepStrictEqual(JSON.parse(matchingRevision.snapshot), record)))) return { ok: false, message: 'This import reuses an evidence ID/revision for different or outdated facts. Export a fresh profile or use newly identified records.' }
     }
     return { ok: true, data }
+  }
+  const outboundEngine = createOutboundConsentEngine()
+  const pendingOutbound = new Map<string, { jobId: string; source: ConsentSource; bundle: OutboundBundle; runId: string; consentId?: string }>()
+  const currentConsentSource = (jobId: string): ConsentSource | null => {
+    const job = db.prepare('SELECT data FROM jobs WHERE id = ?').get(jobId) as { data: string } | undefined
+    if (!job) return null
+    const savedJob = jobRecordSchema.parse(JSON.parse(job.data))
+    const profile = readProfile(), experience = readExperience()
+    const revisions = [profile.contact, ...profile.skills, ...profile.education, ...profile.certificates, ...experience.experience, ...experience.projects].filter(Boolean).map((item: any) => [item.id, item.revision])
+    const settings = db.prepare('SELECT value FROM settings WHERE key = ?').get('gemini-model') as { value: string } | undefined
+    return { job: { id: savedJob.id, revision: savedJob.updatedAt, title: savedJob.title, company: savedJob.company, description: savedJob.description }, profile: { ...profile, revision: JSON.stringify(revisions), experience: experience.experience, projects: experience.projects }, model: { name: settings?.value ?? 'gemini-3.6-flash' } } as ConsentSource
   }
   const api: WorkbenchStorageAPI = {
     async getSettings() {
@@ -397,7 +413,56 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       if (!uuidSchema.safeParse(id).success) return null
       const row = db.prepare('SELECT data FROM jobs WHERE id = ?').get(id) as { data: string } | undefined
       return row ? jobRecordSchema.parse(JSON.parse(row.data)) : null
+    },
+    async prepareOutboundConsent(jobId: string): Promise<OutboundConsentPreview> {
+      if (!uuidSchema.safeParse(jobId).success) return outboundConsentPreviewSchema.parse({ ok: false, message: 'Choose a valid saved job to review outgoing data.' })
+      const source = currentConsentSource(jobId)
+      if (!source) return outboundConsentPreviewSchema.parse({ ok: false, message: 'That saved job is unavailable. Choose another job.' })
+      try {
+        const bundle = prepareOutboundBundle(source)
+        const token = randomUUID(), runId = randomUUID()
+        pendingOutbound.set(token, { jobId, source, bundle, runId })
+        return outboundConsentPreviewSchema.parse({ ok: true, token, jobTitle: source.job.title, jobCompany: source.job.company, outgoing: bundle.outgoing, warning: bundle.preview.residualSensitivityNotice, termsNotice: 'Google Gemini free-tier requests may be used to improve Google products. Do not submit personal, sensitive, or confidential information. This app minimizes data but cannot guarantee anonymity.' })
+      } catch { return outboundConsentPreviewSchema.parse({ ok: false, message: 'Outgoing data could not be prepared safely. Review your profile and model settings, then try again.' }) }
+    },
+    async acceptOutboundConsent(token: string, accepted: boolean, freeTierTermsAcknowledged: boolean): Promise<OutboundConsentAction> {
+      const pending = pendingOutbound.get(token)
+      if (!pending) return outboundConsentActionSchema.parse({ ok: false, message: 'This preview expired. Prepare and review the outgoing data again.' })
+      if (pending.consentId) return outboundConsentActionSchema.parse({ ok: false, message: 'This preview has already been accepted. Start a new run to request fresh consent.' })
+      if (!accepted) return outboundConsentActionSchema.parse({ ok: false, message: 'Consent was not accepted. No request was sent.' })
+      const latest = currentConsentSource(pending.jobId)
+      if (!latest || prepareOutboundBundle(latest).scopeHash !== pending.bundle.scopeHash) {
+        pendingOutbound.delete(token)
+        return outboundConsentActionSchema.parse({ ok: false, message: 'Your job, profile, or model settings changed after preview. Review the outgoing data again.' })
+      }
+      try {
+        const record = outboundEngine.grantConsent(pending.runId, pending.bundle, { accepted, freeTierTermsAcknowledged })
+        pending.consentId = record.id
+        db.prepare('INSERT INTO outbound_consents (id, run_id, scope_hash, created_at, revoked) VALUES (?, ?, ?, ?, 0)').run(record.id, pending.runId, pending.bundle.scopeHash, record.createdAt)
+        return outboundConsentActionSchema.parse({ ok: true, runId: pending.runId, message: 'Consent saved for this run only. No provider request was sent.' })
+      } catch (error) { return outboundConsentActionSchema.parse({ ok: false, message: error instanceof Error ? error.message : 'Consent could not be saved.' }) }
+    },
+    async cancelOutboundConsent(token: string): Promise<OutboundConsentAction> {
+      const pending = pendingOutbound.get(token)
+      if (!pending) return outboundConsentActionSchema.parse({ ok: false, message: 'This preview is no longer active.' })
+      if (pending.consentId) {
+        outboundEngine.revoke(pending.consentId)
+        db.prepare('UPDATE outbound_consents SET revoked = 1 WHERE id = ?').run(pending.consentId)
+      }
+      pendingOutbound.delete(token)
+      return outboundConsentActionSchema.parse({ ok: true, runId: pending.runId, message: 'Consent cancelled for this run. No provider request was sent.' })
     }
   }
-  return { api, close: () => db.close() }
+  const authorizeOutboundPayload = <T>(runId: string, payload: T): T => {
+    const consent = [...pendingOutbound.values()].find(item => item.runId === runId && item.consentId)
+    if (!consent) throw new Error('No active outbound consent exists for this run.')
+    const latest = currentConsentSource(consent.jobId)
+    if (!latest || prepareOutboundBundle(latest).scopeHash !== consent.bundle.scopeHash) {
+      outboundEngine.revoke(consent.consentId!)
+      db.prepare('UPDATE outbound_consents SET revoked = 1 WHERE id = ?').run(consent.consentId)
+      throw new Error('Outbound authorization is stale; review the updated data before sending.')
+    }
+    return outboundEngine.authorizePayload(runId, consent.bundle, payload)
+  }
+  return { api, authorizeOutboundPayload, close: () => db.close() }
 }
