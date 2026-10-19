@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, safeStorage, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } from 'electron'
 import type { ZodError } from 'zod'
 import { fileURLToPath } from 'node:url'
 import { mkdirSync } from 'node:fs'
@@ -9,9 +9,13 @@ import { geminiKeyInputSchema, geminiModelSchema } from '../shared/gemini-settin
 import { contactSaveInputSchema, evidenceRevisionSchema, profileEntrySaveSchema, profileMutationResultSchema, profileSnapshotSchema, skillSaveInputSchema, uuidSchema } from '../shared/profile'
 import { experienceSaveInputSchema, experienceSnapshotSchema, experienceMutationResultSchema, projectSaveInputSchema } from '../shared/experience'
 import { jobRecordSchema, jobSaveInputSchema, jobSaveResultSchema } from '../shared/jobs'
+import { randomUUID } from 'node:crypto'
+import { readFileSync, writeFileSync } from 'node:fs'
+import { profileExchangeSchema, profileExchangeResultSchema } from '../shared/profile-exchange'
 
 let window: BrowserWindow | undefined
 let workspace: ReturnType<typeof createWorkbench> | undefined
+const pendingImports = new Map<string, { value: ReturnType<typeof profileExchangeSchema.parse>; baseline: string }>()
 
 function invalidProfileInput(error: ZodError, kind: string) {
   const fieldErrors: Record<string, string> = {}
@@ -66,6 +70,37 @@ app.whenReady().then(() => {
     trusted(event)
     if (args.length) throw new Error('Unexpected arguments')
     return workspace!.api.removeGeminiApiKey()
+  })
+  ipcMain.handle('profile:export', async (event, ...args: unknown[]) => {
+    trusted(event); if (args.length) throw new Error('Unexpected arguments')
+    const selected = await dialog.showSaveDialog(window!, { title: 'Export profile JSON', defaultPath: 'cv-tailor-profile.json', filters: [{ name: 'CV Tailor profile', extensions: ['json'] }] })
+    if (selected.canceled || !selected.filePath) return { ok: false, cancelled: true, message: 'Profile export cancelled.' }
+    try {
+      const value = profileExchangeSchema.parse({ format: 'cv-tailor-profile', version: 1, profile: await workspace!.api.getProfile(), experience: await workspace!.api.getExperience() })
+      writeFileSync(selected.filePath, `${JSON.stringify(value, null, 2)}\n`, { encoding: 'utf8', flag: 'w' })
+      return { ok: true, cancelled: false, message: 'Profile JSON exported.' }
+    } catch { return { ok: false, cancelled: false, message: 'Could not write the selected file. Choose a different destination or check its permissions.' } }
+  })
+  ipcMain.handle('profile:import:preview', async (event, ...args: unknown[]) => {
+    trusted(event); if (args.length) throw new Error('Unexpected arguments')
+    const selected = await dialog.showOpenDialog(window!, { title: 'Select profile JSON', properties: ['openFile'], filters: [{ name: 'CV Tailor profile', extensions: ['json'] }] })
+    if (selected.canceled || !selected.filePaths[0]) return profileExchangeResultSchema.parse({ ok: false, cancelled: true, message: 'Profile import cancelled.' })
+    try {
+      const value = profileExchangeSchema.parse(JSON.parse(readFileSync(selected.filePaths[0], 'utf8')))
+      const token = randomUUID()
+      const currentProfile = await workspace!.api.getProfile(), currentExperience = await workspace!.api.getExperience()
+      pendingImports.set(token, { value, baseline: JSON.stringify({ profile: currentProfile, experience: currentExperience }) })
+      const count = (p: typeof value) => Object.values(p.profile).filter(Array.isArray).reduce((n, xs) => n + xs.length, 0) + p.experience.experience.length + p.experience.projects.length + (p.profile.contact ? 1 : 0)
+      return profileExchangeResultSchema.parse({ ok: true, token, value, current: { records: count({ ...value, profile: currentProfile, experience: currentExperience }) }, replacement: { records: count(value) } })
+    } catch { return profileExchangeResultSchema.parse({ ok: false, cancelled: false, message: 'This file is not valid CV Tailor profile JSON.' }) }
+  })
+  ipcMain.handle('profile:import:apply', async (event, ...args: unknown[]) => {
+    trusted(event); if (args.length !== 1 || typeof args[0] !== 'string') throw new Error('Expected import preview token')
+    const pending = pendingImports.get(args[0]); pendingImports.delete(args[0])
+    if (!pending) return { ok: false, message: 'This preview expired. Select the file again.' }
+    const baseline = JSON.stringify({ profile: await workspace!.api.getProfile(), experience: await workspace!.api.getExperience() })
+    if (baseline !== pending.baseline) return { ok: false, message: 'Your profile changed after preview. Select the file again to review the replacement.' }
+    return workspace!.api.applyProfileImport(JSON.stringify(pending.value))
   })
   ipcMain.handle('profile:get', async (event, ...args: unknown[]) => {
     trusted(event)

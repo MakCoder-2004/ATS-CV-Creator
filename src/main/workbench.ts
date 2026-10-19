@@ -9,6 +9,7 @@ import { contactInputSchema, contactRecordSchema, evidenceRevisionSchema, profil
 import { experienceInputSchema, experienceRecordSchema, experienceSnapshotSchema, experienceMutationResultSchema, projectInputSchema, projectRecordSchema, type ExperienceRecord, type ProjectRecord, type FactualItemRecord } from '../shared/experience'
 import { jobInputSchema, jobRecordSchema, jobSaveResultSchema } from '../shared/jobs'
 import type { JobRecord } from '../shared/jobs'
+import { profileExchangeSchema } from '../shared/profile-exchange'
 
 export interface SecureStorage {
   isEncryptionAvailable(): boolean
@@ -140,6 +141,27 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       return this.getSettings()
     },
     async getProfile() { return readProfile() },
+    async exportProfile() { return { ok: false, cancelled: true, message: 'Use the application profile export dialog.' } },
+    async previewProfileImport() { return { ok: false, cancelled: true, message: 'Use the application profile import dialog.' } },
+    async applyProfileImport(input: string) {
+      let decoded: unknown
+      try { decoded = JSON.parse(input) } catch { return { ok: false, message: 'This profile file is invalid or incompatible.' } }
+      const parsed = profileExchangeSchema.safeParse(decoded)
+      if (!parsed.success) return { ok: false, message: 'This profile file is invalid or incompatible.' }
+      const data = parsed.data
+      if ((['education','certificates','summary','languages','extras'] as const).some(section => data.profile[section].some(item => item.section !== section))) return { ok: false, message: 'Profile records must match their declared section.' }
+      const ids = [data.profile.contact?.id, ...Object.values(data.profile).filter(Array.isArray).flatMap(x => x.map((item: { id: string }) => item.id)), ...data.experience.experience.flatMap(x => [x.id, ...x.factualItems.map(i => i.id)]), ...data.experience.projects.flatMap(x => [x.id, ...x.factualItems.map(i => i.id), ...x.technologies.map(i => i.id)])].filter(Boolean) as string[]
+      if (new Set(ids).size !== ids.length) return { ok: false, message: 'This profile contains duplicate record IDs.' }
+      const tx = db.transaction(() => {
+        db.exec('DELETE FROM profile_contact; DELETE FROM profile_skills; DELETE FROM profile_entries; DELETE FROM profile_experience; DELETE FROM profile_projects;')
+        if (data.profile.contact) db.prepare('INSERT INTO profile_contact (singleton,id,revision,data) VALUES (1,?,?,?)').run(data.profile.contact.id, data.profile.contact.revision, JSON.stringify(data.profile.contact))
+        for (const item of data.profile.skills) db.prepare('INSERT INTO profile_skills (id,revision,data) VALUES (?,?,?)').run(item.id,item.revision,JSON.stringify(item))
+        for (const section of ['education','certificates','summary','languages','extras'] as const) for (const item of data.profile[section]) db.prepare('INSERT INTO profile_entries (id,section,revision,data) VALUES (?,?,?,?)').run(item.id,section,item.revision,JSON.stringify(item))
+        for (const item of data.experience.experience) db.prepare('INSERT INTO profile_experience (id,revision,data) VALUES (?,?,?)').run(item.id,item.revision,JSON.stringify(item))
+        for (const item of data.experience.projects) db.prepare('INSERT INTO profile_projects (id,revision,data) VALUES (?,?,?)').run(item.id,item.revision,JSON.stringify(item))
+      })
+      try { tx(); return { ok: true, message: 'Profile replaced.', profile: readProfile() } } catch { return { ok: false, message: 'Profile replacement failed; no changes were applied.' } }
+    },
     async saveContact(input) {
       const { id: _id, ...contactInput } = input
       const parsed = validated<ContactRecord>(contactInputSchema.safeParse(contactInput))
