@@ -63,4 +63,3 @@ export function ExperienceEditor({ projects }: { projects: boolean }) {
     {(error || notice) && <p className={error ? 'profile-message error' : 'profile-message success'} role={error ? 'alert' : 'status'}>{error || notice}{error && <button className="text-button" type="button" onClick={() => void reload()}>Retry</button>}</p>}
   </section>
 }
-

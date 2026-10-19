@@ -46,4 +46,3 @@ export function SavedJobs({ jobs, activeJob, onSaved, onOpened }: { jobs: JobRec
     </section>
   </div>
 }
-
