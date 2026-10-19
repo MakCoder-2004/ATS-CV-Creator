@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client'
 import { BriefcaseBusiness, FileText, LayoutPanelLeft, Moon, Settings2, Sun, UserRound } from 'lucide-react'
 import type { Appearance } from '../shared/appearance'
 import { geminiModels, type GeminiModel, type GeminiSettings } from '../shared/gemini-settings'
-import type { ContactInput, ProfileSnapshot, SkillInput, SkillRecord } from '../shared/profile'
+import type { ContactInput, ProfileEntry, ProfileEntryInput, ProfileSnapshot, SkillInput, SkillRecord } from '../shared/profile'
 import './style.css'
 
 type Page = 'Tailor CV' | 'Saved jobs' | 'My profile' | 'Settings'
@@ -174,10 +174,33 @@ function ProfileEditor() {
         <div className="skill-actions"><button className="text-button" type="button" onClick={() => editSkill(item)}>Edit {item.name}</button><button className="text-button destructive" type="button" aria-label={`Delete ${item.name}`} onClick={() => void deleteSkill(item)}>Delete</button></div>
       </li>)}</ul> : <p className="empty-skills">No skills added yet.</p>}
     </section>}
-    {activeSection !== 'Personal' && activeSection !== 'Skills' && <section className="profile-panel profile-upcoming-panel" aria-labelledby="upcoming-heading"><span className="context">Planned profile section</span><h2 id="upcoming-heading">{activeSection}</h2><p>{activeSection} editing is coming later. For now, add contact details under Personal and skills under Skills. Nothing entered here will be saved until this section has a real editor.</p></section>}
+    {activeSection === 'Education' && <ProfileEntryEditor section="education" items={snapshot?.education ?? []} reload={reload} report={setMutationError} />}
+    {activeSection === 'Certificates' && <ProfileEntryEditor section="certificates" items={snapshot?.certificates ?? []} reload={reload} report={setMutationError} />}
+    {activeSection === 'Summary' && <ProfileEntryEditor section="summary" items={snapshot?.summary ?? []} reload={reload} report={setMutationError} />}
+    {activeSection === 'Languages' && <ProfileEntryEditor section="languages" items={snapshot?.languages ?? []} reload={reload} report={setMutationError} />}
+    {activeSection === 'Extras' && <ProfileEntryEditor section="extras" items={snapshot?.extras ?? []} reload={reload} report={setMutationError} />}
+    {['Experience', 'Projects'].includes(activeSection) && <section className="profile-panel profile-upcoming-panel"><span className="context">Separate profile slice</span><h2>{activeSection}</h2><p>{activeSection} records are managed in their dedicated profile section.</p></section>}
     <p className="locality-note">Your profile is stored locally on this device. It is not synced or shared. Local storage does not guarantee that future cloud features will be anonymous.</p>
     {(mutationError || notice) && <p className={mutationError ? 'profile-message error' : 'profile-message success'} role={mutationError ? 'alert' : 'status'}>{mutationError || notice}{mutationError && <button className="text-button" type="button" onClick={() => void reload()}>Retry</button>}</p>}
   </div>
+}
+
+function ProfileEntryEditor({ section, items, reload, report }: { section: ProfileEntryInput['section']; items: ProfileEntry[]; reload: () => Promise<void>; report: (message: string) => void }) {
+  const empty = (): ProfileEntryInput => ({ section, title: section === 'summary' ? 'Summary' : '', ...(section === 'summary' ? { description: '' } : {}) })
+  const [form, setForm] = useState<ProfileEntryInput>(empty())
+  const [editId, setEditId] = useState<string>()
+  const [errors, setErrors] = useState<Record<string, string>>({})
+  const update = (key: keyof ProfileEntryInput, value: string) => setForm(old => ({ ...old, [key]: key === 'year' ? value ? Number(value) : undefined : value }))
+  const save = async (event: FormEvent) => {
+    event.preventDefault(); setErrors({})
+    const result = await window.workbench.saveProfileEntry({ ...form, id: editId })
+    if (!result.ok) { setErrors(result.error.fieldErrors ?? {}); report(result.error.message); return }
+    setEditId(undefined); setForm(empty()); report(`${section} saved`); await reload()
+  }
+  const edit = (item: ProfileEntry) => { const { id, revision, ...values } = item; setEditId(id); setForm(values); setErrors({}) }
+  const del = async (item: ProfileEntry) => { if (!window.confirm(`Delete ${item.title}? This cannot be undone.`)) return; const result = await window.workbench.deleteProfileEntry(item.id); if (!result.ok) report(result.error.message); else { report(`${item.title} deleted`); await reload() } }
+  const field = (key: keyof ProfileEntryInput, label: string, options: { type?: string; required?: boolean } = {}) => <label>{label}<input type={options.type ?? 'text'} value={String(form[key] ?? '')} required={options.required} onChange={event => update(key, event.target.value)} aria-invalid={!!errors[key]} />{errors[key] && <span className="field-error">{errors[key]}</span>}</label>
+  return <section className="profile-panel" aria-labelledby="entry-heading"><div className="panel-heading"><div><span className="context">{section === 'languages' || section === 'extras' || section === 'summary' ? 'Stored locally · not exported' : 'Profile evidence'}</span><h2 id="entry-heading">{section[0].toUpperCase() + section.slice(1)}</h2><p>{section === 'summary' || section === 'languages' || section === 'extras' ? 'This profile information is retained locally and is not included in CV output.' : 'Add, edit, or remove these profile facts. Saved changes retain revision history.'}</p></div></div><form className="profile-form" onSubmit={event => void save(event)} noValidate><div className="form-grid">{section === 'summary' ? <label>Summary<textarea value={form.description ?? ''} onChange={event => update('description', event.target.value)} aria-invalid={!!errors.description} />{errors.description && <span className="field-error">{errors.description}</span>}</label> : <>{field('title', section === 'languages' ? 'Language' : section === 'extras' ? 'Name' : 'Title', { required: true })}{section === 'education' && <>{field('institution', 'Institution')}{field('field', 'Degree or field')}{field('startDate', 'Start date (YYYY or YYYY-MM)')}{field('endDate', 'End date (YYYY or YYYY-MM)')}</>}{section === 'certificates' && <>{field('issuer', 'Issuer')}{field('year', 'Year', { type: 'number' })}{field('link', 'Certificate link', { type: 'url' })}</>}{section === 'languages' && <label>Proficiency<input value={form.description ?? ''} onChange={event => update('description', event.target.value)} placeholder="e.g. Native, fluent, conversational" /></label>}{section === 'extras' && <label>Details<textarea value={form.description ?? ''} onChange={event => update('description', event.target.value)} /></label>}</>}</div><div className="form-actions"><button className="primary-button" type="submit">{editId ? 'Save changes' : `Add ${section}`}</button>{editId && <button className="secondary-button" type="button" onClick={() => { setEditId(undefined); setForm(empty()) }}>Cancel</button>}</div></form><ul className="skill-list">{items.map(item => <li key={item.id}><div><h3>{item.title}</h3><p>{item.institution ?? item.issuer ?? item.field ?? item.description ?? ''} {item.year ?? ''} {item.startDate ? `· ${item.startDate} – ${item.endDate ?? 'Present'}` : ''}</p></div><div className="skill-actions"><button className="text-button" type="button" onClick={() => edit(item)}>Edit {item.title}</button><button className="text-button destructive" type="button" onClick={() => void del(item)}>Delete</button></div></li>)}</ul>{!items.length && <p className="empty-skills">No {section} added yet.</p>}</section>
 }
 
 function App() {

@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { createWorkbench } from './workbench'
 import { appearanceSchema } from '../shared/appearance'
 import { geminiKeyInputSchema, geminiModelSchema } from '../shared/gemini-settings'
-import { contactSaveInputSchema, evidenceRevisionSchema, profileMutationResultSchema, profileSnapshotSchema, skillSaveInputSchema, uuidSchema } from '../shared/profile'
+import { contactSaveInputSchema, evidenceRevisionSchema, profileEntrySaveSchema, profileMutationResultSchema, profileSnapshotSchema, skillSaveInputSchema, uuidSchema } from '../shared/profile'
 
 let window: BrowserWindow | undefined
 let workspace: ReturnType<typeof createWorkbench> | undefined
@@ -97,6 +97,20 @@ app.whenReady().then(() => {
     const id = uuidSchema.safeParse(args[0])
     if (!id.success) return invalidProfileInput(id.error, 'skill')
     return profileMutationResultSchema.parse(await workspace!.api.deleteSkill(id.data))
+  })
+  ipcMain.handle('profile:entry:save', async (event, ...args: unknown[]) => {
+    trusted(event)
+    if (args.length !== 1) throw new Error('Expected profile record')
+    const input = profileEntrySaveSchema.safeParse(args[0])
+    if (!input.success) return invalidProfileInput(input.error, 'profile')
+    return profileMutationResultSchema.parse(await workspace!.api.saveProfileEntry(input.data))
+  })
+  ipcMain.handle('profile:entry:delete', async (event, ...args: unknown[]) => {
+    trusted(event)
+    if (args.length !== 1) throw new Error('Expected profile record ID')
+    const id = uuidSchema.safeParse(args[0])
+    if (!id.success) return invalidProfileInput(id.error, 'profile')
+    return profileMutationResultSchema.parse(await workspace!.api.deleteProfileEntry(id.data))
   })
   ipcMain.handle('profile:history', async (event, ...args: unknown[]) => {
     trusted(event)

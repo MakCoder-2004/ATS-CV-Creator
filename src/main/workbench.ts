@@ -1,10 +1,11 @@
 import Database from 'better-sqlite3'
+import type { ZodError } from 'zod'
 import { randomUUID } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { appearanceSchema, settingsSchema, type WorkbenchAPI } from '../shared/appearance'
 import { geminiKeyInputSchema, geminiModelSchema, type GeminiModel } from '../shared/gemini-settings'
-import { contactInputSchema, contactRecordSchema, evidenceRevisionSchema, profileMutationResultSchema, profileSnapshotSchema, skillInputSchema, skillRecordSchema, uuidSchema, type ContactRecord, type EvidenceRevision, type ProfileSnapshot, type SkillRecord } from '../shared/profile'
+import { contactInputSchema, contactRecordSchema, evidenceRevisionSchema, profileEntryInputSchema, profileEntrySchema, profileMutationResultSchema, profileSnapshotSchema, skillInputSchema, skillRecordSchema, uuidSchema, type ContactRecord, type EvidenceRevision, type ProfileEntry, type ProfileSnapshot, type SkillRecord } from '../shared/profile'
 
 export interface SecureStorage {
   isEncryptionAvailable(): boolean
@@ -27,6 +28,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
     CREATE TABLE IF NOT EXISTS encrypted_credentials (key TEXT PRIMARY KEY, ciphertext TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS profile_contact (singleton INTEGER PRIMARY KEY CHECK(singleton = 1), id TEXT NOT NULL UNIQUE, revision INTEGER NOT NULL, data TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS profile_skills (id TEXT PRIMARY KEY, revision INTEGER NOT NULL, data TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS profile_entries (id TEXT PRIMARY KEY, section TEXT NOT NULL, revision INTEGER NOT NULL, data TEXT NOT NULL);
     CREATE UNIQUE INDEX IF NOT EXISTS profile_skill_unique ON profile_skills(lower(json_extract(data, '$.name')), lower(json_extract(data, '$.category')));
     CREATE TABLE IF NOT EXISTS evidence_revisions (id TEXT NOT NULL, revision INTEGER NOT NULL, action TEXT NOT NULL CHECK(action IN ('created','updated','deleted')), snapshot TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(id, revision));`)
   db.prepare('INSERT OR IGNORE INTO schema_migrations (version) VALUES (1), (2)').run()
@@ -34,17 +36,18 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
   const readProfile = (): ProfileSnapshot => {
     const contactRow = db.prepare('SELECT data FROM profile_contact WHERE singleton = 1').get() as { data: string } | undefined
     const skills = db.prepare('SELECT data FROM profile_skills ORDER BY rowid').all() as { data: string }[]
-    return profileSnapshotSchema.parse({ contact: contactRow ? JSON.parse(contactRow.data) : null, skills: skills.map((row) => JSON.parse(row.data)) })
+    const records = (db.prepare('SELECT data FROM profile_entries ORDER BY rowid').all() as { data: string }[]).map(row => profileEntrySchema.parse(JSON.parse(row.data)))
+    return profileSnapshotSchema.parse({ contact: contactRow ? JSON.parse(contactRow.data) : null, skills: skills.map((row) => JSON.parse(row.data)), education: records.filter(x => x.section === 'education'), certificates: records.filter(x => x.section === 'certificates'), summary: records.filter(x => x.section === 'summary'), languages: records.filter(x => x.section === 'languages'), extras: records.filter(x => x.section === 'extras') })
   }
   const history = (id: string): EvidenceRevision[] => (db.prepare('SELECT id, revision, action, snapshot, created_at FROM evidence_revisions WHERE id = ? ORDER BY revision').all(id) as { id: string; revision: number; action: EvidenceRevision['action']; snapshot: string; created_at: string }[]).map((row) => evidenceRevisionSchema.parse({ id: row.id, revision: row.revision, action: row.action, snapshot: JSON.parse(row.snapshot), createdAt: row.created_at }))
   const failure = (code: string, message: string, fieldErrors?: Record<string, string>) => profileMutationResultSchema.parse({ ok: false, error: { code, message, ...(fieldErrors ? { fieldErrors } : {}) } })
-  const validated = <T>(parsed: ReturnType<typeof contactInputSchema.safeParse> | ReturnType<typeof skillInputSchema.safeParse>): { value?: T; errors?: Record<string, string> } => {
+  const validated = <T>(parsed: { success: true; data: unknown } | { success: false; error: ZodError }): { value?: T; errors?: Record<string, string> } => {
     if (parsed.success) return { value: parsed.data as T }
     const errors: Record<string, string> = {}
     for (const issue of parsed.error.issues) errors[issue.path.length ? issue.path.join('.') : '_'] = issue.message
     return { errors }
   }
-  const recordRevision = (record: ContactRecord | SkillRecord, action: EvidenceRevision['action']) => {
+  const recordRevision = (record: ContactRecord | SkillRecord | ProfileEntry, action: EvidenceRevision['action']) => {
     db.prepare('INSERT INTO evidence_revisions (id, revision, action, snapshot, created_at) VALUES (?, ?, ?, ?, ?)').run(record.id, record.revision, action, JSON.stringify(record), new Date().toISOString())
   }
   const migrateNamedLinks = db.transaction(() => {
@@ -160,6 +163,35 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
         const old = skillRecordSchema.parse(JSON.parse(row.data))
         recordRevision({ ...old, revision: old.revision + 1 }, 'deleted')
         db.prepare('DELETE FROM profile_skills WHERE id = ?').run(id)
+        return profileMutationResultSchema.parse({ ok: true, value: readProfile() })
+      })
+      return tx()
+    },
+    async saveProfileEntry(input) {
+      const { id: _id, ...entryInput } = input
+      const parsed = validated<ProfileEntry>(profileEntryInputSchema.safeParse(entryInput))
+      if (parsed.errors) return failure('VALIDATION_ERROR', 'Check the highlighted profile fields.', parsed.errors)
+      if (input.id !== undefined && !uuidSchema.safeParse(input.id).success) return failure('VALIDATION_ERROR', 'Record ID must be a UUID.', { id: 'Invalid ID' })
+      const tx = db.transaction(() => {
+        const row = input.id ? db.prepare('SELECT id, revision FROM profile_entries WHERE id = ?').get(input.id) as { id: string; revision: number } | undefined : undefined
+        if (input.id && !row) return failure('CONFLICT', 'The profile record no longer exists.')
+        if (parsed.value!.section === 'summary' && db.prepare('SELECT id FROM profile_entries WHERE section = ? AND id <> ?').get('summary', input.id ?? '')) return failure('CONFLICT', 'A summary already exists; edit the existing summary.')
+        const id = row?.id ?? randomUUID(), revision = (row?.revision ?? 0) + 1
+        const record = profileEntrySchema.parse({ ...parsed.value, id, revision })
+        db.prepare('INSERT INTO profile_entries (id, section, revision, data) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET section=excluded.section, revision=excluded.revision, data=excluded.data').run(id, record.section, revision, JSON.stringify(record))
+        recordRevision(record, row ? 'updated' : 'created')
+        return profileMutationResultSchema.parse({ ok: true, value: readProfile() })
+      })
+      try { return tx() } catch { return failure('CONFLICT', 'The profile record could not be saved.') }
+    },
+    async deleteProfileEntry(id) {
+      if (!uuidSchema.safeParse(id).success) return failure('VALIDATION_ERROR', 'Record ID must be a UUID.', { id: 'Invalid ID' })
+      const tx = db.transaction(() => {
+        const row = db.prepare('SELECT data FROM profile_entries WHERE id = ?').get(id) as { data: string } | undefined
+        if (!row) return failure('CONFLICT', 'The profile record no longer exists.')
+        const old = profileEntrySchema.parse(JSON.parse(row.data))
+        recordRevision({ ...old, revision: old.revision + 1 }, 'deleted')
+        db.prepare('DELETE FROM profile_entries WHERE id = ?').run(id)
         return profileMutationResultSchema.parse({ ok: true, value: readProfile() })
       })
       return tx()
