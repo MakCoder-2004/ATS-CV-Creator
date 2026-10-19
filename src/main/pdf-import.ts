@@ -31,13 +31,16 @@ export async function extractPdfImport(bytes: Uint8Array): Promise<PdfImportExtr
       for (const annotation of annotations) {
         if (annotation.subtype !== 'Link') continue
         const target = typeof annotation.url === 'string' ? annotation.url : ''
-        if (!target) continue
+        if (!target) { issues.push({ code: 'unmapped-link', message: `Page ${pageNumber}: an internal or unresolved link has no reviewable external URL.` }); continue }
+        if (!/^https?:\/\//i.test(target)) issues.push({ code: 'unsafe-link', message: `Page ${pageNumber}: a non-HTTP(S) link needs correction before it can be used.` })
         const [x1, y1, x2, y2] = annotation.rect
-        const match = visual.find(item => item.transform[4] <= x2 && item.transform[4] + item.width >= x1 && item.transform[5] <= y2 && item.transform[5] + item.height >= y1)
+        const matches = visual.filter(item => item.transform[4] <= x2 && item.transform[4] + item.width >= x1 && item.transform[5] <= y2 && item.transform[5] + item.height >= y1)
+        const match = matches.length === 1 ? matches[0] : undefined
         links.push({ page: pageNumber, target, x: x1, y: y1, width: x2 - x1, height: y2 - y1, ...(match ? { label: match.str } : {}), mapped: Boolean(match) })
-        if (!match) issues.push({ code: 'unmapped-link', message: `Page ${pageNumber}: a link target could not be matched to visible text and needs review.` })
+        if (!match) issues.push({ code: 'unmapped-link', message: `Page ${pageNumber}: a link target could not be unambiguously matched to visible text and needs review.` })
       }
     }
+    if (!source.length) throw new Error('The PDF has no selectable text. OCR and scanned-image import are not supported.')
     return pdfImportExtractionSchema.parse({ source, links, issues, pageCount: doc.numPages })
   } finally { await loading.destroy() }
 }

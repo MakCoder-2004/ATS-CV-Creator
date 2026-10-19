@@ -6,6 +6,7 @@ import { experienceSnapshotSchema, experienceMutationResultSchema, type Experien
 import { jobRecordSchema, jobSaveResultSchema, type JobInput } from '../shared/jobs'
 import { profileExchangeResultSchema } from '../shared/profile-exchange'
 import { outboundConsentActionSchema, outboundConsentPreviewSchema } from '../shared/outbound-consent-contract'
+import { pdfImportActionSchema, pdfImportProposalSchema, pdfImportReviewSchema, pdfImportSelectionSchema, type PdfImportReview } from '../shared/pdf-import'
 
 const api: WorkbenchAPI = Object.freeze({
   async getSettings() {
@@ -84,6 +85,18 @@ const api: WorkbenchAPI = Object.freeze({
   },
   async cancelOutboundConsent(token: string) {
     return outboundConsentActionSchema.parse(await ipcRenderer.invoke('consent:outbound:cancel', uuidSchema.parse(token)))
+  },
+  async selectReferencePdf() {
+    return pdfImportSelectionSchema.parse(await ipcRenderer.invoke('pdf-import:select'))
+  },
+  async reviewReferencePdf(token: string, review: PdfImportReview) {
+    return pdfImportProposalSchema.parse(await ipcRenderer.invoke('pdf-import:review', uuidSchema.parse(token), pdfImportReviewSchema.parse(review)))
+  },
+  async applyReferencePdf(token: string) {
+    return pdfImportActionSchema.parse(await ipcRenderer.invoke('pdf-import:apply', uuidSchema.parse(token)))
+  },
+  async cancelReferencePdf(token: string) {
+    return pdfImportActionSchema.parse(await ipcRenderer.invoke('pdf-import:cancel', uuidSchema.parse(token)))
   }
 })
 contextBridge.exposeInMainWorld('workbench', api)

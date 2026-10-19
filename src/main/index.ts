@@ -12,8 +12,10 @@ import { jobRecordSchema, jobSaveInputSchema, jobSaveResultSchema } from '../sha
 import { randomUUID } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
 import { readFileSync, writeFileSync } from 'node:fs'
+import { readFile, stat } from 'node:fs/promises'
 import { profileExchangeSchema, profileExchangeResultSchema } from '../shared/profile-exchange'
 import { outboundConsentActionSchema, outboundConsentPreviewSchema } from '../shared/outbound-consent-contract'
+import { pdfImportActionSchema, pdfImportProposalSchema, pdfImportReviewSchema, pdfImportSelectionSchema } from '../shared/pdf-import'
 
 let window: BrowserWindow | undefined
 let workspace: ReturnType<typeof createWorkbench> | undefined
@@ -125,6 +127,37 @@ app.whenReady().then(() => {
     const baseline = JSON.stringify({ profile: await workspace!.api.getProfile(), experience: await workspace!.api.getExperience() })
     if (baseline !== pending.baseline) return { ok: false, message: 'Your profile changed after preview. Select the file again to review the replacement.' }
     return workspace!.api.replaceProfile(JSON.stringify(pending.value))
+  })
+  ipcMain.handle('pdf-import:select', async (event, ...args: unknown[]) => {
+    trusted(event); if (args.length) throw new Error('Unexpected arguments')
+    try {
+      const selected = await dialog.showOpenDialog(window!, { title: 'Select reference CV PDF for local review', properties: ['openFile'], filters: [{ name: 'PDF document', extensions: ['pdf'] }] })
+      if (selected.canceled || !selected.filePaths[0]) return pdfImportSelectionSchema.parse({ ok: false, cancelled: true, message: 'PDF import cancelled. Your profile has not changed.' })
+      const file = selected.filePaths[0]
+      const info = await stat(file)
+      if (!info.isFile() || info.size > 15 * 1024 * 1024) return pdfImportSelectionSchema.parse({ ok: false, cancelled: false, message: 'Choose a readable PDF smaller than 15 MB.' })
+      return pdfImportSelectionSchema.parse(await workspace!.api.stagePdfImport(await readFile(file)))
+    } catch {
+      return pdfImportSelectionSchema.parse({ ok: false, cancelled: false, message: 'The selected PDF could not be read or extracted. Check the file and try again; your profile has not changed.' })
+    }
+  })
+  ipcMain.handle('pdf-import:review', async (event, ...args: unknown[]) => {
+    trusted(event); if (args.length !== 2) throw new Error('Expected PDF review token and confirmed fields')
+    const token = uuidSchema.safeParse(args[0]), review = pdfImportReviewSchema.safeParse(args[1])
+    if (!token.success || !review.success) return pdfImportProposalSchema.parse({ ok: false, message: 'Review every field and correct invalid values before continuing.' })
+    return pdfImportProposalSchema.parse(await workspace!.api.previewPdfImport(token.data, review.data))
+  })
+  ipcMain.handle('pdf-import:apply', async (event, ...args: unknown[]) => {
+    trusted(event); if (args.length !== 1) throw new Error('Expected PDF review token')
+    const token = uuidSchema.safeParse(args[0])
+    if (!token.success) return pdfImportActionSchema.parse({ ok: false, message: 'This PDF review expired. Select the file again.' })
+    return pdfImportActionSchema.parse(await workspace!.api.applyPdfImport(token.data))
+  })
+  ipcMain.handle('pdf-import:cancel', async (event, ...args: unknown[]) => {
+    trusted(event); if (args.length !== 1) throw new Error('Expected PDF review token')
+    const token = uuidSchema.safeParse(args[0])
+    if (!token.success) return pdfImportActionSchema.parse({ ok: false, message: 'This PDF review is no longer active.' })
+    return pdfImportActionSchema.parse(await workspace!.api.cancelPdfImport(token.data))
   })
   ipcMain.handle('profile:get', async (event, ...args: unknown[]) => {
     trusted(event)

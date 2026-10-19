@@ -1,21 +1,7 @@
 import { expect, test } from 'vitest'
 import { extractPdfImport } from '../src/main/pdf-import'
 import { confirmPdfImport } from '../src/shared/pdf-import'
-
-const PDFDocument = require('pdfkit')
-
-function syntheticPdf(build: (document: InstanceType<typeof PDFDocument>) => void): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    const document = new PDFDocument({ autoFirstPage: false, compress: false })
-    const chunks: Buffer[] = []
-    document.on('data', (chunk: Buffer) => chunks.push(chunk))
-    document.on('error', reject)
-    document.on('end', () => resolve(Buffer.concat(chunks)))
-    document.addPage()
-    build(document)
-    document.end()
-  })
-}
+import { syntheticPdf } from './helpers/synthetic-pdf'
 
 test('local synthetic PDF text and hyperlink targets remain reviewable without automatic confirmation', async () => {
   const pdf = await syntheticPdf(document => {
