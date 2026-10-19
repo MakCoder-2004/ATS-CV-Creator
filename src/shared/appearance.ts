@@ -2,6 +2,7 @@ import { z } from 'zod'
 import type { ContactInput, EvidenceRevision, ProfileEntryInput, ProfileMutationResult, ProfileSnapshot, SkillInput } from './profile'
 import type { ExperienceInput, ExperienceMutationResult, ExperienceSnapshot, ProjectInput } from './experience'
 import { geminiSettingsSchema, geminiModelSchema, type GeminiModel } from './gemini-settings'
+import type { JobInput, JobRecord, JobSaveResult } from './jobs'
 
 export const appearanceSchema = z.enum(['light', 'dark'])
 export type Appearance = z.infer<typeof appearanceSchema>
@@ -29,4 +30,7 @@ export interface WorkbenchAPI {
   deleteExperience(id: string): Promise<ExperienceMutationResult>
   saveProject(input: ProjectInput & { id?: string }): Promise<ExperienceMutationResult>
   deleteProject(id: string): Promise<ExperienceMutationResult>
+  saveJob(input: JobInput & { id?: string }): Promise<JobSaveResult>
+  listJobs(): Promise<JobRecord[]>
+  openJob(id: string): Promise<JobRecord | null>
 }

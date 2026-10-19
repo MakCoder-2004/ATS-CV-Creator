@@ -3,6 +3,7 @@ import { appearanceSchema, settingsSchema, type Appearance, type WorkbenchAPI } 
 import { geminiKeyInputSchema, geminiModelSchema, type GeminiModel } from '../shared/gemini-settings'
 import { evidenceRevisionSchema, profileEntryInputSchema, profileMutationResultSchema, profileSnapshotSchema, uuidSchema, type ContactInput, type ProfileEntryInput, type SkillInput } from '../shared/profile'
 import { experienceSnapshotSchema, experienceMutationResultSchema, type ExperienceInput, type ProjectInput } from '../shared/experience'
+import { jobRecordSchema, jobSaveResultSchema, type JobInput } from '../shared/jobs'
 
 const api: WorkbenchAPI = Object.freeze({
   async getSettings() {
@@ -59,6 +60,16 @@ const api: WorkbenchAPI = Object.freeze({
   },
   async deleteProject(id: string) {
     return experienceMutationResultSchema.parse(await ipcRenderer.invoke('profile:project:delete', id))
+  },
+  async saveJob(input: JobInput & { id?: string }) {
+    return jobSaveResultSchema.parse(await ipcRenderer.invoke('jobs:save', input))
+  },
+  async listJobs() {
+    return jobRecordSchema.array().parse(await ipcRenderer.invoke('jobs:list'))
+  },
+  async openJob(id: string) {
+    const job = await ipcRenderer.invoke('jobs:open', uuidSchema.parse(id))
+    return job === null ? null : jobRecordSchema.parse(job)
   }
 })
 contextBridge.exposeInMainWorld('workbench', api)

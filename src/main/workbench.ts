@@ -7,6 +7,8 @@ import { appearanceSchema, settingsSchema, type WorkbenchAPI } from '../shared/a
 import { geminiKeyInputSchema, geminiModelSchema, type GeminiModel } from '../shared/gemini-settings'
 import { contactInputSchema, contactRecordSchema, evidenceRevisionSchema, profileEntryInputSchema, profileEntrySchema, profileMutationResultSchema, profileSnapshotSchema, skillInputSchema, skillRecordSchema, uuidSchema, type ContactRecord, type EvidenceRevision, type ProfileEntry, type ProfileSnapshot, type SkillRecord } from '../shared/profile'
 import { experienceInputSchema, experienceRecordSchema, experienceSnapshotSchema, experienceMutationResultSchema, projectInputSchema, projectRecordSchema, type ExperienceRecord, type ProjectRecord, type FactualItemRecord } from '../shared/experience'
+import { jobInputSchema, jobRecordSchema, jobSaveResultSchema } from '../shared/jobs'
+import type { JobRecord } from '../shared/jobs'
 
 export interface SecureStorage {
   isEncryptionAvailable(): boolean
@@ -33,8 +35,9 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
     CREATE UNIQUE INDEX IF NOT EXISTS profile_skill_unique ON profile_skills(lower(json_extract(data, '$.name')), lower(json_extract(data, '$.category')));
     CREATE TABLE IF NOT EXISTS evidence_revisions (id TEXT NOT NULL, revision INTEGER NOT NULL, action TEXT NOT NULL CHECK(action IN ('created','updated','deleted')), snapshot TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(id, revision));
     CREATE TABLE IF NOT EXISTS profile_experience (id TEXT PRIMARY KEY, revision INTEGER NOT NULL, data TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS profile_projects (id TEXT PRIMARY KEY, revision INTEGER NOT NULL, data TEXT NOT NULL);`)
-  db.prepare('INSERT OR IGNORE INTO schema_migrations (version) VALUES (1), (2), (4)').run()
+    CREATE TABLE IF NOT EXISTS profile_projects (id TEXT PRIMARY KEY, revision INTEGER NOT NULL, data TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, data TEXT NOT NULL);`)
+  db.prepare('INSERT OR IGNORE INTO schema_migrations (version) VALUES (1), (2), (4), (5)').run()
 
   const readProfile = (): ProfileSnapshot => {
     const contactRow = db.prepare('SELECT data FROM profile_contact WHERE singleton = 1').get() as { data: string } | undefined
@@ -85,6 +88,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
     db.prepare('INSERT INTO schema_migrations (version) VALUES (3)').run()
   })
   migrateNamedLinks()
+  db.prepare('INSERT OR IGNORE INTO schema_migrations (version) VALUES (4)').run()
   const secureStorageAvailable = () => {
     try {
       if (!secureStorage.isEncryptionAvailable()) return false
@@ -307,6 +311,33 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
         return experienceMutationResultSchema.parse({ ok: true, value: readExperience() })
       })
       return tx()
+    },
+    async saveJob(input) {
+      const { id: _id, ...jobInput } = input
+      const parsed = jobInputSchema.safeParse(jobInput)
+      if (!parsed.success) {
+        const fieldErrors: Record<string, string> = {}
+        for (const issue of parsed.error.issues) fieldErrors[issue.path.length ? issue.path.join('.') : '_'] = issue.message
+        return jobSaveResultSchema.parse({ ok: false, error: { code: 'VALIDATION_ERROR', message: 'Enter a title, company, and job description.', fieldErrors } })
+      }
+      if (input.id !== undefined && !uuidSchema.safeParse(input.id).success) return jobSaveResultSchema.parse({ ok: false, error: { code: 'VALIDATION_ERROR', message: 'Job ID must be a UUID.', fieldErrors: { id: 'Invalid ID' } } })
+      const tx = db.transaction(() => {
+        const existing = input.id ? db.prepare('SELECT created_at FROM jobs WHERE id = ?').get(input.id) as { created_at: string } | undefined : undefined
+        if (input.id && !existing) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'This saved job no longer exists.' } })
+        const now = new Date().toISOString()
+        const record = jobRecordSchema.parse({ ...parsed.data, id: input.id ?? randomUUID(), createdAt: existing?.created_at ?? now, updatedAt: now })
+        db.prepare('INSERT INTO jobs (id, created_at, updated_at, data) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET updated_at=excluded.updated_at, data=excluded.data').run(record.id, record.createdAt, record.updatedAt, JSON.stringify(record))
+        return jobSaveResultSchema.parse({ ok: true, value: record })
+      })
+      try { return tx() } catch { return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'The job could not be saved.' } }) }
+    },
+    async listJobs() {
+      return (db.prepare('SELECT data FROM jobs ORDER BY updated_at DESC, id').all() as { data: string }[]).map(row => jobRecordSchema.parse(JSON.parse(row.data)))
+    },
+    async openJob(id) {
+      if (!uuidSchema.safeParse(id).success) return null
+      const row = db.prepare('SELECT data FROM jobs WHERE id = ?').get(id) as { data: string } | undefined
+      return row ? jobRecordSchema.parse(JSON.parse(row.data)) : null
     }
   }
   return { api, close: () => db.close() }

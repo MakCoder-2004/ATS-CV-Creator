@@ -8,6 +8,7 @@ import { appearanceSchema } from '../shared/appearance'
 import { geminiKeyInputSchema, geminiModelSchema } from '../shared/gemini-settings'
 import { contactSaveInputSchema, evidenceRevisionSchema, profileEntrySaveSchema, profileMutationResultSchema, profileSnapshotSchema, skillSaveInputSchema, uuidSchema } from '../shared/profile'
 import { experienceSaveInputSchema, experienceSnapshotSchema, experienceMutationResultSchema, projectSaveInputSchema } from '../shared/experience'
+import { jobRecordSchema, jobSaveInputSchema, jobSaveResultSchema } from '../shared/jobs'
 
 let window: BrowserWindow | undefined
 let workspace: ReturnType<typeof createWorkbench> | undefined
@@ -140,6 +141,30 @@ app.whenReady().then(() => {
       return experienceMutationResultSchema.parse(await workspace!.api[command](id.data))
     })
   }
+  ipcMain.handle('jobs:save', async (event, ...args: unknown[]) => {
+    trusted(event)
+    if (args.length !== 1) throw new Error('Expected job')
+    const input = jobSaveInputSchema.safeParse(args[0])
+    if (!input.success) {
+      const fieldErrors: Record<string, string> = {}
+      for (const issue of input.error.issues) fieldErrors[issue.path.length ? issue.path.join('.') : '_'] = issue.message
+      return jobSaveResultSchema.parse({ ok: false, error: { code: 'VALIDATION_ERROR', message: 'Enter a title, company, and job description.', fieldErrors } })
+    }
+    return jobSaveResultSchema.parse(await workspace!.api.saveJob(input.data))
+  })
+  ipcMain.handle('jobs:list', async (event, ...args: unknown[]) => {
+    trusted(event)
+    if (args.length) throw new Error('Unexpected arguments')
+    return jobRecordSchema.array().parse(await workspace!.api.listJobs())
+  })
+  ipcMain.handle('jobs:open', async (event, ...args: unknown[]) => {
+    trusted(event)
+    if (args.length !== 1) throw new Error('Expected job ID')
+    const id = uuidSchema.safeParse(args[0])
+    if (!id.success) throw new Error('Invalid job ID')
+    const job = await workspace!.api.openJob(id.data)
+    return job === null ? null : jobRecordSchema.parse(job)
+  })
 
   window = new BrowserWindow({
     width: 1400, height: 900, minWidth: 640, minHeight: 560,
