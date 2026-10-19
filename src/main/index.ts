@@ -1,11 +1,14 @@
-import { app, BrowserWindow, ipcMain } from 'electron'
+import { app, BrowserWindow, ipcMain, safeStorage } from 'electron'
 import type { ZodError } from 'zod'
 import { fileURLToPath } from 'node:url'
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { createWorkbench } from './workbench'
 import { appearanceSchema } from '../shared/appearance'
-import { contactSaveInputSchema, evidenceRevisionSchema, profileMutationResultSchema, profileSnapshotSchema, skillSaveInputSchema, uuidSchema } from '../shared/profile'
+import { geminiKeyInputSchema, geminiModelSchema } from '../shared/gemini-settings'
+import { contactSaveInputSchema, evidenceRevisionSchema, profileEntrySaveSchema, profileMutationResultSchema, profileSnapshotSchema, skillSaveInputSchema, uuidSchema } from '../shared/profile'
+import { experienceSaveInputSchema, experienceSnapshotSchema, experienceMutationResultSchema, projectSaveInputSchema } from '../shared/experience'
+import { jobRecordSchema, jobSaveInputSchema, jobSaveResultSchema } from '../shared/jobs'
 
 let window: BrowserWindow | undefined
 let workspace: ReturnType<typeof createWorkbench> | undefined
@@ -36,7 +39,7 @@ if (!app.isPackaged && process.env.CV_TAILOR_TEST_USER_DATA_DIR) {
   app.setPath('userData', process.env.CV_TAILOR_TEST_USER_DATA_DIR)
 }
 app.whenReady().then(() => {
-  workspace = createWorkbench(app.getPath('userData'))
+  workspace = createWorkbench(app.getPath('userData'), safeStorage)
   ipcMain.handle('settings:get', (event, ...args: unknown[]) => {
     trusted(event)
     if (args.length) throw new Error('Unexpected arguments')
@@ -46,6 +49,23 @@ app.whenReady().then(() => {
     trusted(event)
     if (args.length !== 1) throw new Error('Expected appearance')
     return workspace!.api.setAppearance(appearanceSchema.parse(args[0]))
+  })
+  ipcMain.handle('settings:gemini-model', (event, ...args: unknown[]) => {
+    trusted(event)
+    if (args.length !== 1) throw new Error('Expected Gemini model')
+    return workspace!.api.setGeminiModel(geminiModelSchema.parse(args[0]))
+  })
+  ipcMain.handle('settings:gemini-key:save', (event, ...args: unknown[]) => {
+    trusted(event)
+    if (args.length !== 1) throw new Error('Expected Gemini API key')
+    const input = geminiKeyInputSchema.safeParse(args[0])
+    if (!input.success) throw new Error('API key input is invalid. Correct it and try again.')
+    return workspace!.api.saveGeminiApiKey(input.data)
+  })
+  ipcMain.handle('settings:gemini-key:remove', (event, ...args: unknown[]) => {
+    trusted(event)
+    if (args.length) throw new Error('Unexpected arguments')
+    return workspace!.api.removeGeminiApiKey()
   })
   ipcMain.handle('profile:get', async (event, ...args: unknown[]) => {
     trusted(event)
@@ -80,10 +100,70 @@ app.whenReady().then(() => {
     if (!id.success) return invalidProfileInput(id.error, 'skill')
     return profileMutationResultSchema.parse(await workspace!.api.deleteSkill(id.data))
   })
+  ipcMain.handle('profile:entry:save', async (event, ...args: unknown[]) => {
+    trusted(event)
+    if (args.length !== 1) throw new Error('Expected profile record')
+    const input = profileEntrySaveSchema.safeParse(args[0])
+    if (!input.success) return invalidProfileInput(input.error, 'profile')
+    return profileMutationResultSchema.parse(await workspace!.api.saveProfileEntry(input.data))
+  })
+  ipcMain.handle('profile:entry:delete', async (event, ...args: unknown[]) => {
+    trusted(event)
+    if (args.length !== 1) throw new Error('Expected profile record ID')
+    const id = uuidSchema.safeParse(args[0])
+    if (!id.success) return invalidProfileInput(id.error, 'profile')
+    return profileMutationResultSchema.parse(await workspace!.api.deleteProfileEntry(id.data))
+  })
   ipcMain.handle('profile:history', async (event, ...args: unknown[]) => {
     trusted(event)
     if (args.length !== 1) throw new Error('Expected evidence ID')
     return evidenceRevisionSchema.array().parse(await workspace!.api.getEvidenceHistory(uuidSchema.parse(args[0])))
+  })
+  ipcMain.handle('profile:experience:get', async (event, ...args: unknown[]) => {
+    trusted(event); if (args.length) throw new Error('Unexpected arguments')
+    return experienceSnapshotSchema.parse(await workspace!.api.getExperience())
+  })
+  const registerExperienceMutation = (channel: string, schema: typeof experienceSaveInputSchema | typeof projectSaveInputSchema, command: 'saveExperience' | 'saveProject') => {
+    ipcMain.handle(channel, async (event, ...args: unknown[]) => {
+      trusted(event); if (args.length !== 1) throw new Error('Expected profile record')
+      const parsed = schema.safeParse(args[0])
+      if (!parsed.success) return experienceMutationResultSchema.parse({ ok: false, error: { code: 'VALIDATION_ERROR', message: 'Check the highlighted profile fields.', fieldErrors: Object.fromEntries(parsed.error.issues.map(issue => [issue.path.join('.') || '_', issue.message])) } })
+      return experienceMutationResultSchema.parse(await workspace!.api[command](parsed.data as never))
+    })
+  }
+  registerExperienceMutation('profile:experience:save', experienceSaveInputSchema, 'saveExperience')
+  registerExperienceMutation('profile:project:save', projectSaveInputSchema, 'saveProject')
+  for (const [channel, command] of [['profile:experience:delete', 'deleteExperience'], ['profile:project:delete', 'deleteProject']] as const) {
+    ipcMain.handle(channel, async (event, ...args: unknown[]) => {
+      trusted(event); if (args.length !== 1) throw new Error('Expected profile record ID')
+      const id = uuidSchema.safeParse(args[0])
+      if (!id.success) return experienceMutationResultSchema.parse({ ok: false, error: { code: 'VALIDATION_ERROR', message: 'Profile record ID must be a UUID.', fieldErrors: { id: 'Invalid ID' } } })
+      return experienceMutationResultSchema.parse(await workspace!.api[command](id.data))
+    })
+  }
+  ipcMain.handle('jobs:save', async (event, ...args: unknown[]) => {
+    trusted(event)
+    if (args.length !== 1) throw new Error('Expected job')
+    const input = jobSaveInputSchema.safeParse(args[0])
+    if (!input.success) {
+      const fieldErrors: Record<string, string> = {}
+      for (const issue of input.error.issues) fieldErrors[issue.path.length ? issue.path.join('.') : '_'] = issue.message
+      return jobSaveResultSchema.parse({ ok: false, error: { code: 'VALIDATION_ERROR', message: 'Enter a title, company, and job description.', fieldErrors } })
+    }
+    return jobSaveResultSchema.parse(await workspace!.api.saveJob(input.data))
+  })
+  ipcMain.handle('jobs:list', async (event, ...args: unknown[]) => {
+    trusted(event)
+    if (args.length) throw new Error('Unexpected arguments')
+    return jobRecordSchema.array().parse(await workspace!.api.listJobs())
+  })
+  ipcMain.handle('jobs:open', async (event, ...args: unknown[]) => {
+    trusted(event)
+    if (args.length !== 1) throw new Error('Expected job ID')
+    const id = uuidSchema.safeParse(args[0])
+    if (!id.success) throw new Error('Invalid job ID')
+    const job = await workspace!.api.openJob(id.data)
+    return job === null ? null : jobRecordSchema.parse(job)
   })
 
   window = new BrowserWindow({
