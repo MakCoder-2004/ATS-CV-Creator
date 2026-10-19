@@ -19,8 +19,31 @@ test('profile contact and categorized skills can be created, edited, and deleted
     await page.getByRole('button', { name: 'My profile' }).click()
     await expect(page.getByRole('heading', { name: 'My profile' })).toBeVisible()
     const sections = page.getByRole('navigation', { name: 'Profile sections' })
-    await expect(sections).toHaveCSS('flex-direction', 'row')
     await expect(sections.getByRole('button')).toHaveCount(9)
+    for (const [width, columns] of [[1600, 9], [1280, 9], [1180, 3], [900, 3], [680, 3], [375, 3]]) {
+      await page.setViewportSize({ width, height: 700 })
+      const layout = await sections.evaluate(nav => {
+        const rows: DOMRect[][] = []
+        for (const button of Array.from(nav.querySelectorAll('button'))) {
+          const rect = button.getBoundingClientRect()
+          if (!rows.length || Math.abs(rows[rows.length - 1][0].top - rect.top) > 1) rows.push([])
+          rows[rows.length - 1].push(rect)
+        }
+        const style = getComputedStyle(nav)
+        return {
+          innerWidth: nav.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight),
+          scrollWidth: nav.scrollWidth, clientWidth: nav.clientWidth,
+          rows: rows.map(row => ({ count: row.length, filledWidth: row[row.length - 1].right - row[0].left, widths: row.map(rect => rect.width) }))
+        }
+      })
+      expect(layout.rows).toHaveLength(9 / columns)
+      expect(layout.scrollWidth).toBeLessThanOrEqual(layout.clientWidth)
+      for (const row of layout.rows) {
+        expect(row.count).toBe(columns)
+        expect(Math.max(...row.widths) - Math.min(...row.widths)).toBeLessThan(1)
+        expect(Math.abs(row.filledWidth - layout.innerWidth)).toBeLessThan(2)
+      }
+    }
     await page.setViewportSize({ width: 680, height: 700 })
     await expect(sections.getByRole('button', { name: /Extras/ })).toBeVisible()
     await expect(sections.getByRole('button', { name: 'Personal', exact: true })).toHaveAttribute('aria-current', 'page')

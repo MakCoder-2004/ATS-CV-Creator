@@ -129,11 +129,11 @@ nav button:hover, nav button[aria-current=page] { background: var(--raised); col
 .profile-summary strong { display: block; font-size: 15px; overflow-wrap: anywhere; }
 .profile-summary p { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
 .profile-local-label { margin-left: auto; flex-shrink: 0; color: var(--muted); font-size: 12px; }
-.profile-sections { display: flex; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 3px 6px; padding: 5px; background: var(--raised); border: 1px solid var(--line); border-radius: 7px; }
-.profile-sections button { display: flex; align-items: center; gap: 5px; min-height: 40px; padding: 7px 10px; border: 0; border-radius: 4px; color: var(--ink); background: transparent; font-size: 12px; font-weight: 650; }
+.profile-sections { display: grid; grid-template-columns: repeat(9, minmax(0, 1fr)); gap: 4px; padding: 5px; background: var(--raised); border: 1px solid var(--line); border-radius: 7px; }
+.profile-sections button { display: flex; flex-wrap: wrap; justify-content: center; align-content: center; align-items: center; gap: 3px 5px; min-width: 0; min-height: 48px; padding: 6px 4px; border: 0; border-radius: 4px; color: var(--ink); background: transparent; font-size: 12px; font-weight: 650; text-align: center; overflow-wrap: anywhere; }
 .profile-sections button:hover { background: var(--surface); }
 .profile-sections button[aria-current=page] { color: var(--link); background: var(--surface); box-shadow: inset 0 -2px var(--link); }
-.profile-upcoming { color: var(--muted); font-size: 10px; font-weight: 450; }
+.profile-upcoming { color: var(--muted); font-size: 10px; font-weight: 450; white-space: nowrap; }
 .profile-upcoming-panel { min-height: 170px; }
 .profile-upcoming-panel h2 { margin-top: 4px; }
 .profile-upcoming-panel p { color: var(--muted); margin-top: 12px; max-width: 65ch; }
@@ -192,6 +192,9 @@ nav button:hover, nav button[aria-current=page] { background: var(--raised); col
 .profile-panel[role=status] { color: var(--muted); }
 :root[data-appearance=dark] .field-error, :root[data-appearance=dark] .destructive { color: #ffb9c1; }
 :root[data-appearance=dark] .form-grid [aria-invalid=true], :root[data-appearance=dark] .link-row [aria-invalid=true] { border-color: #ffb9c1; }
+@media (max-width: 1200px) {
+  .profile-sections { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
 @media (max-width: 760px) {
   .profile-layout { padding: 0 16px 24px; }
   .profile-panel { padding: 18px; }
@@ -201,8 +204,6 @@ nav button:hover, nav button[aria-current=page] { background: var(--raised); col
   .profile-local-label { margin-left: 56px; }
   .form-grid, .contact-summary dl, .link-row { grid-template-columns: minmax(0, 1fr); }
   .link-row .text-button { justify-self: start; }
-  .profile-sections { gap: 3px; }
-  .profile-sections button { padding: 7px 8px; }
   .wide-field { grid-column: auto; }
   .panel-heading { flex-direction: column; }
   .skill-list li { align-items: flex-start; flex-direction: column; }
