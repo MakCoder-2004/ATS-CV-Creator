@@ -13,10 +13,14 @@ export interface FieldSelectProps {
 
 export function FieldSelect({ label, id, value, onValueChange, options, error }: FieldSelectProps) {
   const errorId = `${id}-error`;
+  const emptyValueOption = options.some((option) => option.value === '');
+  let emptySentinel = '__field_select_empty__';
+  while (options.some((option) => option.value === emptySentinel)) emptySentinel += '_';
+  const rootValue = value === '' && emptyValueOption ? emptySentinel : value || undefined;
   return (
     <div className="field-control">
       <label className="field-control-label" htmlFor={id}>{label}</label>
-      <Select.Root value={value || undefined} onValueChange={onValueChange}>
+      <Select.Root value={rootValue} onValueChange={(nextValue) => onValueChange(nextValue === emptySentinel ? '' : nextValue)}>
         <Select.Trigger
           id={id}
           className="field-select-trigger"
@@ -32,7 +36,7 @@ export function FieldSelect({ label, id, value, onValueChange, options, error }:
             <Select.ScrollUpButton className="field-select-scroll"><ChevronUp size={16} /></Select.ScrollUpButton>
             <Select.Viewport className="field-select-viewport">
               {options.map((option) => (
-                <Select.Item className="field-select-item" key={option.value} value={option.value}>
+                <Select.Item className="field-select-item" key={option.value || emptySentinel} value={option.value === '' ? emptySentinel : option.value}>
                   <Select.ItemText>{option.label}</Select.ItemText>
                   <Select.ItemIndicator className="field-select-check"><Check size={15} aria-hidden="true" /></Select.ItemIndicator>
                 </Select.Item>

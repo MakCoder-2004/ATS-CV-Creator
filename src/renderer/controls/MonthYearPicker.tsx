@@ -15,7 +15,9 @@ export interface MonthYearPickerProps {
 const MIN_YEAR = 1900;
 const MAX_YEAR = 2200;
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
-const YEARS = Array.from({ length: MAX_YEAR - MIN_YEAR + 1 }, (_, i) => MAX_YEAR - i);
+const YEARS_PER_PAGE = 12;
+const lastYearPage = MAX_YEAR - YEARS_PER_PAGE + 1;
+const getYearPageStart = (year: number) => Math.min(MIN_YEAR + Math.floor((year - MIN_YEAR) / YEARS_PER_PAGE) * YEARS_PER_PAGE, lastYearPage);
 
 function decode(value?: string) {
   const match = value?.match(/^(\d{4})(?:-(\d{2}))?$/);
@@ -30,7 +32,8 @@ export function MonthYearPicker({ label, id, value, onChange, yearOnly = false, 
   const fallback = new Date().getFullYear();
   const [open, setOpen] = useState(false);
   const [shown, setShown] = useState(() => ({ year: parsed?.year ?? fallback, month: parsed?.month ?? new Date().getMonth() }));
-  const [choosingYear, setChoosingYear] = useState(false);
+  const [choosingYear, setChoosingYear] = useState(yearOnly);
+  const [yearPageStart, setYearPageStart] = useState(() => getYearPageStart(parsed?.year ?? fallback));
   const errorId = `${id}-error`;
   const display = value ? (decode(value) ? (value.length === 4 ? value : `${MONTHS[Number(value.slice(5, 7)) - 1]} ${value.slice(0, 4)}`) : value) : '';
   const chooseYear = (year: number) => {
@@ -43,7 +46,7 @@ export function MonthYearPicker({ label, id, value, onChange, yearOnly = false, 
   return (
     <div className="field-control">
       <label className="field-control-label" htmlFor={id}>{label}</label>
-      <Popover.Root open={open} onOpenChange={(next) => { setOpen(next); if (next) { const current = decode(value); if (current) setShown({ year: current.year, month: current.month ?? new Date().getMonth() }); } else setChoosingYear(false); }}>
+      <Popover.Root open={open} onOpenChange={(next) => { setOpen(next); if (next) { const current = decode(value); const year = current?.year ?? fallback; if (current) setShown({ year, month: current.month ?? new Date().getMonth() }); setYearPageStart(getYearPageStart(year)); setChoosingYear(yearOnly); } else setChoosingYear(false); }}>
         <div className="month-year-input-wrap">
           <Popover.Trigger asChild>
             <button id={id} type="button" className="month-year-trigger" aria-label={`${label}${display ? `: ${display}` : ''}`} aria-invalid={error ? true : undefined} aria-describedby={error ? errorId : undefined}>
@@ -54,20 +57,27 @@ export function MonthYearPicker({ label, id, value, onChange, yearOnly = false, 
           {value && <button type="button" className="month-year-clear" aria-label={`Clear ${label}`} onClick={() => onChange(undefined)}><X size={15} /></button>}
         </div>
         <Popover.Portal>
-          <Popover.Content className="month-year-popover" sideOffset={6} align="start" onOpenAutoFocus={(event) => event.preventDefault()}>
+          <Popover.Content className="month-year-popover" sideOffset={6} align="start">
             <div className="month-year-heading">
-              {!yearOnly && <button type="button" className="month-year-nav" aria-label="Previous year" disabled={shown.year === MIN_YEAR} onClick={() => setShown((current) => ({ ...current, year: Math.max(MIN_YEAR, current.year - 1) }))}><ChevronLeft size={17} /></button>}
-              <button type="button" className="month-year-title" aria-expanded={choosingYear} onClick={() => setChoosingYear((current) => !current)}>{yearOnly ? 'Choose year' : String(shown.year)}<ChevronDown size={15} /></button>
-              {!yearOnly && <button type="button" className="month-year-nav" aria-label="Next year" disabled={shown.year === MAX_YEAR} onClick={() => setShown((current) => ({ ...current, year: Math.min(MAX_YEAR, current.year + 1) }))}><ChevronRight size={17} /></button>}
+              {!yearOnly && !choosingYear && <button type="button" className="month-year-nav" aria-label="Previous year" disabled={shown.year === MIN_YEAR} onClick={() => setShown((current) => ({ ...current, year: Math.max(MIN_YEAR, current.year - 1) }))}><ChevronLeft size={17} /></button>}
+              <button type="button" className="month-year-title" aria-expanded={choosingYear} onClick={() => { setYearPageStart(getYearPageStart(shown.year)); setChoosingYear((current) => !current); }}>{yearOnly ? 'Choose year' : String(shown.year)}<ChevronDown size={15} /></button>
+              {!yearOnly && !choosingYear && <button type="button" className="month-year-nav" aria-label="Next year" disabled={shown.year === MAX_YEAR} onClick={() => setShown((current) => ({ ...current, year: Math.min(MAX_YEAR, current.year + 1) }))}><ChevronRight size={17} /></button>}
             </div>
-            {choosingYear ? <div className="month-year-years" role="listbox" aria-label="Year">
-              {YEARS.map((year) => <button type="button" role="option" aria-selected={year === shown.year} key={year} onClick={() => chooseYear(year)}>{year}</button>)}
-            </div> : yearOnly ? <div className="month-year-range">Select a year from {MIN_YEAR} to {MAX_YEAR}</div> : <div className="month-year-months" aria-label={`Choose a month in ${shown.year}`}>
+            {choosingYear ? <>
+              <div className="month-year-years-heading">
+                <button type="button" aria-label={`Previous ${YEARS_PER_PAGE} years`} disabled={yearPageStart === MIN_YEAR} onClick={() => setYearPageStart((start) => Math.max(MIN_YEAR, start - YEARS_PER_PAGE))}><ChevronLeft size={16} /></button>
+                <span>{yearPageStart}–{Math.min(MAX_YEAR, yearPageStart + YEARS_PER_PAGE - 1)}</span>
+                <button type="button" aria-label={`Next ${YEARS_PER_PAGE} years`} disabled={yearPageStart >= lastYearPage} onClick={() => setYearPageStart((start) => Math.min(lastYearPage, start + YEARS_PER_PAGE))}><ChevronRight size={16} /></button>
+              </div>
+              <div className="month-year-years" role="listbox" aria-label="Year">
+                {Array.from({ length: Math.min(YEARS_PER_PAGE, MAX_YEAR - yearPageStart + 1) }, (_, index) => yearPageStart + index).map((year) => <button type="button" role="option" aria-selected={year === shown.year} key={year} onClick={() => chooseYear(year)}>{year}</button>)}
+              </div>
+            </> : yearOnly ? <div className="month-year-range">Select a year from {MIN_YEAR} to {MAX_YEAR}</div> : <div className="month-year-months" aria-label={`Choose a month in ${shown.year}`}>
               {MONTHS.map((month, index) => <button type="button" key={month} className={parsed?.year === shown.year && parsed.month === index ? 'is-selected' : ''} aria-pressed={parsed?.year === shown.year && parsed.month === index} onClick={() => chooseMonth(index)}>{month.slice(0, 3)}</button>)}
             </div>}
             {yearOnly && <button type="button" className="month-year-this-year" onClick={() => chooseYear(fallback)}>Use this year ({fallback})</button>}
             {!yearOnly && <div className="month-year-actions">
-              <button type="button" className="month-year-this-year" onClick={() => chooseYear(shown.year)}>Use year only</button>
+              <button type="button" className="month-year-this-year" onClick={() => { onChange(String(shown.year)); setOpen(false); setChoosingYear(false); }}>Use year only</button>
               <button type="button" className="month-year-this-year" onClick={() => chooseMonth(new Date().getMonth())}>This month</button>
             </div>}
           </Popover.Content>

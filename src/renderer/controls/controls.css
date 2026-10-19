@@ -39,7 +39,11 @@
 .month-year-months button, .month-year-years button { min-height: 38px; border: 0; border-radius: 5px; color: var(--ink); background: transparent; }
 .month-year-months button:hover, .month-year-years button:hover { color: var(--link); background: var(--raised); }
 .month-year-months button.is-selected, .month-year-years button[aria-selected=true] { color: white; background: var(--blue); }
-.month-year-years { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; max-height: 240px; overflow-y: auto; }
+.month-year-years-heading { display: flex; align-items: center; justify-content: space-between; margin: 0 0 6px; color: var(--muted); font-size: 12px; }
+.month-year-years-heading button { display: grid; place-items: center; width: 32px; height: 32px; border: 0; border-radius: 5px; color: var(--ink); background: transparent; }
+.month-year-years-heading button:hover { background: var(--raised); }
+.month-year-years-heading button:disabled { opacity: .4; cursor: not-allowed; }
+.month-year-years { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
 .month-year-range { padding: 14px 4px; color: var(--muted); font-size: 12px; text-align: center; }
 .month-year-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
 .month-year-this-year { width: 100%; min-height: 36px; margin-top: 7px; border: 0; border-top: 1px solid var(--line); color: var(--link); background: transparent; font: inherit; font-size: 12px; font-weight: 650; }
