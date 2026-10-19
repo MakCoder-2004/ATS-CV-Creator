@@ -1,10 +1,11 @@
-import React, { FormEvent, useEffect, useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { BriefcaseBusiness, FileText, LayoutPanelLeft, Moon, Settings2, Sun, UserRound } from 'lucide-react'
 import type { Appearance } from '../shared/appearance'
 import { GeminiSettingsPanel } from './GeminiSettings'
 import { ProfileEditor } from './ProfileEditor'
 import { SavedJobs } from './SavedJobs'
+import { WorkbenchStart } from './WorkbenchStart'
 import type { JobRecord } from '../shared/jobs'
 import './style.css'
 
@@ -55,8 +56,8 @@ function App() {
       <header className="header"><span className="breadcrumb">Workspace <span aria-hidden="true">/</span> {page}</span><AppearanceControls className="header-appearance" appearance={appearance} change={value => void changeAppearance(value)} /></header>
       {error && <p role="alert" className="error">{error}</p>}
       <main id="content" tabIndex={-1}>
-        <div className="title"><span className="context">Personal workspace</span><h1>{page === 'Tailor CV' ? 'Start with your experience' : page}</h1><p>{page === 'Tailor CV' ? 'Build your profile, then tailor a CV to a saved posting.' : page === 'Saved jobs' ? 'Keep original job postings ready to revisit, even offline.' : page === 'My profile' ? 'Keep the career facts that support your CV in one place.' : 'Manage the model and credentials for future CV generation.'}</p></div>
-        {page === 'Tailor CV' ? <div className="columns"><section className="document-area" aria-label="CV document"><div className="document-toolbar"><span>CV document</span><span>{activeJob ? `Target: ${activeJob.title} · ${activeJob.company}` : 'Not started'}</span></div><div className="paper-wrap"><article className="paper"><div className="paper-header"><strong>Your name</strong><span>Your CV begins here</span></div><div className="paper-rule" /><h2>Education</h2><div className="paper-line" /><h2>Experience</h2><div className="paper-line" /><h2>Projects</h2><div className="paper-line" /><h2>Skills</h2><div className="paper-line" /><h2>Certificates</h2><div className="paper-line" /><p className="paper-hint">Add your career facts in My profile.</p></article></div></section><aside className="inspector" aria-label="Evidence and coverage"><div className="inspector-tabs"><span>Evidence</span><span>Coverage</span></div><div className="inspector-content"><h2>Nothing to inspect yet</h2><p>Once a draft is generated, select a paragraph to see its supporting profile evidence here.</p><div className="inspector-divider" /><h2>Qualification gaps</h2><p>Job requirements without supporting experience will appear as advisory gaps, not invented claims.</p></div></aside></div> : page === 'My profile' ? <ProfileEditor /> : page === 'Saved jobs' ? <SavedJobs jobs={jobs} activeJob={activeJob} onSaved={keepJob} onOpened={keepJob} /> : <div className="settings-page"><GeminiSettingsPanel /></div>}
+        {page === 'Tailor CV' ? <div className="title cv-title"><h1>Your CV workbench</h1><p>Bring your original career facts and a saved job together before drafting a tailored CV.</p></div> : <div className="title"><span className="context">Personal workspace</span><h1>{page}</h1><p>{page === 'Saved jobs' ? 'Keep original job postings ready to revisit, even offline.' : page === 'My profile' ? 'Keep the career facts that support your CV in one place.' : 'Manage the model and credentials for future CV generation.'}</p></div>}
+        {page === 'Tailor CV' ? <WorkbenchStart activeJob={activeJob} jobCount={jobs.length} onNavigate={setPage} /> : page === 'My profile' ? <ProfileEditor /> : page === 'Saved jobs' ? <SavedJobs jobs={jobs} activeJob={activeJob} onSaved={keepJob} onOpened={keepJob} /> : <div className="settings-page"><GeminiSettingsPanel /></div>}
       </main>
     </div>
   </div>

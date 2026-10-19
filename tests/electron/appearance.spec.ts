@@ -14,7 +14,7 @@ test('workbench opens and remembers a keyboard-accessible appearance choice', as
     first = await launch()
     const firstPage = await first.firstWindow()
     await expect(firstPage.locator('[data-ui-ready="true"]')).toBeVisible()
-    await expect(firstPage.getByRole('heading', { name: 'Start with your experience' })).toBeVisible()
+    await expect(firstPage.getByRole('heading', { name: 'Your CV workbench' })).toBeVisible()
     await expect(firstPage.getByRole('button', { name: 'Use light mode' })).toHaveAttribute('aria-pressed', 'true')
     expect(await firstPage.evaluate(() => Object.keys(window.workbench).sort())).toEqual(['deleteContact', 'deleteExperience', 'deleteProfileEntry', 'deleteProject', 'deleteSkill', 'getEvidenceHistory', 'getExperience', 'getProfile', 'getSettings', 'listJobs', 'openJob', 'removeGeminiApiKey', 'saveContact', 'saveExperience', 'saveGeminiApiKey', 'saveJob', 'saveProfileEntry', 'saveProject', 'saveSkill', 'setAppearance', 'setGeminiModel'])
     expect(await firstPage.evaluate(() => typeof (window as Window & { require?: unknown }).require)).toBe('undefined')
