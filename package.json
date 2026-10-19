@@ -1,0 +1,11 @@
+{
+  "name": "cv-tailor-prototype-workspace",
+  "private": true,
+  "version": "0.0.0",
+  "workspaces": ["prototypes/cv-tailor-ui"],
+  "scripts": {
+    "prototype": "npm run dev --workspace @cv-tailor/ui-prototype",
+    "prototype:build": "npm run build --workspace @cv-tailor/ui-prototype",
+    "prototype:typecheck": "npm run typecheck --workspace @cv-tailor/ui-prototype"
+  }
+}
