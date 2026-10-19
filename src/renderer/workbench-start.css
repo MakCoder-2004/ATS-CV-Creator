@@ -111,6 +111,17 @@
 .cv-workbench-start .inspector-future .future-note { margin-top: 16px; padding-top: 15px; border-top: 1px solid var(--line); }
 .cv-workbench-start .inspector-error, .cv-workbench-start .inspector-loading { padding: 20px 23px; color: var(--muted); }
 .cv-workbench-start .inspector-error button { margin-top: 12px; }
+.cv-workbench-start .outbound-consent { padding: 22px 23px; border-top: 1px solid var(--line); }
+.cv-workbench-start .outbound-consent h3 { margin: 0; font-size: 14px; }
+.cv-workbench-start .outbound-consent p { margin: 9px 0 13px; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.cv-workbench-start .outbound-consent .secondary-button { max-width: 100%; }
+.cv-workbench-start .outbound-review { margin-top: 16px; padding: 16px; border: 1px solid var(--line); border-radius: 8px; background: var(--raised); }
+.cv-workbench-start .outbound-review h4 { margin: 0; font-size: 13px; }
+.cv-workbench-start .outbound-review pre { max-height: 280px; overflow: auto; margin: 12px 0; padding: 12px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--ink); font: 11px/1.6 ui-monospace, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.cv-workbench-start .outbound-review a { color: var(--link); text-decoration: underline; text-underline-offset: 2px; }
+.cv-workbench-start .outbound-ack { display: flex; align-items: flex-start; gap: 8px; margin: 16px 0; font-size: 12px; line-height: 1.5; }
+.cv-workbench-start .outbound-ack input { margin: 2px 0 0; flex: none; accent-color: var(--link); }
+.cv-workbench-start .outbound-actions { display: flex; flex-wrap: wrap; gap: 9px; }
 @media (max-width: 1080px) {
   .cv-workbench-start { grid-template-columns: minmax(0, 1fr); }
   .cv-workbench-start .inspector { order: -1; position: static; }

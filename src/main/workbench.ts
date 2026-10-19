@@ -437,8 +437,13 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       }
       try {
         const record = outboundEngine.grantConsent(pending.runId, pending.bundle, { accepted, freeTierTermsAcknowledged })
+        try {
+          db.prepare('INSERT INTO outbound_consents (id, run_id, scope_hash, created_at, revoked) VALUES (?, ?, ?, ?, 0)').run(record.id, pending.runId, pending.bundle.scopeHash, record.createdAt)
+        } catch {
+          outboundEngine.revoke(record.id)
+          return outboundConsentActionSchema.parse({ ok: false, message: 'Consent could not be saved. No request was sent.' })
+        }
         pending.consentId = record.id
-        db.prepare('INSERT INTO outbound_consents (id, run_id, scope_hash, created_at, revoked) VALUES (?, ?, ?, ?, 0)').run(record.id, pending.runId, pending.bundle.scopeHash, record.createdAt)
         return outboundConsentActionSchema.parse({ ok: true, runId: pending.runId, message: 'Consent saved for this run only. No provider request was sent.' })
       } catch (error) { return outboundConsentActionSchema.parse({ ok: false, message: error instanceof Error ? error.message : 'Consent could not be saved.' }) }
     },

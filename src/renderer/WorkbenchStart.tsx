@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { BriefcaseBusiness, FileText, UserRound } from 'lucide-react'
 import type { ExperienceSnapshot } from '../shared/experience'
 import type { JobRecord } from '../shared/jobs'
 import type { ProfileSnapshot } from '../shared/profile'
+import type { OutboundConsentPreview } from '../shared/outbound-consent-contract'
 import './workbench-start.css'
 
 type LocalSources = { profile: ProfileSnapshot; evidence: ExperienceSnapshot }
@@ -22,6 +23,61 @@ export function WorkbenchStart({ activeJob, jobCount, onNavigate }: { activeJob:
   const [sources, setSources] = useState<LocalSources | null>(null)
   const [error, setError] = useState('')
   const [attempt, setAttempt] = useState(0)
+  const [review, setReview] = useState<Extract<OutboundConsentPreview, { ok: true }> | null>(null)
+  const [consentAccepted, setConsentAccepted] = useState(false)
+  const [termsAcknowledged, setTermsAcknowledged] = useState(false)
+  const [consentError, setConsentError] = useState('')
+  const [consentBusy, setConsentBusy] = useState(false)
+  const pendingToken = useRef<string | null>(null)
+  const selectedJob = useRef(activeJob?.id)
+  selectedJob.current = activeJob?.id
+  useEffect(() => {
+    setReview(null); setConsentAccepted(false); setTermsAcknowledged(false); setConsentError('')
+    return () => {
+      const token = pendingToken.current
+      pendingToken.current = null
+      if (token) void window.workbench.cancelOutboundConsent(token).catch(() => {})
+    }
+  }, [activeJob?.id, activeJob?.updatedAt])
+
+  async function inspectOutgoing() {
+    if (!activeJob || consentBusy) return
+    setConsentBusy(true); setConsentError('')
+    try {
+      const result = await window.workbench.prepareOutboundConsent(activeJob.id)
+      if (selectedJob.current !== activeJob.id) {
+        if (result.ok) void window.workbench.cancelOutboundConsent(result.token)
+        return
+      }
+      if (!result.ok) { setConsentError(result.message); return }
+      pendingToken.current = result.token
+      setTermsAcknowledged(false); setConsentAccepted(false); setReview(result)
+    } catch { setConsentError('Outgoing data could not be prepared. Try again.') }
+    finally { setConsentBusy(false) }
+  }
+  async function cancelOutgoing() {
+    const token = pendingToken.current
+    if (!token || consentBusy) return
+    setConsentBusy(true); setConsentError('')
+    try {
+      const result = await window.workbench.cancelOutboundConsent(token)
+      if (!result.ok) { setConsentError(result.message); return }
+      pendingToken.current = null
+      setReview(null); setConsentAccepted(false); setTermsAcknowledged(false)
+    } catch { setConsentError('This run could not be cancelled. Try again.') }
+    finally { setConsentBusy(false) }
+  }
+  async function authorizeOutgoing() {
+    const token = pendingToken.current
+    if (!token || !termsAcknowledged || consentBusy) return
+    setConsentBusy(true); setConsentError('')
+    try {
+      const result = await window.workbench.acceptOutboundConsent(token, true, true)
+      if (!result.ok) { setConsentError(result.message); return }
+      setConsentAccepted(true)
+    } catch { setConsentError('Consent could not be saved. Review the data and try again.') }
+    finally { setConsentBusy(false) }
+  }
   useEffect(() => {
     let mounted = true
     Promise.all([window.workbench.getProfile(), window.workbench.getExperience()])
@@ -65,6 +121,23 @@ export function WorkbenchStart({ activeJob, jobCount, onNavigate }: { activeJob:
         <li><span className="prep-index" aria-hidden="true">01</span><div className="prep-content"><div className="prep-label"><UserRound size={16} aria-hidden="true" /><h3>Your profile</h3></div><p>{total ? `${total} ${total === 1 ? 'record' : 'records'} across CV sections${profile?.contact ? ', with your name saved' : ''}.` : profile?.contact ? 'Your name is saved. Add experience or other CV facts next.' : 'Add your name and genuine career facts.'}</p><button type="button" className="prep-link" onClick={() => onNavigate('My profile')}>{total ? 'Review profile' : 'Build your profile'}</button></div></li>
         <li><span className="prep-index" aria-hidden="true">02</span><div className="prep-content"><div className="prep-label"><BriefcaseBusiness size={16} aria-hidden="true" /><h3>Target job</h3></div><p>{activeJob ? `${activeJob.title} at ${activeJob.company} is selected.` : jobCount ? `${jobCount} saved ${jobCount === 1 ? 'posting' : 'postings'}. Choose the role you want to target.` : 'Save a posting so you can return to its original requirements.'}</p><button type="button" className="prep-link" onClick={() => onNavigate('Saved jobs')}>{activeJob ? 'Change target' : jobCount ? 'Choose a saved job' : 'Save a job posting'}</button></div></li>
       </ol>}
+      {activeJob && <div className="outbound-consent">
+        <h3>Cloud data review</h3>
+        <p>Inspect minimized posting and profile facts before deciding whether to authorize a run. Inspection alone sends nothing.</p>
+        {!review && <button type="button" className="secondary-button" disabled={consentBusy} onClick={() => void inspectOutgoing()}>{consentBusy ? 'Preparing review…' : 'Inspect outgoing data'}</button>}
+        {review && <section className="outbound-review" aria-label="Outgoing data review">
+          <h4>Data that could be sent</h4>
+          <p>Target: {review.jobTitle} at {review.jobCompany}. These names are displayed locally; inspect the data below for what is eligible to leave this device.</p>
+          <pre aria-label="Eligible outgoing bundle">{JSON.stringify(review.outgoing, null, 2)}</pre>
+          <p>{review.warning}</p>
+          <p>{review.termsNotice} <a href="https://ai.google.dev/gemini-api/terms" target="_blank" rel="noopener noreferrer">Gemini API terms</a>.</p>
+          {!consentAccepted ? <>
+            <label className="outbound-ack"><input type="checkbox" checked={termsAcknowledged} onChange={event => setTermsAcknowledged(event.target.checked)} />I understand the Gemini free-tier data-use terms and have reviewed this exact bundle.</label>
+            <div className="outbound-actions"><button type="button" className="primary-button" disabled={!termsAcknowledged || consentBusy} onClick={() => void authorizeOutgoing()}>Authorize this run</button><button type="button" className="secondary-button" disabled={consentBusy} onClick={() => void cancelOutgoing()}>Cancel review</button></div>
+          </> : <><p role="status">Consent saved for this run only. No provider request was sent. Drafting is not available yet.</p><button type="button" className="secondary-button" disabled={consentBusy} onClick={() => void cancelOutgoing()}>Revoke this run</button></>}
+        </section>}
+        {consentError && <p className="inspector-error" role="alert">{consentError}</p>}
+      </div>}
       <div className="inspector-future"><h3>Evidence &amp; coverage</h3><p>Once a draft exists, this space will show its sources and qualification gaps. No posting has been analyzed here.</p><p className="future-note">Drafting isn't available yet. Nothing is sent to Gemini from this page.</p></div>
     </aside>
   </div>
