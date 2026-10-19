@@ -52,6 +52,7 @@ export function ProfileEditor() {
     } finally { setLoading(false) }
   }
   useEffect(() => { void reload() }, [])
+  useEffect(() => () => { if (importPreview?.token) void window.workbench.cancelProfileImport(importPreview.token).catch(() => {}) }, [importPreview?.token])
 
   function updateContact(field: keyof ContactInput, value: string) {
     setContact(current => ({ ...current, [field]: value }))
@@ -133,6 +134,13 @@ export function ProfileEditor() {
       setImportPreview(result)
     } catch { setMutationError('Could not read the selected profile file. Choose a valid JSON file and try again.') }
   }
+  async function cancelImport() {
+    if (!importPreview) return
+    const token = importPreview.token
+    setImportPreview(null)
+    try { await window.workbench.cancelProfileImport(token) }
+    catch { setMutationError('The replacement preview could not be cleared. Reopen the profile before importing.') }
+  }
   async function applyImport() {
     if (!importPreview) return
     try {
@@ -145,9 +153,10 @@ export function ProfileEditor() {
   const categories = [...new Set([...(snapshot?.skills ?? []).map(item => item.category), ...skillCategories])]
   if (loading) return <section className="profile-panel" role="status">Loading your local profile…</section>
   return <div className="profile-layout">
-    <div className="profile-summary"><span className="profile-avatar"><UserRound size={22} aria-hidden="true" /></span><div><strong>{snapshot?.contact?.fullName ?? 'Start your profile'}</strong><p>{snapshot?.contact?.headline ?? 'Your career facts, organized by section.'}</p></div><span className="profile-local-label">Saved on this device</span><span className="profile-local-label">JSON includes personal profile data; store it safely.</span><button className="secondary-button" type="button" onClick={() => void exportProfile()}>Export profile JSON</button><button className="secondary-button" type="button" onClick={() => void previewImport()}>Import profile JSON</button></div>
+    <div className="profile-summary"><span className="profile-avatar"><UserRound size={22} aria-hidden="true" /></span><div><strong>{snapshot?.contact?.fullName ?? 'Start your profile'}</strong><p>{snapshot?.contact?.headline ?? 'Your career facts, organized by section.'}</p></div><span className="profile-local-label">Saved on this device</span></div>
+    <section className="profile-exchange-toolbar" aria-label="Profile JSON exchange"><div><strong>Profile files</strong><p>JSON exports include personal profile data. Store them securely; importing replaces your current profile after review.</p></div><div className="profile-exchange-actions"><button className="secondary-button" type="button" onClick={() => void exportProfile()}>Export profile JSON</button><button className="secondary-button" type="button" onClick={() => void previewImport()}>Import profile JSON</button></div></section>
     <PdfImportPanel onApplied={async message => { await reload(); setNotice(message) }} />
-    {importPreview && <section className="profile-panel" role="dialog" aria-modal="true" aria-labelledby="import-preview-title"><h2 id="import-preview-title">Replace profile from JSON?</h2><p>This file contains personal data. Importing replaces your current profile; it does not merge records. Historical evidence revisions used by older drafts will be retained.</p><p>Current records: {importPreview.current.records}. Replacement records: {importPreview.replacement.records}.</p><ul aria-label="Replacement effects">{importPreview.effects.length ? importPreview.effects.map((effect, index) => <li key={`${effect.section}-${effect.action}-${index}`}>{effect.section} — {effect.action}: {effect.action === 'add' ? effect.replacementLabel : effect.action === 'remove' ? effect.currentLabel : `${effect.currentLabel} → ${effect.replacementLabel}`}</li>) : <li>No record-level changes detected.</li>}</ul><button className="primary-button" type="button" onClick={() => void applyImport()}>Confirm replacement</button><button className="secondary-button" type="button" onClick={() => setImportPreview(null)}>Cancel</button></section>}
+    {importPreview && <section className="profile-panel" role="dialog" aria-labelledby="import-preview-title"><h2 id="import-preview-title">Replace profile from JSON?</h2><p>This file contains personal data. Importing replaces your current profile; it does not merge records. Historical evidence revisions used by older drafts will be retained.</p><p>Current records: {importPreview.current.records}. Replacement records: {importPreview.replacement.records}.</p><ul aria-label="Replacement effects">{importPreview.effects.length ? importPreview.effects.map((effect, index) => <li key={`${effect.section}-${effect.action}-${index}`}>{effect.section} — {effect.action}: {effect.action === 'add' ? effect.replacementLabel : effect.action === 'remove' ? effect.currentLabel : `${effect.currentLabel} → ${effect.replacementLabel}`}</li>) : <li>No record-level changes detected.</li>}</ul><button className="primary-button" type="button" onClick={() => void applyImport()}>Confirm replacement</button><button className="secondary-button" type="button" onClick={() => void cancelImport()}>Cancel</button></section>}
     <nav className="profile-sections" aria-label="Profile sections">{profileSections.map(section => <button key={section} type="button" aria-current={activeSection === section ? 'page' : undefined} onClick={() => { setActiveSection(section); setMutationError(''); setNotice(''); setFieldErrors({}) }}>{section}</button>)}</nav>
     {activeSection === 'Personal' && <section className="profile-panel" aria-labelledby="contact-heading">
       <div className="panel-heading"><div><span className="context">Identity</span><h2 id="contact-heading">Contact details</h2><p>Keep the details you want available when preparing your CV.</p></div>

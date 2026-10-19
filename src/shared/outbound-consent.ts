@@ -1,9 +1,11 @@
 import { createHash } from 'node:crypto'
 
+export type EvidenceScopeRevision = readonly [id: string, revision: number]
+
 export interface ConsentSource {
   job: { id: string; revision: string | number; title: string; company: string; description: string }
   profile: {
-    revision: string | number
+    revision: readonly EvidenceScopeRevision[]
     contact: { fullName: string; email?: string; phone?: string; location?: string; [key: string]: unknown } | null
     experience: Array<{ id: string; revision: number; kind?: string; title: string; organization: string; startDate?: string; endDate?: string; description: string; factualItems?: Array<{ id?: string; revision?: number; text: string }> }>
     projects: Array<{ id: string; revision: number; name: string; description: string; factualItems?: Array<{ id?: string; revision?: number; text: string }>; technologies?: Array<{ id?: string; revision?: number; text: string }>; links?: unknown[] }>
@@ -22,6 +24,7 @@ export interface OutboundBundle {
   readonly restoreIdentifiers: (text: string) => string
   readonly containsRestoredIdentifier: (value: unknown) => boolean
   readonly isAuthorizedText: (text: string) => boolean
+  readonly isAuthorizedPayload: (payload: unknown) => boolean
   readonly verifyIntegrity: () => boolean
 }
 
@@ -87,17 +90,41 @@ export function prepareOutboundBundle(source: ConsentSource): OutboundBundle {
   const frozen = deepFreeze(outgoing)
   const frozenScope = deepFreeze(scope)
   const scopeHash = digest({ outgoing: frozen, scope: frozenScope })
-  const containsRestoredIdentifier = (value: unknown): boolean => {
-    if (typeof value === 'string') return identifiers.some(({ value: identifier }) => identifier.length > 2 && value.toLocaleLowerCase().includes(identifier.toLocaleLowerCase())) || /\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b/.test(value) || /\b(?:\+?\d[\d ().-]{7,}\d)\b/.test(value) || /\b(?:19|20)\d{2}-(?:0[1-9]|1[0-2])(?:-(?:0[1-9]|[12]\d|3[01]))?\b/.test(value)
-    if (Array.isArray(value)) return value.some(containsRestoredIdentifier)
-    if (value && typeof value === 'object') return Object.values(value as Record<string, unknown>).some(containsRestoredIdentifier)
-    return false
+  const containsRestoredIdentifier = (input: unknown): boolean => {
+    const seen = new WeakSet<object>()
+    const contains = (value: unknown): boolean => {
+      if (typeof value === 'string') return identifiers.some(({ value: identifier }) => new RegExp(`(?<![\\p{L}\\p{N}])${escapeRegExp(identifier)}(?![\\p{L}\\p{N}])`, 'iu').test(value)) || /\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b/.test(value) || /\b(?:\+?\d[\d ().-]{7,}\d)\b/.test(value) || /\b(?:19|20)\d{2}-(?:0[1-9]|1[0-2])(?:-(?:0[1-9]|[12]\d|3[01]))?\b/.test(value)
+      if (!value || typeof value !== 'object' || seen.has(value)) return false
+      seen.add(value)
+      if (Array.isArray(value)) return value.some(contains)
+      return Object.entries(value as Record<string, unknown>).some(([key, child]) => contains(key) || contains(child))
+    }
+    return contains(input)
   }
-  const authorizedStrings = new Set<string>()
-  const collectStrings = (value: unknown) => { if (typeof value === 'string') authorizedStrings.add(value); else if (Array.isArray(value)) value.forEach(collectStrings); else if (value && typeof value === 'object') Object.values(value as Record<string, unknown>).forEach(collectStrings) }
-  collectStrings(frozen)
-  const isAuthorizedText = (text: string) => authorizedStrings.has(text) || [...authorizedStrings].some(allowed => allowed.length > 0 && text.includes(allowed) && text.replaceAll(allowed, '').replace(/\[\[(?:PERSON|CONTACT|EMPLOYER|PROJECT|INSTITUTION)_\d+\]\]/g, '').trim().length === 0)
-  return Object.freeze({ id: scopeHash, scopeHash, outgoing: frozen, verifyIntegrity: () => digest({ outgoing: frozen, scope: frozenScope }) === scopeHash, preview: deepFreeze({ warnings: ['Unstructured posting and career text can still identify you; review the complete outgoing preview.'], residualSensitivityNotice: 'Residual sensitivity may remain in free text; this bundle does not guarantee anonymity.' }), restoreIdentifiers: (text: string) => [...restore].reduce((result, [token, value]) => result.replaceAll(token, value), text), containsRestoredIdentifier, isAuthorizedText })
+  const authorizedStrings = new Set<string>(), authorizedNumbers = new Set<number>(), authorizedKeys = new Set(['text'])
+  const collectAllowed = (value: unknown) => {
+    if (typeof value === 'string') authorizedStrings.add(value)
+    else if (typeof value === 'number') authorizedNumbers.add(value)
+    else if (Array.isArray(value)) value.forEach(collectAllowed)
+    else if (value && typeof value === 'object') for (const [key, child] of Object.entries(value)) { authorizedKeys.add(key); collectAllowed(child) }
+  }
+  collectAllowed(frozen)
+  const isAuthorizedText = (text: string) => text === '' || [...authorizedStrings].some(allowed => allowed.includes(text))
+  const isAuthorizedPayload = (payload: unknown): boolean => {
+    const seen = new WeakSet<object>()
+    const withinScope = (value: unknown): boolean => {
+      if (typeof value === 'string') return isAuthorizedText(value)
+      if (typeof value === 'number') return authorizedNumbers.has(value)
+      if (value === null || value === undefined) return true
+      if (typeof value !== 'object' || seen.has(value)) return false
+      seen.add(value)
+      if (Array.isArray(value)) return value.every(withinScope)
+      if (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null) return false
+      return Object.entries(value).every(([key, child]) => authorizedKeys.has(key) && withinScope(child))
+    }
+    return withinScope(payload)
+  }
+  return Object.freeze({ id: scopeHash, scopeHash, outgoing: frozen, verifyIntegrity: () => digest({ outgoing: frozen, scope: frozenScope }) === scopeHash, preview: deepFreeze({ warnings: ['Unstructured posting and career text can still identify you; review the complete outgoing preview.'], residualSensitivityNotice: 'Residual sensitivity may remain in free text; this bundle does not guarantee anonymity.' }), restoreIdentifiers: (text: string) => [...restore].reduce((result, [token, value]) => result.replaceAll(token, value), text), containsRestoredIdentifier, isAuthorizedText, isAuthorizedPayload })
 }
 
 export const hashOutboundScope = digest

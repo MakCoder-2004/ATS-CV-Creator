@@ -30,6 +30,7 @@ const api: WorkbenchAPI = Object.freeze({
   async exportProfile() { return await ipcRenderer.invoke('profile:export') },
   async previewProfileImport() { return profileExchangeResultSchema.parse(await ipcRenderer.invoke('profile:import:preview')) },
   async applyProfileImport(token: string) { return await ipcRenderer.invoke('profile:import:apply', uuidSchema.parse(token)) },
+  async cancelProfileImport(token: string) { return await ipcRenderer.invoke('profile:import:cancel', uuidSchema.parse(token)) },
   async saveContact(input: ContactInput & { id?: string }) {
     return profileMutationResultSchema.parse(await ipcRenderer.invoke('profile:contact:save', input))
   },

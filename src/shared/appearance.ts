@@ -24,6 +24,7 @@ export interface WorkbenchAPI {
   exportProfile(): Promise<{ ok: boolean; cancelled: boolean; message: string }>
   previewProfileImport(): Promise<ProfileExchangeResult>
   applyProfileImport(token: string): Promise<{ ok: boolean; message: string; profile?: ProfileSnapshot }>
+  cancelProfileImport(token: string): Promise<{ ok: boolean; message: string }>
   saveContact(input: ContactInput & { id?: string }): Promise<ProfileMutationResult>
   deleteContact(id: string): Promise<ProfileMutationResult>
   saveSkill(input: SkillInput & { id?: string }): Promise<ProfileMutationResult>
@@ -48,7 +49,7 @@ export interface WorkbenchAPI {
   cancelReferencePdf(token: string): Promise<PdfImportAction>
 }
 
-export type WorkbenchStorageAPI = Omit<WorkbenchAPI, 'exportProfile' | 'previewProfileImport' | 'applyProfileImport' | 'selectReferencePdf' | 'reviewReferencePdf' | 'applyReferencePdf' | 'cancelReferencePdf'> & {
+export type WorkbenchStorageAPI = Omit<WorkbenchAPI, 'exportProfile' | 'previewProfileImport' | 'applyProfileImport' | 'cancelProfileImport' | 'selectReferencePdf' | 'reviewReferencePdf' | 'applyReferencePdf' | 'cancelReferencePdf'> & {
   validateProfileImport(input: string): Promise<{ ok: boolean; message: string }>
   replaceProfile(input: string): Promise<{ ok: boolean; message: string; profile?: ProfileSnapshot }>
   stagePdfImport(bytes: Uint8Array): Promise<PdfImportSelection>
