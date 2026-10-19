@@ -4,6 +4,7 @@ import { geminiKeyInputSchema, geminiModelSchema, type GeminiModel } from '../sh
 import { evidenceRevisionSchema, profileEntryInputSchema, profileMutationResultSchema, profileSnapshotSchema, uuidSchema, type ContactInput, type ProfileEntryInput, type SkillInput } from '../shared/profile'
 import { experienceSnapshotSchema, experienceMutationResultSchema, type ExperienceInput, type ProjectInput } from '../shared/experience'
 import { jobRecordSchema, jobSaveResultSchema, type JobInput } from '../shared/jobs'
+import { profileExchangeResultSchema } from '../shared/profile-exchange'
 
 const api: WorkbenchAPI = Object.freeze({
   async getSettings() {
@@ -24,6 +25,9 @@ const api: WorkbenchAPI = Object.freeze({
   async getProfile() {
     return profileSnapshotSchema.parse(await ipcRenderer.invoke('profile:get'))
   },
+  async exportProfile() { return await ipcRenderer.invoke('profile:export') },
+  async previewProfileImport() { return profileExchangeResultSchema.parse(await ipcRenderer.invoke('profile:import:preview')) },
+  async applyProfileImport(token: string) { return await ipcRenderer.invoke('profile:import:apply', uuidSchema.parse(token)) },
   async saveContact(input: ContactInput & { id?: string }) {
     return profileMutationResultSchema.parse(await ipcRenderer.invoke('profile:contact:save', input))
   },

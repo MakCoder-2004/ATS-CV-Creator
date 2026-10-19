@@ -3,12 +3,14 @@ import type { ZodError } from 'zod'
 import { randomUUID } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { appearanceSchema, settingsSchema, type WorkbenchAPI } from '../shared/appearance'
+import { isDeepStrictEqual } from 'node:util'
+import { appearanceSchema, settingsSchema, type WorkbenchStorageAPI } from '../shared/appearance'
 import { geminiKeyInputSchema, geminiModelSchema, type GeminiModel } from '../shared/gemini-settings'
 import { contactInputSchema, contactRecordSchema, evidenceRevisionSchema, profileEntryInputSchema, profileEntrySchema, profileMutationResultSchema, profileSnapshotSchema, skillInputSchema, skillRecordSchema, uuidSchema, type ContactRecord, type EvidenceRevision, type ProfileEntry, type ProfileSnapshot, type SkillRecord } from '../shared/profile'
 import { experienceInputSchema, experienceRecordSchema, experienceSnapshotSchema, experienceMutationResultSchema, projectInputSchema, projectRecordSchema, type ExperienceRecord, type ProjectRecord, type FactualItemRecord } from '../shared/experience'
 import { jobInputSchema, jobRecordSchema, jobSaveResultSchema } from '../shared/jobs'
 import type { JobRecord } from '../shared/jobs'
+import { profileExchangeSchema, type ProfileExchange } from '../shared/profile-exchange'
 
 export interface SecureStorage {
   isEncryptionAvailable(): boolean
@@ -35,7 +37,7 @@ function reconcileNestedItems(items: NestedInput[], previous: NestedRecord[], ow
 }
 
 /** One workspace per userData directory. Opening a workspace applies forward-only migrations. */
-export function createWorkbench(userData: string, secureStorage: SecureStorage = unavailableSecureStorage): { api: WorkbenchAPI; close(): void } {
+export function createWorkbench(userData: string, secureStorage: SecureStorage = unavailableSecureStorage): { api: WorkbenchStorageAPI; close(): void } {
   mkdirSync(userData, { recursive: true })
   const db = new Database(join(userData, 'workbench.sqlite'))
   db.pragma('journal_mode = WAL')
@@ -110,7 +112,26 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
     } catch { return false }
   }
   const saveSetting = (key: string, value: string) => db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(key, value)
-  const api: WorkbenchAPI = {
+  const validateProfileImport = (input: string): { ok: true; data: ProfileExchange } | { ok: false; message: string } => {
+    let decoded: unknown
+    try { decoded = JSON.parse(input) } catch { return { ok: false, message: 'This profile file is invalid or incompatible.' } }
+    const parsed = profileExchangeSchema.safeParse(decoded)
+    if (!parsed.success) return { ok: false, message: 'This profile file is invalid or incompatible.' }
+    const data = parsed.data
+    const records = [data.profile.contact, ...data.profile.skills, ...data.profile.education, ...data.profile.certificates, ...data.profile.summary, ...data.profile.languages, ...data.profile.extras, ...data.experience.experience, ...data.experience.experience.flatMap(x => x.factualItems), ...data.experience.projects, ...data.experience.projects.flatMap(x => [...x.factualItems, ...x.technologies])].filter((record): record is NonNullable<typeof record> => record !== null)
+    const currentProfile = readProfile(), currentExperience = readExperience()
+    const currentRecords = [currentProfile.contact, ...currentProfile.skills, ...currentProfile.education, ...currentProfile.certificates, ...currentProfile.summary, ...currentProfile.languages, ...currentProfile.extras, ...currentExperience.experience, ...currentExperience.experience.flatMap(x => x.factualItems), ...currentExperience.projects, ...currentExperience.projects.flatMap(x => [...x.factualItems, ...x.technologies])].filter((record): record is NonNullable<typeof record> => record !== null)
+    const currentById = new Map(currentRecords.map(record => [record.id, record]))
+    for (const record of records) {
+      const active = currentById.get(record.id)
+      if (active && record.revision <= active.revision && !isDeepStrictEqual(active, record)) return { ok: false, message: 'This import reuses an active evidence ID/revision for different or outdated facts.' }
+      const historyRows = db.prepare('SELECT revision, snapshot FROM evidence_revisions WHERE id = ? ORDER BY revision DESC').all(record.id) as { revision: number; snapshot: string }[]
+      const matchingRevision = historyRows.find(row => row.revision === record.revision)
+      if (historyRows.length && (historyRows[0].revision > record.revision || (matchingRevision && !isDeepStrictEqual(JSON.parse(matchingRevision.snapshot), record)))) return { ok: false, message: 'This import reuses an evidence ID/revision for different or outdated facts. Export a fresh profile or use newly identified records.' }
+    }
+    return { ok: true, data }
+  }
+  const api: WorkbenchStorageAPI = {
     async getSettings() {
       const rows = db.prepare('SELECT key, value FROM settings WHERE key IN (?, ?)').all('appearance', 'gemini-model') as { key: string; value: string }[]
       const stored = Object.fromEntries(rows.map(row => [row.key, row.value]))
@@ -140,6 +161,43 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       return this.getSettings()
     },
     async getProfile() { return readProfile() },
+    async validateProfileImport(input: string) {
+      const result = validateProfileImport(input)
+      return result.ok ? { ok: true, message: 'Profile import is valid.' } : { ok: false, message: result.message }
+    },
+    async replaceProfile(input: string) {
+      const validation = validateProfileImport(input)
+      if (!validation.ok) return { ok: false, message: validation.message }
+      const data = validation.data
+      const currentProfile = readProfile(), currentExperience = readExperience()
+      const currentRecords = [currentProfile.contact, ...currentProfile.skills, ...currentProfile.education, ...currentProfile.certificates, ...currentProfile.summary, ...currentProfile.languages, ...currentProfile.extras, ...currentExperience.experience, ...currentExperience.experience.flatMap(x => x.factualItems), ...currentExperience.projects, ...currentExperience.projects.flatMap(x => [...x.factualItems, ...x.technologies])].filter((record): record is NonNullable<typeof record> => record !== null)
+      const incomingRecords = [data.profile.contact, ...data.profile.skills, ...data.profile.education, ...data.profile.certificates, ...data.profile.summary, ...data.profile.languages, ...data.profile.extras, ...data.experience.experience, ...data.experience.experience.flatMap(x => x.factualItems), ...data.experience.projects, ...data.experience.projects.flatMap(x => [...x.factualItems, ...x.technologies])].filter((record): record is NonNullable<typeof record> => record !== null)
+      const incomingIds = new Set(incomingRecords.map(record => record.id))
+      const tx = db.transaction(() => {
+        for (const record of currentRecords) {
+          const row = db.prepare('SELECT revision FROM evidence_revisions WHERE id = ? AND revision = ?').get(record.id, record.revision)
+          if (!row) {
+            const latest = db.prepare('SELECT MAX(revision) AS revision FROM evidence_revisions WHERE id = ?').get(record.id) as { revision: number | null }
+            recordRevision(record, latest.revision === null ? 'created' : 'updated')
+          }
+          if (!incomingIds.has(record.id)) recordRevision({ ...record, revision: record.revision + 1 }, 'deleted')
+        }
+        for (const record of incomingRecords) {
+          const row = db.prepare('SELECT revision FROM evidence_revisions WHERE id = ? AND revision = ?').get(record.id, record.revision)
+          if (!row) {
+            const latest = db.prepare('SELECT MAX(revision) AS revision FROM evidence_revisions WHERE id = ?').get(record.id) as { revision: number | null }
+            recordRevision(record, latest.revision === null ? 'created' : 'updated')
+          }
+        }
+        db.exec('DELETE FROM profile_contact; DELETE FROM profile_skills; DELETE FROM profile_entries; DELETE FROM profile_experience; DELETE FROM profile_projects;')
+        if (data.profile.contact) db.prepare('INSERT INTO profile_contact (singleton,id,revision,data) VALUES (1,?,?,?)').run(data.profile.contact.id, data.profile.contact.revision, JSON.stringify(data.profile.contact))
+        for (const item of data.profile.skills) db.prepare('INSERT INTO profile_skills (id,revision,data) VALUES (?,?,?)').run(item.id,item.revision,JSON.stringify(item))
+        for (const section of ['education','certificates','summary','languages','extras'] as const) for (const item of data.profile[section]) db.prepare('INSERT INTO profile_entries (id,section,revision,data) VALUES (?,?,?,?)').run(item.id,section,item.revision,JSON.stringify(item))
+        for (const item of data.experience.experience) db.prepare('INSERT INTO profile_experience (id,revision,data) VALUES (?,?,?)').run(item.id,item.revision,JSON.stringify(item))
+        for (const item of data.experience.projects) db.prepare('INSERT INTO profile_projects (id,revision,data) VALUES (?,?,?)').run(item.id,item.revision,JSON.stringify(item))
+      })
+      try { tx(); return { ok: true, message: 'Profile replaced.', profile: readProfile() } } catch { return { ok: false, message: 'Profile replacement failed; no changes were applied.' } }
+    },
     async saveContact(input) {
       const { id: _id, ...contactInput } = input
       const parsed = validated<ContactRecord>(contactInputSchema.safeParse(contactInput))

@@ -24,6 +24,7 @@ export function ProfileEditor() {
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
   const [mutationError, setMutationError] = useState('')
   const [notice, setNotice] = useState('')
+  const [importPreview, setImportPreview] = useState<Awaited<ReturnType<typeof window.workbench.previewProfileImport>> & { ok: true } | null>(null)
 
   function loadLinks(items: Array<string | { label: string; url: string }>) {
     setLinks(items.map(item => ({ key: ++nextLinkKey.current, label: typeof item === 'string' ? item : item.label, url: typeof item === 'string' ? item : item.url })))
@@ -114,10 +115,37 @@ export function ProfileEditor() {
     } catch { setMutationError('Skill could not be deleted. Try again.') }
   }
 
+  async function exportProfile() {
+    if (!window.confirm('The profile JSON contains personal data. Save and store the file securely. Continue?')) return
+    setMutationError(''); setNotice('')
+    try {
+      const result = await window.workbench.exportProfile()
+      if (result.ok) setNotice(result.message)
+      else if (!result.cancelled) setMutationError(result.message)
+    } catch { setMutationError('Profile export failed. Check the destination and try again.') }
+  }
+  async function previewImport() {
+    setMutationError(''); setNotice('')
+    try {
+      const result = await window.workbench.previewProfileImport()
+      if (!result.ok) { if (!result.cancelled) setMutationError(result.message); return }
+      setImportPreview(result)
+    } catch { setMutationError('Could not read the selected profile file. Choose a valid JSON file and try again.') }
+  }
+  async function applyImport() {
+    if (!importPreview) return
+    try {
+      const result = await window.workbench.applyProfileImport(importPreview.token)
+      setImportPreview(null)
+      if (!result.ok) { setMutationError(result.message); return }
+      await reload(); setNotice('Profile replaced from JSON. Historical evidence revisions were retained.')
+    } catch { setMutationError('Profile replacement failed. Your existing profile was not intentionally changed; reload and try again.') }
+  }
   const categories = [...new Set([...(snapshot?.skills ?? []).map(item => item.category), ...skillCategories])]
   if (loading) return <section className="profile-panel" role="status">Loading your local profile…</section>
   return <div className="profile-layout">
-    <div className="profile-summary"><span className="profile-avatar"><UserRound size={22} aria-hidden="true" /></span><div><strong>{snapshot?.contact?.fullName ?? 'Start your profile'}</strong><p>{snapshot?.contact?.headline ?? 'Your career facts, organized by section.'}</p></div><span className="profile-local-label">Saved on this device</span></div>
+    <div className="profile-summary"><span className="profile-avatar"><UserRound size={22} aria-hidden="true" /></span><div><strong>{snapshot?.contact?.fullName ?? 'Start your profile'}</strong><p>{snapshot?.contact?.headline ?? 'Your career facts, organized by section.'}</p></div><span className="profile-local-label">Saved on this device</span><span className="profile-local-label">JSON includes personal profile data; store it safely.</span><button className="secondary-button" type="button" onClick={() => void exportProfile()}>Export profile JSON</button><button className="secondary-button" type="button" onClick={() => void previewImport()}>Import profile JSON</button></div>
+    {importPreview && <section className="profile-panel" role="dialog" aria-modal="true" aria-labelledby="import-preview-title"><h2 id="import-preview-title">Replace profile from JSON?</h2><p>This file contains personal data. Importing replaces your current profile; it does not merge records. Historical evidence revisions used by older drafts will be retained.</p><p>Current records: {importPreview.current.records}. Replacement records: {importPreview.replacement.records}.</p><ul aria-label="Replacement effects">{importPreview.effects.length ? importPreview.effects.map((effect, index) => <li key={`${effect.section}-${effect.action}-${index}`}>{effect.section} — {effect.action}: {effect.action === 'add' ? effect.replacementLabel : effect.action === 'remove' ? effect.currentLabel : `${effect.currentLabel} → ${effect.replacementLabel}`}</li>) : <li>No record-level changes detected.</li>}</ul><button className="primary-button" type="button" onClick={() => void applyImport()}>Confirm replacement</button><button className="secondary-button" type="button" onClick={() => setImportPreview(null)}>Cancel</button></section>}
     <nav className="profile-sections" aria-label="Profile sections">{profileSections.map(section => <button key={section} type="button" aria-current={activeSection === section ? 'page' : undefined} onClick={() => { setActiveSection(section); setMutationError(''); setNotice(''); setFieldErrors({}) }}>{section}</button>)}</nav>
     {activeSection === 'Personal' && <section className="profile-panel" aria-labelledby="contact-heading">
       <div className="panel-heading"><div><span className="context">Identity</span><h2 id="contact-heading">Contact details</h2><p>Keep the details you want available when preparing your CV.</p></div>
