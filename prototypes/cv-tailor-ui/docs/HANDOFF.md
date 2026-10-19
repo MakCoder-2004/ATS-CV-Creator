@@ -20,7 +20,7 @@ Status: **User-approved UI direction: A — Workbench, light/dark modes, Sora he
 - Document-level final approval with inspectable per-paragraph/skill evidence. DOCX and PDF content/order match; pagination may differ.
 - SQLite and durable generation/review checkpoints; explicit restart recovery/resume, cancellation, and no silent network resumption. Shared configurable run ceiling initially 12 outbound attempts or 5 minutes, including transport retries, schema repairs and content retries. SDK hidden retries disabled. Quota counts are local observations, not authoritative provider-wide remaining quota.
 - Profile JSON exchange plus complete app backup excluding API key. Profile import replaces only current profile after preview, preserving draft evidence history. Full restore replaces the workspace after a safety backup. No silent merge.
-- Test extraction locally; no automatic uploads to ATS checkers. Pilot with two real postings (strong match + substantial gaps), zero observed unsupported claims and acceptable relevance/tone; keep technical safety/export/recovery/cancel/clean-Windows-installer checks. Expand to at least five postings before broad quality claims.
+- Test extraction locally; no automatic uploads to ATS checkers. Pilot with two real postings (strong match + substantial gaps), zero observed unsupported claims and acceptable relevance/tone; keep technical safety/export/recovery/cancel/installed-Windows checks on the user's confirmed fresh Windows machine (no separate VM required). Expand to at least five postings before broad quality claims.
 
 ## Requested technology stack — preserved, not silently replaced
 
@@ -32,7 +32,7 @@ Status: **User-approved UI direction: A — Workbench, light/dark modes, Sora he
 | Local data | better-sqlite3 (Electron rebuild required); JSON was an original alternative | SQLite was selected during recovery discovery. Prototype state is memory-only; no production DB or backup implementation. |
 | Agent | @langchain/langgraph, langchain, @langchain/core, @langchain/google-genai | Simulated finite steps only. Verify current package/classes, structured output, thinking options and cancellation/checkpoint behavior before implementation. |
 | Export | docx + Electron webContents.printToPDF | Simulated notifications; **no DOCX/PDF file is created**. CV layout is an HTML approximation. |
-| Packaging | electron-builder NSIS; @electron/rebuild or electron-builder install-app-deps | Deferred. Test native ABI and clean-Windows installation early in production work. |
+| Packaging | electron-builder NSIS; @electron/rebuild or electron-builder install-app-deps | Deferred. Test native ABI and real installer startup on the user's confirmed fresh Windows machine early in production work; no separate VM is required. |
 | Testing | Vitest unit; Playwright for Electron optional | No production test suite for throwaway code. Playwright browser inspection is development tooling, not Electron E2E coverage. |
 
 `@hookform/resolvers` is on the compatible v5 line: the registry’s v6 resolution conflicted between optional Effect v3/v4 peers. TypeScript 7 removes `baseUrl`; prototype aliases use relative `paths`. Current dependencies are recorded in package-lock.json, not assumed from the original plan.
