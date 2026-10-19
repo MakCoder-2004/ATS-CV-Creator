@@ -4,6 +4,9 @@ import { geminiKeyInputSchema, geminiModelSchema, type GeminiModel } from '../sh
 import { evidenceRevisionSchema, profileEntryInputSchema, profileMutationResultSchema, profileSnapshotSchema, uuidSchema, type ContactInput, type ProfileEntryInput, type SkillInput } from '../shared/profile'
 import { experienceSnapshotSchema, experienceMutationResultSchema, type ExperienceInput, type ProjectInput } from '../shared/experience'
 import { jobRecordSchema, jobSaveResultSchema, type JobInput } from '../shared/jobs'
+import { profileExchangeResultSchema } from '../shared/profile-exchange'
+import { outboundConsentActionSchema, outboundConsentPreviewSchema } from '../shared/outbound-consent-contract'
+import { pdfImportActionSchema, pdfImportProposalSchema, pdfImportReviewSchema, pdfImportSelectionSchema, type PdfImportReview } from '../shared/pdf-import'
 
 const api: WorkbenchAPI = Object.freeze({
   async getSettings() {
@@ -24,6 +27,10 @@ const api: WorkbenchAPI = Object.freeze({
   async getProfile() {
     return profileSnapshotSchema.parse(await ipcRenderer.invoke('profile:get'))
   },
+  async exportProfile() { return await ipcRenderer.invoke('profile:export') },
+  async previewProfileImport() { return profileExchangeResultSchema.parse(await ipcRenderer.invoke('profile:import:preview')) },
+  async applyProfileImport(token: string) { return await ipcRenderer.invoke('profile:import:apply', uuidSchema.parse(token)) },
+  async cancelProfileImport(token: string) { return await ipcRenderer.invoke('profile:import:cancel', uuidSchema.parse(token)) },
   async saveContact(input: ContactInput & { id?: string }) {
     return profileMutationResultSchema.parse(await ipcRenderer.invoke('profile:contact:save', input))
   },
@@ -70,6 +77,27 @@ const api: WorkbenchAPI = Object.freeze({
   async openJob(id: string) {
     const job = await ipcRenderer.invoke('jobs:open', uuidSchema.parse(id))
     return job === null ? null : jobRecordSchema.parse(job)
+  },
+  async prepareOutboundConsent(jobId: string) {
+    return outboundConsentPreviewSchema.parse(await ipcRenderer.invoke('consent:outbound:preview', uuidSchema.parse(jobId)))
+  },
+  async acceptOutboundConsent(token: string, accepted: boolean, freeTierTermsAcknowledged: boolean) {
+    return outboundConsentActionSchema.parse(await ipcRenderer.invoke('consent:outbound:accept', uuidSchema.parse(token), accepted, freeTierTermsAcknowledged))
+  },
+  async cancelOutboundConsent(token: string) {
+    return outboundConsentActionSchema.parse(await ipcRenderer.invoke('consent:outbound:cancel', uuidSchema.parse(token)))
+  },
+  async selectReferencePdf() {
+    return pdfImportSelectionSchema.parse(await ipcRenderer.invoke('pdf-import:select'))
+  },
+  async reviewReferencePdf(token: string, review: PdfImportReview) {
+    return pdfImportProposalSchema.parse(await ipcRenderer.invoke('pdf-import:review', uuidSchema.parse(token), pdfImportReviewSchema.parse(review)))
+  },
+  async applyReferencePdf(token: string) {
+    return pdfImportActionSchema.parse(await ipcRenderer.invoke('pdf-import:apply', uuidSchema.parse(token)))
+  },
+  async cancelReferencePdf(token: string) {
+    return pdfImportActionSchema.parse(await ipcRenderer.invoke('pdf-import:cancel', uuidSchema.parse(token)))
   }
 })
 contextBridge.exposeInMainWorld('workbench', api)

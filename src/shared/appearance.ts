@@ -3,6 +3,9 @@ import type { ContactInput, EvidenceRevision, ProfileEntryInput, ProfileMutation
 import type { ExperienceInput, ExperienceMutationResult, ExperienceSnapshot, ProjectInput } from './experience'
 import { geminiSettingsSchema, geminiModelSchema, type GeminiModel } from './gemini-settings'
 import type { JobInput, JobRecord, JobSaveResult } from './jobs'
+import type { ProfileExchangeResult } from './profile-exchange'
+import type { OutboundConsentAction, OutboundConsentPreview } from './outbound-consent-contract'
+import type { PdfImportAction, PdfImportProposal, PdfImportReview, PdfImportSelection } from './pdf-import'
 
 export const appearanceSchema = z.enum(['light', 'dark'])
 export type Appearance = z.infer<typeof appearanceSchema>
@@ -18,6 +21,10 @@ export interface WorkbenchAPI {
   saveGeminiApiKey(value: string): Promise<Settings>
   removeGeminiApiKey(): Promise<Settings>
   getProfile(): Promise<ProfileSnapshot>
+  exportProfile(): Promise<{ ok: boolean; cancelled: boolean; message: string }>
+  previewProfileImport(): Promise<ProfileExchangeResult>
+  applyProfileImport(token: string): Promise<{ ok: boolean; message: string; profile?: ProfileSnapshot }>
+  cancelProfileImport(token: string): Promise<{ ok: boolean; message: string }>
   saveContact(input: ContactInput & { id?: string }): Promise<ProfileMutationResult>
   deleteContact(id: string): Promise<ProfileMutationResult>
   saveSkill(input: SkillInput & { id?: string }): Promise<ProfileMutationResult>
@@ -33,4 +40,20 @@ export interface WorkbenchAPI {
   saveJob(input: JobInput & { id?: string }): Promise<JobSaveResult>
   listJobs(): Promise<JobRecord[]>
   openJob(id: string): Promise<JobRecord | null>
+  prepareOutboundConsent(jobId: string): Promise<OutboundConsentPreview>
+  acceptOutboundConsent(token: string, accepted: boolean, freeTierTermsAcknowledged: boolean): Promise<OutboundConsentAction>
+  cancelOutboundConsent(token: string): Promise<OutboundConsentAction>
+  selectReferencePdf(): Promise<PdfImportSelection>
+  reviewReferencePdf(token: string, review: PdfImportReview): Promise<PdfImportProposal>
+  applyReferencePdf(token: string): Promise<PdfImportAction>
+  cancelReferencePdf(token: string): Promise<PdfImportAction>
+}
+
+export type WorkbenchStorageAPI = Omit<WorkbenchAPI, 'exportProfile' | 'previewProfileImport' | 'applyProfileImport' | 'cancelProfileImport' | 'selectReferencePdf' | 'reviewReferencePdf' | 'applyReferencePdf' | 'cancelReferencePdf'> & {
+  validateProfileImport(input: string): Promise<{ ok: boolean; message: string }>
+  replaceProfile(input: string): Promise<{ ok: boolean; message: string; profile?: ProfileSnapshot }>
+  stagePdfImport(bytes: Uint8Array): Promise<PdfImportSelection>
+  previewPdfImport(token: string, review: PdfImportReview): Promise<PdfImportProposal>
+  applyPdfImport(token: string): Promise<PdfImportAction>
+  cancelPdfImport(token: string): Promise<PdfImportAction>
 }
