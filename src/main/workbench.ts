@@ -7,11 +7,11 @@ import { isDeepStrictEqual } from 'node:util'
 import { appearanceSchema, settingsSchema, type WorkbenchStorageAPI } from '../shared/appearance'
 import { geminiKeyInputSchema, geminiModelSchema, type GeminiModel } from '../shared/gemini-settings'
 import { contactInputSchema, contactRecordSchema, evidenceRevisionSchema, profileEntryInputSchema, profileEntrySchema, profileMutationResultSchema, profileSnapshotSchema, skillInputSchema, skillRecordSchema, uuidSchema, type ContactRecord, type EvidenceRevision, type ProfileEntry, type ProfileSnapshot, type SkillRecord } from '../shared/profile'
-import { experienceInputSchema, experienceRecordSchema, experienceSnapshotSchema, experienceMutationResultSchema, projectInputSchema, projectRecordSchema, type ExperienceRecord, type ProjectRecord, type FactualItemRecord } from '../shared/experience'
+import { experienceInputSchema, experienceRecordSchema, experienceSnapshotSchema, experienceMutationResultSchema, projectInputSchema, projectRecordSchema, type ExperienceRecord, type ProjectRecord, type FactualItemRecord, type ExperienceSnapshot } from '../shared/experience'
 import { jobInputSchema, jobRecordSchema, jobSaveResultSchema } from '../shared/jobs'
 import type { JobRecord } from '../shared/jobs'
 import { profileExchangeSchema, type ProfileExchange } from '../shared/profile-exchange'
-import { prepareOutboundBundle, type ConsentSource, type OutboundBundle } from '../shared/outbound-consent'
+import { prepareOutboundBundle, type ConsentSource, type EvidenceScopeRevision, type OutboundBundle } from '../shared/outbound-consent'
 import { createOutboundConsentEngine } from './outbound-consent'
 import { createPdfReviewService } from './pdf-review'
 import type { OutboundConsentAction, OutboundConsentPreview } from '../shared/outbound-consent-contract'
@@ -118,15 +118,19 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
     } catch { return false }
   }
   const saveSetting = (key: string, value: string) => db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(key, value)
+  const profileRecords = (profile: ProfileSnapshot, experience: ExperienceSnapshot) => [
+    profile.contact, ...profile.skills, ...profile.education, ...profile.certificates, ...profile.summary, ...profile.languages, ...profile.extras,
+    ...experience.experience, ...experience.experience.flatMap(item => item.factualItems),
+    ...experience.projects, ...experience.projects.flatMap(item => [...item.factualItems, ...item.technologies])
+  ].filter((record): record is NonNullable<typeof record> => record !== null)
   const validateProfileImport = (input: string): { ok: true; data: ProfileExchange } | { ok: false; message: string } => {
     let decoded: unknown
     try { decoded = JSON.parse(input) } catch { return { ok: false, message: 'This profile file is invalid or incompatible.' } }
     const parsed = profileExchangeSchema.safeParse(decoded)
     if (!parsed.success) return { ok: false, message: 'This profile file is invalid or incompatible.' }
     const data = parsed.data
-    const records = [data.profile.contact, ...data.profile.skills, ...data.profile.education, ...data.profile.certificates, ...data.profile.summary, ...data.profile.languages, ...data.profile.extras, ...data.experience.experience, ...data.experience.experience.flatMap(x => x.factualItems), ...data.experience.projects, ...data.experience.projects.flatMap(x => [...x.factualItems, ...x.technologies])].filter((record): record is NonNullable<typeof record> => record !== null)
-    const currentProfile = readProfile(), currentExperience = readExperience()
-    const currentRecords = [currentProfile.contact, ...currentProfile.skills, ...currentProfile.education, ...currentProfile.certificates, ...currentProfile.summary, ...currentProfile.languages, ...currentProfile.extras, ...currentExperience.experience, ...currentExperience.experience.flatMap(x => x.factualItems), ...currentExperience.projects, ...currentExperience.projects.flatMap(x => [...x.factualItems, ...x.technologies])].filter((record): record is NonNullable<typeof record> => record !== null)
+    const records = profileRecords(data.profile, data.experience)
+    const currentRecords = profileRecords(readProfile(), readExperience())
     const currentById = new Map(currentRecords.map(record => [record.id, record]))
     for (const record of records) {
       const active = currentById.get(record.id)
@@ -149,9 +153,15 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
     if (!job) return null
     const savedJob = jobRecordSchema.parse(JSON.parse(job.data))
     const profile = readProfile(), experience = readExperience()
-    const revisions = [profile.contact, ...profile.skills, ...profile.education, ...profile.certificates, ...experience.experience, ...experience.projects].filter(Boolean).map((item: any) => [item.id, item.revision])
+    const eligible = [profile.contact, ...profile.skills, ...profile.education, ...profile.certificates,
+      ...experience.experience, ...experience.experience.flatMap(item => item.factualItems),
+      ...experience.projects, ...experience.projects.flatMap(item => [...item.factualItems, ...item.technologies])]
+      .filter((item): item is NonNullable<typeof item> => item !== null)
+    const revisions: EvidenceScopeRevision[] = eligible.map(item => [item.id, item.revision])
     const settings = db.prepare('SELECT value FROM settings WHERE key = ?').get('gemini-model') as { value: string } | undefined
-    return { job: { id: savedJob.id, revision: savedJob.updatedAt, title: savedJob.title, company: savedJob.company, description: savedJob.description }, profile: { ...profile, revision: JSON.stringify(revisions), experience: experience.experience, projects: experience.projects }, model: { name: settings?.value ?? 'gemini-3.6-flash' } } as ConsentSource
+    return { job: { id: savedJob.id, revision: savedJob.updatedAt, title: savedJob.title, company: savedJob.company, description: savedJob.description },
+      profile: { ...profile, revision: revisions, experience: experience.experience, projects: experience.projects },
+      model: { name: geminiModelSchema.parse(settings?.value ?? 'gemini-3.6-flash') } }
   }
   const api: WorkbenchStorageAPI = {
     async getSettings() {
@@ -195,9 +205,8 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       const validation = validateProfileImport(input)
       if (!validation.ok) return { ok: false, message: validation.message }
       const data = validation.data
-      const currentProfile = readProfile(), currentExperience = readExperience()
-      const currentRecords = [currentProfile.contact, ...currentProfile.skills, ...currentProfile.education, ...currentProfile.certificates, ...currentProfile.summary, ...currentProfile.languages, ...currentProfile.extras, ...currentExperience.experience, ...currentExperience.experience.flatMap(x => x.factualItems), ...currentExperience.projects, ...currentExperience.projects.flatMap(x => [...x.factualItems, ...x.technologies])].filter((record): record is NonNullable<typeof record> => record !== null)
-      const incomingRecords = [data.profile.contact, ...data.profile.skills, ...data.profile.education, ...data.profile.certificates, ...data.profile.summary, ...data.profile.languages, ...data.profile.extras, ...data.experience.experience, ...data.experience.experience.flatMap(x => x.factualItems), ...data.experience.projects, ...data.experience.projects.flatMap(x => [...x.factualItems, ...x.technologies])].filter((record): record is NonNullable<typeof record> => record !== null)
+      const currentRecords = profileRecords(readProfile(), readExperience())
+      const incomingRecords = profileRecords(data.profile, data.experience)
       const incomingIds = new Set(incomingRecords.map(record => record.id))
       const tx = db.transaction(() => {
         for (const record of currentRecords) {

@@ -21,12 +21,21 @@ export function createOutboundConsentEngine() {
       const consent = runConsents.find(record => !record.revoked)
       if (!consent) throw new Error(runConsents.length ? 'Consent was revoked for this run.' : 'No active consent exists for this run.')
       if (consent.scopeHash !== bundle.scopeHash || !bundle.verifyIntegrity()) throw new Error('Authorization scope is stale or has expanded.')
-      if (bundle.containsRestoredIdentifier(payload)) throw new Error('Restored identifier is not authorized for outbound payloads.')
-      const leaves: string[] = []
-      const collect = (value: unknown) => { if (typeof value === 'string') leaves.push(value); else if (Array.isArray(value)) value.forEach(collect); else if (value && typeof value === 'object') Object.values(value as Record<string, unknown>).forEach(collect) }
-      collect(payload)
-      if (leaves.some(text => !bundle.isAuthorizedText(text))) throw new Error('Payload contains data outside the authorized bundle; use a scoped workflow-derived intermediate only when appropriate.')
-      return payload
+      let request: T
+      try { request = structuredClone(payload) }
+      catch { throw new Error('Outbound payload cannot be safely copied for authorization.') }
+      if (!bundle.isAuthorizedPayload(request)) {
+        if (bundle.containsRestoredIdentifier(request)) throw new Error('Restored identifier is not authorized for outbound payloads.')
+        throw new Error('Payload contains data outside the authorized bundle.')
+      }
+      if (bundle.containsRestoredIdentifier(request)) throw new Error('Restored identifier is not authorized for outbound payloads.')
+      const freeze = (value: unknown): void => {
+        if (!value || typeof value !== 'object' || Object.isFrozen(value)) return
+        Object.freeze(value)
+        for (const child of Object.values(value)) freeze(child)
+      }
+      freeze(request)
+      return request
     }
   })
 }

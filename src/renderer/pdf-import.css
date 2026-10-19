@@ -1,4 +1,4 @@
-.pdf-import-panel { margin-top: 16px; }
+.pdf-import-panel { margin-top: 0; }
 .pdf-import-panel .panel-heading { gap: 18px; align-items: center; }
 .pdf-import-panel .panel-heading p { max-width: 78ch; }
 .pdf-import-panel .pdf-import-review, .pdf-import-panel .pdf-import-effects { padding: 0 23px 24px; }
