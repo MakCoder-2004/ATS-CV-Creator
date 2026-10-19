@@ -1,4 +1,5 @@
 import { app, BrowserWindow, ipcMain } from 'electron'
+import type { ZodError } from 'zod'
 import { fileURLToPath } from 'node:url'
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
@@ -8,6 +9,12 @@ import { contactSaveInputSchema, evidenceRevisionSchema, profileMutationResultSc
 
 let window: BrowserWindow | undefined
 let workspace: ReturnType<typeof createWorkbench> | undefined
+
+function invalidProfileInput(error: ZodError, kind: string) {
+  const fieldErrors: Record<string, string> = {}
+  for (const issue of error.issues) fieldErrors[String(issue.path[0] ?? '_')] = issue.message
+  return profileMutationResultSchema.parse({ ok: false, error: { code: 'VALIDATION_ERROR', message: `Check the highlighted ${kind} fields.`, fieldErrors } })
+}
 
 function isTrusted(event: Electron.IpcMainInvokeEvent): boolean {
   const frame = event.senderFrame
@@ -47,25 +54,31 @@ app.whenReady().then(() => {
   })
   ipcMain.handle('profile:contact:save', async (event, ...args: unknown[]) => {
     trusted(event)
-    if (args.length !== 1 || typeof args[0] !== 'object' || args[0] === null || Array.isArray(args[0])) throw new Error('Expected contact')
-    const input = contactSaveInputSchema.parse(args[0])
-    return profileMutationResultSchema.parse(await workspace!.api.saveContact(input))
+    if (args.length !== 1) throw new Error('Expected contact')
+    const input = contactSaveInputSchema.safeParse(args[0])
+    if (!input.success) return invalidProfileInput(input.error, 'contact')
+    return profileMutationResultSchema.parse(await workspace!.api.saveContact(input.data))
   })
   ipcMain.handle('profile:contact:delete', async (event, ...args: unknown[]) => {
     trusted(event)
     if (args.length !== 1) throw new Error('Expected contact ID')
-    return profileMutationResultSchema.parse(await workspace!.api.deleteContact(uuidSchema.parse(args[0])))
+    const id = uuidSchema.safeParse(args[0])
+    if (!id.success) return invalidProfileInput(id.error, 'contact')
+    return profileMutationResultSchema.parse(await workspace!.api.deleteContact(id.data))
   })
   ipcMain.handle('profile:skill:save', async (event, ...args: unknown[]) => {
     trusted(event)
-    if (args.length !== 1 || typeof args[0] !== 'object' || args[0] === null || Array.isArray(args[0])) throw new Error('Expected skill')
-    const input = skillSaveInputSchema.parse(args[0])
-    return profileMutationResultSchema.parse(await workspace!.api.saveSkill(input))
+    if (args.length !== 1) throw new Error('Expected skill')
+    const input = skillSaveInputSchema.safeParse(args[0])
+    if (!input.success) return invalidProfileInput(input.error, 'skill')
+    return profileMutationResultSchema.parse(await workspace!.api.saveSkill(input.data))
   })
   ipcMain.handle('profile:skill:delete', async (event, ...args: unknown[]) => {
     trusted(event)
     if (args.length !== 1) throw new Error('Expected skill ID')
-    return profileMutationResultSchema.parse(await workspace!.api.deleteSkill(uuidSchema.parse(args[0])))
+    const id = uuidSchema.safeParse(args[0])
+    if (!id.success) return invalidProfileInput(id.error, 'skill')
+    return profileMutationResultSchema.parse(await workspace!.api.deleteSkill(id.data))
   })
   ipcMain.handle('profile:history', async (event, ...args: unknown[]) => {
     trusted(event)

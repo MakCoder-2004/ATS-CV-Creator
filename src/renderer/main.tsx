@@ -53,9 +53,19 @@ function ProfileEditor() {
   async function saveContact(event: FormEvent) {
     event.preventDefault()
     setFieldErrors({}); setMutationError(''); setNotice('')
-    const result = await window.workbench.saveContact({ ...contact, id: snapshot?.contact?.id, links: linksText.split('\n').map(link => link.trim()).filter(Boolean) })
-    if (!result.ok) { setFieldErrors(result.error.fieldErrors ?? {}); setMutationError(result.error.message); return }
-    setSnapshot(result.value); setContactEdit(false); setNotice('Contact details saved')
+    const input: ContactInput = {
+      fullName: contact.fullName,
+      ...(contact.headline?.trim() ? { headline: contact.headline } : {}),
+      ...(contact.email?.trim() ? { email: contact.email } : {}),
+      ...(contact.phone?.trim() ? { phone: contact.phone } : {}),
+      ...(contact.location?.trim() ? { location: contact.location } : {}),
+      links: linksText.split('\n').map(link => link.trim()).filter(Boolean)
+    }
+    try {
+      const result = await window.workbench.saveContact({ ...input, id: snapshot?.contact?.id })
+      if (!result.ok) { setFieldErrors(result.error.fieldErrors ?? {}); setMutationError(result.error.message); return }
+      setSnapshot(result.value); setContactEdit(false); setNotice('Contact details saved')
+    } catch { setMutationError('Contact details could not be saved. Check the fields and try again.') }
   }
   function beginContactEdit() {
     if (snapshot?.contact) {
@@ -66,12 +76,14 @@ function ProfileEditor() {
   }
   async function deleteContact() {
     if (!snapshot?.contact || !window.confirm('Delete your contact details? This cannot be undone.')) return
-    const result = await window.workbench.deleteContact(snapshot.contact.id)
-    if (!result.ok) { setMutationError(result.error.message); return }
-    setSnapshot(result.value); setContact({ fullName: '', headline: '', email: '', phone: '', location: '', links: [] }); setLinksText(''); setNotice('Contact details deleted')
+    try {
+      const result = await window.workbench.deleteContact(snapshot.contact.id)
+      if (!result.ok) { setMutationError(result.error.message); return }
+      setSnapshot(result.value); setContact({ fullName: '', headline: '', email: '', phone: '', location: '', links: [] }); setLinksText(''); setNotice('Contact details deleted')
+    } catch { setMutationError('Contact details could not be deleted. Try again.') }
   }
   function updateSkill(field: keyof SkillInput, value: string) {
-    setSkill(current => ({ ...current, [field]: field === 'years' ? (value === '' ? undefined : Number(value)) : value }))
+    setSkill(current => ({ ...current, [field]: field === 'years' ? (value === '' ? undefined : Number(value)) : field === 'proficiency' && !value ? undefined : value }))
     setFieldErrors(current => ({ ...current, [field]: '' }))
   }
   function editSkill(item: SkillRecord) {
@@ -82,15 +94,19 @@ function ProfileEditor() {
   function resetSkill() { setSkillEditId(undefined); setSkill({ name: '', category: skillCategories[0] }); setFieldErrors({}) }
   async function saveSkill(event: FormEvent) {
     event.preventDefault(); setFieldErrors({}); setMutationError(''); setNotice('')
-    const result = await window.workbench.saveSkill({ ...skill, id: skillEditId })
-    if (!result.ok) { setFieldErrors(result.error.fieldErrors ?? {}); setMutationError(result.error.message); return }
-    setSnapshot(result.value); resetSkill(); setNotice(skillEditId ? 'Skill updated' : 'Skill added')
+    try {
+      const result = await window.workbench.saveSkill({ ...skill, id: skillEditId })
+      if (!result.ok) { setFieldErrors(result.error.fieldErrors ?? {}); setMutationError(result.error.message); return }
+      setSnapshot(result.value); resetSkill(); setNotice(skillEditId ? 'Skill updated' : 'Skill added')
+    } catch { setMutationError('Skill could not be saved. Check the fields and try again.') }
   }
   async function deleteSkill(item: SkillRecord) {
     if (!window.confirm(`Delete ${item.name}? This cannot be undone.`)) return
-    const result = await window.workbench.deleteSkill(item.id)
-    if (!result.ok) { setMutationError(result.error.message); return }
-    setSnapshot(result.value); setNotice(`${item.name} deleted`)
+    try {
+      const result = await window.workbench.deleteSkill(item.id)
+      if (!result.ok) { setMutationError(result.error.message); return }
+      setSnapshot(result.value); setNotice(`${item.name} deleted`)
+    } catch { setMutationError('Skill could not be deleted. Try again.') }
   }
 
   const categories = [...new Set([...(snapshot?.skills ?? []).map(item => item.category), ...skillCategories])]
@@ -102,7 +118,7 @@ function ProfileEditor() {
       </div>
       {snapshot?.contact && !contactEdit ? <div className="contact-summary">
         <h3>{snapshot.contact.fullName}</h3>{snapshot.contact.headline && <p>{snapshot.contact.headline}</p>}
-        <dl>{snapshot.contact.email && <div><dt>Email</dt><dd>{snapshot.contact.email}</dd></div>}{snapshot.contact.phone && <div><dt>Phone</dt><dd>{snapshot.contact.phone}</dd></div>}{snapshot.contact.location && <div><dt>Location</dt><dd>{snapshot.contact.location}</dd></div>}{snapshot.contact.links?.map((link, index) => <div key={`${link}-${index}`}><dt>{index === 0 ? 'Links' : ''}</dt><dd><a href={link} target="_blank" rel="noreferrer">{link}</a></dd></div>)}</dl>
+        <dl>{snapshot.contact.email && <div><dt>Email</dt><dd>{snapshot.contact.email}</dd></div>}{snapshot.contact.phone && <div><dt>Phone</dt><dd>{snapshot.contact.phone}</dd></div>}{snapshot.contact.location && <div><dt>Location</dt><dd>{snapshot.contact.location}</dd></div>}{snapshot.contact.links?.map((link, index) => <div key={`${link}-${index}`}><dt>{index === 0 ? 'Links' : ''}</dt><dd>{link}</dd></div>)}</dl>
         <button className="text-button destructive" type="button" onClick={() => void deleteContact()}>Delete contact details</button>
       </div> : <form className="profile-form" onSubmit={event => void saveContact(event)} noValidate>
         <div className="form-grid">

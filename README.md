@@ -1,6 +1,6 @@
 # CV Tailor
 
-Personal Windows Workbench. This repository contains the early installable T01 baseline; profile editing, Gemini generation and document exports belong to later tickets and **are not implemented**. The approved browser-only prototype remains under `prototypes/cv-tailor-ui/` as design evidence, never part of the installed app.
+Personal Windows Workbench. The installable app supports local contact details and categorized skill editing with evidence revisions. Other profile categories, Gemini generation and document exports belong to later tickets and **are not implemented**. The approved browser-only prototype remains under `prototypes/cv-tailor-ui/` as design evidence, never part of the installed app.
 
 ## Develop and verify
 
@@ -12,8 +12,8 @@ npm run test:electron  # Rebuild native SQLite for Electron, then Playwright sta
 npm run dist:win       # Build a per-user NSIS installer in release/
 ```
 
-`npm test` rebuilds the native database for Node. `npm run test:electron` rebuilds it for the installed Electron ABI; don't run the two suites concurrently against the same `node_modules`. Packaging also rebuilds native dependencies. The test override for temporary user data is disabled in packaged builds. The renderer only has the typed settings bridge, not generic IPC, Node or filesystem access. Settings are stored under Electron's per-user `userData` directory in `workbench.sqlite`.
+`npm test` rebuilds the native database for Node. `npm run test:electron` rebuilds it for the installed Electron ABI; don't run the two suites concurrently against the same `node_modules`. Packaging also rebuilds native dependencies. The test override for temporary user data is disabled in packaged builds. The renderer has a narrow typed settings/profile bridge, not generic IPC, Node or filesystem access. Settings and profile evidence are stored under Electron's per-user `userData` directory in `workbench.sqlite`.
 
 The NSIS installer defaults to a per-user installation and lets you choose the location. The user confirms this current machine is a fresh Windows installation and accepts it for installer and release checks; a separate Windows VM is not required. Install the **actual installer**, confirm the first window opens, change appearance, close/reopen and confirm it persists through native SQLite. For release candidates, repeat this with an isolated app-data profile and verify the required export/recovery workflows; record exactly what was observed. The T01 installer was installed here, the installed executable passed an automated SQLite-backed reopen check with isolated temporary user data, and the user manually confirmed the installed app works. An unsigned personal installer can trigger SmartScreen or an unknown-publisher warning. It is not a signed public release; only run installers you trust. There is no bundled API key, Python runtime, model or personal sample profile.
 
-The approved [specification](https://github.com/MakCoder-2004/ATS-CV-Creator/issues/1) and [T01 ticket](https://github.com/MakCoder-2004/ATS-CV-Creator/issues/2) define the scope. [Visual approval and handoff](prototypes/cv-tailor-ui/docs/HANDOFF.md) record the Workbench direction; the prototype is not a backend or an assurance of privacy.
+The approved [specification](https://github.com/MakCoder-2004/ATS-CV-Creator/issues/1), [T01 ticket](https://github.com/MakCoder-2004/ATS-CV-Creator/issues/2) and [T02 ticket](https://github.com/MakCoder-2004/ATS-CV-Creator/issues/3) define the scope. [Visual approval and handoff](prototypes/cv-tailor-ui/docs/HANDOFF.md) record the Workbench direction; the prototype is not a backend or an assurance of privacy.

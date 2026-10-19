@@ -167,6 +167,8 @@ nav button:hover, nav button[aria-current=page] { background: var(--raised); col
 :root[data-appearance=dark] .profile-message.error { color: #ffdce0; background: #4a2029; border-color: #9b4551; }
 .profile-message button { color: inherit; }
 .profile-panel[role=status] { color: var(--muted); }
+:root[data-appearance=dark] .field-error, :root[data-appearance=dark] .destructive { color: #ffb9c1; }
+:root[data-appearance=dark] .form-grid [aria-invalid=true] { border-color: #ffb9c1; }
 @media (max-width: 760px) {
   .profile-layout { padding: 0 16px 24px; }
   .profile-panel { padding: 18px; }

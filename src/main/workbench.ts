@@ -83,6 +83,10 @@ export function createWorkbench(userData: string): { api: WorkbenchAPI; close():
       const tx = db.transaction(() => {
         const row = input.id ? db.prepare('SELECT id, revision FROM profile_skills WHERE id = ?').get(input.id) as { id: string; revision: number } | undefined : undefined
         if (input.id && !row) return failure('CONFLICT', 'The skill no longer exists.')
+        const duplicate = db.prepare(`SELECT id FROM profile_skills WHERE lower(trim(json_extract(data, '$.name'))) = lower(trim(?))
+          AND lower(trim(json_extract(data, '$.category'))) = lower(trim(?)) AND id <> ?`)
+          .get(parsed.value!.name, parsed.value!.category, input.id ?? '')
+        if (duplicate) return failure('CONFLICT', 'A matching skill already exists in this category.', { name: 'This skill already exists in this category.' })
         const id = row?.id ?? randomUUID(), revision = (row?.revision ?? 0) + 1
         const record = skillRecordSchema.parse({ ...parsed.value, id, revision })
         db.prepare('INSERT INTO profile_skills (id, revision, data) VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET revision=excluded.revision, data=excluded.data').run(id, revision, JSON.stringify(record))
