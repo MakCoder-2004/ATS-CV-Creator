@@ -2,6 +2,7 @@ import { afterEach, expect, test } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import Database from 'better-sqlite3'
 import { createWorkbench } from '../src/main/workbench'
 
 const directories: string[] = []
@@ -16,7 +17,7 @@ function open() {
 
 test('contact and skills persist with stable IDs and immutable revisions', async () => {
   const { directory, workbench: first } = open()
-  const contactResult = await first.api.saveContact({ fullName: ' Ada Lovelace ', headline: 'Engineer', links: ['https://example.com'] })
+  const contactResult = await first.api.saveContact({ fullName: ' Ada Lovelace ', headline: 'Engineer', links: [{ label: 'Website', url: 'https://example.com' }] })
   expect(contactResult.ok).toBe(true)
   if (!contactResult.ok) throw Error(contactResult.error.message)
   const contactId = contactResult.value.contact!.id
@@ -34,6 +35,45 @@ test('contact and skills persist with stable IDs and immutable revisions', async
   first.close()
   const reopened = createWorkbench(directory)
   expect(await reopened.api.getProfile()).toMatchObject({ contact: { id: contactId, revision: 1 }, skills: [{ id: skillId, revision: 2 }] })
+  reopened.close()
+})
+
+test('named contact links validate each row atomically and retain usable names', async () => {
+  const { workbench } = open()
+  const saved = await workbench.api.saveContact({ fullName: 'Ada Lovelace', links: [{ label: 'GitHub', url: 'https://test.com' }] })
+  expect(saved).toMatchObject({ ok: true, value: { contact: { links: [{ label: 'GitHub', url: 'https://test.com' }] } } })
+  const before = await workbench.api.getProfile()
+  const invalid = await workbench.api.saveContact({ fullName: 'Ada Lovelace', links: [{ label: ' ', url: 'file:///tmp/nope' }] })
+  expect(invalid).toMatchObject({ ok: false, error: { code: 'VALIDATION_ERROR', fieldErrors: { 'links.0.label': expect.any(String), 'links.0.url': expect.any(String) } } })
+  expect(await workbench.api.getProfile()).toEqual(before)
+  workbench.close()
+})
+
+test('legacy contacts migrate to named links without rewriting historical evidence', async () => {
+  const { directory } = open()
+  const id = 'b28b5307-07dd-4e39-bc16-849c56b4c331'
+  const db = new Database(join(directory, 'workbench.sqlite'))
+  db.exec(`CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY);
+    INSERT INTO schema_migrations (version) VALUES (1), (2);
+    CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+    CREATE TABLE profile_contact (singleton INTEGER PRIMARY KEY CHECK(singleton = 1), id TEXT NOT NULL UNIQUE, revision INTEGER NOT NULL, data TEXT NOT NULL);
+    CREATE TABLE profile_skills (id TEXT PRIMARY KEY, revision INTEGER NOT NULL, data TEXT NOT NULL);
+    CREATE UNIQUE INDEX profile_skill_unique ON profile_skills(lower(json_extract(data, '$.name')), lower(json_extract(data, '$.category')));
+    CREATE TABLE evidence_revisions (id TEXT NOT NULL, revision INTEGER NOT NULL, action TEXT NOT NULL CHECK(action IN ('created','updated','deleted')), snapshot TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(id, revision));`)
+  const old = { id, revision: 1, fullName: 'Ada Lovelace', links: ['https://github.com/ada'] }
+  db.prepare('INSERT INTO profile_contact VALUES (1, ?, 1, ?)').run(id, JSON.stringify(old))
+  db.prepare('INSERT INTO evidence_revisions VALUES (?, 1, ?, ?, ?)').run(id, 'created', JSON.stringify(old), '2026-01-01T00:00:00.000Z')
+  db.close()
+  const migrated = createWorkbench(directory)
+  expect(await migrated.api.getProfile()).toMatchObject({ contact: { id, revision: 2, links: [{ label: 'https://github.com/ada', url: 'https://github.com/ada' }] } })
+  expect(await migrated.api.getEvidenceHistory(id)).toMatchObject([
+    { revision: 1, action: 'created', snapshot: { id, revision: 1, links: ['https://github.com/ada'] } },
+    { revision: 2, action: 'updated', snapshot: { id, revision: 2, links: [{ label: 'https://github.com/ada', url: 'https://github.com/ada' }] } }
+  ])
+  migrated.close()
+  const reopened = createWorkbench(directory)
+  expect(await reopened.api.getProfile()).toMatchObject({ contact: { id, revision: 2, links: [{ label: 'https://github.com/ada' }] } })
+  expect(await reopened.api.getEvidenceHistory(id)).toHaveLength(2)
   reopened.close()
 })
 

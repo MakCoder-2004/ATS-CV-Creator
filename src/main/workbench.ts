@@ -28,12 +28,29 @@ export function createWorkbench(userData: string): { api: WorkbenchAPI; close():
   const validated = <T>(parsed: ReturnType<typeof contactInputSchema.safeParse> | ReturnType<typeof skillInputSchema.safeParse>): { value?: T; errors?: Record<string, string> } => {
     if (parsed.success) return { value: parsed.data as T }
     const errors: Record<string, string> = {}
-    for (const issue of parsed.error.issues) errors[String(issue.path[0] ?? '_')] = issue.message
+    for (const issue of parsed.error.issues) errors[issue.path.length ? issue.path.join('.') : '_'] = issue.message
     return { errors }
   }
   const recordRevision = (record: ContactRecord | SkillRecord, action: EvidenceRevision['action']) => {
     db.prepare('INSERT INTO evidence_revisions (id, revision, action, snapshot, created_at) VALUES (?, ?, ?, ?, ?)').run(record.id, record.revision, action, JSON.stringify(record), new Date().toISOString())
   }
+  const migrateNamedLinks = db.transaction(() => {
+    const migrated = db.prepare('SELECT 1 FROM schema_migrations WHERE version = 3').get()
+    if (migrated) return
+    const row = db.prepare('SELECT id, revision, data FROM profile_contact WHERE singleton = 1').get() as { id: string; revision: number; data: string } | undefined
+    if (row) {
+      const legacy = JSON.parse(row.data) as Record<string, unknown>
+      if (Array.isArray(legacy.links) && legacy.links.every((link) => typeof link === 'string')) {
+        const links = legacy.links.map((url) => ({ label: url, url }))
+        const changed = links.length > 0
+        const record = contactRecordSchema.parse({ ...legacy, links, revision: row.revision + (changed ? 1 : 0) })
+        db.prepare('UPDATE profile_contact SET revision = ?, data = ? WHERE singleton = 1').run(record.revision, JSON.stringify(record))
+        if (changed) recordRevision(record, 'updated')
+      }
+    }
+    db.prepare('INSERT INTO schema_migrations (version) VALUES (3)').run()
+  })
+  migrateNamedLinks()
   const api: WorkbenchAPI = {
     async getSettings() {
       const stored = db.prepare('SELECT value FROM settings WHERE key = ?').get('appearance') as { value: string } | undefined
