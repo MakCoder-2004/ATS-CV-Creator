@@ -3,13 +3,14 @@ import type { ZodError } from 'zod'
 import { randomUUID } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { appearanceSchema, settingsSchema, type WorkbenchAPI } from '../shared/appearance'
+import { isDeepStrictEqual } from 'node:util'
+import { appearanceSchema, settingsSchema, type WorkbenchStorageAPI } from '../shared/appearance'
 import { geminiKeyInputSchema, geminiModelSchema, type GeminiModel } from '../shared/gemini-settings'
 import { contactInputSchema, contactRecordSchema, evidenceRevisionSchema, profileEntryInputSchema, profileEntrySchema, profileMutationResultSchema, profileSnapshotSchema, skillInputSchema, skillRecordSchema, uuidSchema, type ContactRecord, type EvidenceRevision, type ProfileEntry, type ProfileSnapshot, type SkillRecord } from '../shared/profile'
 import { experienceInputSchema, experienceRecordSchema, experienceSnapshotSchema, experienceMutationResultSchema, projectInputSchema, projectRecordSchema, type ExperienceRecord, type ProjectRecord, type FactualItemRecord } from '../shared/experience'
 import { jobInputSchema, jobRecordSchema, jobSaveResultSchema } from '../shared/jobs'
 import type { JobRecord } from '../shared/jobs'
-import { profileExchangeSchema } from '../shared/profile-exchange'
+import { profileExchangeSchema, type ProfileExchange } from '../shared/profile-exchange'
 
 export interface SecureStorage {
   isEncryptionAvailable(): boolean
@@ -36,7 +37,7 @@ function reconcileNestedItems(items: NestedInput[], previous: NestedRecord[], ow
 }
 
 /** One workspace per userData directory. Opening a workspace applies forward-only migrations. */
-export function createWorkbench(userData: string, secureStorage: SecureStorage = unavailableSecureStorage): { api: WorkbenchAPI; close(): void } {
+export function createWorkbench(userData: string, secureStorage: SecureStorage = unavailableSecureStorage): { api: WorkbenchStorageAPI; close(): void } {
   mkdirSync(userData, { recursive: true })
   const db = new Database(join(userData, 'workbench.sqlite'))
   db.pragma('journal_mode = WAL')
@@ -111,7 +112,20 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
     } catch { return false }
   }
   const saveSetting = (key: string, value: string) => db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(key, value)
-  const api: WorkbenchAPI = {
+  const validateProfileImport = (input: string): { ok: true; data: ProfileExchange } | { ok: false; message: string } => {
+    let decoded: unknown
+    try { decoded = JSON.parse(input) } catch { return { ok: false, message: 'This profile file is invalid or incompatible.' } }
+    const parsed = profileExchangeSchema.safeParse(decoded)
+    if (!parsed.success) return { ok: false, message: 'This profile file is invalid or incompatible.' }
+    const data = parsed.data
+    const records = [data.profile.contact, ...data.profile.skills, ...data.profile.education, ...data.profile.certificates, ...data.profile.summary, ...data.profile.languages, ...data.profile.extras, ...data.experience.experience, ...data.experience.experience.flatMap(x => x.factualItems), ...data.experience.projects, ...data.experience.projects.flatMap(x => [...x.factualItems, ...x.technologies])].filter((record): record is NonNullable<typeof record> => record !== null)
+    for (const record of records) {
+      const historyRows = db.prepare('SELECT revision, snapshot FROM evidence_revisions WHERE id = ? ORDER BY revision DESC').all(record.id) as { revision: number; snapshot: string }[]
+      if (historyRows.length && (historyRows[0].revision !== record.revision || !isDeepStrictEqual(JSON.parse(historyRows.find(row => row.revision === record.revision)!.snapshot), record))) return { ok: false, message: 'This import reuses an evidence ID/revision for different or outdated facts. Export a fresh profile or use newly identified records.' }
+    }
+    return { ok: true, data }
+  }
+  const api: WorkbenchStorageAPI = {
     async getSettings() {
       const rows = db.prepare('SELECT key, value FROM settings WHERE key IN (?, ?)').all('appearance', 'gemini-model') as { key: string; value: string }[]
       const stored = Object.fromEntries(rows.map(row => [row.key, row.value]))
@@ -141,17 +155,14 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       return this.getSettings()
     },
     async getProfile() { return readProfile() },
-    async exportProfile() { return { ok: false, cancelled: true, message: 'Use the application profile export dialog.' } },
-    async previewProfileImport() { return { ok: false, cancelled: true, message: 'Use the application profile import dialog.' } },
-    async applyProfileImport(input: string) {
-      let decoded: unknown
-      try { decoded = JSON.parse(input) } catch { return { ok: false, message: 'This profile file is invalid or incompatible.' } }
-      const parsed = profileExchangeSchema.safeParse(decoded)
-      if (!parsed.success) return { ok: false, message: 'This profile file is invalid or incompatible.' }
-      const data = parsed.data
-      if ((['education','certificates','summary','languages','extras'] as const).some(section => data.profile[section].some(item => item.section !== section))) return { ok: false, message: 'Profile records must match their declared section.' }
-      const ids = [data.profile.contact?.id, ...Object.values(data.profile).filter(Array.isArray).flatMap(x => x.map((item: { id: string }) => item.id)), ...data.experience.experience.flatMap(x => [x.id, ...x.factualItems.map(i => i.id)]), ...data.experience.projects.flatMap(x => [x.id, ...x.factualItems.map(i => i.id), ...x.technologies.map(i => i.id)])].filter(Boolean) as string[]
-      if (new Set(ids).size !== ids.length) return { ok: false, message: 'This profile contains duplicate record IDs.' }
+    async validateProfileImport(input: string) {
+      const result = validateProfileImport(input)
+      return result.ok ? { ok: true, message: 'Profile import is valid.' } : { ok: false, message: result.message }
+    },
+    async replaceProfile(input: string) {
+      const validation = validateProfileImport(input)
+      if (!validation.ok) return { ok: false, message: validation.message }
+      const data = validation.data
       const tx = db.transaction(() => {
         db.exec('DELETE FROM profile_contact; DELETE FROM profile_skills; DELETE FROM profile_entries; DELETE FROM profile_experience; DELETE FROM profile_projects;')
         if (data.profile.contact) db.prepare('INSERT INTO profile_contact (singleton,id,revision,data) VALUES (1,?,?,?)').run(data.profile.contact.id, data.profile.contact.revision, JSON.stringify(data.profile.contact))

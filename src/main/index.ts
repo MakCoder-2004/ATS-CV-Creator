@@ -10,6 +10,7 @@ import { contactSaveInputSchema, evidenceRevisionSchema, profileEntrySaveSchema,
 import { experienceSaveInputSchema, experienceSnapshotSchema, experienceMutationResultSchema, projectSaveInputSchema } from '../shared/experience'
 import { jobRecordSchema, jobSaveInputSchema, jobSaveResultSchema } from '../shared/jobs'
 import { randomUUID } from 'node:crypto'
+import { isDeepStrictEqual } from 'node:util'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { profileExchangeSchema, profileExchangeResultSchema } from '../shared/profile-exchange'
 
@@ -87,11 +88,33 @@ app.whenReady().then(() => {
     if (selected.canceled || !selected.filePaths[0]) return profileExchangeResultSchema.parse({ ok: false, cancelled: true, message: 'Profile import cancelled.' })
     try {
       const value = profileExchangeSchema.parse(JSON.parse(readFileSync(selected.filePaths[0], 'utf8')))
+      const validation = await workspace!.api.validateProfileImport(JSON.stringify(value))
+      if (!validation.ok) return profileExchangeResultSchema.parse({ ok: false, cancelled: false, message: validation.message })
       const token = randomUUID()
       const currentProfile = await workspace!.api.getProfile(), currentExperience = await workspace!.api.getExperience()
       pendingImports.set(token, { value, baseline: JSON.stringify({ profile: currentProfile, experience: currentExperience }) })
       const count = (p: typeof value) => Object.values(p.profile).filter(Array.isArray).reduce((n, xs) => n + xs.length, 0) + p.experience.experience.length + p.experience.projects.length + (p.profile.contact ? 1 : 0)
-      return profileExchangeResultSchema.parse({ ok: true, token, value, current: { records: count({ ...value, profile: currentProfile, experience: currentExperience }) }, replacement: { records: count(value) } })
+      const before = { ...value, profile: currentProfile, experience: currentExperience }
+      const collections = (p: typeof value) => ({
+        contact: p.profile.contact ? [{ id: p.profile.contact.id, label: p.profile.contact.fullName, record: p.profile.contact }] : [],
+        skills: p.profile.skills.map(record => ({ id: record.id, label: record.name, record })),
+        education: p.profile.education.map(record => ({ id: record.id, label: record.title, record })),
+        experience: p.experience.experience.map(record => ({ id: record.id, label: `${record.title} — ${record.organization}`, record })),
+        projects: p.experience.projects.map(record => ({ id: record.id, label: record.name, record })),
+        certificates: p.profile.certificates.map(record => ({ id: record.id, label: record.title, record })),
+        summary: p.profile.summary.map(record => ({ id: record.id, label: record.title, record })),
+        languages: p.profile.languages.map(record => ({ id: record.id, label: record.title, record })),
+        extras: p.profile.extras.map(record => ({ id: record.id, label: record.title, record }))
+      })
+      const oldCollections = collections(before), newCollections = collections(value)
+      const effects = Object.keys(oldCollections).flatMap(section => {
+        const oldItems = oldCollections[section as keyof typeof oldCollections], newItems = newCollections[section as keyof typeof newCollections]
+        const oldById = new Map(oldItems.map(item => [item.id, item])), newById = new Map(newItems.map(item => [item.id, item]))
+        return [...oldItems.filter(item => !newById.has(item.id)).map(item => ({ section, action: 'remove' as const, currentLabel: item.label })),
+          ...newItems.filter(item => !oldById.has(item.id)).map(item => ({ section, action: 'add' as const, replacementLabel: item.label })),
+          ...newItems.filter(item => oldById.has(item.id) && !isDeepStrictEqual(item.record, oldById.get(item.id)!.record)).map(item => ({ section, action: 'replace' as const, currentLabel: oldById.get(item.id)!.label, replacementLabel: item.label }))]
+      })
+      return profileExchangeResultSchema.parse({ ok: true, token, value, current: { records: count(before) }, replacement: { records: count(value) }, effects })
     } catch { return profileExchangeResultSchema.parse({ ok: false, cancelled: false, message: 'This file is not valid CV Tailor profile JSON.' }) }
   })
   ipcMain.handle('profile:import:apply', async (event, ...args: unknown[]) => {
@@ -100,7 +123,7 @@ app.whenReady().then(() => {
     if (!pending) return { ok: false, message: 'This preview expired. Select the file again.' }
     const baseline = JSON.stringify({ profile: await workspace!.api.getProfile(), experience: await workspace!.api.getExperience() })
     if (baseline !== pending.baseline) return { ok: false, message: 'Your profile changed after preview. Select the file again to review the replacement.' }
-    return workspace!.api.applyProfileImport(JSON.stringify(pending.value))
+    return workspace!.api.replaceProfile(JSON.stringify(pending.value))
   })
   ipcMain.handle('profile:get', async (event, ...args: unknown[]) => {
     trusted(event)

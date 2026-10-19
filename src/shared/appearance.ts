@@ -38,3 +38,8 @@ export interface WorkbenchAPI {
   listJobs(): Promise<JobRecord[]>
   openJob(id: string): Promise<JobRecord | null>
 }
+
+export type WorkbenchStorageAPI = Omit<WorkbenchAPI, 'exportProfile' | 'previewProfileImport' | 'applyProfileImport'> & {
+  validateProfileImport(input: string): Promise<{ ok: boolean; message: string }>
+  replaceProfile(input: string): Promise<{ ok: boolean; message: string; profile?: ProfileSnapshot }>
+}
