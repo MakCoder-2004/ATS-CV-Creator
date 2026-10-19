@@ -17,6 +17,13 @@ test('fictional postings save, validate, select independently, and reopen after 
     await expect(page.locator('[data-ui-ready="true"]')).toBeVisible()
     await page.getByRole('button', { name: 'Saved jobs' }).click()
     await expect(page.locator('.jobs-empty')).toBeVisible()
+    await expect(page.getByText('No saved postings', { exact: true })).toBeVisible()
+    const wideLayout = await page.locator('.jobs-redesign').evaluate(element => {
+      const style = getComputedStyle(element)
+      return { columns: style.gridTemplateColumns.split(' ').length, editorWidth: element.querySelector('.job-editor')!.getBoundingClientRect().width }
+    })
+    expect(wideLayout.columns).toBe(2)
+    expect(wideLayout.editorWidth).toBeGreaterThan(500)
     await page.getByRole('button', { name: 'Save posting' }).click()
     await expect(page.getByRole('alert')).toContainText('Enter a title')
     await expect(page.getByLabel('Job title')).toHaveAttribute('aria-invalid', 'true')
@@ -42,6 +49,16 @@ test('fictional postings save, validate, select independently, and reopen after 
     await expect(page.getByText('Target: Fictional Platform Engineer · Northwind Research')).toBeVisible()
     await page.getByRole('button', { name: /Fictional Product Analyst/ }).click()
     await expect(page.getByText('Target: Fictional Product Analyst · Contoso Labs')).toBeVisible()
+    await page.getByRole('button', { name: 'Saved jobs' }).click()
+    await page.getByRole('button', { name: 'Use dark mode' }).click()
+    await page.setViewportSize({ width: 700, height: 900 })
+    const narrowLayout = await page.locator('.jobs-redesign').evaluate(element => ({
+      columns: getComputedStyle(element).gridTemplateColumns.split(' ').length,
+      scrollWidth: element.scrollWidth,
+      clientWidth: element.clientWidth,
+    }))
+    expect(narrowLayout.columns).toBe(1)
+    expect(narrowLayout.scrollWidth).toBeLessThanOrEqual(narrowLayout.clientWidth)
 
     await app.close()
     running = undefined

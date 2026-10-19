@@ -1,8 +1,9 @@
 import React, { FormEvent, useEffect, useRef, useState } from 'react'
 import { UserRound } from 'lucide-react'
 import type { ContactInput, ProfileEntry, ProfileEntryInput, ProfileSnapshot, SkillInput, SkillRecord } from '../shared/profile'
-import type { ExperienceRecord, ProjectRecord } from '../shared/experience'
 import { ExperienceEditor } from './ExperienceEditor'
+import { FieldSelect } from './controls/FieldSelect'
+import { MonthYearPicker } from './controls/MonthYearPicker'
 
 type ProfileSection = 'Personal' | 'Skills' | 'Experience' | 'Projects' | 'Education' | 'Certificates' | 'Summary' | 'Languages' | 'Extras'
 type LinkRow = { key: number; label: string; url: string }
@@ -154,8 +155,8 @@ export function ProfileEditor() {
       <form className="profile-form skill-form" onSubmit={event => void saveSkill(event)} noValidate>
         <div className="form-grid skill-grid">
           <label>Skill name<input value={skill.name} onChange={event => updateSkill('name', event.target.value)} aria-invalid={!!fieldErrors.name} aria-describedby={fieldErrors.name ? 'skill-name-error' : undefined} />{fieldErrors.name && <span className="field-error" id="skill-name-error">{fieldErrors.name}</span>}</label>
-          <label>Skill category<select value={skill.category} onChange={event => updateSkill('category', event.target.value)} aria-invalid={!!fieldErrors.category} aria-describedby={fieldErrors.category ? 'skill-category-error' : undefined}>{categories.map(category => <option key={category}>{category}</option>)}</select>{fieldErrors.category && <span className="field-error" id="skill-category-error">{fieldErrors.category}</span>}</label>
-          <label>Proficiency (optional)<select value={skill.proficiency ?? ''} onChange={event => updateSkill('proficiency', event.target.value)} aria-invalid={!!fieldErrors.proficiency} aria-describedby={fieldErrors.proficiency ? 'skill-proficiency-error' : undefined}><option value="">Not specified</option><option value="beginner">Beginner</option><option value="intermediate">Intermediate</option><option value="advanced">Advanced</option><option value="expert">Expert</option></select>{fieldErrors.proficiency && <span className="field-error" id="skill-proficiency-error">{fieldErrors.proficiency}</span>}</label>
+          <FieldSelect id="skill-category" label="Skill category" value={skill.category} onValueChange={value => updateSkill('category', value)} options={categories.map(category => ({ value: category, label: category }))} error={fieldErrors.category} />
+          <FieldSelect id="skill-proficiency" label="Proficiency (optional)" value={skill.proficiency ?? ''} onValueChange={value => updateSkill('proficiency', value)} options={[{ value: '', label: 'Not specified' }, ...(['beginner', 'intermediate', 'advanced', 'expert'] as const).map(value => ({ value, label: proficiencyLabels[value] }))]} error={fieldErrors.proficiency} />
           <label>Years of experience (optional)<input type="number" min="0" max="80" step="1" value={skill.years ?? ''} onChange={event => updateSkill('years', event.target.value)} aria-invalid={!!fieldErrors.years} aria-describedby={fieldErrors.years ? 'skill-years-error' : undefined} />{fieldErrors.years && <span className="field-error" id="skill-years-error">{fieldErrors.years}</span>}</label>
         </div>
         <div className="form-actions"><button className="primary-button" type="submit">{skillEditId ? 'Save skill' : 'Add skill'}</button>{skillEditId && <button className="secondary-button" type="button" onClick={resetSkill}>Cancel</button>}</div>
@@ -166,31 +167,71 @@ export function ProfileEditor() {
       </li>)}</ul> : <p className="empty-skills">No skills added yet.</p>}
     </section>}
     {(activeSection === 'Experience' || activeSection === 'Projects') && <ExperienceEditor key={activeSection} projects={activeSection === 'Projects'} />}
-    {activeSection === 'Education' && <ProfileEntryEditor section="education" items={snapshot?.education ?? []} reload={reload} report={setMutationError} />}
-    {activeSection === 'Certificates' && <ProfileEntryEditor section="certificates" items={snapshot?.certificates ?? []} reload={reload} report={setMutationError} />}
-    {activeSection === 'Summary' && <ProfileEntryEditor section="summary" items={snapshot?.summary ?? []} reload={reload} report={setMutationError} />}
-    {activeSection === 'Languages' && <ProfileEntryEditor section="languages" items={snapshot?.languages ?? []} reload={reload} report={setMutationError} />}
-    {activeSection === 'Extras' && <ProfileEntryEditor section="extras" items={snapshot?.extras ?? []} reload={reload} report={setMutationError} />}
+    {activeSection === 'Education' && <ProfileEntryEditor key="education" section="education" items={snapshot?.education ?? []} reload={reload} onError={setMutationError} onSuccess={setNotice} />}
+    {activeSection === 'Certificates' && <ProfileEntryEditor key="certificates" section="certificates" items={snapshot?.certificates ?? []} reload={reload} onError={setMutationError} onSuccess={setNotice} />}
+    {activeSection === 'Summary' && <ProfileEntryEditor key="summary" section="summary" items={snapshot?.summary ?? []} reload={reload} onError={setMutationError} onSuccess={setNotice} />}
+    {activeSection === 'Languages' && <ProfileEntryEditor key="languages" section="languages" items={snapshot?.languages ?? []} reload={reload} onError={setMutationError} onSuccess={setNotice} />}
+    {activeSection === 'Extras' && <ProfileEntryEditor key="extras" section="extras" items={snapshot?.extras ?? []} reload={reload} onError={setMutationError} onSuccess={setNotice} />}
     <p className="locality-note">Your profile is stored locally on this device. It is not synced or shared. Local storage does not guarantee that future cloud features will be anonymous.</p>
     {(mutationError || notice) && <p className={mutationError ? 'profile-message error' : 'profile-message success'} role={mutationError ? 'alert' : 'status'}>{mutationError || notice}{mutationError && <button className="text-button" type="button" onClick={() => void reload()}>Retry</button>}</p>}
   </div>
 }
 
-function ProfileEntryEditor({ section, items, reload, report }: { section: ProfileEntryInput['section']; items: ProfileEntry[]; reload: () => Promise<void>; report: (message: string) => void }) {
+function ProfileEntryEditor({ section, items, reload, onError, onSuccess }: { section: ProfileEntryInput['section']; items: ProfileEntry[]; reload: () => Promise<void>; onError: (message: string) => void; onSuccess: (message: string) => void }) {
   const empty = (): ProfileEntryInput => ({ section, title: section === 'summary' ? 'Summary' : '', ...(section === 'summary' ? { description: '' } : {}) })
-  const [form, setForm] = useState<ProfileEntryInput>(empty())
+  const [form, setForm] = useState<ProfileEntryInput>(empty)
   const [editId, setEditId] = useState<string>()
   const [errors, setErrors] = useState<Record<string, string>>({})
   const update = (key: keyof ProfileEntryInput, value: string) => setForm(old => ({ ...old, [key]: key === 'year' ? value ? Number(value) : undefined : value === '' ? undefined : value }))
-  const save = async (event: FormEvent) => {
-    event.preventDefault(); setErrors({})
-    const result = await window.workbench.saveProfileEntry({ ...form, id: editId })
-    if (!result.ok) { setErrors(result.error.fieldErrors ?? {}); report(result.error.message); return }
-    setEditId(undefined); setForm(empty()); report(`${section} saved`); await reload()
+  async function save(event: FormEvent) {
+    event.preventDefault(); setErrors({}); onError(''); onSuccess('')
+    try {
+      const result = await window.workbench.saveProfileEntry({ ...form, id: editId })
+      if (!result.ok) { setErrors(result.error.fieldErrors ?? {}); onError(result.error.message); return }
+      setEditId(undefined); setForm(empty()); await reload(); onSuccess(`${section} saved`)
+    } catch { onError(`The ${section} record could not be saved. Check the fields and try again.`) }
   }
-  const edit = (item: ProfileEntry) => { const { id, revision, ...values } = item; setEditId(id); setForm(values); setErrors({}) }
-  const del = async (item: ProfileEntry) => { if (!window.confirm(`Delete ${item.title}? This cannot be undone.`)) return; const result = await window.workbench.deleteProfileEntry(item.id); if (!result.ok) report(result.error.message); else { report(`${item.title} deleted`); await reload() } }
-  const field = (key: keyof ProfileEntryInput, label: string, options: { type?: string; required?: boolean } = {}) => <label>{label}<input type={options.type ?? 'text'} value={String(form[key] ?? '')} required={options.required} onChange={event => update(key, event.target.value)} aria-invalid={!!errors[key]} />{errors[key] && <span className="field-error">{errors[key]}</span>}</label>
-  return <section className="profile-panel" aria-labelledby="entry-heading"><div className="panel-heading"><div><span className="context">{section === 'languages' || section === 'extras' || section === 'summary' ? 'Stored locally · not exported' : 'Profile evidence'}</span><h2 id="entry-heading">{section[0].toUpperCase() + section.slice(1)}</h2><p>{section === 'summary' || section === 'languages' || section === 'extras' ? 'This profile information is retained locally and is not included in CV output.' : 'Add, edit, or remove these profile facts. Saved changes retain revision history.'}</p></div></div><form className="profile-form" onSubmit={event => void save(event)} noValidate><div className="form-grid">{section === 'summary' ? <label>Summary<textarea value={form.description ?? ''} onChange={event => update('description', event.target.value)} aria-invalid={!!errors.description} />{errors.description && <span className="field-error">{errors.description}</span>}</label> : <>{field('title', section === 'languages' ? 'Language' : section === 'extras' ? 'Name' : 'Title', { required: true })}{section === 'education' && <>{field('institution', 'Institution')}{field('field', 'Degree or field')}{field('startDate', 'Start date (YYYY or YYYY-MM)')}{field('endDate', 'End date (YYYY or YYYY-MM)')}</>}{section === 'certificates' && <>{field('issuer', 'Issuer')}{field('year', 'Year', { type: 'number' })}{field('link', 'Certificate link', { type: 'url' })}</>}{section === 'languages' && <label>Proficiency<input value={form.description ?? ''} onChange={event => update('description', event.target.value)} placeholder="e.g. Native, fluent, conversational" /></label>}{section === 'extras' && <label>Details<textarea value={form.description ?? ''} onChange={event => update('description', event.target.value)} /></label>}</>}</div><div className="form-actions"><button className="primary-button" type="submit">{editId ? 'Save changes' : `Add ${section}`}</button>{editId && <button className="secondary-button" type="button" onClick={() => { setEditId(undefined); setForm(empty()) }}>Cancel</button>}</div></form><ul className="skill-list">{items.map(item => <li key={item.id}><div><h3>{item.title}</h3><p>{item.institution ?? item.issuer ?? item.field ?? item.description ?? ''} {item.year ?? ''} {item.startDate ? `· ${item.startDate} – ${item.endDate ?? 'Present'}` : ''}</p></div><div className="skill-actions"><button className="text-button" type="button" onClick={() => edit(item)}>Edit {item.title}</button><button className="text-button destructive" type="button" onClick={() => void del(item)}>Delete</button></div></li>)}</ul>{!items.length && <p className="empty-skills">No {section} added yet.</p>}</section>
-
+  function edit(item: ProfileEntry) { const { id, revision, ...values } = item; setEditId(id); setForm(values); setErrors({}); onError(''); onSuccess('') }
+  async function del(item: ProfileEntry) {
+    if (!window.confirm(`Delete ${item.title}? This cannot be undone.`)) return
+    try {
+      const result = await window.workbench.deleteProfileEntry(item.id)
+      if (!result.ok) { onError(result.error.message); return }
+      await reload(); onSuccess(`${item.title} deleted`)
+    } catch { onError(`${item.title} could not be deleted. Try again.`) }
+  }
+  const field = (key: keyof ProfileEntryInput, label: string, options: { type?: string; multiline?: boolean } = {}) => <label className="form-field" key={key}>{label}
+    {options.multiline ? <textarea rows={4} value={String(form[key] ?? '')} onChange={event => update(key, event.target.value)} aria-invalid={!!errors[key]} aria-describedby={errors[key] ? `${section}-${key}-error` : undefined} />
+      : <input type={options.type ?? 'text'} value={String(form[key] ?? '')} onChange={event => update(key, event.target.value)} aria-invalid={!!errors[key]} aria-describedby={errors[key] ? `${section}-${key}-error` : undefined} />}
+    {errors[key] && <span className="field-error" id={`${section}-${key}-error`}>{errors[key]}</span>}
+  </label>
+  const localOnly = section === 'summary' || section === 'languages' || section === 'extras'
+  return <section className="profile-panel profile-entry-editor" aria-labelledby="entry-heading">
+    <div className="panel-heading"><div><h2 id="entry-heading">{section[0].toUpperCase() + section.slice(1)}</h2><p>{localOnly ? 'Saved in your profile, not included in CV output.' : 'Keep these profile facts accurate. Edits retain their earlier revisions.'}</p></div></div>
+    <form className="profile-form profile-entry-form" onSubmit={event => void save(event)} noValidate>
+      <div className="form-grid profile-entry-grid">
+        {section === 'summary' ? <div className="wide-field">{field('description', 'Summary', { multiline: true })}</div> : <>
+          <div className={section === 'languages' || section === 'extras' ? 'wide-field' : undefined}>{field('title', section === 'languages' ? 'Language' : section === 'extras' ? 'Name' : 'Title')}</div>
+          {section === 'education' && <>
+            {field('institution', 'Institution')}
+            <div className="wide-field">{field('field', 'Degree or field')}</div>
+            <MonthYearPicker id="education-start" label="Start date" value={form.startDate} onChange={value => update('startDate', value ?? '')} error={errors.startDate} />
+            <MonthYearPicker id="education-end" label="End date" value={form.endDate} onChange={value => update('endDate', value ?? '')} error={errors.endDate} />
+          </>}
+          {section === 'certificates' && <>
+            {field('issuer', 'Issuer')}
+            <MonthYearPicker id="certificate-year" label="Year" yearOnly value={form.year?.toString()} onChange={value => update('year', value ?? '')} error={errors.year} />
+            <div className="wide-field">{field('link', 'Certificate link', { type: 'url' })}</div>
+          </>}
+          {section === 'languages' && <div className="wide-field">{field('description', 'Proficiency (optional)')}</div>}
+          {section === 'extras' && <div className="wide-field">{field('description', 'Details (optional)', { multiline: true })}</div>}
+        </>}
+      </div>
+      <div className="form-actions"><button className="primary-button" type="submit">{editId ? 'Save changes' : `Add ${section}`}</button>{editId && <button className="secondary-button" type="button" onClick={() => { setEditId(undefined); setForm(empty()); setErrors({}) }}>Cancel</button>}</div>
+    </form>
+    {items.length ? <div className="evidence-records"><h3>Saved {section}</h3><ul className="skill-list">{items.map(item => <li key={item.id}>
+      <div><h3>{item.title}</h3><div className="entry-meta">{item.institution && <span>{item.institution}</span>}{item.field && <span>{item.field}</span>}{item.issuer && <span>{item.issuer}</span>}{item.year && <span>{item.year}</span>}{item.startDate && <span>{item.startDate} – {item.endDate ?? 'Present'}</span>}</div>{item.description && <p className="entry-description">{item.description}</p>}</div>
+      <div className="skill-actions"><button className="text-button" type="button" onClick={() => edit(item)}>Edit {item.title}</button><button className="text-button destructive" type="button" onClick={() => void del(item)}>Delete</button></div>
+    </li>)}</ul></div> : <p className="empty-skills">No {section} added yet. Add your first record above.</p>}
+  </section>
 }
