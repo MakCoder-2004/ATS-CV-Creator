@@ -50,8 +50,10 @@ test('named contact links validate each row atomically and retain usable names',
 })
 
 test('legacy contacts migrate to named links without rewriting historical evidence', async () => {
-  const { directory } = open()
+  const directory = mkdtempSync(join(tmpdir(), 'cv-tailor-legacy-profile-'))
+  directories.push(directory)
   const id = 'b28b5307-07dd-4e39-bc16-849c56b4c331'
+  const longUrl = `https://example.com/${'x'.repeat(100)}`
   const db = new Database(join(directory, 'workbench.sqlite'))
   db.exec(`CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY);
     INSERT INTO schema_migrations (version) VALUES (1), (2);
@@ -60,19 +62,19 @@ test('legacy contacts migrate to named links without rewriting historical eviden
     CREATE TABLE profile_skills (id TEXT PRIMARY KEY, revision INTEGER NOT NULL, data TEXT NOT NULL);
     CREATE UNIQUE INDEX profile_skill_unique ON profile_skills(lower(json_extract(data, '$.name')), lower(json_extract(data, '$.category')));
     CREATE TABLE evidence_revisions (id TEXT NOT NULL, revision INTEGER NOT NULL, action TEXT NOT NULL CHECK(action IN ('created','updated','deleted')), snapshot TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(id, revision));`)
-  const old = { id, revision: 1, fullName: 'Ada Lovelace', links: ['https://github.com/ada'] }
+  const old = { id, revision: 1, fullName: 'Ada Lovelace', links: ['https://github.com/ada', longUrl] }
   db.prepare('INSERT INTO profile_contact VALUES (1, ?, 1, ?)').run(id, JSON.stringify(old))
   db.prepare('INSERT INTO evidence_revisions VALUES (?, 1, ?, ?, ?)').run(id, 'created', JSON.stringify(old), '2026-01-01T00:00:00.000Z')
   db.close()
   const migrated = createWorkbench(directory)
-  expect(await migrated.api.getProfile()).toMatchObject({ contact: { id, revision: 2, links: [{ label: 'https://github.com/ada', url: 'https://github.com/ada' }] } })
+  expect(await migrated.api.getProfile()).toMatchObject({ contact: { id, revision: 2, links: [{ label: 'https://github.com/ada', url: 'https://github.com/ada' }, { label: longUrl, url: longUrl }] } })
   expect(await migrated.api.getEvidenceHistory(id)).toMatchObject([
-    { revision: 1, action: 'created', snapshot: { id, revision: 1, links: ['https://github.com/ada'] } },
-    { revision: 2, action: 'updated', snapshot: { id, revision: 2, links: [{ label: 'https://github.com/ada', url: 'https://github.com/ada' }] } }
+    { revision: 1, action: 'created', snapshot: { id, revision: 1, links: ['https://github.com/ada', longUrl] } },
+    { revision: 2, action: 'updated', snapshot: { id, revision: 2, links: [{ label: 'https://github.com/ada', url: 'https://github.com/ada' }, { label: longUrl, url: longUrl }] } }
   ])
   migrated.close()
   const reopened = createWorkbench(directory)
-  expect(await reopened.api.getProfile()).toMatchObject({ contact: { id, revision: 2, links: [{ label: 'https://github.com/ada' }] } })
+  expect(await reopened.api.getProfile()).toMatchObject({ contact: { id, revision: 2, links: [{ label: 'https://github.com/ada' }, { label: longUrl }] } })
   expect(await reopened.api.getEvidenceHistory(id)).toHaveLength(2)
   reopened.close()
 })

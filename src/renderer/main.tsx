@@ -1,4 +1,4 @@
-import React, { FormEvent, useEffect, useState } from 'react'
+import React, { FormEvent, useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { BriefcaseBusiness, FileText, LayoutPanelLeft, Moon, Settings2, Sun, UserRound } from 'lucide-react'
 import type { Appearance } from '../shared/appearance'
@@ -12,6 +12,9 @@ const pages = [
   { label: 'My profile', icon: UserRound },
   { label: 'Settings', icon: Settings2 }
 ] as const
+const profileSections = ['Personal', 'Skills', 'Experience', 'Projects', 'Education', 'Certificates', 'Summary', 'Languages', 'Extras'] as const
+type ProfileSection = typeof profileSections[number]
+type LinkRow = { key: number; label: string; url: string }
 const skillCategories = ['Technical', 'Tools', 'Domain', 'Languages', 'Leadership', 'Other']
 const proficiencyLabels: Record<string, string> = { beginner: 'Beginner', intermediate: 'Intermediate', advanced: 'Advanced', expert: 'Expert' }
 
@@ -19,14 +22,23 @@ function ProfileEditor() {
   const [snapshot, setSnapshot] = useState<ProfileSnapshot | null>(null)
   const [loading, setLoading] = useState(true)
   const [contactEdit, setContactEdit] = useState(false)
+  const [activeSection, setActiveSection] = useState<ProfileSection>('Personal')
+  const nextLinkKey = useRef(0)
+  const [links, setLinks] = useState<LinkRow[]>([])
   const [skillEditId, setSkillEditId] = useState<string | undefined>()
   const [contact, setContact] = useState<ContactInput>({ fullName: '', headline: '', email: '', phone: '', location: '', links: [] })
   const [skill, setSkill] = useState<SkillInput>({ name: '', category: skillCategories[0] })
-  const [linksText, setLinksText] = useState('')
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
   const [mutationError, setMutationError] = useState('')
   const [notice, setNotice] = useState('')
 
+  function loadLinks(items: Array<string | { label: string; url: string }>) {
+    setLinks(items.map(item => ({ key: ++nextLinkKey.current, label: typeof item === 'string' ? item : item.label, url: typeof item === 'string' ? item : item.url })))
+  }
+  function changeLink(key: number, field: 'label' | 'url', value: string) {
+    setLinks(current => current.map(link => link.key === key ? { ...link, [field]: value } : link))
+    setFieldErrors({})
+  }
   async function reload() {
     setLoading(true)
     try {
@@ -34,10 +46,10 @@ function ProfileEditor() {
       setSnapshot(value)
       if (value.contact) {
         setContact({ ...value.contact })
-        setLinksText((value.contact.links ?? []).join('\n'))
+        loadLinks(value.contact.links ?? [])
       } else {
         setContact({ fullName: '', headline: '', email: '', phone: '', location: '', links: [] })
-        setLinksText('')
+        setLinks([])
       }
       setMutationError('')
     } catch {
@@ -59,7 +71,7 @@ function ProfileEditor() {
       ...(contact.email?.trim() ? { email: contact.email } : {}),
       ...(contact.phone?.trim() ? { phone: contact.phone } : {}),
       ...(contact.location?.trim() ? { location: contact.location } : {}),
-      links: linksText.split('\n').map(link => link.trim()).filter(Boolean)
+      links: links.map(({ label, url }) => ({ label, url }))
     }
     try {
       const result = await window.workbench.saveContact({ ...input, id: snapshot?.contact?.id })
@@ -70,7 +82,7 @@ function ProfileEditor() {
   function beginContactEdit() {
     if (snapshot?.contact) {
       setContact({ ...snapshot.contact })
-      setLinksText((snapshot.contact.links ?? []).join('\n'))
+      loadLinks(snapshot.contact.links ?? [])
     }
     setContactEdit(true); setNotice(''); setFieldErrors({})
   }
@@ -79,7 +91,7 @@ function ProfileEditor() {
     try {
       const result = await window.workbench.deleteContact(snapshot.contact.id)
       if (!result.ok) { setMutationError(result.error.message); return }
-      setSnapshot(result.value); setContact({ fullName: '', headline: '', email: '', phone: '', location: '', links: [] }); setLinksText(''); setNotice('Contact details deleted')
+      setSnapshot(result.value); setContact({ fullName: '', headline: '', email: '', phone: '', location: '', links: [] }); setLinks([]); setNotice('Contact details deleted')
     } catch { setMutationError('Contact details could not be deleted. Try again.') }
   }
   function updateSkill(field: keyof SkillInput, value: string) {
@@ -112,13 +124,15 @@ function ProfileEditor() {
   const categories = [...new Set([...(snapshot?.skills ?? []).map(item => item.category), ...skillCategories])]
   if (loading) return <section className="profile-panel" role="status">Loading your local profile…</section>
   return <div className="profile-layout">
-    <section className="profile-panel" aria-labelledby="contact-heading">
+    <div className="profile-summary"><span className="profile-avatar"><UserRound size={22} aria-hidden="true" /></span><div><strong>{snapshot?.contact?.fullName ?? 'Start your profile'}</strong><p>{snapshot?.contact?.headline ?? 'Your career facts, organized by section.'}</p></div><span className="profile-local-label">Saved on this device</span></div>
+    <nav className="profile-sections" aria-label="Profile sections">{profileSections.map(section => <button key={section} type="button" aria-current={activeSection === section ? 'page' : undefined} onClick={() => { setActiveSection(section); setMutationError(''); setNotice(''); setFieldErrors({}) }}>{section}{section !== 'Personal' && section !== 'Skills' && <span className="profile-upcoming">Soon</span>}</button>)}</nav>
+    {activeSection === 'Personal' && <section className="profile-panel" aria-labelledby="contact-heading">
       <div className="panel-heading"><div><span className="context">Identity</span><h2 id="contact-heading">Contact details</h2><p>Keep the details you want available when preparing your CV.</p></div>
         {!contactEdit && snapshot?.contact && <button className="secondary-button" type="button" onClick={beginContactEdit}>Edit contact details</button>}
       </div>
       {snapshot?.contact && !contactEdit ? <div className="contact-summary">
         <h3>{snapshot.contact.fullName}</h3>{snapshot.contact.headline && <p>{snapshot.contact.headline}</p>}
-        <dl>{snapshot.contact.email && <div><dt>Email</dt><dd>{snapshot.contact.email}</dd></div>}{snapshot.contact.phone && <div><dt>Phone</dt><dd>{snapshot.contact.phone}</dd></div>}{snapshot.contact.location && <div><dt>Location</dt><dd>{snapshot.contact.location}</dd></div>}{snapshot.contact.links?.map((link, index) => <div key={`${link}-${index}`}><dt>{index === 0 ? 'Links' : ''}</dt><dd>{link}</dd></div>)}</dl>
+        <dl>{snapshot.contact.email && <div><dt>Email</dt><dd>{snapshot.contact.email}</dd></div>}{snapshot.contact.phone && <div><dt>Phone</dt><dd>{snapshot.contact.phone}</dd></div>}{snapshot.contact.location && <div><dt>Location</dt><dd>{snapshot.contact.location}</dd></div>}{snapshot.contact.links?.map((link, index) => <div key={`${link.url}-${index}`}><dt>{link.label}</dt><dd>{link.url}</dd></div>)}</dl>
         <button className="text-button destructive" type="button" onClick={() => void deleteContact()}>Delete contact details</button>
       </div> : <form className="profile-form" onSubmit={event => void saveContact(event)} noValidate>
         <div className="form-grid">
@@ -127,12 +141,23 @@ function ProfileEditor() {
           <label>Email<input type="email" autoComplete="email" value={contact.email ?? ''} onChange={event => updateContact('email', event.target.value)} aria-invalid={!!fieldErrors.email} aria-describedby={fieldErrors.email ? 'contact-email-error' : undefined} />{fieldErrors.email && <span className="field-error" id="contact-email-error">{fieldErrors.email}</span>}</label>
           <label>Phone<input type="tel" autoComplete="tel" value={contact.phone ?? ''} onChange={event => updateContact('phone', event.target.value)} aria-invalid={!!fieldErrors.phone} aria-describedby={fieldErrors.phone ? 'contact-phone-error' : undefined} />{fieldErrors.phone && <span className="field-error" id="contact-phone-error">{fieldErrors.phone}</span>}</label>
           <label>Location<input autoComplete="address-level2" value={contact.location ?? ''} onChange={event => updateContact('location', event.target.value)} aria-invalid={!!fieldErrors.location} aria-describedby={fieldErrors.location ? 'contact-location-error' : undefined} />{fieldErrors.location && <span className="field-error" id="contact-location-error">{fieldErrors.location}</span>}</label>
-          <label className="wide-field">Links <span className="optional">(one per line)</span><textarea rows={2} value={linksText} onChange={event => setLinksText(event.target.value)} aria-invalid={!!fieldErrors.links} aria-describedby={fieldErrors.links ? 'contact-links-error' : undefined} />{fieldErrors.links && <span className="field-error" id="contact-links-error">{fieldErrors.links}</span>}</label>
+        </div>
+        <div className="links-editor"><div className="links-heading"><div><h3>Links</h3><p>Name the destinations you want to keep with your contact details.</p></div><button className="secondary-button" type="button" disabled={links.length >= 20} onClick={() => { setLinks(current => [...current, { key: ++nextLinkKey.current, label: '', url: '' }]); setFieldErrors({}) }}>Add link</button></div>
+          {fieldErrors.links && <p className="field-error" role="alert">{fieldErrors.links}</p>}
+          {links.map((link, index) => {
+            const labelError = fieldErrors[`links.${index}.label`]
+            const urlError = fieldErrors[`links.${index}.url`]
+            return <div className="link-row" key={link.key}>
+              <label>Link name {index + 1}<input value={link.label} onChange={event => changeLink(link.key, 'label', event.target.value)} aria-invalid={!!labelError} aria-describedby={labelError ? `link-label-error-${link.key}` : undefined} />{labelError && <span className="field-error" id={`link-label-error-${link.key}`}>{labelError}</span>}</label>
+              <label>Link URL {index + 1}<input type="url" inputMode="url" value={link.url} onChange={event => changeLink(link.key, 'url', event.target.value)} aria-invalid={!!urlError} aria-describedby={urlError ? `link-url-error-${link.key}` : undefined} />{urlError && <span className="field-error" id={`link-url-error-${link.key}`}>{urlError}</span>}</label>
+              <button className="text-button destructive" type="button" aria-label={`Remove ${link.label.trim() || `link ${index + 1}`}`} onClick={() => { setLinks(current => current.filter(item => item.key !== link.key)); setFieldErrors({}) }}>Remove</button>
+            </div>
+          })}
         </div>
         <div className="form-actions"><button className="primary-button" type="submit">Save contact details</button>{snapshot?.contact && <button className="secondary-button" type="button" onClick={() => { setContactEdit(false); setFieldErrors({}) }}>Cancel</button>}</div>
       </form>}
-    </section>
-    <section className="profile-panel" aria-labelledby="skills-heading">
+    </section>}
+    {activeSection === 'Skills' && <section className="profile-panel" aria-labelledby="skills-heading">
       <div className="panel-heading"><div><span className="context">Evidence</span><h2 id="skills-heading">Skills</h2><p>Record skills by category. Proficiency and years are optional self-reported details.</p></div></div>
       <form className="profile-form skill-form" onSubmit={event => void saveSkill(event)} noValidate>
         <div className="form-grid skill-grid">
@@ -147,7 +172,8 @@ function ProfileEditor() {
         <div className="skill-copy"><h3>{item.name}</h3><span className="category-tag">{item.category}</span>{item.proficiency && <span>{proficiencyLabels[item.proficiency] ?? item.proficiency}</span>}{item.years != null && <span>{item.years} {item.years === 1 ? 'year' : 'years'}</span>}</div>
         <div className="skill-actions"><button className="text-button" type="button" onClick={() => editSkill(item)}>Edit {item.name}</button><button className="text-button destructive" type="button" aria-label={`Delete ${item.name}`} onClick={() => void deleteSkill(item)}>Delete</button></div>
       </li>)}</ul> : <p className="empty-skills">No skills added yet.</p>}
-    </section>
+    </section>}
+    {activeSection !== 'Personal' && activeSection !== 'Skills' && <section className="profile-panel profile-upcoming-panel" aria-labelledby="upcoming-heading"><span className="context">Planned profile section</span><h2 id="upcoming-heading">{activeSection}</h2><p>{activeSection} editing is coming later. For now, add contact details under Personal and skills under Skills. Nothing entered here will be saved until this section has a real editor.</p></section>}
     <p className="locality-note">Your profile is stored locally on this device. It is not synced or shared. Local storage does not guarantee that future cloud features will be anonymous.</p>
     {(mutationError || notice) && <p className={mutationError ? 'profile-message error' : 'profile-message success'} role={mutationError ? 'alert' : 'status'}>{mutationError || notice}{mutationError && <button className="text-button" type="button" onClick={() => void reload()}>Retry</button>}</p>}
   </div>

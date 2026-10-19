@@ -12,7 +12,7 @@ let workspace: ReturnType<typeof createWorkbench> | undefined
 
 function invalidProfileInput(error: ZodError, kind: string) {
   const fieldErrors: Record<string, string> = {}
-  for (const issue of error.issues) fieldErrors[String(issue.path[0] ?? '_')] = issue.message
+  for (const issue of error.issues) fieldErrors[issue.path.length ? issue.path.join('.') : '_'] = issue.message
   return profileMutationResultSchema.parse({ ok: false, error: { code: 'VALIDATION_ERROR', message: `Check the highlighted ${kind} fields.`, fieldErrors } })
 }
 

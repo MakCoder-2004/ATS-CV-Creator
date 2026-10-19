@@ -2,7 +2,8 @@ import { z } from 'zod'
 
 const text = (max: number) => z.string().max(max).refine((value) => value.trim().length > 0, 'Must not be blank')
 const httpUrl = z.string().url().max(2048).refine((value) => /^https?:\/\//i.test(value), 'Must be an HTTP(S) URL')
-export const namedLinkSchema = z.object({ label: text(80), url: httpUrl }).strict()
+// A migrated URL may be used as its editable label, so names must accept the longest valid legacy URL.
+export const namedLinkSchema = z.object({ label: text(2048), url: httpUrl }).strict()
 export const contactInputSchema = z.object({
   fullName: text(160), headline: text(240).optional(), email: z.string().email().max(254).optional(),
   phone: text(64).optional(), location: text(160).optional(),
