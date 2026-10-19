@@ -2,6 +2,7 @@ import React, { FormEvent, useEffect, useRef, useState } from 'react'
 import { UserRound } from 'lucide-react'
 import type { ContactInput, ProfileEntry, ProfileEntryInput, ProfileSnapshot, SkillInput, SkillRecord } from '../shared/profile'
 import { ExperienceEditor } from './ExperienceEditor'
+import { PdfImportPanel } from './PdfImportPanel'
 import { FieldSelect } from './controls/FieldSelect'
 import { MonthYearPicker } from './controls/MonthYearPicker'
 
@@ -145,6 +146,7 @@ export function ProfileEditor() {
   if (loading) return <section className="profile-panel" role="status">Loading your local profile…</section>
   return <div className="profile-layout">
     <div className="profile-summary"><span className="profile-avatar"><UserRound size={22} aria-hidden="true" /></span><div><strong>{snapshot?.contact?.fullName ?? 'Start your profile'}</strong><p>{snapshot?.contact?.headline ?? 'Your career facts, organized by section.'}</p></div><span className="profile-local-label">Saved on this device</span><span className="profile-local-label">JSON includes personal profile data; store it safely.</span><button className="secondary-button" type="button" onClick={() => void exportProfile()}>Export profile JSON</button><button className="secondary-button" type="button" onClick={() => void previewImport()}>Import profile JSON</button></div>
+    <PdfImportPanel onApplied={async message => { await reload(); setNotice(message) }} />
     {importPreview && <section className="profile-panel" role="dialog" aria-modal="true" aria-labelledby="import-preview-title"><h2 id="import-preview-title">Replace profile from JSON?</h2><p>This file contains personal data. Importing replaces your current profile; it does not merge records. Historical evidence revisions used by older drafts will be retained.</p><p>Current records: {importPreview.current.records}. Replacement records: {importPreview.replacement.records}.</p><ul aria-label="Replacement effects">{importPreview.effects.length ? importPreview.effects.map((effect, index) => <li key={`${effect.section}-${effect.action}-${index}`}>{effect.section} — {effect.action}: {effect.action === 'add' ? effect.replacementLabel : effect.action === 'remove' ? effect.currentLabel : `${effect.currentLabel} → ${effect.replacementLabel}`}</li>) : <li>No record-level changes detected.</li>}</ul><button className="primary-button" type="button" onClick={() => void applyImport()}>Confirm replacement</button><button className="secondary-button" type="button" onClick={() => setImportPreview(null)}>Cancel</button></section>}
     <nav className="profile-sections" aria-label="Profile sections">{profileSections.map(section => <button key={section} type="button" aria-current={activeSection === section ? 'page' : undefined} onClick={() => { setActiveSection(section); setMutationError(''); setNotice(''); setFieldErrors({}) }}>{section}</button>)}</nav>
     {activeSection === 'Personal' && <section className="profile-panel" aria-labelledby="contact-heading">

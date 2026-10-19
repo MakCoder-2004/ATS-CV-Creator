@@ -1,0 +1,28 @@
+.pdf-import-panel { margin-top: 16px; }
+.pdf-import-panel .panel-heading { gap: 18px; align-items: center; }
+.pdf-import-panel .panel-heading p { max-width: 78ch; }
+.pdf-import-panel .pdf-import-review, .pdf-import-panel .pdf-import-effects { padding: 0 23px 24px; }
+.pdf-import-panel .pdf-import-review > p, .pdf-import-panel .pdf-import-effects > p { color: var(--muted); line-height: 1.6; }
+.pdf-import-panel .pdf-import-caution { padding: 12px 14px; border: 1px solid var(--line); border-radius: 7px; background: var(--raised); }
+.pdf-import-panel .pdf-import-issues { margin: 12px 0; padding: 10px 14px 10px 35px; color: var(--muted); background: var(--raised); border-radius: 7px; line-height: 1.5; }
+.pdf-import-panel .pdf-import-fields { display: grid; gap: 10px; max-height: 540px; overflow: auto; margin: 16px 0; padding: 0 4px 0 0; list-style: none; }
+.pdf-import-panel .pdf-import-fields li { padding: 15px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.pdf-import-panel .pdf-import-source { display: flex; flex-wrap: wrap; align-items: baseline; gap: 5px 12px; margin-bottom: 10px; overflow-wrap: anywhere; }
+.pdf-import-panel .pdf-import-source strong { font-size: 11px; color: var(--link); text-transform: uppercase; letter-spacing: .04em; }
+.pdf-import-panel .pdf-import-source span { font-size: 13px; font-weight: 650; }
+.pdf-import-panel .pdf-import-source small { width: 100%; color: var(--muted); }
+.pdf-import-panel .pdf-import-controls { display: grid; grid-template-columns: minmax(120px, 1fr) minmax(140px, 1fr) minmax(100px, .7fr); gap: 10px; align-items: end; }
+.pdf-import-panel .pdf-import-controls label { display: grid; gap: 5px; min-width: 0; font-size: 12px; font-weight: 600; }
+.pdf-import-panel .pdf-import-controls input:not([type='checkbox']), .pdf-import-panel .pdf-import-controls select, .pdf-import-panel .pdf-import-controls textarea { width: 100%; min-width: 0; min-height: 38px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--ink); font: inherit; }
+.pdf-import-panel .pdf-import-controls .pdf-import-value { grid-column: span 2; }
+.pdf-import-panel .pdf-import-controls .pdf-import-check { display: flex; flex-direction: row; align-items: center; gap: 8px; min-height: 38px; }
+.pdf-import-panel .pdf-import-controls .pdf-import-check input { width: 16px; height: 16px; accent-color: var(--link); }
+.pdf-import-panel .pdf-import-error, .pdf-import-panel .pdf-import-notice { margin: 12px 23px; line-height: 1.5; }
+.pdf-import-panel .pdf-import-error { color: var(--danger, #a32531); }
+.pdf-import-panel .pdf-import-notice { color: var(--link); }
+.pdf-import-panel .pdf-import-effects h3 { margin: 0; font-size: 16px; }
+.pdf-import-panel .pdf-import-effects ul { margin: 16px 0; padding: 0; list-style: none; }
+.pdf-import-panel .pdf-import-effects li { margin: 6px 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; overflow-wrap: anywhere; }
+.pdf-import-panel .pdf-import-effects li strong { margin-right: 6px; color: var(--link); text-transform: capitalize; }
+@media (max-width: 760px) { .pdf-import-panel .pdf-import-controls { grid-template-columns: repeat(2, minmax(0, 1fr)); } .pdf-import-panel .pdf-import-controls .pdf-import-value { grid-column: auto; } }
+@media (max-width: 520px) { .pdf-import-panel .pdf-import-controls { grid-template-columns: 1fr; } }
