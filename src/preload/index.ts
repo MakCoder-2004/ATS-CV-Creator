@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { appearanceSchema, settingsSchema, type Appearance, type WorkbenchAPI } from '../shared/appearance'
+import { geminiKeyInputSchema, geminiModelSchema, type GeminiModel } from '../shared/gemini-settings'
 import { evidenceRevisionSchema, profileMutationResultSchema, profileSnapshotSchema, uuidSchema, type ContactInput, type SkillInput } from '../shared/profile'
 import { jobRecordSchema, jobSaveResultSchema, type JobInput } from '../shared/jobs'
 
@@ -9,6 +10,15 @@ const api: WorkbenchAPI = Object.freeze({
   },
   async setAppearance(value: Appearance) {
     return settingsSchema.parse(await ipcRenderer.invoke('settings:appearance', appearanceSchema.parse(value)))
+  },
+  async setGeminiModel(value: GeminiModel) {
+    return settingsSchema.parse(await ipcRenderer.invoke('settings:gemini-model', geminiModelSchema.parse(value)))
+  },
+  async saveGeminiApiKey(value: string) {
+    return settingsSchema.parse(await ipcRenderer.invoke('settings:gemini-key:save', geminiKeyInputSchema.parse(value)))
+  },
+  async removeGeminiApiKey() {
+    return settingsSchema.parse(await ipcRenderer.invoke('settings:gemini-key:remove'))
   },
   async getProfile() {
     return profileSnapshotSchema.parse(await ipcRenderer.invoke('profile:get'))

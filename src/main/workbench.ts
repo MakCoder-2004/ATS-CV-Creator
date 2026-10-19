@@ -3,17 +3,30 @@ import { randomUUID } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { appearanceSchema, settingsSchema, type WorkbenchAPI } from '../shared/appearance'
+import { geminiKeyInputSchema, geminiModelSchema, type GeminiModel } from '../shared/gemini-settings'
 import { contactInputSchema, contactRecordSchema, evidenceRevisionSchema, profileMutationResultSchema, profileSnapshotSchema, skillInputSchema, skillRecordSchema, uuidSchema, type ContactRecord, type EvidenceRevision, type ProfileSnapshot, type SkillRecord } from '../shared/profile'
 import { jobInputSchema, jobRecordSchema, jobSaveResultSchema } from '../shared/jobs'
 import type { JobRecord } from '../shared/jobs'
 
+export interface SecureStorage {
+  isEncryptionAvailable(): boolean
+  getSelectedStorageBackend?(): string
+  encryptString(value: string): Buffer
+}
+
+const unavailableSecureStorage: SecureStorage = {
+  isEncryptionAvailable: () => false,
+  encryptString: () => { throw new Error('Secure storage unavailable') }
+}
+
 /** One workspace per userData directory. Opening a workspace applies forward-only migrations. */
-export function createWorkbench(userData: string): { api: WorkbenchAPI; close(): void } {
+export function createWorkbench(userData: string, secureStorage: SecureStorage = unavailableSecureStorage): { api: WorkbenchAPI; close(): void } {
   mkdirSync(userData, { recursive: true })
   const db = new Database(join(userData, 'workbench.sqlite'))
   db.pragma('journal_mode = WAL')
   db.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY);
     CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS encrypted_credentials (key TEXT PRIMARY KEY, ciphertext TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS profile_contact (singleton INTEGER PRIMARY KEY CHECK(singleton = 1), id TEXT NOT NULL UNIQUE, revision INTEGER NOT NULL, data TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS profile_skills (id TEXT PRIMARY KEY, revision INTEGER NOT NULL, data TEXT NOT NULL);
     CREATE UNIQUE INDEX IF NOT EXISTS profile_skill_unique ON profile_skills(lower(json_extract(data, '$.name')), lower(json_extract(data, '$.category')));
@@ -55,14 +68,41 @@ export function createWorkbench(userData: string): { api: WorkbenchAPI; close():
   })
   migrateNamedLinks()
   db.prepare('INSERT OR IGNORE INTO schema_migrations (version) VALUES (4)').run()
+  const secureStorageAvailable = () => {
+    try {
+      if (!secureStorage.isEncryptionAvailable()) return false
+      // Electron's Linux basic_text backend is reversible obfuscation, not secure encryption.
+      return secureStorage.getSelectedStorageBackend?.() !== 'basic_text'
+    } catch { return false }
+  }
+  const saveSetting = (key: string, value: string) => db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(key, value)
   const api: WorkbenchAPI = {
     async getSettings() {
-      const stored = db.prepare('SELECT value FROM settings WHERE key = ?').get('appearance') as { value: string } | undefined
-      return settingsSchema.parse({ appearance: stored?.value ?? 'light' })
+      const rows = db.prepare('SELECT key, value FROM settings WHERE key IN (?, ?)').all('appearance', 'gemini-model') as { key: string; value: string }[]
+      const stored = Object.fromEntries(rows.map(row => [row.key, row.value]))
+      const configured = Boolean(db.prepare('SELECT 1 FROM encrypted_credentials WHERE key = ?').get('gemini-api-key'))
+      return settingsSchema.parse({ appearance: stored.appearance ?? 'light', gemini: { model: stored['gemini-model'] ?? 'gemini-3.6-flash', credential: { configured, secureStorageAvailable: secureStorageAvailable() } } })
     },
     async setAppearance(value) {
-      const appearance = appearanceSchema.parse(value)
-      db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run('appearance', appearance)
+      saveSetting('appearance', appearanceSchema.parse(value))
+      return this.getSettings()
+    },
+    async setGeminiModel(value: GeminiModel) {
+      saveSetting('gemini-model', geminiModelSchema.parse(value))
+      return this.getSettings()
+    },
+    async saveGeminiApiKey(value: string) {
+      const key = geminiKeyInputSchema.parse(value)
+      if (!secureStorageAvailable()) throw new Error('Secure storage is unavailable. Your API key was not saved.')
+      let encrypted: Buffer
+      try { encrypted = secureStorage.encryptString(key) }
+      catch { throw new Error('Secure storage could not encrypt the API key. The key was not saved.') }
+      if (!Buffer.isBuffer(encrypted) || encrypted.length === 0) throw new Error('Secure storage could not encrypt the API key. The key was not saved.')
+      db.prepare('INSERT INTO encrypted_credentials (key, ciphertext) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET ciphertext = excluded.ciphertext').run('gemini-api-key', encrypted.toString('base64'))
+      return this.getSettings()
+    },
+    async removeGeminiApiKey() {
+      db.prepare('DELETE FROM encrypted_credentials WHERE key = ?').run('gemini-api-key')
       return this.getSettings()
     },
     async getProfile() { return readProfile() },
