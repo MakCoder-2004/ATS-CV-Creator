@@ -5,8 +5,9 @@ import { join } from 'node:path'
 import { createWorkbench } from '../src/main/workbench'
 
 const dirs: string[] = []
-afterEach(() => dirs.splice(0).forEach(dir => rmSync(dir, { recursive: true, force: true })))
-function open() { const directory = mkdtempSync(join(tmpdir(), 'cv-tailor-sections-')); dirs.push(directory); return { directory, workspace: createWorkbench(directory) } }
+const closers: Array<() => void> = []
+afterEach(() => { closers.splice(0).forEach(close => { try { close() } catch { /* already closed */ } }); dirs.splice(0).forEach(dir => rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })) })
+function open() { const directory = mkdtempSync(join(tmpdir(), 'cv-tailor-sections-')); dirs.push(directory); const workspace = createWorkbench(directory); closers.push(() => workspace.close()); return { directory, workspace } }
 
 test('education, certificates, and non-exported profile categories validate, revise, delete, and reopen', async () => {
   const { directory, workspace } = open()
@@ -18,6 +19,7 @@ test('education, certificates, and non-exported profile categories validate, rev
   expect(await workspace.api.saveProfileEntry({ section: 'education', title: 'BSc', institution: 'Example University', startDate: '2025', endDate: '2020' })).toMatchObject({ ok: false, error: { code: 'VALIDATION_ERROR', fieldErrors: { endDate: expect.any(String) } } })
   const updated = await workspace.api.saveProfileEntry({ id, section: 'education', title: 'MSc', institution: 'Example University', field: 'AI', startDate: '2024', endDate: '2026' })
   expect(updated).toMatchObject({ ok: true, value: { education: [{ id, revision: 2, title: 'MSc' }] } })
+  expect(await workspace.api.saveProfileEntry({ id, section: 'certificates', title: 'MSc', issuer: 'Example' })).toMatchObject({ ok: false, error: { code: 'CONFLICT' } })
   const certificate = await workspace.api.saveProfileEntry({ section: 'certificates', title: 'Cloud credential', issuer: 'Example', year: 2025, link: 'https://example.test/cert' })
   expect(certificate).toMatchObject({ ok: true, value: { certificates: [{ issuer: 'Example', year: 2025 }] } })
   const summary = await workspace.api.saveProfileEntry({ section: 'summary', title: 'Local summary', description: 'Private career note' })
