@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { appearanceSchema, settingsSchema, type Appearance, type WorkbenchAPI } from '../shared/appearance'
 import { evidenceRevisionSchema, profileMutationResultSchema, profileSnapshotSchema, uuidSchema, type ContactInput, type SkillInput } from '../shared/profile'
+import { jobRecordSchema, jobSaveResultSchema, type JobInput } from '../shared/jobs'
 
 const api: WorkbenchAPI = Object.freeze({
   async getSettings() {
@@ -27,6 +28,16 @@ const api: WorkbenchAPI = Object.freeze({
   async getEvidenceHistory(id: string) {
     const revisions = await ipcRenderer.invoke('profile:history', uuidSchema.parse(id))
     return evidenceRevisionSchema.array().parse(revisions)
+  },
+  async saveJob(input: JobInput & { id?: string }) {
+    return jobSaveResultSchema.parse(await ipcRenderer.invoke('jobs:save', input))
+  },
+  async listJobs() {
+    return jobRecordSchema.array().parse(await ipcRenderer.invoke('jobs:list'))
+  },
+  async openJob(id: string) {
+    const job = await ipcRenderer.invoke('jobs:open', uuidSchema.parse(id))
+    return job === null ? null : jobRecordSchema.parse(job)
   }
 })
 contextBridge.exposeInMainWorld('workbench', api)

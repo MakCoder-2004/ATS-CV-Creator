@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import { BriefcaseBusiness, FileText, LayoutPanelLeft, Moon, Settings2, Sun, UserRound } from 'lucide-react'
 import type { Appearance } from '../shared/appearance'
 import type { ContactInput, ProfileSnapshot, SkillInput, SkillRecord } from '../shared/profile'
+import type { JobInput, JobRecord } from '../shared/jobs'
 import './style.css'
 
 type Page = 'Tailor CV' | 'Saved jobs' | 'My profile' | 'Settings'
@@ -179,14 +180,71 @@ function ProfileEditor() {
   </div>
 }
 
+function SavedJobs({ jobs, activeJob, onSaved, onOpened }: { jobs: JobRecord[]; activeJob: JobRecord | null; onSaved: (job: JobRecord) => void; onOpened: (job: JobRecord) => void }) {
+  const [input, setInput] = useState<JobInput>({ title: '', company: '', description: '' })
+  const [editingId, setEditingId] = useState<string | undefined>()
+  const [errors, setErrors] = useState<Record<string, string>>({})
+  const [message, setMessage] = useState('')
+  const [busy, setBusy] = useState(false)
+  function newJob() { setEditingId(undefined); setInput({ title: '', company: '', description: '' }); setErrors({}); setMessage('') }
+  async function open(id: string) {
+    setMessage('')
+    try {
+      const job = await window.workbench.openJob(id)
+      if (!job) { setMessage('This saved posting is no longer available. Refresh the list and try again.'); return }
+      setEditingId(job.id); setInput({ title: job.title, company: job.company, description: job.description }); onOpened(job)
+    } catch { setMessage('The saved posting could not be opened. Try again.') }
+  }
+  async function save(event: FormEvent) {
+    event.preventDefault(); setErrors({}); setMessage(''); setBusy(true)
+    try {
+      const result = await window.workbench.saveJob({ ...input, id: editingId })
+      if (!result.ok) { setErrors(result.error.fieldErrors ?? {}); setMessage(result.error.message); return }
+      onSaved(result.value); setEditingId(result.value.id); setMessage('Posting saved on this device.')
+    } catch { setMessage('The posting could not be saved. Check the fields and try again.') }
+    finally { setBusy(false) }
+  }
+  const field = (key: keyof JobInput) => ({ value: input[key], onChange: (event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => { setInput(value => ({ ...value, [key]: event.target.value })); setErrors(value => ({ ...value, [key]: '' })) }, 'aria-invalid': !!errors[key], 'aria-describedby': errors[key] ? `job-${key}-error` : undefined })
+  const hasErrors = Object.values(errors).some(Boolean)
+  return <div className="jobs-layout">
+    <section className="profile-panel saved-job-list" aria-labelledby="saved-jobs-heading">
+      <div className="panel-heading"><div><span className="context">Local history</span><h2 id="saved-jobs-heading">Saved postings</h2><p>Choose a posting to reopen its original text while offline.</p></div><button className="secondary-button" type="button" onClick={newJob}>New posting</button></div>
+      {jobs.length ? <ul>{jobs.map(job => <li key={job.id}><button type="button" aria-current={activeJob?.id === job.id ? 'page' : undefined} onClick={() => void open(job.id)}><strong>{job.title}</strong><span>{job.company}</span><small>Saved {new Date(job.updatedAt).toLocaleDateString()}</small></button></li>)}</ul> : <p className="jobs-empty">No saved postings yet. Add a posting to keep its requirements available for this workspace.</p>}
+    </section>
+    <section className="profile-panel job-editor" aria-labelledby="job-editor-heading">
+      <div className="panel-heading"><div><span className="context">{editingId ? 'Saved posting' : 'New target'}</span><h2 id="job-editor-heading">{editingId ? 'Job details' : 'Save a job posting'}</h2><p>The original text is stored locally as job context, not as candidate evidence.</p></div></div>
+      <form className="profile-form" onSubmit={event => void save(event)} noValidate>
+        <div className="form-grid">
+          <label>Job title<input {...field('title')} />{errors.title && <span id="job-title-error" className="field-error">{errors.title}</span>}</label>
+          <label>Company<input {...field('company')} />{errors.company && <span id="job-company-error" className="field-error">{errors.company}</span>}</label>
+          <label className="wide-field">Job description and requirements<textarea rows={13} {...field('description')} />{errors.description && <span id="job-description-error" className="field-error">{errors.description}</span>}</label>
+        </div>
+        <div className="form-actions"><button className="primary-button" type="submit" disabled={busy}>{editingId ? 'Update posting' : 'Save posting'}</button>{editingId && <button className="secondary-button" type="button" onClick={newJob}>New posting</button>}</div>
+      </form>
+      {message && <p className={hasErrors ? 'profile-message error' : 'profile-message success'} role={hasErrors ? 'alert' : 'status'}>{message}</p>}
+    </section>
+  </div>
+}
+
 function App() {
   const [appearance, setAppearance] = useState<Appearance>('light')
   const [page, setPage] = useState<Page>('Tailor CV')
   const [error, setError] = useState('')
   const [ready, setReady] = useState(false)
+  const [jobs, setJobs] = useState<JobRecord[]>([])
+  const [activeJob, setActiveJob] = useState<JobRecord | null>(null)
   useEffect(() => {
     window.workbench.getSettings().then(settings => { setAppearance(settings.appearance); setReady(true) }).catch(() => setError('Could not open workspace settings. Restart the app to retry.'))
+    window.workbench.listJobs().then(setJobs).catch(() => setError('Saved postings could not be loaded. Restart the app to retry.'))
   }, [])
+  function keepJob(job: JobRecord) {
+    setJobs(current => [job, ...current.filter(item => item.id !== job.id).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))])
+    setActiveJob(job)
+  }
+  async function activateJob(id: string) {
+    try { const job = await window.workbench.openJob(id); setActiveJob(job) }
+    catch { setError('The selected saved posting could not be opened.') }
+  }
   useEffect(() => { document.documentElement.dataset.appearance = appearance }, [appearance])
   async function changeAppearance(value: Appearance) {
     try { const saved = await window.workbench.setAppearance(value); setAppearance(saved.appearance); setError('') }
@@ -198,7 +256,7 @@ function App() {
     <aside className="sidebar" aria-label="Workspace navigation">
       <div className="brand"><span className="brand-icon"><LayoutPanelLeft aria-hidden="true" size={20} /></span><div><strong>CV Tailor</strong><small>Your experience, supported.</small></div></div>
       <nav aria-label="Main navigation">{pages.map(({ label, icon: Icon }) => <button type="button" key={label} aria-current={page === label ? 'page' : undefined} onClick={() => setPage(label)}><Icon size={18} aria-hidden="true" />{label}</button>)}</nav>
-      <div className="sidebar-jobs"><div className="section-label">Saved postings <span>0</span></div><p>No saved jobs yet. Job creation is coming in the next release slice.</p></div>
+      <div className="sidebar-jobs"><div className="section-label">Saved postings <span>{jobs.length}</span></div>{jobs.length ? <div className="sidebar-job-items">{jobs.map(job => <button type="button" key={job.id} aria-current={activeJob?.id === job.id ? 'true' : undefined} onClick={() => { setPage('Tailor CV'); void activateJob(job.id) }}>{job.title}<small>{job.company}</small></button>)}</div> : <p>No saved postings yet. Use Saved jobs to add your first target.</p>}</div>
       <div className="sidebar-bottom"><div className="storage-note">Personal workspace<br /><span>Saved on this device</span></div></div>
     </aside>
     <div className="workspace-main">
@@ -206,7 +264,7 @@ function App() {
       {error && <p role="alert" className="error">{error}</p>}
       <main id="content" tabIndex={-1}>
         <div className="title"><span className="context">Personal workspace</span><h1>{page === 'Tailor CV' ? 'Start with your experience' : page}</h1><p>{page === 'Tailor CV' ? 'Build your profile, then tailor a CV to a saved posting.' : page === 'Saved jobs' ? 'Your job postings and their drafts will live here.' : page === 'My profile' ? 'Keep the career facts that support your CV in one place.' : 'Choose how your workspace looks.'}</p></div>
-        {page === 'Tailor CV' ? <div className="columns"><section className="document-area" aria-label="CV document"><div className="document-toolbar"><span>CV document</span><span>Not started</span></div><div className="paper-wrap"><article className="paper"><div className="paper-header"><strong>Your name</strong><span>Your CV begins here</span></div><div className="paper-rule" /><h2>Education</h2><div className="paper-line" /><h2>Experience</h2><div className="paper-line" /><h2>Projects</h2><div className="paper-line" /><h2>Skills</h2><div className="paper-line" /><h2>Certificates</h2><div className="paper-line" /><p className="paper-hint">Add your career facts in My profile.</p></article></div></section><aside className="inspector" aria-label="Evidence and coverage"><div className="inspector-tabs"><span>Evidence</span><span>Coverage</span></div><div className="inspector-content"><h2>Nothing to inspect yet</h2><p>Once a draft is generated, select a paragraph to see its supporting profile evidence here.</p><div className="inspector-divider" /><h2>Qualification gaps</h2><p>Job requirements without supporting experience will appear as advisory gaps, not invented claims.</p></div></aside></div> : page === 'My profile' ? <ProfileEditor /> : <div className="empty-panel"><h2>{page === 'Settings' ? 'Appearance' : 'No saved postings'}</h2><p>{page === 'Settings' ? 'Use the Light and Dark controls in the header. Your choice is saved locally and restored when you reopen the app.' : 'Saving postings is not available in this first installable slice. Your workspace is ready for the next steps.'}</p></div>}
+        {page === 'Tailor CV' ? <div className="columns"><section className="document-area" aria-label="CV document"><div className="document-toolbar"><span>CV document</span><span>{activeJob ? `Target: ${activeJob.title} · ${activeJob.company}` : 'Not started'}</span></div><div className="paper-wrap"><article className="paper"><div className="paper-header"><strong>Your name</strong><span>Your CV begins here</span></div><div className="paper-rule" /><h2>Education</h2><div className="paper-line" /><h2>Experience</h2><div className="paper-line" /><h2>Projects</h2><div className="paper-line" /><h2>Skills</h2><div className="paper-line" /><h2>Certificates</h2><div className="paper-line" /><p className="paper-hint">Add your career facts in My profile.</p></article></div></section><aside className="inspector" aria-label="Evidence and coverage"><div className="inspector-tabs"><span>Evidence</span><span>Coverage</span></div><div className="inspector-content"><h2>Nothing to inspect yet</h2><p>Once a draft is generated, select a paragraph to see its supporting profile evidence here.</p><div className="inspector-divider" /><h2>Qualification gaps</h2><p>Job requirements without supporting experience will appear as advisory gaps, not invented claims.</p></div></aside></div> : page === 'My profile' ? <ProfileEditor /> : page === 'Saved jobs' ? <SavedJobs jobs={jobs} activeJob={activeJob} onSaved={keepJob} onOpened={keepJob} /> : <div className="empty-panel"><h2>Appearance</h2><p>Use the Light and Dark controls in the header. Your choice is saved locally and restored when you reopen the app.</p></div>}
       </main>
     </div>
   </div>
