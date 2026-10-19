@@ -16,6 +16,9 @@
 # Dependencies and build output
 node_modules/
 dist/
+out/
+release/
+test-results/
 build/
 coverage/
 .next/

@@ -1,11 +1,64 @@
 {
-  "name": "cv-tailor-prototype-workspace",
+  "name": "cv-tailor",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
+  "description": "CV Tailor personal Windows workbench",
+  "author": "CV Tailor",
+  "license": "UNLICENSED",
+  "main": "./out/main/index.js",
   "workspaces": ["prototypes/cv-tailor-ui"],
   "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "typecheck": "tsc --noEmit",
+    "test": "npm rebuild better-sqlite3 --no-audit --no-fund && vitest run",
+    "test:electron": "npm run build && electron-rebuild -f -w better-sqlite3 && playwright test",
+    "postinstall": "electron-builder install-app-deps",
+    "dist:win": "npm run build && electron-builder --win nsis",
     "prototype": "npm run dev --workspace @cv-tailor/ui-prototype",
     "prototype:build": "npm run build --workspace @cv-tailor/ui-prototype",
     "prototype:typecheck": "npm run typecheck --workspace @cv-tailor/ui-prototype"
+  },
+  "dependencies": {
+    "@fontsource-variable/manrope": "^5.2.7",
+    "@fontsource-variable/sora": "^5.2.8",
+    "better-sqlite3": "^12.2.0",
+    "lucide-react": "^0.468.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^4.0.0",
+    "@playwright/test": "^1.58.0",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "@tailwindcss/vite": "^4.0.0",
+    "tailwindcss": "^4.0.0",
+    "electron": "39.8.10",
+    "electron-builder": "^26.0.0",
+    "electron-vite": "^5.0.0",
+    "typescript": "^5.9.0",
+    "vite": "^7.0.0",
+    "vitest": "^3.0.0"
+  },
+  "build": {
+    "appId": "io.cv-tailor.workbench",
+    "productName": "CV Tailor",
+    "artifactName": "CV-Tailor-Setup-${version}.${ext}",
+    "directories": { "output": "release" },
+    "files": ["out/**/*", "package.json"],
+    "asar": true,
+    "asarUnpack": ["**/*.node"],
+    "npmRebuild": true,
+    "win": { "target": ["nsis"], "icon": "resources/icon.ico" },
+    "nsis": { "oneClick": false, "perMachine": false, "allowElevation": false, "allowToChangeInstallationDirectory": true, "createDesktopShortcut": true },
+    "extraResources": [
+      { "from": "node_modules/@fontsource-variable/manrope/LICENSE", "to": "licenses/manrope-OFL.txt" },
+      { "from": "node_modules/@fontsource-variable/sora/LICENSE", "to": "licenses/sora-OFL.txt" }
+    ]
   }
 }
