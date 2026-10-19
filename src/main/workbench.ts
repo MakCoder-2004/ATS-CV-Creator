@@ -119,9 +119,15 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
     if (!parsed.success) return { ok: false, message: 'This profile file is invalid or incompatible.' }
     const data = parsed.data
     const records = [data.profile.contact, ...data.profile.skills, ...data.profile.education, ...data.profile.certificates, ...data.profile.summary, ...data.profile.languages, ...data.profile.extras, ...data.experience.experience, ...data.experience.experience.flatMap(x => x.factualItems), ...data.experience.projects, ...data.experience.projects.flatMap(x => [...x.factualItems, ...x.technologies])].filter((record): record is NonNullable<typeof record> => record !== null)
+    const currentProfile = readProfile(), currentExperience = readExperience()
+    const currentRecords = [currentProfile.contact, ...currentProfile.skills, ...currentProfile.education, ...currentProfile.certificates, ...currentProfile.summary, ...currentProfile.languages, ...currentProfile.extras, ...currentExperience.experience, ...currentExperience.experience.flatMap(x => x.factualItems), ...currentExperience.projects, ...currentExperience.projects.flatMap(x => [...x.factualItems, ...x.technologies])].filter((record): record is NonNullable<typeof record> => record !== null)
+    const currentById = new Map(currentRecords.map(record => [record.id, record]))
     for (const record of records) {
+      const active = currentById.get(record.id)
+      if (active && record.revision <= active.revision && !isDeepStrictEqual(active, record)) return { ok: false, message: 'This import reuses an active evidence ID/revision for different or outdated facts.' }
       const historyRows = db.prepare('SELECT revision, snapshot FROM evidence_revisions WHERE id = ? ORDER BY revision DESC').all(record.id) as { revision: number; snapshot: string }[]
-      if (historyRows.length && (historyRows[0].revision !== record.revision || !isDeepStrictEqual(JSON.parse(historyRows.find(row => row.revision === record.revision)!.snapshot), record))) return { ok: false, message: 'This import reuses an evidence ID/revision for different or outdated facts. Export a fresh profile or use newly identified records.' }
+      const matchingRevision = historyRows.find(row => row.revision === record.revision)
+      if (historyRows.length && (historyRows[0].revision > record.revision || (matchingRevision && !isDeepStrictEqual(JSON.parse(matchingRevision.snapshot), record)))) return { ok: false, message: 'This import reuses an evidence ID/revision for different or outdated facts. Export a fresh profile or use newly identified records.' }
     }
     return { ok: true, data }
   }
@@ -163,7 +169,26 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       const validation = validateProfileImport(input)
       if (!validation.ok) return { ok: false, message: validation.message }
       const data = validation.data
+      const currentProfile = readProfile(), currentExperience = readExperience()
+      const currentRecords = [currentProfile.contact, ...currentProfile.skills, ...currentProfile.education, ...currentProfile.certificates, ...currentProfile.summary, ...currentProfile.languages, ...currentProfile.extras, ...currentExperience.experience, ...currentExperience.experience.flatMap(x => x.factualItems), ...currentExperience.projects, ...currentExperience.projects.flatMap(x => [...x.factualItems, ...x.technologies])].filter((record): record is NonNullable<typeof record> => record !== null)
+      const incomingRecords = [data.profile.contact, ...data.profile.skills, ...data.profile.education, ...data.profile.certificates, ...data.profile.summary, ...data.profile.languages, ...data.profile.extras, ...data.experience.experience, ...data.experience.experience.flatMap(x => x.factualItems), ...data.experience.projects, ...data.experience.projects.flatMap(x => [...x.factualItems, ...x.technologies])].filter((record): record is NonNullable<typeof record> => record !== null)
+      const incomingIds = new Set(incomingRecords.map(record => record.id))
       const tx = db.transaction(() => {
+        for (const record of currentRecords) {
+          const row = db.prepare('SELECT revision FROM evidence_revisions WHERE id = ? AND revision = ?').get(record.id, record.revision)
+          if (!row) {
+            const latest = db.prepare('SELECT MAX(revision) AS revision FROM evidence_revisions WHERE id = ?').get(record.id) as { revision: number | null }
+            recordRevision(record, latest.revision === null ? 'created' : 'updated')
+          }
+          if (!incomingIds.has(record.id)) recordRevision({ ...record, revision: record.revision + 1 }, 'deleted')
+        }
+        for (const record of incomingRecords) {
+          const row = db.prepare('SELECT revision FROM evidence_revisions WHERE id = ? AND revision = ?').get(record.id, record.revision)
+          if (!row) {
+            const latest = db.prepare('SELECT MAX(revision) AS revision FROM evidence_revisions WHERE id = ?').get(record.id) as { revision: number | null }
+            recordRevision(record, latest.revision === null ? 'created' : 'updated')
+          }
+        }
         db.exec('DELETE FROM profile_contact; DELETE FROM profile_skills; DELETE FROM profile_entries; DELETE FROM profile_experience; DELETE FROM profile_projects;')
         if (data.profile.contact) db.prepare('INSERT INTO profile_contact (singleton,id,revision,data) VALUES (1,?,?,?)').run(data.profile.contact.id, data.profile.contact.revision, JSON.stringify(data.profile.contact))
         for (const item of data.profile.skills) db.prepare('INSERT INTO profile_skills (id,revision,data) VALUES (?,?,?)').run(item.id,item.revision,JSON.stringify(item))
