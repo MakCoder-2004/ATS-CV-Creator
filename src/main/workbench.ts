@@ -13,7 +13,6 @@ import type { JobRecord } from '../shared/jobs'
 import { profileExchangeSchema, type ProfileExchange } from '../shared/profile-exchange'
 import { prepareOutboundBundle, type ConsentSource, type EvidenceScopeRevision, type OutboundBundle } from '../shared/outbound-consent'
 import { createOutboundConsentEngine } from './outbound-consent'
-import { createPdfReviewService } from './pdf-review'
 import type { OutboundConsentAction, OutboundConsentPreview } from '../shared/outbound-consent-contract'
 import { outboundConsentActionSchema, outboundConsentPreviewSchema } from '../shared/outbound-consent-contract'
 
@@ -141,11 +140,6 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
     }
     return { ok: true, data }
   }
-  const pdfReview = createPdfReviewService({
-    getProfile: async () => readProfile(), getExperience: async () => readExperience(),
-    validateProfileImport: (input) => api.validateProfileImport(input),
-    replaceProfile: (input) => api.replaceProfile(input)
-  })
   const outboundEngine = createOutboundConsentEngine()
   const pendingOutbound = new Map<string, { jobId: string; source: ConsentSource; bundle: OutboundBundle; runId: string; consentId?: string }>()
   const currentConsentSource = (jobId: string): ConsentSource | null => {
@@ -193,10 +187,6 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       return this.getSettings()
     },
     async getProfile() { return readProfile() },
-    async stagePdfImport(bytes) { return pdfReview.stage(bytes) },
-    async previewPdfImport(token, review) { return pdfReview.review(token, review) },
-    async applyPdfImport(token) { return pdfReview.apply(token) },
-    async cancelPdfImport(token) { return pdfReview.cancel(token) },
     async validateProfileImport(input: string) {
       const result = validateProfileImport(input)
       return result.ok ? { ok: true, message: 'Profile import is valid.' } : { ok: false, message: result.message }

@@ -13,6 +13,7 @@ test('education editor persists and clearly labels local-only profile sections',
     let page = await app.firstWindow()
     await expect(page.locator('[data-ui-ready="true"]')).toBeVisible()
     await page.getByRole('button', { name: 'My profile' }).click()
+    await expect(page.getByRole('region', { name: 'Reference PDF import' })).toHaveCount(0)
     const sections = page.getByRole('navigation', { name: 'Profile sections' })
     const educationButton = sections.getByRole('button', { name: 'Education' })
     await expect(educationButton).not.toContainText('Soon')
