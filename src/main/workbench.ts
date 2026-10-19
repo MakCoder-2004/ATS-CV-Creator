@@ -1,20 +1,35 @@
 import Database from 'better-sqlite3'
+import type { ZodError } from 'zod'
 import { randomUUID } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { appearanceSchema, settingsSchema, type WorkbenchAPI } from '../shared/appearance'
-import { contactInputSchema, contactRecordSchema, evidenceRevisionSchema, profileMutationResultSchema, profileSnapshotSchema, skillInputSchema, skillRecordSchema, uuidSchema, type ContactRecord, type EvidenceRevision, type ProfileSnapshot, type SkillRecord } from '../shared/profile'
-import { experienceInputSchema, experienceRecordSchema, experienceSnapshotSchema, experienceHistorySchema, experienceMutationResultSchema, projectInputSchema, projectRecordSchema, type ExperienceRecord, type ProjectRecord, type FactualItemRecord } from '../shared/experience'
+import { geminiKeyInputSchema, geminiModelSchema, type GeminiModel } from '../shared/gemini-settings'
+import { contactInputSchema, contactRecordSchema, evidenceRevisionSchema, profileEntryInputSchema, profileEntrySchema, profileMutationResultSchema, profileSnapshotSchema, skillInputSchema, skillRecordSchema, uuidSchema, type ContactRecord, type EvidenceRevision, type ProfileEntry, type ProfileSnapshot, type SkillRecord } from '../shared/profile'
+import { experienceInputSchema, experienceRecordSchema, experienceSnapshotSchema, experienceMutationResultSchema, projectInputSchema, projectRecordSchema, type ExperienceRecord, type ProjectRecord, type FactualItemRecord } from '../shared/experience'
+
+export interface SecureStorage {
+  isEncryptionAvailable(): boolean
+  getSelectedStorageBackend?(): string
+  encryptString(value: string): Buffer
+}
+
+const unavailableSecureStorage: SecureStorage = {
+  isEncryptionAvailable: () => false,
+  encryptString: () => { throw new Error('Secure storage unavailable') }
+}
 
 /** One workspace per userData directory. Opening a workspace applies forward-only migrations. */
-export function createWorkbench(userData: string): { api: WorkbenchAPI; close(): void } {
+export function createWorkbench(userData: string, secureStorage: SecureStorage = unavailableSecureStorage): { api: WorkbenchAPI; close(): void } {
   mkdirSync(userData, { recursive: true })
   const db = new Database(join(userData, 'workbench.sqlite'))
   db.pragma('journal_mode = WAL')
   db.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY);
     CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS encrypted_credentials (key TEXT PRIMARY KEY, ciphertext TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS profile_contact (singleton INTEGER PRIMARY KEY CHECK(singleton = 1), id TEXT NOT NULL UNIQUE, revision INTEGER NOT NULL, data TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS profile_skills (id TEXT PRIMARY KEY, revision INTEGER NOT NULL, data TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS profile_entries (id TEXT PRIMARY KEY, section TEXT NOT NULL, revision INTEGER NOT NULL, data TEXT NOT NULL);
     CREATE UNIQUE INDEX IF NOT EXISTS profile_skill_unique ON profile_skills(lower(json_extract(data, '$.name')), lower(json_extract(data, '$.category')));
     CREATE TABLE IF NOT EXISTS evidence_revisions (id TEXT NOT NULL, revision INTEGER NOT NULL, action TEXT NOT NULL CHECK(action IN ('created','updated','deleted')), snapshot TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(id, revision));
     CREATE TABLE IF NOT EXISTS profile_experience (id TEXT PRIMARY KEY, revision INTEGER NOT NULL, data TEXT NOT NULL);
@@ -24,7 +39,8 @@ export function createWorkbench(userData: string): { api: WorkbenchAPI; close():
   const readProfile = (): ProfileSnapshot => {
     const contactRow = db.prepare('SELECT data FROM profile_contact WHERE singleton = 1').get() as { data: string } | undefined
     const skills = db.prepare('SELECT data FROM profile_skills ORDER BY rowid').all() as { data: string }[]
-    return profileSnapshotSchema.parse({ contact: contactRow ? JSON.parse(contactRow.data) : null, skills: skills.map((row) => JSON.parse(row.data)) })
+    const records = (db.prepare('SELECT data FROM profile_entries ORDER BY rowid').all() as { data: string }[]).map(row => profileEntrySchema.parse(JSON.parse(row.data)))
+    return profileSnapshotSchema.parse({ contact: contactRow ? JSON.parse(contactRow.data) : null, skills: skills.map((row) => JSON.parse(row.data)), education: records.filter(x => x.section === 'education'), certificates: records.filter(x => x.section === 'certificates'), summary: records.filter(x => x.section === 'summary'), languages: records.filter(x => x.section === 'languages'), extras: records.filter(x => x.section === 'extras') })
   }
   const history = (id: string): EvidenceRevision[] => (db.prepare('SELECT id, revision, action, snapshot, created_at FROM evidence_revisions WHERE id = ? ORDER BY revision').all(id) as { id: string; revision: number; action: EvidenceRevision['action']; snapshot: string; created_at: string }[]).map((row) => evidenceRevisionSchema.parse({ id: row.id, revision: row.revision, action: row.action, snapshot: JSON.parse(row.snapshot), createdAt: row.created_at }))
   const failure = (code: string, message: string, fieldErrors?: Record<string, string>) => profileMutationResultSchema.parse({ ok: false, error: { code, message, ...(fieldErrors ? { fieldErrors } : {}) } })
@@ -33,13 +49,13 @@ export function createWorkbench(userData: string): { api: WorkbenchAPI; close():
     experience: (db.prepare('SELECT data FROM profile_experience ORDER BY rowid').all() as { data: string }[]).map(row => JSON.parse(row.data)),
     projects: (db.prepare('SELECT data FROM profile_projects ORDER BY rowid').all() as { data: string }[]).map(row => JSON.parse(row.data))
   })
-  const validated = <T>(parsed: ReturnType<typeof contactInputSchema.safeParse> | ReturnType<typeof skillInputSchema.safeParse>): { value?: T; errors?: Record<string, string> } => {
+  const validated = <T>(parsed: { success: true; data: unknown } | { success: false; error: ZodError }): { value?: T; errors?: Record<string, string> } => {
     if (parsed.success) return { value: parsed.data as T }
     const errors: Record<string, string> = {}
     for (const issue of parsed.error.issues) errors[issue.path.length ? issue.path.join('.') : '_'] = issue.message
     return { errors }
   }
-  const recordRevision = (record: ContactRecord | SkillRecord | ExperienceRecord | ProjectRecord | FactualItemRecord, action: EvidenceRevision['action']) => {
+  const recordRevision = (record: ContactRecord | SkillRecord | ProfileEntry | ExperienceRecord | ProjectRecord | FactualItemRecord, action: EvidenceRevision['action']) => {
     db.prepare('INSERT INTO evidence_revisions (id, revision, action, snapshot, created_at) VALUES (?, ?, ?, ?, ?)').run(record.id, record.revision, action, JSON.stringify(record), new Date().toISOString())
   }
   const recordItemChanges = (prior: FactualItemRecord[], current: FactualItemRecord[]) => {
@@ -69,14 +85,41 @@ export function createWorkbench(userData: string): { api: WorkbenchAPI; close():
     db.prepare('INSERT INTO schema_migrations (version) VALUES (3)').run()
   })
   migrateNamedLinks()
+  const secureStorageAvailable = () => {
+    try {
+      if (!secureStorage.isEncryptionAvailable()) return false
+      // Electron's Linux basic_text backend is reversible obfuscation, not secure encryption.
+      return secureStorage.getSelectedStorageBackend?.() !== 'basic_text'
+    } catch { return false }
+  }
+  const saveSetting = (key: string, value: string) => db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(key, value)
   const api: WorkbenchAPI = {
     async getSettings() {
-      const stored = db.prepare('SELECT value FROM settings WHERE key = ?').get('appearance') as { value: string } | undefined
-      return settingsSchema.parse({ appearance: stored?.value ?? 'light' })
+      const rows = db.prepare('SELECT key, value FROM settings WHERE key IN (?, ?)').all('appearance', 'gemini-model') as { key: string; value: string }[]
+      const stored = Object.fromEntries(rows.map(row => [row.key, row.value]))
+      const configured = Boolean(db.prepare('SELECT 1 FROM encrypted_credentials WHERE key = ?').get('gemini-api-key'))
+      return settingsSchema.parse({ appearance: stored.appearance ?? 'light', gemini: { model: stored['gemini-model'] ?? 'gemini-3.6-flash', credential: { configured, secureStorageAvailable: secureStorageAvailable() } } })
     },
     async setAppearance(value) {
-      const appearance = appearanceSchema.parse(value)
-      db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run('appearance', appearance)
+      saveSetting('appearance', appearanceSchema.parse(value))
+      return this.getSettings()
+    },
+    async setGeminiModel(value: GeminiModel) {
+      saveSetting('gemini-model', geminiModelSchema.parse(value))
+      return this.getSettings()
+    },
+    async saveGeminiApiKey(value: string) {
+      const key = geminiKeyInputSchema.parse(value)
+      if (!secureStorageAvailable()) throw new Error('Secure storage is unavailable. Your API key was not saved.')
+      let encrypted: Buffer
+      try { encrypted = secureStorage.encryptString(key) }
+      catch { throw new Error('Secure storage could not encrypt the API key. The key was not saved.') }
+      if (!Buffer.isBuffer(encrypted) || encrypted.length === 0) throw new Error('Secure storage could not encrypt the API key. The key was not saved.')
+      db.prepare('INSERT INTO encrypted_credentials (key, ciphertext) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET ciphertext = excluded.ciphertext').run('gemini-api-key', encrypted.toString('base64'))
+      return this.getSettings()
+    },
+    async removeGeminiApiKey() {
+      db.prepare('DELETE FROM encrypted_credentials WHERE key = ?').run('gemini-api-key')
       return this.getSettings()
     },
     async getProfile() { return readProfile() },
@@ -138,6 +181,35 @@ export function createWorkbench(userData: string): { api: WorkbenchAPI; close():
         const old = skillRecordSchema.parse(JSON.parse(row.data))
         recordRevision({ ...old, revision: old.revision + 1 }, 'deleted')
         db.prepare('DELETE FROM profile_skills WHERE id = ?').run(id)
+        return profileMutationResultSchema.parse({ ok: true, value: readProfile() })
+      })
+      return tx()
+    },
+    async saveProfileEntry(input) {
+      const { id: _id, ...entryInput } = input
+      const parsed = validated<ProfileEntry>(profileEntryInputSchema.safeParse(entryInput))
+      if (parsed.errors) return failure('VALIDATION_ERROR', 'Check the highlighted profile fields.', parsed.errors)
+      if (input.id !== undefined && !uuidSchema.safeParse(input.id).success) return failure('VALIDATION_ERROR', 'Record ID must be a UUID.', { id: 'Invalid ID' })
+      const tx = db.transaction(() => {
+        const row = input.id ? db.prepare('SELECT id, revision FROM profile_entries WHERE id = ?').get(input.id) as { id: string; revision: number } | undefined : undefined
+        if (input.id && !row) return failure('CONFLICT', 'The profile record no longer exists.')
+        if (parsed.value!.section === 'summary' && db.prepare('SELECT id FROM profile_entries WHERE section = ? AND id <> ?').get('summary', input.id ?? '')) return failure('CONFLICT', 'A summary already exists; edit the existing summary.')
+        const id = row?.id ?? randomUUID(), revision = (row?.revision ?? 0) + 1
+        const record = profileEntrySchema.parse({ ...parsed.value, id, revision })
+        db.prepare('INSERT INTO profile_entries (id, section, revision, data) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET section=excluded.section, revision=excluded.revision, data=excluded.data').run(id, record.section, revision, JSON.stringify(record))
+        recordRevision(record, row ? 'updated' : 'created')
+        return profileMutationResultSchema.parse({ ok: true, value: readProfile() })
+      })
+      try { return tx() } catch { return failure('CONFLICT', 'The profile record could not be saved.') }
+    },
+    async deleteProfileEntry(id) {
+      if (!uuidSchema.safeParse(id).success) return failure('VALIDATION_ERROR', 'Record ID must be a UUID.', { id: 'Invalid ID' })
+      const tx = db.transaction(() => {
+        const row = db.prepare('SELECT data FROM profile_entries WHERE id = ?').get(id) as { data: string } | undefined
+        if (!row) return failure('CONFLICT', 'The profile record no longer exists.')
+        const old = profileEntrySchema.parse(JSON.parse(row.data))
+        recordRevision({ ...old, revision: old.revision + 1 }, 'deleted')
+        db.prepare('DELETE FROM profile_entries WHERE id = ?').run(id)
         return profileMutationResultSchema.parse({ ok: true, value: readProfile() })
       })
       return tx()

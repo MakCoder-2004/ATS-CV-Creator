@@ -2,7 +2,8 @@ import React, { FormEvent, useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { BriefcaseBusiness, FileText, LayoutPanelLeft, Moon, Settings2, Sun, UserRound } from 'lucide-react'
 import type { Appearance } from '../shared/appearance'
-import type { ContactInput, ProfileSnapshot, SkillInput, SkillRecord } from '../shared/profile'
+import { geminiModels, type GeminiModel, type GeminiSettings } from '../shared/gemini-settings'
+import type { ContactInput, ProfileEntry, ProfileEntryInput, ProfileSnapshot, SkillInput, SkillRecord } from '../shared/profile'
 import type { ExperienceInput, ExperienceRecord, ProjectInput, ProjectRecord } from '../shared/experience'
 import './style.css'
 
@@ -34,21 +35,28 @@ function ExperienceEditor({ projects }: { projects: boolean }) {
     setEditing(item?.id)
     if (projects) {
       const project = item as ProjectRecord | undefined
-      setFields({ name: project?.name ?? '', description: project?.description ?? '', factualItems: (project?.factualItems ?? []).map(value => value.text).join('\\n'), technologies: (project?.technologies ?? []).map(value => value.text).join('\\n'), links: (project?.links ?? []).map(value => `${value.label} | ${value.url}`).join('\\n') })
+      setFields({ name: project?.name ?? '', description: project?.description ?? '', factualItems: (project?.factualItems ?? []).map(value => value.text).join('\n'), technologies: (project?.technologies ?? []).map(value => value.text).join('\n'), links: (project?.links ?? []).map(value => `${value.label} | ${value.url}`).join('\n') })
     } else {
       const role = item as ExperienceRecord | undefined
-      setFields({ kind: role?.kind ?? 'employment', title: role?.title ?? '', organization: role?.organization ?? '', startDate: role?.startDate ?? '', endDate: role?.endDate ?? '', description: role?.description ?? '', factualItems: (role?.factualItems ?? []).map(value => value.text).join('\\n') })
+      setFields({ kind: role?.kind ?? 'employment', title: role?.title ?? '', organization: role?.organization ?? '', startDate: role?.startDate ?? '', endDate: role?.endDate ?? '', description: role?.description ?? '', factualItems: (role?.factualItems ?? []).map(value => value.text).join('\n') })
     }
     setError(''); setNotice(''); setFieldErrors({})
   }
-  function nested(values: string, prior: Array<{ id: string; revision: number; text: string }> = []) { return values.split('\\n').filter(value => value.trim()).map(text => { const match = prior.find(item => item.text === text); return match ? { id: match.id, text } : { text } }) }
+  function nested(values: string, prior: Array<{ id: string; revision: number; text: string }> = []) {
+    const used = new Set<string>()
+    return values.split('\n').filter(value => value.trim()).map((text, index) => {
+      const match = prior.find(item => item.text === text && !used.has(item.id)) ?? (prior[index] && !used.has(prior[index].id) ? prior[index] : undefined)
+      if (match) used.add(match.id)
+      return match ? { id: match.id, text } : { text }
+    })
+  }
   async function save(event: FormEvent) {
     event.preventDefault(); setError(''); setNotice(''); setFieldErrors({})
     const old = items.find(item => item.id === editing)
     const input = projects ? {
       name: fields.name, description: fields.description, factualItems: nested(fields.factualItems ?? '', (old as ProjectRecord | undefined)?.factualItems),
       technologies: nested(fields.technologies ?? '', (old as ProjectRecord | undefined)?.technologies),
-      links: (fields.links ?? '').split('\\n').filter(Boolean).map(row => { const [label, ...url] = row.split('|'); return { label: label.trim(), url: url.join('|').trim() } })
+      links: (fields.links ?? '').split('\n').filter(Boolean).map(row => { const [label, ...url] = row.split('|'); return { label: label.trim(), url: url.join('|').trim() } })
     } satisfies ProjectInput : {
       kind: fields.kind as 'employment' | 'training', title: fields.title, organization: fields.organization, startDate: fields.startDate || undefined, endDate: fields.endDate || undefined,
       description: fields.description, factualItems: nested(fields.factualItems ?? '', (old as ExperienceRecord | undefined)?.factualItems)
@@ -231,10 +239,32 @@ function ProfileEditor() {
       </li>)}</ul> : <p className="empty-skills">No skills added yet.</p>}
     </section>}
     {(activeSection === 'Experience' || activeSection === 'Projects') && <ExperienceEditor key={activeSection} projects={activeSection === 'Projects'} />}
-    {activeSection !== 'Personal' && activeSection !== 'Skills' && activeSection !== 'Experience' && activeSection !== 'Projects' && <section className="profile-panel profile-upcoming-panel" aria-labelledby="upcoming-heading"><span className="context">Planned profile section</span><h2 id="upcoming-heading">{activeSection}</h2><p>{activeSection} editing is coming later. For now, add contact details under Personal and skills under Skills. Nothing entered here will be saved until this section has a real editor.</p></section>}
+    {activeSection === 'Education' && <ProfileEntryEditor section="education" items={snapshot?.education ?? []} reload={reload} report={setMutationError} />}
+    {activeSection === 'Certificates' && <ProfileEntryEditor section="certificates" items={snapshot?.certificates ?? []} reload={reload} report={setMutationError} />}
+    {activeSection === 'Summary' && <ProfileEntryEditor section="summary" items={snapshot?.summary ?? []} reload={reload} report={setMutationError} />}
+    {activeSection === 'Languages' && <ProfileEntryEditor section="languages" items={snapshot?.languages ?? []} reload={reload} report={setMutationError} />}
+    {activeSection === 'Extras' && <ProfileEntryEditor section="extras" items={snapshot?.extras ?? []} reload={reload} report={setMutationError} />}
     <p className="locality-note">Your profile is stored locally on this device. It is not synced or shared. Local storage does not guarantee that future cloud features will be anonymous.</p>
     {(mutationError || notice) && <p className={mutationError ? 'profile-message error' : 'profile-message success'} role={mutationError ? 'alert' : 'status'}>{mutationError || notice}{mutationError && <button className="text-button" type="button" onClick={() => void reload()}>Retry</button>}</p>}
   </div>
+}
+
+function ProfileEntryEditor({ section, items, reload, report }: { section: ProfileEntryInput['section']; items: ProfileEntry[]; reload: () => Promise<void>; report: (message: string) => void }) {
+  const empty = (): ProfileEntryInput => ({ section, title: section === 'summary' ? 'Summary' : '', ...(section === 'summary' ? { description: '' } : {}) })
+  const [form, setForm] = useState<ProfileEntryInput>(empty())
+  const [editId, setEditId] = useState<string>()
+  const [errors, setErrors] = useState<Record<string, string>>({})
+  const update = (key: keyof ProfileEntryInput, value: string) => setForm(old => ({ ...old, [key]: key === 'year' ? value ? Number(value) : undefined : value }))
+  const save = async (event: FormEvent) => {
+    event.preventDefault(); setErrors({})
+    const result = await window.workbench.saveProfileEntry({ ...form, id: editId })
+    if (!result.ok) { setErrors(result.error.fieldErrors ?? {}); report(result.error.message); return }
+    setEditId(undefined); setForm(empty()); report(`${section} saved`); await reload()
+  }
+  const edit = (item: ProfileEntry) => { const { id, revision, ...values } = item; setEditId(id); setForm(values); setErrors({}) }
+  const del = async (item: ProfileEntry) => { if (!window.confirm(`Delete ${item.title}? This cannot be undone.`)) return; const result = await window.workbench.deleteProfileEntry(item.id); if (!result.ok) report(result.error.message); else { report(`${item.title} deleted`); await reload() } }
+  const field = (key: keyof ProfileEntryInput, label: string, options: { type?: string; required?: boolean } = {}) => <label>{label}<input type={options.type ?? 'text'} value={String(form[key] ?? '')} required={options.required} onChange={event => update(key, event.target.value)} aria-invalid={!!errors[key]} />{errors[key] && <span className="field-error">{errors[key]}</span>}</label>
+  return <section className="profile-panel" aria-labelledby="entry-heading"><div className="panel-heading"><div><span className="context">{section === 'languages' || section === 'extras' || section === 'summary' ? 'Stored locally · not exported' : 'Profile evidence'}</span><h2 id="entry-heading">{section[0].toUpperCase() + section.slice(1)}</h2><p>{section === 'summary' || section === 'languages' || section === 'extras' ? 'This profile information is retained locally and is not included in CV output.' : 'Add, edit, or remove these profile facts. Saved changes retain revision history.'}</p></div></div><form className="profile-form" onSubmit={event => void save(event)} noValidate><div className="form-grid">{section === 'summary' ? <label>Summary<textarea value={form.description ?? ''} onChange={event => update('description', event.target.value)} aria-invalid={!!errors.description} />{errors.description && <span className="field-error">{errors.description}</span>}</label> : <>{field('title', section === 'languages' ? 'Language' : section === 'extras' ? 'Name' : 'Title', { required: true })}{section === 'education' && <>{field('institution', 'Institution')}{field('field', 'Degree or field')}{field('startDate', 'Start date (YYYY or YYYY-MM)')}{field('endDate', 'End date (YYYY or YYYY-MM)')}</>}{section === 'certificates' && <>{field('issuer', 'Issuer')}{field('year', 'Year', { type: 'number' })}{field('link', 'Certificate link', { type: 'url' })}</>}{section === 'languages' && <label>Proficiency<input value={form.description ?? ''} onChange={event => update('description', event.target.value)} placeholder="e.g. Native, fluent, conversational" /></label>}{section === 'extras' && <label>Details<textarea value={form.description ?? ''} onChange={event => update('description', event.target.value)} /></label>}</>}</div><div className="form-actions"><button className="primary-button" type="submit">{editId ? 'Save changes' : `Add ${section}`}</button>{editId && <button className="secondary-button" type="button" onClick={() => { setEditId(undefined); setForm(empty()) }}>Cancel</button>}</div></form><ul className="skill-list">{items.map(item => <li key={item.id}><div><h3>{item.title}</h3><p>{item.institution ?? item.issuer ?? item.field ?? item.description ?? ''} {item.year ?? ''} {item.startDate ? `· ${item.startDate} – ${item.endDate ?? 'Present'}` : ''}</p></div><div className="skill-actions"><button className="text-button" type="button" onClick={() => edit(item)}>Edit {item.title}</button><button className="text-button destructive" type="button" onClick={() => void del(item)}>Delete</button></div></li>)}</ul>{!items.length && <p className="empty-skills">No {section} added yet.</p>}</section>
 }
 
 function App() {
@@ -242,13 +272,30 @@ function App() {
   const [page, setPage] = useState<Page>('Tailor CV')
   const [error, setError] = useState('')
   const [ready, setReady] = useState(false)
+  const [gemini, setGemini] = useState<GeminiSettings | null>(null)
+  const [apiKey, setApiKey] = useState('')
+  const [geminiMessage, setGeminiMessage] = useState('')
+  const [geminiError, setGeminiError] = useState('')
   useEffect(() => {
-    window.workbench.getSettings().then(settings => { setAppearance(settings.appearance); setReady(true) }).catch(() => setError('Could not open workspace settings. Restart the app to retry.'))
+    window.workbench.getSettings().then(settings => { setAppearance(settings.appearance); setGemini(settings.gemini); setReady(true) }).catch(() => setError('Could not open workspace settings. Restart the app to retry.'))
   }, [])
   useEffect(() => { document.documentElement.dataset.appearance = appearance }, [appearance])
   async function changeAppearance(value: Appearance) {
     try { const saved = await window.workbench.setAppearance(value); setAppearance(saved.appearance); setError('') }
     catch { setError('Appearance could not be saved. Try again.') }
+  }
+  async function saveGeminiModel(value: GeminiModel) {
+    try { const saved = await window.workbench.setGeminiModel(value); setGemini(saved.gemini); setGeminiError(''); setGeminiMessage('Model preference saved. No provider request was sent.') }
+    catch { setGeminiError('Model preference could not be saved. Choose a supported Gemini model and try again.'); setGeminiMessage('') }
+  }
+  async function saveGeminiKey(event: FormEvent) {
+    event.preventDefault(); setGeminiMessage(''); setGeminiError('')
+    try { const saved = await window.workbench.saveGeminiApiKey(apiKey); setGemini(saved.gemini); setApiKey(''); setGeminiMessage('API key saved securely. No provider request was sent.') }
+    catch (error) { setGeminiError(error instanceof Error ? error.message : 'API key was not saved. Check secure storage and try again.') }
+  }
+  async function removeGeminiKey() {
+    try { const saved = await window.workbench.removeGeminiApiKey(); setGemini(saved.gemini); setApiKey(''); setGeminiError(''); setGeminiMessage('Saved API key removed. No provider request was sent.') }
+    catch { setGeminiError('The saved API key could not be removed. Try again.'); setGeminiMessage('') }
   }
   if (!ready && !error) return <div className="loading" role="status">Opening your workspace…</div>
   return <div className="workbench" data-ui-ready={ready ? 'true' : undefined}>
@@ -264,7 +311,17 @@ function App() {
       {error && <p role="alert" className="error">{error}</p>}
       <main id="content" tabIndex={-1}>
         <div className="title"><span className="context">Personal workspace</span><h1>{page === 'Tailor CV' ? 'Start with your experience' : page}</h1><p>{page === 'Tailor CV' ? 'Build your profile, then tailor a CV to a saved posting.' : page === 'Saved jobs' ? 'Your job postings and their drafts will live here.' : page === 'My profile' ? 'Keep the career facts that support your CV in one place.' : 'Choose how your workspace looks.'}</p></div>
-        {page === 'Tailor CV' ? <div className="columns"><section className="document-area" aria-label="CV document"><div className="document-toolbar"><span>CV document</span><span>Not started</span></div><div className="paper-wrap"><article className="paper"><div className="paper-header"><strong>Your name</strong><span>Your CV begins here</span></div><div className="paper-rule" /><h2>Education</h2><div className="paper-line" /><h2>Experience</h2><div className="paper-line" /><h2>Projects</h2><div className="paper-line" /><h2>Skills</h2><div className="paper-line" /><h2>Certificates</h2><div className="paper-line" /><p className="paper-hint">Add your career facts in My profile.</p></article></div></section><aside className="inspector" aria-label="Evidence and coverage"><div className="inspector-tabs"><span>Evidence</span><span>Coverage</span></div><div className="inspector-content"><h2>Nothing to inspect yet</h2><p>Once a draft is generated, select a paragraph to see its supporting profile evidence here.</p><div className="inspector-divider" /><h2>Qualification gaps</h2><p>Job requirements without supporting experience will appear as advisory gaps, not invented claims.</p></div></aside></div> : page === 'My profile' ? <ProfileEditor /> : <div className="empty-panel"><h2>{page === 'Settings' ? 'Appearance' : 'No saved postings'}</h2><p>{page === 'Settings' ? 'Use the Light and Dark controls in the header. Your choice is saved locally and restored when you reopen the app.' : 'Saving postings is not available in this first installable slice. Your workspace is ready for the next steps.'}</p></div>}
+        {page === 'Tailor CV' ? <div className="columns"><section className="document-area" aria-label="CV document"><div className="document-toolbar"><span>CV document</span><span>Not started</span></div><div className="paper-wrap"><article className="paper"><div className="paper-header"><strong>Your name</strong><span>Your CV begins here</span></div><div className="paper-rule" /><h2>Education</h2><div className="paper-line" /><h2>Experience</h2><div className="paper-line" /><h2>Projects</h2><div className="paper-line" /><h2>Skills</h2><div className="paper-line" /><h2>Certificates</h2><div className="paper-line" /><p className="paper-hint">Add your career facts in My profile.</p></article></div></section><aside className="inspector" aria-label="Evidence and coverage"><div className="inspector-tabs"><span>Evidence</span><span>Coverage</span></div><div className="inspector-content"><h2>Nothing to inspect yet</h2><p>Once a draft is generated, select a paragraph to see its supporting profile evidence here.</p><div className="inspector-divider" /><h2>Qualification gaps</h2><p>Job requirements without supporting experience will appear as advisory gaps, not invented claims.</p></div></aside></div> : page === 'My profile' ? <ProfileEditor /> : <div className="empty-panel"><h2>{page === 'Settings' ? 'Gemini and privacy' : 'No saved postings'}</h2>{page === 'Settings' ? <div className="settings-panel">
+          <p>Choose the Gemini model for future operations. Saving settings never sends a provider request.</p>
+          <label>Gemini model<select aria-label="Gemini model" value={gemini?.model ?? 'gemini-3.6-flash'} onChange={event => void saveGeminiModel(event.target.value as GeminiModel)}>{geminiModels.map(model => <option key={model} value={model}>{model}</option>)}</select></label>
+          <section className="credential-panel" aria-labelledby="credential-heading"><h3 id="credential-heading">Gemini API key</h3>
+            {gemini?.credential.configured ? <p role="status">An encrypted API key is saved on this device. Its value is never shown here.</p> : <p>No API key is saved.</p>}
+            {!gemini?.credential.secureStorageAvailable && <p className="privacy-warning" role="alert">Secure storage is unavailable. A key cannot be saved; CV Tailor will not store it in plaintext.</p>}
+            <form className="profile-form" onSubmit={event => void saveGeminiKey(event)}><label>API key<input aria-label="Gemini API key" type="password" autoComplete="new-password" value={apiKey} onChange={event => setApiKey(event.target.value)} disabled={!gemini?.credential.secureStorageAvailable} /></label><div className="form-actions"><button className="primary-button" type="submit" disabled={!gemini?.credential.secureStorageAvailable || !apiKey.trim()}>Save API key</button>{gemini?.credential.configured && <button className="secondary-button" type="button" onClick={() => void removeGeminiKey()}>Remove saved API key</button>}</div></form>
+          </section>
+          <p className="privacy-warning">Privacy limitation: Gemini's free tier is a cloud service and Google may use submitted data under its free-tier terms, which restrict personal, sensitive, or confidential information. Local key storage does not make generation private or anonymous and does not establish compliance. Review the outgoing data and provider terms before any future generation.</p>
+          {geminiError && <p className="profile-message error" role="alert">{geminiError}</p>}{geminiMessage && <p className="profile-message success" role="status">{geminiMessage}</p>}
+        </div> : <p>Saving postings is not available in this first installable slice. Your workspace is ready for the next steps.</p>}</div>}
       </main>
     </div>
   </div>

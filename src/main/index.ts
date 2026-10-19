@@ -1,11 +1,12 @@
-import { app, BrowserWindow, ipcMain } from 'electron'
+import { app, BrowserWindow, ipcMain, safeStorage } from 'electron'
 import type { ZodError } from 'zod'
 import { fileURLToPath } from 'node:url'
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { createWorkbench } from './workbench'
 import { appearanceSchema } from '../shared/appearance'
-import { contactSaveInputSchema, evidenceRevisionSchema, profileMutationResultSchema, profileSnapshotSchema, skillSaveInputSchema, uuidSchema } from '../shared/profile'
+import { geminiKeyInputSchema, geminiModelSchema } from '../shared/gemini-settings'
+import { contactSaveInputSchema, evidenceRevisionSchema, profileEntrySaveSchema, profileMutationResultSchema, profileSnapshotSchema, skillSaveInputSchema, uuidSchema } from '../shared/profile'
 import { experienceSaveInputSchema, experienceSnapshotSchema, experienceMutationResultSchema, projectSaveInputSchema } from '../shared/experience'
 
 let window: BrowserWindow | undefined
@@ -37,7 +38,7 @@ if (!app.isPackaged && process.env.CV_TAILOR_TEST_USER_DATA_DIR) {
   app.setPath('userData', process.env.CV_TAILOR_TEST_USER_DATA_DIR)
 }
 app.whenReady().then(() => {
-  workspace = createWorkbench(app.getPath('userData'))
+  workspace = createWorkbench(app.getPath('userData'), safeStorage)
   ipcMain.handle('settings:get', (event, ...args: unknown[]) => {
     trusted(event)
     if (args.length) throw new Error('Unexpected arguments')
@@ -47,6 +48,23 @@ app.whenReady().then(() => {
     trusted(event)
     if (args.length !== 1) throw new Error('Expected appearance')
     return workspace!.api.setAppearance(appearanceSchema.parse(args[0]))
+  })
+  ipcMain.handle('settings:gemini-model', (event, ...args: unknown[]) => {
+    trusted(event)
+    if (args.length !== 1) throw new Error('Expected Gemini model')
+    return workspace!.api.setGeminiModel(geminiModelSchema.parse(args[0]))
+  })
+  ipcMain.handle('settings:gemini-key:save', (event, ...args: unknown[]) => {
+    trusted(event)
+    if (args.length !== 1) throw new Error('Expected Gemini API key')
+    const input = geminiKeyInputSchema.safeParse(args[0])
+    if (!input.success) throw new Error('API key input is invalid. Correct it and try again.')
+    return workspace!.api.saveGeminiApiKey(input.data)
+  })
+  ipcMain.handle('settings:gemini-key:remove', (event, ...args: unknown[]) => {
+    trusted(event)
+    if (args.length) throw new Error('Unexpected arguments')
+    return workspace!.api.removeGeminiApiKey()
   })
   ipcMain.handle('profile:get', async (event, ...args: unknown[]) => {
     trusted(event)
@@ -80,6 +98,20 @@ app.whenReady().then(() => {
     const id = uuidSchema.safeParse(args[0])
     if (!id.success) return invalidProfileInput(id.error, 'skill')
     return profileMutationResultSchema.parse(await workspace!.api.deleteSkill(id.data))
+  })
+  ipcMain.handle('profile:entry:save', async (event, ...args: unknown[]) => {
+    trusted(event)
+    if (args.length !== 1) throw new Error('Expected profile record')
+    const input = profileEntrySaveSchema.safeParse(args[0])
+    if (!input.success) return invalidProfileInput(input.error, 'profile')
+    return profileMutationResultSchema.parse(await workspace!.api.saveProfileEntry(input.data))
+  })
+  ipcMain.handle('profile:entry:delete', async (event, ...args: unknown[]) => {
+    trusted(event)
+    if (args.length !== 1) throw new Error('Expected profile record ID')
+    const id = uuidSchema.safeParse(args[0])
+    if (!id.success) return invalidProfileInput(id.error, 'profile')
+    return profileMutationResultSchema.parse(await workspace!.api.deleteProfileEntry(id.data))
   })
   ipcMain.handle('profile:history', async (event, ...args: unknown[]) => {
     trusted(event)
