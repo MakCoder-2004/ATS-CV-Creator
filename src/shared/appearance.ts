@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import type { ContactInput, EvidenceRevision, ProfileEntryInput, ProfileMutationResult, ProfileSnapshot, SkillInput } from './profile'
+import type { ExperienceInput, ExperienceMutationResult, ExperienceSnapshot, ProjectInput } from './experience'
 import { geminiSettingsSchema, geminiModelSchema, type GeminiModel } from './gemini-settings'
 import type { JobInput, JobRecord, JobSaveResult } from './jobs'
 
@@ -24,6 +25,11 @@ export interface WorkbenchAPI {
   saveProfileEntry(input: ProfileEntryInput & { id?: string }): Promise<ProfileMutationResult>
   deleteProfileEntry(id: string): Promise<ProfileMutationResult>
   getEvidenceHistory(id: string): Promise<EvidenceRevision[]>
+  getExperience(): Promise<ExperienceSnapshot>
+  saveExperience(input: ExperienceInput & { id?: string }): Promise<ExperienceMutationResult>
+  deleteExperience(id: string): Promise<ExperienceMutationResult>
+  saveProject(input: ProjectInput & { id?: string }): Promise<ExperienceMutationResult>
+  deleteProject(id: string): Promise<ExperienceMutationResult>
   saveJob(input: JobInput & { id?: string }): Promise<JobSaveResult>
   listJobs(): Promise<JobRecord[]>
   openJob(id: string): Promise<JobRecord | null>

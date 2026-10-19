@@ -4,6 +4,7 @@ import { BriefcaseBusiness, FileText, LayoutPanelLeft, Moon, Settings2, Sun, Use
 import type { Appearance } from '../shared/appearance'
 import { geminiModels, type GeminiModel, type GeminiSettings } from '../shared/gemini-settings'
 import type { ContactInput, ProfileEntry, ProfileEntryInput, ProfileSnapshot, SkillInput, SkillRecord } from '../shared/profile'
+import type { ExperienceInput, ExperienceRecord, ProjectInput, ProjectRecord } from '../shared/experience'
 import type { JobInput, JobRecord } from '../shared/jobs'
 import './style.css'
 
@@ -19,6 +20,69 @@ type ProfileSection = typeof profileSections[number]
 type LinkRow = { key: number; label: string; url: string }
 const skillCategories = ['Technical', 'Tools', 'Domain', 'Languages', 'Leadership', 'Other']
 const proficiencyLabels: Record<string, string> = { beginner: 'Beginner', intermediate: 'Intermediate', advanced: 'Advanced', expert: 'Expert' }
+
+function ExperienceEditor({ projects }: { projects: boolean }) {
+  const [data, setData] = useState<{ experience: ExperienceRecord[]; projects: ProjectRecord[] }>({ experience: [], projects: [] })
+  const [editing, setEditing] = useState<string>()
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
+  const [fields, setFields] = useState<Record<string, string>>({})
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
+  const items = projects ? data.projects : data.experience
+  async function reload() { try { setData(await window.workbench.getExperience()); setError('') } catch { setError('Your experience and project evidence could not be loaded. Try again.') } finally { setLoading(false) } }
+  useEffect(() => { void reload() }, [])
+  function begin(item?: ExperienceRecord | ProjectRecord) {
+    setEditing(item?.id)
+    if (projects) {
+      const project = item as ProjectRecord | undefined
+      setFields({ name: project?.name ?? '', description: project?.description ?? '', factualItems: (project?.factualItems ?? []).map(value => value.text).join('\n'), technologies: (project?.technologies ?? []).map(value => value.text).join('\n'), links: (project?.links ?? []).map(value => `${value.label} | ${value.url}`).join('\n') })
+    } else {
+      const role = item as ExperienceRecord | undefined
+      setFields({ kind: role?.kind ?? 'employment', title: role?.title ?? '', organization: role?.organization ?? '', startDate: role?.startDate ?? '', endDate: role?.endDate ?? '', description: role?.description ?? '', factualItems: (role?.factualItems ?? []).map(value => value.text).join('\n') })
+    }
+    setError(''); setNotice(''); setFieldErrors({})
+  }
+  function nested(values: string, prior: Array<{ id: string; revision: number; text: string }> = []) {
+    const used = new Set<string>()
+    return values.split('\n').filter(value => value.trim()).map((text, index) => {
+      const match = prior.find(item => item.text === text && !used.has(item.id)) ?? (prior[index] && !used.has(prior[index].id) ? prior[index] : undefined)
+      if (match) used.add(match.id)
+      return match ? { id: match.id, text } : { text }
+    })
+  }
+  async function save(event: FormEvent) {
+    event.preventDefault(); setError(''); setNotice(''); setFieldErrors({})
+    const old = items.find(item => item.id === editing)
+    const input = projects ? {
+      name: fields.name, description: fields.description, factualItems: nested(fields.factualItems ?? '', (old as ProjectRecord | undefined)?.factualItems),
+      technologies: nested(fields.technologies ?? '', (old as ProjectRecord | undefined)?.technologies),
+      links: (fields.links ?? '').split('\n').filter(Boolean).map(row => { const [label, ...url] = row.split('|'); return { label: label.trim(), url: url.join('|').trim() } })
+    } satisfies ProjectInput : {
+      kind: fields.kind as 'employment' | 'training', title: fields.title, organization: fields.organization, startDate: fields.startDate || undefined, endDate: fields.endDate || undefined,
+      description: fields.description, factualItems: nested(fields.factualItems ?? '', (old as ExperienceRecord | undefined)?.factualItems)
+    } satisfies ExperienceInput
+    try {
+      const result = projects ? await window.workbench.saveProject({ ...input as ProjectInput, id: editing }) : await window.workbench.saveExperience({ ...input as ExperienceInput, id: editing })
+      if (!result.ok) { setError(result.error.message); setFieldErrors(result.error.fieldErrors ?? {}); return }
+      setData(result.value); setEditing(undefined); setNotice(projects ? 'Project saved' : 'Experience saved')
+    } catch { setError('Your changes could not be saved. Check the fields and try again.') }
+  }
+  async function remove(item: ExperienceRecord | ProjectRecord) {
+    if (!window.confirm(`Delete ${projects ? (item as ProjectRecord).name : (item as ExperienceRecord).title}? This cannot be undone.`)) return
+    const result = projects ? await window.workbench.deleteProject(item.id) : await window.workbench.deleteExperience(item.id)
+    if (result.ok) { setData(result.value); setNotice('Record deleted') } else setError(result.error.message)
+  }
+  const field = (name: string, label: string, multiline = false) => <label>{label}{multiline ? <textarea aria-invalid={!!fieldErrors[name]} value={fields[name] ?? ''} onChange={event => setFields(current => ({ ...current, [name]: event.target.value }))} /> : <input aria-invalid={!!fieldErrors[name]} value={fields[name] ?? ''} onChange={event => setFields(current => ({ ...current, [name]: event.target.value }))} />}{fieldErrors[name] && <span className="field-error">{fieldErrors[name]}</span>}</label>
+  if (loading) return <section className="profile-panel" role="status">Loading your local evidence…</section>
+  return <section className="profile-panel" aria-labelledby="experience-heading"><div className="panel-heading"><div><span className="context">Original evidence</span><h2 id="experience-heading">{projects ? 'Projects' : 'Experience'}</h2><p>{projects ? 'Keep project descriptions, factual items, technology and links.' : 'Employment and training remain separately labelled. Dates stay exactly as entered.'}</p></div>{!editing && <button className="secondary-button" type="button" onClick={() => begin()}>Add {projects ? 'project' : 'role'}</button>}</div>
+    {editing !== undefined || (!editing && Object.keys(fields).length > 0) ? <form className="profile-form" onSubmit={event => void save(event)} noValidate><div className="form-grid">
+      {projects ? <>{field('name', 'Project name')}{field('description', 'Original project description', true)}{field('factualItems', 'Factual items (one per line)', true)}{field('technologies', 'Technology (one per line)', true)}{field('links', 'Links (name | URL, one per line)', true)}</> : <><label>Record type<select value={fields.kind ?? 'employment'} onChange={event => setFields(current => ({ ...current, kind: event.target.value }))}><option value="employment">Employment</option><option value="training">Training</option></select></label>{field('title', 'Role or training title')}{field('organization', 'Company or institution')}{field('startDate', 'Start date (as entered)')}{field('endDate', 'End date (as entered)')}{field('description', 'Original description', true)}{field('factualItems', 'Factual items (one per line)', true)}</>}
+    </div><div className="form-actions"><button className="primary-button" type="submit">Save {projects ? 'project' : 'role'}</button><button className="secondary-button" type="button" onClick={() => { setEditing(undefined); setFields({}) }}>Cancel</button></div></form> : null}
+    {items.length ? <ul className="skill-list">{items.map(item => <li key={item.id}><div className="skill-copy"><h3>{projects ? (item as ProjectRecord).name : (item as ExperienceRecord).title}</h3><span>{projects ? (item as ProjectRecord).description : `${(item as ExperienceRecord).kind === 'training' ? 'Training' : 'Employment'} · ${(item as ExperienceRecord).organization}`}</span><small>Revision {item.revision}</small></div><div className="skill-actions"><button className="text-button" type="button" onClick={() => begin(item)}>Edit</button><button className="text-button destructive" type="button" onClick={() => void remove(item)}>Delete</button></div></li>)}</ul> : <p className="empty-skills">No {projects ? 'projects' : 'experience'} added yet. Add a record to keep your original evidence available offline.</p>}
+    {(error || notice) && <p className={error ? 'profile-message error' : 'profile-message success'} role={error ? 'alert' : 'status'}>{error || notice}{error && <button className="text-button" type="button" onClick={() => void reload()}>Retry</button>}</p>}
+  </section>
+}
 
 function ProfileEditor() {
   const [snapshot, setSnapshot] = useState<ProfileSnapshot | null>(null)
@@ -127,7 +191,7 @@ function ProfileEditor() {
   if (loading) return <section className="profile-panel" role="status">Loading your local profile…</section>
   return <div className="profile-layout">
     <div className="profile-summary"><span className="profile-avatar"><UserRound size={22} aria-hidden="true" /></span><div><strong>{snapshot?.contact?.fullName ?? 'Start your profile'}</strong><p>{snapshot?.contact?.headline ?? 'Your career facts, organized by section.'}</p></div><span className="profile-local-label">Saved on this device</span></div>
-    <nav className="profile-sections" aria-label="Profile sections">{profileSections.map(section => <button key={section} type="button" aria-current={activeSection === section ? 'page' : undefined} onClick={() => { setActiveSection(section); setMutationError(''); setNotice(''); setFieldErrors({}) }}>{section}{section !== 'Personal' && section !== 'Skills' && <span className="profile-upcoming">Soon</span>}</button>)}</nav>
+    <nav className="profile-sections" aria-label="Profile sections">{profileSections.map(section => <button key={section} type="button" aria-current={activeSection === section ? 'page' : undefined} onClick={() => { setActiveSection(section); setMutationError(''); setNotice(''); setFieldErrors({}) }}>{section}{section !== 'Personal' && section !== 'Skills' && section !== 'Experience' && section !== 'Projects' && <span className="profile-upcoming">Soon</span>}</button>)}</nav>
     {activeSection === 'Personal' && <section className="profile-panel" aria-labelledby="contact-heading">
       <div className="panel-heading"><div><span className="context">Identity</span><h2 id="contact-heading">Contact details</h2><p>Keep the details you want available when preparing your CV.</p></div>
         {!contactEdit && snapshot?.contact && <button className="secondary-button" type="button" onClick={beginContactEdit}>Edit contact details</button>}
@@ -175,12 +239,12 @@ function ProfileEditor() {
         <div className="skill-actions"><button className="text-button" type="button" onClick={() => editSkill(item)}>Edit {item.name}</button><button className="text-button destructive" type="button" aria-label={`Delete ${item.name}`} onClick={() => void deleteSkill(item)}>Delete</button></div>
       </li>)}</ul> : <p className="empty-skills">No skills added yet.</p>}
     </section>}
+    {(activeSection === 'Experience' || activeSection === 'Projects') && <ExperienceEditor key={activeSection} projects={activeSection === 'Projects'} />}
     {activeSection === 'Education' && <ProfileEntryEditor section="education" items={snapshot?.education ?? []} reload={reload} report={setMutationError} />}
     {activeSection === 'Certificates' && <ProfileEntryEditor section="certificates" items={snapshot?.certificates ?? []} reload={reload} report={setMutationError} />}
     {activeSection === 'Summary' && <ProfileEntryEditor section="summary" items={snapshot?.summary ?? []} reload={reload} report={setMutationError} />}
     {activeSection === 'Languages' && <ProfileEntryEditor section="languages" items={snapshot?.languages ?? []} reload={reload} report={setMutationError} />}
     {activeSection === 'Extras' && <ProfileEntryEditor section="extras" items={snapshot?.extras ?? []} reload={reload} report={setMutationError} />}
-    {['Experience', 'Projects'].includes(activeSection) && <section className="profile-panel profile-upcoming-panel"><span className="context">Separate profile slice</span><h2>{activeSection}</h2><p>{activeSection} records are managed in their dedicated profile section.</p></section>}
     <p className="locality-note">Your profile is stored locally on this device. It is not synced or shared. Local storage does not guarantee that future cloud features will be anonymous.</p>
     {(mutationError || notice) && <p className={mutationError ? 'profile-message error' : 'profile-message success'} role={mutationError ? 'alert' : 'status'}>{mutationError || notice}{mutationError && <button className="text-button" type="button" onClick={() => void reload()}>Retry</button>}</p>}
   </div>

@@ -7,6 +7,7 @@ import { createWorkbench } from './workbench'
 import { appearanceSchema } from '../shared/appearance'
 import { geminiKeyInputSchema, geminiModelSchema } from '../shared/gemini-settings'
 import { contactSaveInputSchema, evidenceRevisionSchema, profileEntrySaveSchema, profileMutationResultSchema, profileSnapshotSchema, skillSaveInputSchema, uuidSchema } from '../shared/profile'
+import { experienceSaveInputSchema, experienceSnapshotSchema, experienceMutationResultSchema, projectSaveInputSchema } from '../shared/experience'
 import { jobRecordSchema, jobSaveInputSchema, jobSaveResultSchema } from '../shared/jobs'
 
 let window: BrowserWindow | undefined
@@ -118,6 +119,28 @@ app.whenReady().then(() => {
     if (args.length !== 1) throw new Error('Expected evidence ID')
     return evidenceRevisionSchema.array().parse(await workspace!.api.getEvidenceHistory(uuidSchema.parse(args[0])))
   })
+  ipcMain.handle('profile:experience:get', async (event, ...args: unknown[]) => {
+    trusted(event); if (args.length) throw new Error('Unexpected arguments')
+    return experienceSnapshotSchema.parse(await workspace!.api.getExperience())
+  })
+  const registerExperienceMutation = (channel: string, schema: typeof experienceSaveInputSchema | typeof projectSaveInputSchema, command: 'saveExperience' | 'saveProject') => {
+    ipcMain.handle(channel, async (event, ...args: unknown[]) => {
+      trusted(event); if (args.length !== 1) throw new Error('Expected profile record')
+      const parsed = schema.safeParse(args[0])
+      if (!parsed.success) return experienceMutationResultSchema.parse({ ok: false, error: { code: 'VALIDATION_ERROR', message: 'Check the highlighted profile fields.', fieldErrors: Object.fromEntries(parsed.error.issues.map(issue => [issue.path.join('.') || '_', issue.message])) } })
+      return experienceMutationResultSchema.parse(await workspace!.api[command](parsed.data as never))
+    })
+  }
+  registerExperienceMutation('profile:experience:save', experienceSaveInputSchema, 'saveExperience')
+  registerExperienceMutation('profile:project:save', projectSaveInputSchema, 'saveProject')
+  for (const [channel, command] of [['profile:experience:delete', 'deleteExperience'], ['profile:project:delete', 'deleteProject']] as const) {
+    ipcMain.handle(channel, async (event, ...args: unknown[]) => {
+      trusted(event); if (args.length !== 1) throw new Error('Expected profile record ID')
+      const id = uuidSchema.safeParse(args[0])
+      if (!id.success) return experienceMutationResultSchema.parse({ ok: false, error: { code: 'VALIDATION_ERROR', message: 'Profile record ID must be a UUID.', fieldErrors: { id: 'Invalid ID' } } })
+      return experienceMutationResultSchema.parse(await workspace!.api[command](id.data))
+    })
+  }
   ipcMain.handle('jobs:save', async (event, ...args: unknown[]) => {
     trusted(event)
     if (args.length !== 1) throw new Error('Expected job')

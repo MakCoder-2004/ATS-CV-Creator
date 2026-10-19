@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 import { appearanceSchema, settingsSchema, type Appearance, type WorkbenchAPI } from '../shared/appearance'
 import { geminiKeyInputSchema, geminiModelSchema, type GeminiModel } from '../shared/gemini-settings'
 import { evidenceRevisionSchema, profileEntryInputSchema, profileMutationResultSchema, profileSnapshotSchema, uuidSchema, type ContactInput, type ProfileEntryInput, type SkillInput } from '../shared/profile'
+import { experienceSnapshotSchema, experienceMutationResultSchema, type ExperienceInput, type ProjectInput } from '../shared/experience'
 import { jobRecordSchema, jobSaveResultSchema, type JobInput } from '../shared/jobs'
 
 const api: WorkbenchAPI = Object.freeze({
@@ -44,6 +45,21 @@ const api: WorkbenchAPI = Object.freeze({
   async getEvidenceHistory(id: string) {
     const revisions = await ipcRenderer.invoke('profile:history', uuidSchema.parse(id))
     return evidenceRevisionSchema.array().parse(revisions)
+  },
+  async getExperience() {
+    return experienceSnapshotSchema.parse(await ipcRenderer.invoke('profile:experience:get'))
+  },
+  async saveExperience(input: ExperienceInput & { id?: string }) {
+    return experienceMutationResultSchema.parse(await ipcRenderer.invoke('profile:experience:save', input))
+  },
+  async deleteExperience(id: string) {
+    return experienceMutationResultSchema.parse(await ipcRenderer.invoke('profile:experience:delete', id))
+  },
+  async saveProject(input: ProjectInput & { id?: string }) {
+    return experienceMutationResultSchema.parse(await ipcRenderer.invoke('profile:project:save', input))
+  },
+  async deleteProject(id: string) {
+    return experienceMutationResultSchema.parse(await ipcRenderer.invoke('profile:project:delete', id))
   },
   async saveJob(input: JobInput & { id?: string }) {
     return jobSaveResultSchema.parse(await ipcRenderer.invoke('jobs:save', input))

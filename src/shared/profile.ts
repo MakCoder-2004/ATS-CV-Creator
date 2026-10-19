@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { experienceRecordSchema, factualItemSchema, projectRecordSchema } from './experience'
 
 const text = (max: number) => z.string().max(max).refine((value) => value.trim().length > 0, 'Must not be blank')
 const httpUrl = z.string().url().max(2048).refine((value) => /^https?:\/\//i.test(value), 'Must be an HTTP(S) URL')
@@ -16,7 +17,7 @@ export const profileEntrySaveSchema = profileEntryInputSchema.extend({ id: uuidS
 export const profileEntrySchema = profileEntryInputSchema.extend({ id: uuidSchema, revision: z.number().int().positive() }).strict()
 export const profileSnapshotSchema = z.object({ contact: contactRecordSchema.nullable(), skills: z.array(skillRecordSchema), education: z.array(profileEntrySchema), certificates: z.array(profileEntrySchema), summary: z.array(profileEntrySchema), languages: z.array(profileEntrySchema), extras: z.array(profileEntrySchema) }).strict()
 const legacyContactRecordSchema = z.object({ fullName: text(160), headline: text(240).optional(), email: z.string().email().max(254).optional(), phone: text(64).optional(), location: text(160).optional(), links: z.array(httpUrl).max(20).optional(), id: uuidSchema, revision: z.number().int().positive() }).strict()
-export const evidenceRevisionSchema = z.object({ id: uuidSchema, revision: z.number().int().positive(), action: z.enum(['created', 'updated', 'deleted']), snapshot: z.union([contactRecordSchema, legacyContactRecordSchema, skillRecordSchema, profileEntrySchema]), createdAt: z.string().datetime() }).strict()
+export const evidenceRevisionSchema = z.object({ id: uuidSchema, revision: z.number().int().positive(), action: z.enum(['created', 'updated', 'deleted']), snapshot: z.union([contactRecordSchema, legacyContactRecordSchema, skillRecordSchema, profileEntrySchema, factualItemSchema, experienceRecordSchema, projectRecordSchema]), createdAt: z.string().datetime() }).strict()
 export const profileMutationResultSchema = z.discriminatedUnion('ok', [z.object({ ok: z.literal(true), value: profileSnapshotSchema }).strict(), z.object({ ok: z.literal(false), error: z.object({ code: z.string(), message: z.string(), fieldErrors: z.record(z.string(), z.string()).optional() }).strict() }).strict()])
 export type ContactInput = z.infer<typeof contactInputSchema>
 export type SkillInput = z.infer<typeof skillInputSchema>
