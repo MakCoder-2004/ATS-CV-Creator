@@ -13,6 +13,7 @@ import { randomUUID } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { profileExchangeSchema, profileExchangeResultSchema } from '../shared/profile-exchange'
+import { outboundConsentActionSchema, outboundConsentPreviewSchema } from '../shared/outbound-consent-contract'
 
 let window: BrowserWindow | undefined
 let workspace: ReturnType<typeof createWorkbench> | undefined
@@ -214,6 +215,18 @@ app.whenReady().then(() => {
     trusted(event)
     if (args.length) throw new Error('Unexpected arguments')
     return jobRecordSchema.array().parse(await workspace!.api.listJobs())
+  })
+  ipcMain.handle('consent:outbound:preview', async (event, ...args: unknown[]) => {
+    trusted(event); if (args.length !== 1) throw new Error('Expected saved job ID')
+    return outboundConsentPreviewSchema.parse(await workspace!.api.prepareOutboundConsent(uuidSchema.parse(args[0])))
+  })
+  ipcMain.handle('consent:outbound:accept', async (event, ...args: unknown[]) => {
+    trusted(event); if (args.length !== 3 || typeof args[1] !== 'boolean' || typeof args[2] !== 'boolean') throw new Error('Expected preview token and consent decisions')
+    return outboundConsentActionSchema.parse(await workspace!.api.acceptOutboundConsent(uuidSchema.parse(args[0]), args[1], args[2]))
+  })
+  ipcMain.handle('consent:outbound:cancel', async (event, ...args: unknown[]) => {
+    trusted(event); if (args.length !== 1) throw new Error('Expected preview token')
+    return outboundConsentActionSchema.parse(await workspace!.api.cancelOutboundConsent(uuidSchema.parse(args[0])))
   })
   ipcMain.handle('jobs:open', async (event, ...args: unknown[]) => {
     trusted(event)

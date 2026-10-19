@@ -5,6 +5,7 @@ import { evidenceRevisionSchema, profileEntryInputSchema, profileMutationResultS
 import { experienceSnapshotSchema, experienceMutationResultSchema, type ExperienceInput, type ProjectInput } from '../shared/experience'
 import { jobRecordSchema, jobSaveResultSchema, type JobInput } from '../shared/jobs'
 import { profileExchangeResultSchema } from '../shared/profile-exchange'
+import { outboundConsentActionSchema, outboundConsentPreviewSchema } from '../shared/outbound-consent-contract'
 
 const api: WorkbenchAPI = Object.freeze({
   async getSettings() {
@@ -74,6 +75,15 @@ const api: WorkbenchAPI = Object.freeze({
   async openJob(id: string) {
     const job = await ipcRenderer.invoke('jobs:open', uuidSchema.parse(id))
     return job === null ? null : jobRecordSchema.parse(job)
+  },
+  async prepareOutboundConsent(jobId: string) {
+    return outboundConsentPreviewSchema.parse(await ipcRenderer.invoke('consent:outbound:preview', uuidSchema.parse(jobId)))
+  },
+  async acceptOutboundConsent(token: string, accepted: boolean, freeTierTermsAcknowledged: boolean) {
+    return outboundConsentActionSchema.parse(await ipcRenderer.invoke('consent:outbound:accept', uuidSchema.parse(token), accepted, freeTierTermsAcknowledged))
+  },
+  async cancelOutboundConsent(token: string) {
+    return outboundConsentActionSchema.parse(await ipcRenderer.invoke('consent:outbound:cancel', uuidSchema.parse(token)))
   }
 })
 contextBridge.exposeInMainWorld('workbench', api)
