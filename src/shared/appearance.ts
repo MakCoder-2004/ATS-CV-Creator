@@ -5,7 +5,6 @@ import { geminiSettingsSchema, geminiModelSchema, type GeminiModel } from './gem
 import type { JobInput, JobRecord, JobSaveResult } from './jobs'
 import type { ProfileExchangeResult } from './profile-exchange'
 import type { OutboundConsentAction, OutboundConsentPreview } from './outbound-consent-contract'
-import type { PdfImportAction, PdfImportProposal, PdfImportReview, PdfImportSelection } from './pdf-import'
 
 export const appearanceSchema = z.enum(['light', 'dark'])
 export type Appearance = z.infer<typeof appearanceSchema>
@@ -43,17 +42,9 @@ export interface WorkbenchAPI {
   prepareOutboundConsent(jobId: string): Promise<OutboundConsentPreview>
   acceptOutboundConsent(token: string, accepted: boolean, freeTierTermsAcknowledged: boolean): Promise<OutboundConsentAction>
   cancelOutboundConsent(token: string): Promise<OutboundConsentAction>
-  selectReferencePdf(): Promise<PdfImportSelection>
-  reviewReferencePdf(token: string, review: PdfImportReview): Promise<PdfImportProposal>
-  applyReferencePdf(token: string): Promise<PdfImportAction>
-  cancelReferencePdf(token: string): Promise<PdfImportAction>
 }
 
-export type WorkbenchStorageAPI = Omit<WorkbenchAPI, 'exportProfile' | 'previewProfileImport' | 'applyProfileImport' | 'cancelProfileImport' | 'selectReferencePdf' | 'reviewReferencePdf' | 'applyReferencePdf' | 'cancelReferencePdf'> & {
+export type WorkbenchStorageAPI = Omit<WorkbenchAPI, 'exportProfile' | 'previewProfileImport' | 'applyProfileImport' | 'cancelProfileImport'> & {
   validateProfileImport(input: string): Promise<{ ok: boolean; message: string }>
   replaceProfile(input: string): Promise<{ ok: boolean; message: string; profile?: ProfileSnapshot }>
-  stagePdfImport(bytes: Uint8Array): Promise<PdfImportSelection>
-  previewPdfImport(token: string, review: PdfImportReview): Promise<PdfImportProposal>
-  applyPdfImport(token: string): Promise<PdfImportAction>
-  cancelPdfImport(token: string): Promise<PdfImportAction>
 }
