@@ -4,6 +4,7 @@ import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { createWorkbench } from './workbench'
 import { appearanceSchema } from '../shared/appearance'
+import { contactSaveInputSchema, evidenceRevisionSchema, profileMutationResultSchema, profileSnapshotSchema, skillSaveInputSchema, uuidSchema } from '../shared/profile'
 
 let window: BrowserWindow | undefined
 let workspace: ReturnType<typeof createWorkbench> | undefined
@@ -38,6 +39,38 @@ app.whenReady().then(() => {
     trusted(event)
     if (args.length !== 1) throw new Error('Expected appearance')
     return workspace!.api.setAppearance(appearanceSchema.parse(args[0]))
+  })
+  ipcMain.handle('profile:get', async (event, ...args: unknown[]) => {
+    trusted(event)
+    if (args.length) throw new Error('Unexpected arguments')
+    return profileSnapshotSchema.parse(await workspace!.api.getProfile())
+  })
+  ipcMain.handle('profile:contact:save', async (event, ...args: unknown[]) => {
+    trusted(event)
+    if (args.length !== 1 || typeof args[0] !== 'object' || args[0] === null || Array.isArray(args[0])) throw new Error('Expected contact')
+    const input = contactSaveInputSchema.parse(args[0])
+    return profileMutationResultSchema.parse(await workspace!.api.saveContact(input))
+  })
+  ipcMain.handle('profile:contact:delete', async (event, ...args: unknown[]) => {
+    trusted(event)
+    if (args.length !== 1) throw new Error('Expected contact ID')
+    return profileMutationResultSchema.parse(await workspace!.api.deleteContact(uuidSchema.parse(args[0])))
+  })
+  ipcMain.handle('profile:skill:save', async (event, ...args: unknown[]) => {
+    trusted(event)
+    if (args.length !== 1 || typeof args[0] !== 'object' || args[0] === null || Array.isArray(args[0])) throw new Error('Expected skill')
+    const input = skillSaveInputSchema.parse(args[0])
+    return profileMutationResultSchema.parse(await workspace!.api.saveSkill(input))
+  })
+  ipcMain.handle('profile:skill:delete', async (event, ...args: unknown[]) => {
+    trusted(event)
+    if (args.length !== 1) throw new Error('Expected skill ID')
+    return profileMutationResultSchema.parse(await workspace!.api.deleteSkill(uuidSchema.parse(args[0])))
+  })
+  ipcMain.handle('profile:history', async (event, ...args: unknown[]) => {
+    trusted(event)
+    if (args.length !== 1) throw new Error('Expected evidence ID')
+    return evidenceRevisionSchema.array().parse(await workspace!.api.getEvidenceHistory(uuidSchema.parse(args[0])))
   })
 
   window = new BrowserWindow({

@@ -1,0 +1,33 @@
+import { z } from 'zod'
+
+const text = (max: number) => z.string().max(max).refine((value) => value.trim().length > 0, 'Must not be blank')
+export const contactInputSchema = z.object({
+  fullName: text(160), headline: text(240).optional(), email: z.string().email().max(254).optional(),
+  phone: text(64).optional(), location: text(160).optional(),
+  links: z.array(z.string().url().max(2048).refine((value) => /^https?:\/\//i.test(value), 'Must be an HTTP(S) URL')).max(20).optional()
+}).strict()
+export const skillInputSchema = z.object({
+  name: text(160), category: text(100), proficiency: z.enum(['beginner', 'intermediate', 'advanced', 'expert']).optional(),
+  years: z.number().finite().min(0).max(80).optional()
+}).strict()
+export const uuidSchema = z.string().uuid()
+export const contactSaveInputSchema = contactInputSchema.extend({ id: uuidSchema.optional() }).strict()
+export const skillSaveInputSchema = skillInputSchema.extend({ id: uuidSchema.optional() }).strict()
+export const contactRecordSchema = contactInputSchema.extend({ id: uuidSchema, revision: z.number().int().positive() }).strict()
+export const skillRecordSchema = skillInputSchema.extend({ id: uuidSchema, revision: z.number().int().positive() }).strict()
+export const profileSnapshotSchema = z.object({ contact: contactRecordSchema.nullable(), skills: z.array(skillRecordSchema) }).strict()
+export const evidenceRevisionSchema = z.object({
+  id: uuidSchema, revision: z.number().int().positive(), action: z.enum(['created', 'updated', 'deleted']),
+  snapshot: z.union([contactRecordSchema, skillRecordSchema]), createdAt: z.string().datetime()
+}).strict()
+export const profileMutationResultSchema = z.discriminatedUnion('ok', [
+  z.object({ ok: z.literal(true), value: profileSnapshotSchema }).strict(),
+  z.object({ ok: z.literal(false), error: z.object({ code: z.string(), message: z.string(), fieldErrors: z.record(z.string(), z.string()).optional() }).strict() }).strict()
+])
+export type ContactInput = z.infer<typeof contactInputSchema>
+export type SkillInput = z.infer<typeof skillInputSchema>
+export type ContactRecord = z.infer<typeof contactRecordSchema>
+export type SkillRecord = z.infer<typeof skillRecordSchema>
+export type ProfileSnapshot = z.infer<typeof profileSnapshotSchema>
+export type EvidenceRevision = z.infer<typeof evidenceRevisionSchema>
+export type ProfileMutationResult = z.infer<typeof profileMutationResultSchema>
