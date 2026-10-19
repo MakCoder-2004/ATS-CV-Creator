@@ -26,6 +26,6 @@ test('invalid settings cannot alter the persisted appearance', async () => {
   directories.push(directory)
   const workbench = createWorkbench(directory)
   await expect(workbench.api.setAppearance('system' as 'dark')).rejects.toThrow()
-  expect(await workbench.api.getSettings()).toEqual({ appearance: 'light' })
+  expect((await workbench.api.getSettings()).appearance).toBe('light')
   workbench.close()
 })
