@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { experienceRecordSchema, factualItemSchema, projectRecordSchema } from './experience'
 
 const text = (max: number) => z.string().max(max).refine((value) => value.trim().length > 0, 'Must not be blank')
 const httpUrl = z.string().url().max(2048).refine((value) => /^https?:\/\//i.test(value), 'Must be an HTTP(S) URL')
@@ -26,7 +27,7 @@ const legacyContactRecordSchema = z.object({
 }).strict()
 export const evidenceRevisionSchema = z.object({
   id: uuidSchema, revision: z.number().int().positive(), action: z.enum(['created', 'updated', 'deleted']),
-  snapshot: z.union([contactRecordSchema, legacyContactRecordSchema, skillRecordSchema]), createdAt: z.string().datetime()
+  snapshot: z.union([contactRecordSchema, legacyContactRecordSchema, skillRecordSchema, factualItemSchema, experienceRecordSchema, projectRecordSchema]), createdAt: z.string().datetime()
 }).strict()
 export const profileMutationResultSchema = z.discriminatedUnion('ok', [
   z.object({ ok: z.literal(true), value: profileSnapshotSchema }).strict(),
