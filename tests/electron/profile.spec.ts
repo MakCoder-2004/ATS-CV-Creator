@@ -55,28 +55,35 @@ test('profile contact and categorized skills can be created, edited, and deleted
     await page.getByLabel('Company or institution').fill('Research Lab')
     await page.getByLabel('Start date (as entered)').fill('2020-01 (as entered)')
     await page.getByLabel('Original description').fill('Original supervised training description.')
-    await page.getByLabel('Factual items (one per line)').fill('Recorded observations')
+    await page.getByRole('button', { name: 'Add factual items' }).click()
+    await page.getByRole('textbox', { name: 'Factual items 1' }).fill('Recorded observations')
+    await page.getByRole('button', { name: 'Add factual items' }).click()
+    await page.getByRole('textbox', { name: 'Factual items 2' }).fill('Documented findings')
     await page.getByRole('button', { name: 'Save role' }).click()
     await expect(page.getByText('Training · Research Lab')).toBeVisible()
     const beforeRoleEdit = await page.evaluate(() => window.workbench.getExperience())
     const originalRole = beforeRoleEdit.experience[0]
     const originalFactualId = originalRole.factualItems[0].id
+    const secondFactualId = originalRole.factualItems[1].id
     await page.getByRole('button', { name: 'Edit', exact: true }).click()
     await page.getByLabel('Original description').fill('Updated training description.')
-    await page.getByLabel('Factual items (one per line)').fill('Recorded verified observations')
+    await page.getByRole('button', { name: 'Move Factual items 2 up' }).click()
+    await page.getByRole('textbox', { name: 'Factual items 1' }).fill('Documented verified findings')
     await page.getByRole('button', { name: 'Save role' }).click()
     const afterRoleEdit = await page.evaluate(() => window.workbench.getExperience())
-    expect(afterRoleEdit.experience[0]).toMatchObject({ id: originalRole.id, revision: 2, kind: 'training', description: 'Updated training description.', factualItems: [{ id: originalFactualId, revision: 2 }] })
-    await expect.poll(async () => page.evaluate(id => window.workbench.getEvidenceHistory(id), originalFactualId)).toMatchObject([
-      { revision: 1, action: 'created', snapshot: { text: 'Recorded observations' } },
-      { revision: 2, action: 'updated', snapshot: { text: 'Recorded verified observations' } }
+    expect(afterRoleEdit.experience[0]).toMatchObject({ id: originalRole.id, revision: 2, kind: 'training', description: 'Updated training description.', factualItems: [{ id: secondFactualId, revision: 2 }, { id: originalFactualId, revision: 1 }] })
+    await expect.poll(async () => page.evaluate(id => window.workbench.getEvidenceHistory(id), secondFactualId)).toMatchObject([
+      { revision: 1, action: 'created', snapshot: { text: 'Documented findings' } },
+      { revision: 2, action: 'updated', snapshot: { text: 'Documented verified findings' } }
     ])
     await sections.getByRole('button', { name: /Projects/ }).click()
     await page.getByRole('button', { name: 'Add project' }).click()
     await page.getByLabel('Project name').fill('Local prototype')
     await page.getByLabel('Original project description').fill('Project text retained locally.')
-    await page.getByLabel('Factual items (one per line)').fill('Built an interface')
-    await page.getByLabel('Technology (one per line)').fill('TypeScript')
+    await page.getByRole('button', { name: 'Add factual items' }).click()
+    await page.getByRole('textbox', { name: 'Factual items 1' }).fill('Built an interface')
+    await page.getByRole('button', { name: 'Add technology' }).click()
+    await page.getByRole('textbox', { name: 'Technology 1' }).fill('TypeScript')
     await page.getByLabel('Links (name | URL, one per line)').fill('Repository | https://example.test/source')
     await page.getByRole('button', { name: 'Save project' }).click()
     await expect(page.getByText('Local prototype', { exact: true })).toBeVisible()

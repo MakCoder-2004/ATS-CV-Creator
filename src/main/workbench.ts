@@ -21,6 +21,19 @@ const unavailableSecureStorage: SecureStorage = {
   encryptString: () => { throw new Error('Secure storage unavailable') }
 }
 
+type NestedInput = { id?: string; text: string }
+type NestedRecord = { id: string; revision: number; text: string }
+function reconcileNestedItems(items: NestedInput[], previous: NestedRecord[], owner: string): NestedRecord[] {
+  const byId = new Map(previous.map(item => [item.id, item]))
+  const used = new Set<string>()
+  return items.map(item => {
+    const prior = item.id ? byId.get(item.id) : undefined
+    if (item.id && (!prior || used.has(item.id))) throw new Error(`Nested factual item does not belong to this ${owner}.`)
+    if (item.id) used.add(item.id)
+    return { id: prior?.id ?? randomUUID(), revision: prior ? prior.text === item.text ? prior.revision : prior.revision + 1 : 1, text: item.text }
+  })
+}
+
 /** One workspace per userData directory. Opening a workspace applies forward-only migrations. */
 export function createWorkbench(userData: string, secureStorage: SecureStorage = unavailableSecureStorage): { api: WorkbenchAPI; close(): void } {
   mkdirSync(userData, { recursive: true })
@@ -197,6 +210,10 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       const tx = db.transaction(() => {
         const row = input.id ? db.prepare('SELECT id, revision FROM profile_entries WHERE id = ?').get(input.id) as { id: string; revision: number } | undefined : undefined
         if (input.id && !row) return failure('CONFLICT', 'The profile record no longer exists.')
+        if (row) {
+          const current = db.prepare('SELECT section FROM profile_entries WHERE id = ?').get(input.id) as { section: string }
+          if (current.section !== parsed.value!.section) return failure('CONFLICT', 'A profile record cannot be moved to another section.')
+        }
         if (parsed.value!.section === 'summary' && db.prepare('SELECT id FROM profile_entries WHERE section = ? AND id <> ?').get('summary', input.id ?? '')) return failure('CONFLICT', 'A summary already exists; edit the existing summary.')
         const id = row?.id ?? randomUUID(), revision = (row?.revision ?? 0) + 1
         const record = profileEntrySchema.parse({ ...parsed.value, id, revision })
@@ -236,14 +253,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
         const row = input.id ? db.prepare('SELECT revision, data FROM profile_experience WHERE id = ?').get(input.id) as { revision: number; data: string } | undefined : undefined
         if (input.id && !row) return experienceFailure('CONFLICT', 'The experience record no longer exists.')
         const old = row ? experienceRecordSchema.parse(JSON.parse(row.data)) : undefined
-        const oldItems = new Map((old?.factualItems ?? []).map(item => [item.id, item]))
-        const used = new Set<string>()
-        const nested = parsed.data.factualItems.map(item => {
-          const prior = item.id ? oldItems.get(item.id) : undefined
-          if (item.id && (!prior || used.has(item.id))) throw new Error('Nested factual item does not belong to this experience.')
-          if (item.id) used.add(item.id)
-          return { id: prior?.id ?? randomUUID(), revision: prior ? prior.text === item.text ? prior.revision : prior.revision + 1 : 1, text: item.text }
-        })
+        const nested = reconcileNestedItems(parsed.data.factualItems, old?.factualItems ?? [], 'experience')
         const record = experienceRecordSchema.parse({ ...parsed.data, id: old?.id ?? randomUUID(), revision: (old?.revision ?? 0) + 1, factualItems: nested })
         recordItemChanges(old?.factualItems ?? [], record.factualItems)
         db.prepare('INSERT INTO profile_experience (id, revision, data) VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET revision=excluded.revision, data=excluded.data').run(record.id, record.revision, JSON.stringify(record))
@@ -278,17 +288,8 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
         const row = input.id ? db.prepare('SELECT revision, data FROM profile_projects WHERE id = ?').get(input.id) as { revision: number; data: string } | undefined : undefined
         if (input.id && !row) return experienceFailure('CONFLICT', 'The project no longer exists.')
         const old = row ? projectRecordSchema.parse(JSON.parse(row.data)) : undefined
-        const retainItems = (items: typeof parsed.data.factualItems, previous: ProjectRecord['factualItems']) => {
-          const byId = new Map(previous.map(item => [item.id, item])), used = new Set<string>()
-          return items.map(item => {
-            const prior = item.id ? byId.get(item.id) : undefined
-            if (item.id && (!prior || used.has(item.id))) throw new Error('Nested factual item does not belong to this project.')
-            if (item.id) used.add(item.id)
-            return { id: prior?.id ?? randomUUID(), revision: prior ? prior.text === item.text ? prior.revision : prior.revision + 1 : 1, text: item.text }
-          })
-        }
-        const factualItems = retainItems(parsed.data.factualItems, old?.factualItems ?? [])
-        const technologies = retainItems(parsed.data.technologies, old?.technologies ?? [])
+        const factualItems = reconcileNestedItems(parsed.data.factualItems, old?.factualItems ?? [], 'project')
+        const technologies = reconcileNestedItems(parsed.data.technologies, old?.technologies ?? [], 'project')
         if (new Set([...factualItems, ...technologies].map(item => item.id)).size !== factualItems.length + technologies.length) throw new Error('Nested factual item IDs must be unique within this project.')
         const record = projectRecordSchema.parse({ ...parsed.data, id: old?.id ?? randomUUID(), revision: (old?.revision ?? 0) + 1, factualItems, technologies })
         recordItemChanges(old?.factualItems ?? [], record.factualItems)
