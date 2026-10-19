@@ -27,14 +27,6 @@ export function createOutboundConsentEngine() {
       collect(payload)
       if (leaves.some(text => !bundle.isAuthorizedText(text))) throw new Error('Payload contains data outside the authorized bundle; use a scoped workflow-derived intermediate only when appropriate.')
       return payload
-    },
-    authorizeWorkflowIntermediate<T>(runId: string, bundle: OutboundBundle, intermediate: { scopeHash: string; value: T }): T {
-      const runConsents = [...records.values()].filter(record => record.runId === runId)
-      const consent = runConsents.find(record => !record.revoked)
-      if (!consent) throw new Error(runConsents.length ? 'Consent was revoked for this run.' : 'No active consent exists for this run.')
-      if (consent.scopeHash !== bundle.scopeHash || intermediate.scopeHash !== bundle.scopeHash || !bundle.verifyIntegrity()) throw new Error('Workflow intermediate scope is stale or expanded.')
-      if (bundle.containsRestoredIdentifier(intermediate.value)) throw new Error('Restored identifier is not authorized for outbound payloads.')
-      return intermediate.value
     }
   })
 }

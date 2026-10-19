@@ -39,7 +39,8 @@ describe('outbound consent public contract', () => {
     const consent = engine.grantConsent('run-a', bundle, { accepted: true, freeTierTermsAcknowledged: true })
     expect(() => engine.authorizePayload('run-a', bundle, { text: 'hello Ada Lovelace' })).toThrow(/identifier/i)
     expect(engine.authorizePayload('run-a', bundle, { text: bundle.outgoing.job.description })).toEqual({ text: bundle.outgoing.job.description })
-    expect(engine.authorizeWorkflowIntermediate('run-a', bundle, { scopeHash: bundle.scopeHash, value: { analysis: 'new workflow-derived text' } })).toEqual({ analysis: 'new workflow-derived text' })
+    // A matching scope hash alone cannot prove that new text came from the workflow.
+    expect(() => engine.authorizePayload('run-a', bundle, { analysis: 'forged workflow-derived text', scopeHash: bundle.scopeHash })).toThrow(/scope|authorized/i)
     expect(() => engine.authorizePayload('run-a', bundle, { text: 'new secret acquisition strategy' })).toThrow(/scope|derived|authorized/i)
     expect(() => engine.authorizePayload('run-a', bundle, { text: 'Added a new sensitive fact: my medical leave' })).toThrow(/scope|derived|authorized/i)
     expect(() => engine.authorizePayload('run-a', bundle, { text: 'added contact ada.private@example.test' })).toThrow(/identifier|scope/i)
