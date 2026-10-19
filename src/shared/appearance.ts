@@ -3,6 +3,7 @@ import type { ContactInput, EvidenceRevision, ProfileEntryInput, ProfileMutation
 import type { ExperienceInput, ExperienceMutationResult, ExperienceSnapshot, ProjectInput } from './experience'
 import { geminiSettingsSchema, geminiModelSchema, type GeminiModel } from './gemini-settings'
 import type { JobInput, JobRecord, JobSaveResult } from './jobs'
+import type { ProfileExchangeResult } from './profile-exchange'
 
 export const appearanceSchema = z.enum(['light', 'dark'])
 export type Appearance = z.infer<typeof appearanceSchema>
@@ -18,6 +19,9 @@ export interface WorkbenchAPI {
   saveGeminiApiKey(value: string): Promise<Settings>
   removeGeminiApiKey(): Promise<Settings>
   getProfile(): Promise<ProfileSnapshot>
+  exportProfile(): Promise<{ ok: boolean; cancelled: boolean; message: string }>
+  previewProfileImport(): Promise<ProfileExchangeResult>
+  applyProfileImport(token: string): Promise<{ ok: boolean; message: string; profile?: ProfileSnapshot }>
   saveContact(input: ContactInput & { id?: string }): Promise<ProfileMutationResult>
   deleteContact(id: string): Promise<ProfileMutationResult>
   saveSkill(input: SkillInput & { id?: string }): Promise<ProfileMutationResult>
@@ -33,4 +37,9 @@ export interface WorkbenchAPI {
   saveJob(input: JobInput & { id?: string }): Promise<JobSaveResult>
   listJobs(): Promise<JobRecord[]>
   openJob(id: string): Promise<JobRecord | null>
+}
+
+export type WorkbenchStorageAPI = Omit<WorkbenchAPI, 'exportProfile' | 'previewProfileImport' | 'applyProfileImport'> & {
+  validateProfileImport(input: string): Promise<{ ok: boolean; message: string }>
+  replaceProfile(input: string): Promise<{ ok: boolean; message: string; profile?: ProfileSnapshot }>
 }
