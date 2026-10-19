@@ -20,6 +20,10 @@ test('profile contact and categorized skills can be created, edited, and deleted
     await expect(page.getByRole('heading', { name: 'My profile' })).toBeVisible()
     const sections = page.getByRole('navigation', { name: 'Profile sections' })
     await expect(sections.getByRole('button')).toHaveCount(9)
+    await page.setViewportSize({ width: 1600, height: 900 })
+    const profileWidth = await page.locator('.profile-layout').evaluate(element => element.getBoundingClientRect().width)
+    const workspaceWidth = await page.locator('.workspace-main').evaluate(element => element.getBoundingClientRect().width)
+    expect(Math.abs(profileWidth - workspaceWidth)).toBeLessThan(2)
     for (const [width, columns] of [[1600, 9], [1280, 9], [1180, 3], [900, 3], [680, 3], [375, 3]]) {
       await page.setViewportSize({ width, height: 700 })
       const layout = await sections.evaluate(nav => {
