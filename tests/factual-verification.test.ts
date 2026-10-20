@@ -37,8 +37,9 @@ test.each([
   expect(await wb.api.getDraft(job.value.id)).toMatchObject({ id: result.draft!.id, revision: result.draft!.revision, status: 'blocked', evidence: [{ evidenceId: role.value.experience[0].id, revision: 1 }], checkReport: { draftId: result.draft!.id, draftRevision: result.draft!.revision, evidenceRevisionHash: expect.any(String) } })
   expect(await wb.api.checkDraft(job.value.id)).toMatchObject({ passed: false, findings: [{ code: expectedCode, itemPath: 'generation' }] })
   const authored = await wb.api.addDraftItem({ jobId: job.value.id, section: 'experience', text: 'Built reliable services.', citation: { evidenceId: role.value.experience[0].id, revision: 1 } })
-  expect(authored).toMatchObject({ revision: result.draft!.revision + 1, status: 'unverified', content: { experience: [{ text: 'Built reliable services.', citations: [{ evidenceId: role.value.experience[0].id, revision: 1 }] }] }, checkReport: { passed: true, findings: [] } })
-  expect(await wb.api.checkDraft(job.value.id)).toMatchObject({ passed: true, findings: [] })
+  const preservedFailure = expectedCode === 'foreign-citation' ? 'foreign-citation' : 'schema'
+  expect(authored).toMatchObject({ revision: result.draft!.revision + 1, status: 'blocked', checkReport: { passed: false, findings: [{ code: preservedFailure, itemPath: 'generation' }] } })
+  expect(await wb.api.checkDraft(job.value.id)).toMatchObject({ passed: false, findings: [{ code: preservedFailure, itemPath: 'generation' }] })
   expect(await wb.api.addDraftItem({ jobId: job.value.id, section: 'projects', text: 'Borrowed.', citation: { evidenceId: role.value.experience[0].id, revision: 1 } })).toBeNull()
   expect(await wb.api.addDraftItem({ jobId: job.value.id, section: 'experience', text: 'Stale.', citation: { evidenceId: role.value.experience[0].id, revision: 9 } })).toBeNull()
 })
@@ -52,7 +53,7 @@ test('public API saves revision-bound factual check reports and rejects unsuppor
     if (prompt.includes('Extract only explicit qualifications')) return JSON.stringify({ required: [], preferred: [], tools: [], responsibilities: [], keywords: [] })
     if (prompt.startsWith('Score these numbered')) { const { items } = JSON.parse(prompt.slice(prompt.indexOf('{'))); return JSON.stringify({ relevance: items.map((item: { index: number }) => ({ index: item.index, score: 0.9, rationale: 'Relevant.' })) }) }
     const { selected } = JSON.parse(prompt.slice(prompt.indexOf('{')))
-    const experience = selected.filter((item: { category: string }) => item.category === 'experience').map((item: { index: number }) => ({ text: 'Reduced latency by 500 percent.', evidence: [item.index], rationale: 'Relevant result.' }))
+    const experience = selected.filter((item: { category: string }) => item.category === 'experience').map((item: { index: number }) => ({ text: 'Reduced latency by over 12 percent.', evidence: [item.index], rationale: 'Relevant result.' }))
     const projects = selected.filter((item: { category: string }) => item.category === 'projects').map((item: { index: number; text: string }) => ({ text: item.text, evidence: [item.index], rationale: 'Separate project evidence.' }))
     return JSON.stringify({ education: [], experience, projects, skills: [], certificates: [] })
   } }

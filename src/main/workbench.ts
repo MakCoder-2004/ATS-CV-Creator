@@ -54,6 +54,11 @@ function reconcileNestedItems(items: NestedInput[], previous: NestedRecord[], ow
 }
 
 /** One workspace per userData directory. Opening a workspace applies forward-only migrations. */
+function preserveGenerationFinding(checked: ReturnType<typeof checkDraftFacts>, prior: DraftRevision) {
+  const known = prior.checkReport?.findings.filter(finding => finding.itemPath === 'generation') ?? []
+  return factualCheckReportSchema.parse({ ...checked, passed: checked.passed && known.length === 0, findings: [...known, ...checked.findings] })
+}
+
 export function createWorkbench(userData: string, secureStorage: SecureStorage = unavailableSecureStorage, scriptedTransport?: AnalysisTransport): { api: WorkbenchStorageAPI; authorizeOutboundPayload<T>(runId: string, payload: T): T; close(): void } {
   mkdirSync(userData, { recursive: true })
   const db = new Database(join(userData, 'workbench.sqlite'))
@@ -628,10 +633,8 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       if (!target) return null
       const updatedContent = { ...prior.content, [parsed.data.section]: section.map((item, index) => index !== parsed.data.index ? item : 'text' in item ? { ...item, text: parsed.data.text } : { ...item, name: parsed.data.text }) }
       const next = draftRevisionSchema.parse({ ...prior, id: randomUUID(), revision: prior.revision + 1, status: 'unverified', checkReport: undefined, content: updatedContent, progress: 'Draft wording corrected locally. Recheck before human review.' })
-      const checkedReport = checkDraftFacts(next)
-      const known = prior.checkReport?.findings.filter(finding => finding.itemPath === 'generation') ?? []
-      const report = factualCheckReportSchema.parse({ ...checkedReport, passed: checkedReport.passed && known.length === 0, findings: [...known, ...checkedReport.findings] })
-      const checked = draftRevisionSchema.parse({ ...next, status: report.passed ? 'unverified' : 'blocked', checkReport: report, progress: report.passed ? 'Correction passes deterministic checks; semantic truth still requires human review.' : `Blocked by ${report.findings.length} factual finding(s). Use the correction guidance below.` })
+      const report = preserveGenerationFinding(checkDraftFacts(next), prior)
+      const checked = draftRevisionSchema.parse({ ...next, status: report.passed ? 'unverified' : 'blocked', checkReport: report, progress: report.findings.some(finding => finding.itemPath === 'generation') ? 'Correction saved, but the known generation failure remains unresolved. Only a new authorized generation that passes validation can resolve it.' : report.passed ? 'Correction passes deterministic checks; semantic truth still requires human review.' : `Blocked by ${report.findings.length} factual finding(s). Use the correction guidance below.` })
       db.prepare('INSERT INTO draft_revisions (id,job_id,revision,data) VALUES (?,?,?,?)').run(checked.id, checked.jobId, checked.revision, JSON.stringify(checked))
       return checked
     },
@@ -650,8 +653,8 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       const draftItem = parsed.data.section === 'skills' ? { name: parsed.data.text, citations: [parsed.data.citation], rationale: 'Locally authored correction from selected saved evidence.' } : { text: parsed.data.text, citations: [parsed.data.citation], rationale: 'Locally authored correction from selected saved evidence.' }
       items.push(draftItem as never)
       const next = draftRevisionSchema.parse({ ...prior, id: randomUUID(), revision: prior.revision + 1, status: 'blocked', checkReport: undefined, content: { ...prior.content, [parsed.data.section]: items }, progress: 'The invalid provider response was discarded and replaced by locally authored, cited content. Automated checks do not replace human review.' })
-      const report = checkDraftFacts(next)
-      const saved = draftRevisionSchema.parse({ ...next, status: report.passed ? 'unverified' : 'blocked', checkReport: report })
+      const report = preserveGenerationFinding(checkDraftFacts(next), prior)
+      const saved = draftRevisionSchema.parse({ ...next, status: report.passed ? 'unverified' : 'blocked', checkReport: report, progress: report.findings.some(finding => finding.itemPath === 'generation') ? 'Locally authored wording was added, but the known generation failure remains unresolved. Only a new authorized generation that passes validation can resolve it.' : next.progress })
       db.prepare('INSERT INTO draft_revisions (id,job_id,revision,data) VALUES (?,?,?,?)').run(saved.id, saved.jobId, saved.revision, JSON.stringify(saved))
       return saved
     },
@@ -660,9 +663,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       const row = db.prepare('SELECT data FROM draft_revisions WHERE job_id = ? ORDER BY revision DESC LIMIT 1').get(jobId) as { data: string } | undefined
       if (!row) return null
       const draft = draftRevisionSchema.parse(JSON.parse(row.data))
-      const checked = checkDraftFacts(draft)
-      const known = draft.checkReport?.findings.filter(finding => finding.itemPath === 'generation') ?? []
-      const report = factualCheckReportSchema.parse({ ...checked, passed: checked.passed && known.length === 0, findings: [...known, ...checked.findings] })
+      const report = preserveGenerationFinding(checkDraftFacts(draft), draft)
       const updated = draftRevisionSchema.parse({ ...draft, status: report.passed ? 'unverified' : 'blocked', checkReport: report, progress: report.passed ? 'Deterministic factual checks passed; citations do not establish semantic truth. Human review remains required.' : `Blocked by ${report.findings.length} deterministic factual finding(s). Correct the draft and check again.` })
       db.prepare('UPDATE draft_revisions SET data = ? WHERE id = ?').run(JSON.stringify(updated), draft.id)
       return report

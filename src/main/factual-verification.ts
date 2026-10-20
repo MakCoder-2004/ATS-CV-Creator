@@ -11,7 +11,9 @@ function strings(value: unknown): string[] {
 }
 // Compare the complete numeric expression (value, currency/unit, and nearby qualifier), not a value elsewhere.
 function numericExpressions(text: string): string[] {
-  const pattern = /(?:[$€£]\s*)?\b\d+(?:[,.]\d+)*(?:\s*(?:%|percent|percentage|USD|EUR|GBP|dollars?|euros?|pounds?|k|m|million|billion|hours?|days?|weeks?|months?|years?|users?|customers?|projects?|teams?))?\b/giu
+  const qualifier = '(?:(?:more\\s+than|less\\s+than|at\\s+least|up\\s+to|over|under|above|below|about|around|approximately|approx\\.?|nearly|almost|roughly)\\s+)?'
+  const unit = '(?:%|percent(?:age)?|USD|EUR|GBP|CAD|AUD|dollars?|euros?|pounds?|yen|CNY|INR|currency|k|m|million|billion|thousand|hours?|days?|weeks?|months?|years?|users?|customers?|projects?|teams?|employees?|requests?|records?|items?|bytes?|MB|GB|TB|ms|seconds?|minutes?)'
+  const pattern = new RegExp(`(?:[$€£]\\s*)?${qualifier}\\b\\d+(?:[,.]\\d+)*(?:\\s*(?:%|${unit.slice(3, -1)}\\b))?`, 'giu')
   return [...text.matchAll(pattern)].map(match => normalized(match[0]))
 }
 
@@ -22,6 +24,10 @@ export function checkDraftFacts(draft: DraftRevision) {
   const evidence = new Map(draft.evidence.map(item => [item.evidenceId, item]))
   const parents = new Map<string, string>()
   for (const parent of [...draft.lockedFields.experience, ...draft.lockedFields.projects]) for (const sourceId of parent.sourceIds ?? [parent.evidenceId]) parents.set(sourceId, parent.evidenceId)
+  const expectedParents: Record<string, Array<{ evidenceId: string; sourceIds?: string[] }>> = { experience: draft.lockedFields.experience, projects: draft.lockedFields.projects }
+  const owners = new Map<string, string>()
+  for (const section of ['experience', 'projects', 'education', 'certificates'] as const) for (const parent of draft.lockedFields[section]) for (const id of ('sourceIds' in parent ? parent.sourceIds : undefined) ?? [parent.evidenceId]) owners.set(id, section)
+  for (const item of draft.evidence) if (!owners.has(item.evidenceId) && item.snapshot && typeof item.snapshot === 'object' && 'category' in item.snapshot && 'name' in item.snapshot) owners.set(item.evidenceId, 'skills')
   const sections = Object.entries(draft.content) as Array<[string, Array<{ citations: Array<{ evidenceId: string; revision: number }>; text?: string; name?: string }>]>
   for (const [section, items] of sections) items.forEach((item, index) => {
     const itemPath = `${section}[${index}]`
@@ -31,8 +37,11 @@ export function checkDraftFacts(draft: DraftRevision) {
       if (!source) { findings.push({ code: 'foreign-citation', itemPath, evidenceId: citation.evidenceId, message: 'Citation is outside this draft’s frozen evidence revisions.', correction: 'Choose evidence from this draft’s saved evidence snapshot.' }); continue }
       if (source.revision !== citation.revision) findings.push({ code: 'invalid-citation', itemPath, evidenceId: citation.evidenceId, message: 'Citation revision does not match the saved evidence revision.', correction: `Use the saved evidence revision r${source.revision} or regenerate from current evidence.` })
     }
+    const expectedCategory = section
+    const wrongType = cited.some(({ citation, source }) => source && owners.get(citation.evidenceId) !== expectedCategory)
     const associatedParents = new Set(cited.map(({ citation }) => parents.get(citation.evidenceId)).filter(Boolean))
-    if (associatedParents.size > 1) findings.push({ code: 'wrong-parent', itemPath, message: 'Citations combine evidence belonging to different experience or project records.', correction: 'Keep each paragraph tied to one parent record.' })
+    const parentMismatch = expectedParents[section]?.length && cited.some(({ citation }) => !expectedParents[section].some(parent => (parent.sourceIds ?? [parent.evidenceId]).includes(citation.evidenceId)))
+    if (wrongType || parentMismatch || associatedParents.size > 1) findings.push({ code: 'wrong-parent', itemPath, message: 'Citation type or parent does not match this draft section and its frozen evidence ownership.', correction: 'Cite evidence of the correct section type from the matching saved parent record.' })
     const text = item.text ?? item.name ?? ''
     const citedText = cited.flatMap(({ source }) => source ? strings(source.snapshot) : []).join(' ')
     if (section === 'skills' && normalized(text) && !normalized(citedText).includes(normalized(text))) findings.push({ code: 'unsupported-skill', itemPath, message: `Skill “${text}” is not named in its cited evidence; equivalent wording needs explicit evidence support.`, correction: 'Use the saved skill name or add genuine supporting profile evidence.' })
