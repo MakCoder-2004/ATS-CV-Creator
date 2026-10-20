@@ -43,6 +43,28 @@ async function measure(workspace: ReturnType<typeof createWorkbench>, jobId: str
   return workspace.api.saveDocumentFitReport(jobId, { documentHash, targetPages: canonical.targetPages, actualPages: overflow ? canonical.targetPages + 1 : canonical.targetPages, extractedText: ['CV'], linkTargets: [], overflow, proposedCuts: overflow ? [{ entryId: 'skills-0', label: 'TypeScript', section: 'Skills' }] : [], measuredAt: new Date().toISOString() })
 }
 
+test('public export guard rejects unapproved, overflowing, and source-stale canonical documents', async () => {
+  const { workspace, jobId } = await fixture()
+  expect(await workspace.api.assertDraftExportable(jobId)).toMatchObject({ ok: false, message: expect.stringMatching(/approve/i) })
+  await workspace.api.checkDraft(jobId)
+  await measure(workspace, jobId)
+  expect(await workspace.api.approveDraft(jobId)).toMatchObject({ ok: true })
+  expect(await workspace.api.assertDraftExportable(jobId)).toMatchObject({ ok: true, document: expect.any(Object) })
+
+  const canonical = await workspace.api.getCanonicalDocument(jobId)
+  if (!canonical) throw new Error('Expected current canonical document')
+  const hash = createHash('sha256').update(JSON.stringify(canonical)).digest('hex')
+  await workspace.api.saveDocumentFitReport(jobId, { documentHash: hash, targetPages: canonical.targetPages, actualPages: canonical.targetPages + 1, extractedText: ['CV'], linkTargets: [], overflow: true, proposedCuts: [{ entryId: 'skills-0', label: 'TypeScript', section: 'Skills' }], measuredAt: new Date().toISOString() })
+  expect(await workspace.api.assertDraftExportable(jobId)).toMatchObject({ ok: false })
+
+  const other = await fixture()
+  await other.workspace.api.checkDraft(other.jobId)
+  await measure(other.workspace, other.jobId)
+  await other.workspace.api.approveDraft(other.jobId)
+  await other.workspace.api.saveSkill({ id: other.skillId, name: 'Changed source', category: 'Programming' })
+  expect(await other.workspace.api.assertDraftExportable(other.jobId)).toMatchObject({ ok: false, message: expect.stringMatching(/stale|current checks/i) })
+})
+
 test('new factual wording requires an explicitly saved cited source and keeps semantic novelty user-declared', async () => {
   const { workspace, jobId, skillId } = await fixture()
   const draft = await workspace.api.getDraft(jobId)

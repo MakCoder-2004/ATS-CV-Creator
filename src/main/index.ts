@@ -1,10 +1,12 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain, safeStorage, shell } from 'electron'
 import type { ZodError } from 'zod'
 import { fileURLToPath } from 'node:url'
-import { mkdirSync } from 'node:fs'
+import { existsSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { renderDocumentHtml } from '../shared/document'
+import { containsPdfTextInOrder, pdfFilename, writePdfAtomically } from '../shared/export'
+import { z } from 'zod'
 import { createWorkbench } from './workbench'
 import type { AnalysisTransport } from './posting-analysis'
 import { appearanceSchema } from '../shared/appearance'
@@ -255,6 +257,53 @@ app.whenReady().then(() => {
       const report = await workspace!.api.saveDocumentFitReport(jobId, { documentHash: createHash('sha256').update(JSON.stringify(document)).digest('hex'), targetPages: document.targetPages, actualPages, extractedText, linkTargets: [...linkTargets], overflow: actualPages > document.targetPages, proposedCuts: actualPages > document.targetPages ? entries.slice(1).reverse() : [], measuredAt: new Date().toISOString() })
       return report
     } finally { pdfWindow.destroy() }
+  })
+  ipcMain.handle('document:export-pdf', async (event, ...args: unknown[]) => {
+    trusted(event)
+    if (args.length !== 1) throw new Error('Expected job ID')
+    const jobId = analysisIdSchema.parse(args[0])
+    const guarded = await workspace!.api.assertDraftExportable(jobId)
+    if (!guarded.ok || !guarded.document) return { ok: false, cancelled: false, message: guarded.message }
+    const canonical = guarded.document, job = await workspace!.api.openJob(jobId)
+    if (!job) return { ok: false, cancelled: false, message: 'The saved job is no longer available.' }
+    const destination = await dialog.showSaveDialog(window!, { title: 'Export approved CV as PDF', defaultPath: pdfFilename(canonical.identity.name, job.company, job.title), filters: [{ name: 'PDF document', extensions: ['pdf'] }] })
+    if (destination.canceled || !destination.filePath) return { ok: false, cancelled: true, message: 'PDF export cancelled.' }
+    let overwriteApproved = false
+    try {
+      if (existsSync(destination.filePath)) {
+        const overwrite = await dialog.showMessageBox(window!, { type: 'warning', buttons: ['Cancel', 'Replace file'], defaultId: 0, cancelId: 0, title: 'Replace existing PDF?', message: 'A file already exists at this location.', detail: 'Replace it only after the new PDF has rendered and passed local checks.' })
+        if (overwrite.response !== 1) return { ok: false, cancelled: true, message: 'PDF export cancelled; the existing file was kept.' }
+        overwriteApproved = true
+      }
+      const pdfWindow = new BrowserWindow({ show: false, webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true } })
+      let pdf: Buffer
+      try {
+        await pdfWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(renderDocumentHtml(canonical))}`)
+        await pdfWindow.webContents.executeJavaScript('document.fonts.ready')
+        pdf = await pdfWindow.webContents.printToPDF({ pageSize: 'A4', printBackground: true, preferCSSPageSize: true, margins: { top: 0, bottom: 0, left: 0, right: 0 } })
+      } finally { pdfWindow.destroy() }
+      const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs')
+      const loadingTask = pdfjs.getDocument({ data: new Uint8Array(pdf), useSystemFonts: true })
+      const parsed = await loadingTask.promise
+      const extracted: string[] = [], links = new Set<string>()
+      for (let pageNo = 1; pageNo <= parsed.numPages; pageNo++) {
+        const page = await parsed.getPage(pageNo)
+        extracted.push(...(await page.getTextContent()).items.flatMap(item => 'str' in item && item.str.trim() ? [item.str.trim()] : []))
+        for (const annotation of await page.getAnnotations({ intent: 'display' })) if (annotation.subtype === 'Link' && annotation.url) links.add(annotation.url)
+      }
+      await loadingTask.destroy()
+      if (!parsed.numPages || parsed.numPages > canonical.targetPages || !extracted.length) throw new Error('The rendered PDF failed selectable-text or page-target checks.')
+      const requiredText = [canonical.identity.name, ...(canonical.identity.headline ? [canonical.identity.headline] : []), ...canonical.identity.contact, ...canonical.identity.links.map(link => link.label), ...canonical.sections.flatMap(section => [section.name, ...section.entries.flatMap(entry => [entry.heading, ...(entry.dates ? [entry.dates] : []), ...(entry.organization ? [entry.organization] : []), entry.text, ...entry.links.map(link => link.label)])])]
+      if (!containsPdfTextInOrder(extracted, requiredText)) throw new Error('The rendered PDF content or reading order did not match the approved CV.')
+      const requiredLinks = [...canonical.identity.links, ...canonical.sections.flatMap(section => section.entries.flatMap(entry => entry.links))].map(link => link.url)
+      if (requiredLinks.some(url => !links.has(url))) throw new Error('A PDF hyperlink target did not survive local validation.')
+      const latest = await workspace!.api.assertDraftExportable(jobId)
+      if (!latest.ok || !latest.document || JSON.stringify(latest.document) !== JSON.stringify(canonical)) throw new Error('The approved CV changed during export. No file was written.')
+      writePdfAtomically(destination.filePath, pdf, overwriteApproved)
+      return { ok: true, cancelled: false, message: 'Approved PDF saved and checked locally.' }
+    } catch (error) {
+      return { ok: false, cancelled: false, message: error instanceof Error ? error.message : 'PDF export failed; no success was reported.' }
+    }
   })
   ipcMain.handle('document:fit:get', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected job ID'); return workspace!.api.getDocumentFitReport(analysisIdSchema.parse(args[0])) })
   ipcMain.handle('document:cuts:accept', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 3 || typeof args[1] !== 'string' || !Array.isArray(args[2]) || !args[2].every(id => typeof id === 'string')) throw new Error('Expected job ID, document hash and accepted cut IDs'); return workspace!.api.acceptDocumentCuts(analysisIdSchema.parse(args[0]), args[1], args[2]) })
