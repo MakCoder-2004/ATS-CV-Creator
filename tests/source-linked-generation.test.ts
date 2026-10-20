@@ -73,6 +73,7 @@ test('accepted frozen consent generates a batched source-linked draft that reope
   expect(secondDraft).toMatchObject({ ok: true, draft: { jobId: secondJob.value.id, pageTarget: 2, progress: expect.stringContaining('2-page target') } })
   expect(secondDraft.draft!.content.skills.length).toBeGreaterThan(generated.draft!.content.skills.length)
   expect((await wb.api.getDraft(job.value.id))?.id).toBe(originalDraft.id)
+  expect(await wb.api.approveDraft(job.value.id)).toMatchObject({ ok: false })
   const thirdJob = await wb.api.saveJob({ title: 'Platform Specialist', company: 'Another Company', description: 'Platform development with TypeScript.' })
   if (!thirdJob.ok) throw Error('third job fixture')
   const thirdConsent = await wb.api.prepareOutboundConsent(thirdJob.value.id)
@@ -100,6 +101,8 @@ test('accepted frozen consent generates a batched source-linked draft that reope
   expect(changedRole.ok).toBe(true)
   const requestCountBeforeStaleGeneration = requests.length
   expect(await wb.api.generateDraft(staleConsent.token)).toMatchObject({ ok: false, message: expect.stringMatching(/changed|scope|review/i) })
+  expect((await wb.api.checkDraft(staleJob.value.id))?.findings).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'stale-source' })]))
+  expect(await wb.api.assertDraftExportable(staleJob.value.id)).toMatchObject({ ok: false })
   expect(requests).toHaveLength(requestCountBeforeStaleGeneration)
 
   wb.close(); opened.pop()

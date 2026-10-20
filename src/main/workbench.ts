@@ -632,7 +632,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       const target = section[parsed.data.index]
       if (!target) return null
       const updatedContent = { ...prior.content, [parsed.data.section]: section.map((item, index) => index !== parsed.data.index ? item : 'text' in item ? { ...item, text: parsed.data.text } : { ...item, name: parsed.data.text }) }
-      const next = draftRevisionSchema.parse({ ...prior, id: randomUUID(), revision: prior.revision + 1, status: 'unverified', checkReport: undefined, content: updatedContent, progress: 'Draft wording corrected locally. Recheck before human review.' })
+      const next = draftRevisionSchema.parse({ ...prior, id: randomUUID(), revision: prior.revision + 1, status: 'unverified', approved: false, approval: undefined, checkReport: undefined, content: updatedContent, progress: 'Draft wording corrected locally. Recheck before human review.' })
       const report = preserveGenerationFinding(checkDraftFacts(next), prior)
       const checked = draftRevisionSchema.parse({ ...next, status: report.passed ? 'unverified' : 'blocked', checkReport: report, progress: report.findings.some(finding => finding.itemPath === 'generation') ? 'Correction saved, but the known generation failure remains unresolved. Only a new authorized generation that passes validation can resolve it.' : report.passed ? 'Correction passes deterministic checks; semantic truth still requires human review.' : `Blocked by ${report.findings.length} factual finding(s). Use the correction guidance below.` })
       db.prepare('INSERT INTO draft_revisions (id,job_id,revision,data) VALUES (?,?,?,?)').run(checked.id, checked.jobId, checked.revision, JSON.stringify(checked))
@@ -643,16 +643,16 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       if (!parsed.success) return null
       const prior = await this.getDraft(parsed.data.jobId)
       if (!prior) return null
-      const selected = prior.evidence.find(item => item.evidenceId === parsed.data.citation.evidenceId && item.revision === parsed.data.citation.revision)
-      if (!selected) return null
-      const current = prepareDraftInputs(readProfile(), readExperience()).items.find(item => item.id === selected.evidenceId)
-      if (!current || current.revision !== selected.revision || current.category !== parsed.data.section) return null
+      const current = prepareDraftInputs(readProfile(), readExperience()).items.find(item => item.id === parsed.data.citation.evidenceId)
+      if (!current || current.revision !== parsed.data.citation.revision || current.category !== parsed.data.section) return null
+      const selected = prior.evidence.find(item => item.evidenceId === current.id)
       const parent = parsed.data.section === 'experience' ? prior.lockedFields.experience.find(item => item.sourceIds?.includes(current.id)) : parsed.data.section === 'projects' ? prior.lockedFields.projects.find(item => item.sourceIds?.includes(current.id)) : undefined
       if ((parsed.data.section === 'experience' || parsed.data.section === 'projects') && !parent) return null
       const items = [...prior.content[parsed.data.section]]
       const draftItem = parsed.data.section === 'skills' ? { name: parsed.data.text, citations: [parsed.data.citation], rationale: 'Locally authored correction from selected saved evidence.' } : { text: parsed.data.text, citations: [parsed.data.citation], rationale: 'Locally authored correction from selected saved evidence.' }
       items.push(draftItem as never)
-      const next = draftRevisionSchema.parse({ ...prior, id: randomUUID(), revision: prior.revision + 1, status: 'blocked', checkReport: undefined, content: { ...prior.content, [parsed.data.section]: items }, progress: 'The invalid provider response was discarded and replaced by locally authored, cited content. Automated checks do not replace human review.' })
+      const evidence = selected ? prior.evidence : [...prior.evidence, { evidenceId: current.id, revision: current.revision, snapshot: current.snapshot }]
+      const next = draftRevisionSchema.parse({ ...prior, id: randomUUID(), revision: prior.revision + 1, status: 'blocked', approved: false, approval: undefined, checkReport: undefined, evidence, content: { ...prior.content, [parsed.data.section]: items }, progress: 'Locally authored, cited content was saved. Automated checks do not replace human review.' })
       const report = preserveGenerationFinding(checkDraftFacts(next), prior)
       const saved = draftRevisionSchema.parse({ ...next, status: report.passed ? 'unverified' : 'blocked', checkReport: report, progress: report.findings.some(finding => finding.itemPath === 'generation') ? 'Locally authored wording was added, but the known generation failure remains unresolved. Only a new authorized generation that passes validation can resolve it.' : next.progress })
       db.prepare('INSERT INTO draft_revisions (id,job_id,revision,data) VALUES (?,?,?,?)').run(saved.id, saved.jobId, saved.revision, JSON.stringify(saved))
@@ -663,10 +663,39 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       const row = db.prepare('SELECT data FROM draft_revisions WHERE job_id = ? ORDER BY revision DESC LIMIT 1').get(jobId) as { data: string } | undefined
       if (!row) return null
       const draft = draftRevisionSchema.parse(JSON.parse(row.data))
-      const report = preserveGenerationFinding(checkDraftFacts(draft), draft)
-      const updated = draftRevisionSchema.parse({ ...draft, status: report.passed ? 'unverified' : 'blocked', checkReport: report, progress: report.passed ? 'Deterministic factual checks passed; citations do not establish semantic truth. Human review remains required.' : `Blocked by ${report.findings.length} deterministic factual finding(s). Correct the draft and check again.` })
+      let report = preserveGenerationFinding(checkDraftFacts(draft), draft)
+      const currentById = new Map(profileRecords(readProfile(), readExperience()).map(record => [record.id, record.revision]))
+      const citedIds = new Set(Object.values(draft.content).flatMap(items => items.flatMap(item => item.citations.map(citation => citation.evidenceId))))
+      const stale = [...citedIds].filter(id => !draft.evidence.some(e => e.evidenceId === id && currentById.get(id) === e.revision))
+      if (stale.length) report = factualCheckReportSchema.parse({ ...report, passed: false, findings: [...report.findings, ...stale.map(evidenceId => ({ code: 'stale-source' as const, itemPath: 'sources', evidenceId, message: 'A cited profile source changed or was deleted after this draft was created.', correction: 'Review the current source and regenerate or remove the affected wording.' }))] })
+      const updated = draftRevisionSchema.parse({ ...draft, status: report.passed ? 'unverified' : 'blocked', checkReport: report, progress: report.passed ? 'Current factual checks passed; citations do not establish semantic truth. Human review remains required.' : `Blocked by ${report.findings.length} factual or source revision finding(s). Correct the draft and check again.` })
       db.prepare('UPDATE draft_revisions SET data = ? WHERE id = ?').run(JSON.stringify(updated), draft.id)
       return report
+    },
+    async approveDraft(jobId: string) {
+      const draft = await this.getDraft(jobId)
+      if (!draft) return { ok: false, message: 'There is no saved draft to approve.' }
+      const report = draft.checkReport
+      const currentById = new Map(profileRecords(readProfile(), readExperience()).map(record => [record.id, record.revision]))
+      const citedIds = new Set(Object.values(draft.content).flatMap(items => items.flatMap(item => item.citations.map(citation => citation.evidenceId))))
+      const sourcesCurrent = [...citedIds].every(id => draft.evidence.some(e => e.evidenceId === id && currentById.get(id) === e.revision))
+      if (!report?.passed || !sourcesCurrent || draft.status === 'blocked') return { ok: false, message: 'Current factual checks and cited source revisions must pass before approval.' }
+      const canonical = await this.getCanonicalDocument(jobId)
+      const fit = await this.getDocumentFitReport(jobId)
+      if (!canonical || !fit || fit.overflow || fit.actualPages > fit.targetPages) return { ok: false, message: 'Measure the current document and resolve page overflow before approval.' }
+      const contentHash = createHash('sha256').update(JSON.stringify(canonical)).digest('hex')
+      const approval = { contentHash, evidenceHash: report.evidenceRevisionHash, checkHash: createHash('sha256').update(JSON.stringify({ draftId: report.draftId, draftRevision: report.draftRevision, evidenceRevisionHash: report.evidenceRevisionHash, passed: report.passed, findings: report.findings })).digest('hex'), targetPages: canonical.targetPages, approvedAt: new Date().toISOString() }
+      const saved = draftRevisionSchema.parse({ ...draft, approved: true, approval, checkReport: report, progress: 'Whole canonical document approved by the user.' })
+      db.prepare('UPDATE draft_revisions SET data = ? WHERE id = ?').run(JSON.stringify(saved), draft.id)
+      return { ok: true, message: 'Exact measured canonical document approved.', draft: saved }
+    },
+    async assertDraftExportable(jobId: string) {
+      const draft = await this.getDraft(jobId), canonical = await this.getCanonicalDocument(jobId)
+      if (!draft || !canonical || !draft.approved || !draft.approval) return { ok: false, message: 'Approve the current canonical document before export.' }
+      const report = await this.checkDraft(jobId), fit = await this.getDocumentFitReport(jobId)
+      const contentHash = createHash('sha256').update(JSON.stringify(canonical)).digest('hex')
+      if (!report?.passed || !fit || fit.overflow || fit.actualPages > fit.targetPages || draft.approval.contentHash !== contentHash || draft.approval.evidenceHash !== report.evidenceRevisionHash || draft.approval.targetPages !== canonical.targetPages || draft.approval.checkHash !== createHash('sha256').update(JSON.stringify({ draftId: report.draftId, draftRevision: report.draftRevision, evidenceRevisionHash: report.evidenceRevisionHash, passed: report.passed, findings: report.findings })).digest('hex')) return { ok: false, message: 'Approval is stale or current checks/page fit no longer pass. Review and approve the current document again.' }
+      return { ok: true, message: 'Current approved document is eligible for export.', document: canonical }
     },
     async getDraft(jobId: string) {
       if (!uuidSchema.safeParse(jobId).success) return null

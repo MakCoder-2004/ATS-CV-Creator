@@ -52,6 +52,8 @@ export interface WorkbenchAPI {
   generateDraft(consentToken: string, pageTarget?: 1 | 2): Promise<{ ok: boolean; message: string; draft?: DraftRevision }>
   getDraft(jobId: string): Promise<DraftRevision | null>
   checkDraft(jobId: string): Promise<FactualCheckReport | null>
+  approveDraft(jobId: string): Promise<{ ok: boolean; message: string; draft?: DraftRevision }>
+  assertDraftExportable(jobId: string): Promise<{ ok: boolean; message: string; document?: CanonicalDocument }>
   correctDraft(input: DraftCorrectionInput): Promise<DraftRevision | null>
   addDraftItem(input: AddDraftItemInput): Promise<DraftRevision | null>
   getCanonicalDocument(jobId: string): Promise<CanonicalDocument | null>
