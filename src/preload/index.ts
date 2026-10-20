@@ -8,6 +8,7 @@ import { profileExchangeResultSchema } from '../shared/profile-exchange'
 import { outboundConsentActionSchema, outboundConsentPreviewSchema } from '../shared/outbound-consent-contract'
 import { analysisBudgetsSchema, analysisIdSchema, analysisResultSchema, analysisUsageSchema, type AnalysisBudgets, type AnalysisResult } from '../shared/posting-analysis'
 import { draftGenerationSchema, draftRevisionSchema } from '../shared/draft'
+import { canonicalDocumentSchema, documentFitReportSchema } from '../shared/document'
 
 const api: WorkbenchAPI = Object.freeze({
   async getSettings() {
@@ -92,6 +93,10 @@ const api: WorkbenchAPI = Object.freeze({
   async getAnalysis(jobId: string) { const value = await ipcRenderer.invoke('analysis:get', analysisIdSchema.parse(jobId)); return value === null ? null : analysisResultSchema.parse(value) },
   async generateDraft(consentToken: string, pageTarget: 1 | 2 = 1) { if (pageTarget !== 1 && pageTarget !== 2) throw new Error('Choose a one- or two-page target.'); return draftGenerationSchema.parse(await ipcRenderer.invoke('draft:generate', uuidSchema.parse(consentToken), pageTarget)) },
   async getDraft(jobId: string) { const value = await ipcRenderer.invoke('draft:get', analysisIdSchema.parse(jobId)); return value === null ? null : draftRevisionSchema.parse(value) },
+  async getCanonicalDocument(jobId: string) { const value = await ipcRenderer.invoke('document:preview', analysisIdSchema.parse(jobId)); return value === null ? null : canonicalDocumentSchema.parse(value) },
+  async measureDocument(jobId: string) { return documentFitReportSchema.parse(await ipcRenderer.invoke('document:measure', analysisIdSchema.parse(jobId))) },
+  async getDocumentFitReport(jobId: string) { const value = await ipcRenderer.invoke('document:fit:get', analysisIdSchema.parse(jobId)); return value === null ? null : documentFitReportSchema.parse(value) },
+  async acceptDocumentCuts(jobId: string, documentHash: string, entryIds: string[]) { return await ipcRenderer.invoke('document:cuts:accept', analysisIdSchema.parse(jobId), documentHash, entryIds) },
   async cancelAnalysis(jobId: string) { return analysisResultSchema.parse(await ipcRenderer.invoke('analysis:cancel', analysisIdSchema.parse(jobId))) },
   async getAnalysisUsage() { return analysisUsageSchema.parse(await ipcRenderer.invoke('analysis:usage')) },
   async setAnalysisBudgets(value: AnalysisBudgets) { return analysisUsageSchema.parse(await ipcRenderer.invoke('analysis:budgets:set', analysisBudgetsSchema.parse(value))) }

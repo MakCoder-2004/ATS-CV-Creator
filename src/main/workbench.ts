@@ -24,6 +24,7 @@ import { pacificDay } from '../shared/pacific-day'
 import { draftRevisionSchema, type DraftRevision } from '../shared/draft'
 import { runSourceLinkedGraph } from './source-linked-generation'
 import { prepareDraftInputs } from './draft-inputs'
+import { createCanonicalDocument, documentFitReportSchema, type DocumentFitReport } from '../shared/document'
 
 export interface SecureStorage {
   isEncryptionAvailable(): boolean
@@ -70,7 +71,8 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
     CREATE TABLE IF NOT EXISTS posting_analysis_cache (cache_key TEXT PRIMARY KEY, job_id TEXT NOT NULL, run_id TEXT NOT NULL, data TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS analysis_run_state (job_id TEXT PRIMARY KEY, run_id TEXT NOT NULL, data TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS analysis_attempts (id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, attempted_at TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS draft_revisions (id TEXT PRIMARY KEY, job_id TEXT NOT NULL, revision INTEGER NOT NULL, data TEXT NOT NULL, UNIQUE(job_id, revision));`)
+    CREATE TABLE IF NOT EXISTS draft_revisions (id TEXT PRIMARY KEY, job_id TEXT NOT NULL, revision INTEGER NOT NULL, data TEXT NOT NULL, UNIQUE(job_id, revision));
+    CREATE TABLE IF NOT EXISTS document_fit_reports (job_id TEXT PRIMARY KEY, data TEXT NOT NULL);`)
   db.prepare('INSERT OR IGNORE INTO schema_migrations (version) VALUES (1), (2), (4), (5)').run()
 
   const readProfile = (): ProfileSnapshot => {
@@ -580,6 +582,36 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       if (!row) return null
       const stored = JSON.parse(row.data) as Record<string, unknown>
       return draftRevisionSchema.parse({ ...stored, pageTarget: stored.pageTarget ?? 1 })
+    },
+    async getCanonicalDocument(jobId: string) {
+      const draft = await this.getDraft(jobId)
+      if (!draft) return null
+      return createCanonicalDocument(draft, readProfile(), readExperience())
+    },
+    async saveDocumentFitReport(jobId: string, report: DocumentFitReport) {
+      const parsed = documentFitReportSchema.parse(report), canonical = await this.getCanonicalDocument(jobId)
+      if (!canonical || canonical.targetPages !== parsed.targetPages || createHash('sha256').update(JSON.stringify(canonical)).digest('hex') !== parsed.documentHash) throw new Error('Document changed during page measurement; measure the current preview again.')
+      db.prepare('INSERT INTO document_fit_reports (job_id,data) VALUES (?,?) ON CONFLICT(job_id) DO UPDATE SET data=excluded.data').run(jobId, JSON.stringify(parsed))
+      return parsed
+    },
+    async getDocumentFitReport(jobId: string) {
+      const row = db.prepare('SELECT data FROM document_fit_reports WHERE job_id = ?').get(jobId) as { data: string } | undefined
+      if (!row) return null
+      const report = documentFitReportSchema.parse(JSON.parse(row.data)), canonical = await this.getCanonicalDocument(jobId)
+      if (!canonical || canonical.targetPages !== report.targetPages || createHash('sha256').update(JSON.stringify(canonical)).digest('hex') !== report.documentHash) return null
+      return report
+    },
+    async acceptDocumentCuts(jobId: string, documentHash: string, entryIds: string[]) {
+      const report = await this.getDocumentFitReport(jobId), current = await this.getDraft(jobId)
+      if (!report || !report.overflow || report.documentHash !== documentHash || !current) return { ok: false, message: 'Page-fit proposal is stale. Measure the current preview again.' }
+      const selected = new Set(entryIds)
+      if (!selected.size || [...selected].some(id => !report.proposedCuts.some(cut => cut.entryId === id))) return { ok: false, message: 'Choose one or more proposed cuts from the current overflow report.' }
+      const content = { ...current.content }
+      for (const section of ['education', 'experience', 'projects', 'skills', 'certificates'] as const) content[section] = content[section].filter((_, index) => !selected.has(`${section}-${index}`)) as never
+      const revised = draftRevisionSchema.parse({ ...current, id: randomUUID(), revision: current.revision + 1, content, approved: false, status: 'unverified', progress: 'Accepted page-fit cuts. The document is a new unverified revision and must be rechecked and reviewed.', createdAt: new Date().toISOString() })
+      db.prepare('INSERT INTO draft_revisions (id,job_id,revision,data) VALUES (?,?,?,?)').run(revised.id, revised.jobId, revised.revision, JSON.stringify(revised))
+      db.prepare('DELETE FROM document_fit_reports WHERE job_id = ?').run(jobId)
+      return { ok: true, message: 'Accepted cuts saved as a new draft revision; remeasure and review it.', draft: revised }
     },
     async getAnalysis(jobId: string) {
       if (!uuidSchema.safeParse(jobId).success) return null

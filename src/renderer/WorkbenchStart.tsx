@@ -4,6 +4,7 @@ import type { ExperienceSnapshot } from '../shared/experience'
 import type { JobRecord } from '../shared/jobs'
 import type { ProfileSnapshot } from '../shared/profile'
 import type { OutboundConsentPreview } from '../shared/outbound-consent-contract'
+import type { CanonicalDocument, DocumentFitReport } from '../shared/document'
 import { DraftDocument, DraftEvidenceReview } from './DraftReview'
 import './workbench-start.css'
 
@@ -31,6 +32,10 @@ export function WorkbenchStart({ activeJob, jobCount, onNavigate }: { activeJob:
   const [consentBusy, setConsentBusy] = useState(false)
   const [analysis, setAnalysis] = useState<Awaited<ReturnType<typeof window.workbench.getAnalysis>>>(null)
   const [draft, setDraft] = useState<Awaited<ReturnType<typeof window.workbench.getDraft>>>(null)
+  const [canonical, setCanonical] = useState<CanonicalDocument | null>(null)
+  const [fitReport, setFitReport] = useState<DocumentFitReport | null>(null)
+  const [fitBusy, setFitBusy] = useState(false)
+  const [acceptedCuts, setAcceptedCuts] = useState<string[]>([])
   const [draftBusy, setDraftBusy] = useState(false)
   const [draftError, setDraftError] = useState('')
   const [pageTarget, setPageTarget] = useState<1 | 2>(1)
@@ -39,9 +44,9 @@ export function WorkbenchStart({ activeJob, jobCount, onNavigate }: { activeJob:
   const selectedJob = useRef(activeJob?.id)
   selectedJob.current = activeJob?.id
   useEffect(() => {
-    setReview(null); setConsentAccepted(false); setTermsAcknowledged(false); setConsentError(''); setDraft(null); setDraftError(''); setDraftBusy(false)
+    setReview(null); setConsentAccepted(false); setTermsAcknowledged(false); setConsentError(''); setDraft(null); setCanonical(null); setFitReport(null); setAcceptedCuts([]); setDraftError(''); setDraftBusy(false)
     if (activeJob) {
-      void window.workbench.getDraft(activeJob.id).then(setDraft).catch(() => setDraftError('Saved draft could not be opened offline.'))
+      void window.workbench.getDraft(activeJob.id).then(async value => { setDraft(value); if (value) { setCanonical(await window.workbench.getCanonicalDocument(activeJob.id)); setFitReport(await window.workbench.getDocumentFitReport(activeJob.id)) } }).catch(() => setDraftError('Saved draft could not be opened offline.'))
       void window.workbench.getAnalysis(activeJob.id).then(value => { if (value) setAnalysis(value) }).catch(() => {})
     } else { setAnalysis(null) }
     return () => {
@@ -83,13 +88,29 @@ export function WorkbenchStart({ activeJob, jobCount, onNavigate }: { activeJob:
     try {
       const result = await window.workbench.generateDraft(token, pageTarget)
       if (selectedJob.current !== jobId) return
-      if (result.ok && result.draft && result.draft.jobId === jobId) setDraft(result.draft)
+      if (result.ok && result.draft && result.draft.jobId === jobId) { setDraft(result.draft); setCanonical(await window.workbench.getCanonicalDocument(jobId)); setFitReport(null) }
       else if (!result.ok) setDraftError(result.message)
       const latest = await window.workbench.getAnalysis(jobId)
       if (latest && selectedJob.current === jobId) setAnalysis(latest)
       if (selectedJob.current === jobId) setUsage(await window.workbench.getAnalysisUsage())
     } catch (failure) { if (selectedJob.current === jobId) setDraftError(failure instanceof Error ? failure.message : 'Draft generation failed.') }
     finally { if (selectedJob.current === jobId) setDraftBusy(false) }
+  }
+  async function measurePageFit() {
+    if (!activeJob || fitBusy) return
+    setFitBusy(true); setDraftError(''); setAcceptedCuts([])
+    try { const report = await window.workbench.measureDocument(activeJob.id); setFitReport(report) }
+    catch (failure) { setDraftError(failure instanceof Error ? failure.message : 'The real PDF page measurement failed.') }
+    finally { setFitBusy(false) }
+  }
+  async function applyPageCuts() {
+    if (!activeJob || !fitReport || !acceptedCuts.length) return
+    try {
+      const result = await window.workbench.acceptDocumentCuts(activeJob.id, fitReport.documentHash, acceptedCuts)
+      if (!result.ok) { setDraftError(result.message); return }
+      const revised = await window.workbench.getDraft(activeJob.id)
+      setDraft(revised); setCanonical(await window.workbench.getCanonicalDocument(activeJob.id)); setFitReport(null); setAcceptedCuts([])
+    } catch (failure) { setDraftError(failure instanceof Error ? failure.message : 'Accepted cuts could not be applied.') }
   }
   async function cancelOutgoing() {
     const token = pendingToken.current
@@ -157,7 +178,7 @@ export function WorkbenchStart({ activeJob, jobCount, onNavigate }: { activeJob:
       <div className="document-toolbar"><div className="document-toolbar-title"><FileText size={17} aria-hidden="true" /><strong>{draft ? 'Tailored CV draft' : 'Source outline'}</strong><span className="document-stage">{draft ? 'Unverified · not approved' : 'No CV draft yet'}</span></div><span className="document-target">{activeJob ? `Target: ${activeJob.title} · ${activeJob.company}` : 'No job selected'}</span></div>
       <div className="paper-wrap">
         <div className="paper-context"><span>{draft ? 'Tailored draft · local locked fields' : 'Layout reference'}</span><span>Five CV sections</span></div>
-        {draft ? <DraftDocument draft={draft} /> : <>
+        {draft && canonical ? <DraftDocument document={canonical} /> : <>
           <article className="paper" aria-label="White Arial CV source outline, not a generated draft">
             <header className="paper-header"><strong className={profile?.contact ? undefined : 'paper-placeholder'}>{profile?.contact?.fullName ?? 'Your name'}</strong><span className={profile?.contact?.headline ? undefined : 'paper-placeholder'}>{profile?.contact?.headline ?? 'Professional headline'}</span></header>
             <div className="paper-rule" aria-hidden="true" />
@@ -165,6 +186,7 @@ export function WorkbenchStart({ activeJob, jobCount, onNavigate }: { activeJob:
           </article>
           <p className="paper-caption">Original profile facts only. This is not a draft, export preview, or page-fit check.</p>
         </>}
+        {draft && canonical && <section className="page-fit-controls" aria-label="Actual PDF page fit"><p>Preview only · unverified and unapproved. No save or export is available.</p><button type="button" className="secondary-button" disabled={fitBusy} onClick={() => void measurePageFit()}>{fitBusy ? 'Measuring with Electron PDF…' : 'Measure actual A4 page fit'}</button>{fitReport && <div role="status">Electron PDF: {fitReport.actualPages} page{fitReport.actualPages === 1 ? '' : 's'}; target {fitReport.targetPages}. {fitReport.overflow ? 'Overflow requires review; no content was changed.' : 'Fits the selected page target.'}{fitReport.overflow && fitReport.proposedCuts.map(cut => <label key={cut.entryId}><input type="checkbox" checked={acceptedCuts.includes(cut.entryId)} onChange={event => setAcceptedCuts(value => event.target.checked ? [...value, cut.entryId] : value.filter(id => id !== cut.entryId))} />Proposed cut: {cut.section} — {cut.label}</label>)}{fitReport.overflow && <button type="button" className="primary-button" disabled={!acceptedCuts.length} onClick={() => void applyPageCuts()}>Accept selected cuts and create new draft revision</button>}</div>}{draftError && <p className="inspector-error" role="alert">{draftError}</p>}</section>}
       </div>
     </section>
     {draft && <DraftEvidenceReview draft={draft} />}
