@@ -29,6 +29,7 @@ import { factualCheckReportSchema } from '../shared/factual-report'
 import { qualificationCoverage, supportedCoverageTerms } from './qualification-coverage'
 import { createCanonicalDocument, documentFitReportSchema, type DocumentFitReport } from '../shared/document'
 import { SqliteCheckpointSaver } from './sqlite-checkpoint'
+import { generationRecoverySnapshotSchema } from '../shared/generation-recovery'
 
 export interface SecureStorage {
   isEncryptionAvailable(): boolean
@@ -70,11 +71,11 @@ function preserveKnownFindings(checked: ReturnType<typeof checkDraftFacts>, prio
   return factualCheckReportSchema.parse({ ...checked, passed: checked.passed && known.length === 0, findings })
 }
 
-export function createWorkbench(userData: string, secureStorage: SecureStorage = unavailableSecureStorage, scriptedTransport?: AnalysisTransport): { api: WorkbenchStorageAPI; authorizeOutboundPayload<T>(runId: string, payload: T): T; close(): void } {
+export function createWorkbench(userData: string, secureStorage: SecureStorage = unavailableSecureStorage, scriptedTransport?: AnalysisTransport, recoveryHooks?: { beforeGraphCheckpoint?: (metadata: import('@langchain/langgraph').CheckpointMetadata) => void }): { api: WorkbenchStorageAPI; authorizeOutboundPayload<T>(runId: string, payload: T): T; close(): void } {
   mkdirSync(userData, { recursive: true })
   const db = new Database(join(userData, 'workbench.sqlite'))
   db.pragma('journal_mode = WAL')
-  const graphCheckpointer = new SqliteCheckpointSaver(db)
+  const graphCheckpointer = new SqliteCheckpointSaver(db, recoveryHooks?.beforeGraphCheckpoint)
   db.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY);
     CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS encrypted_credentials (key TEXT PRIMARY KEY, ciphertext TEXT NOT NULL);
@@ -90,11 +91,13 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
     CREATE TABLE IF NOT EXISTS posting_analysis_cache (cache_key TEXT PRIMARY KEY, job_id TEXT NOT NULL, run_id TEXT NOT NULL, data TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS analysis_run_state (job_id TEXT PRIMARY KEY, run_id TEXT NOT NULL, data TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS analysis_attempts (id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, attempted_at TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS provider_attempt_outcomes (id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, dispatched_at TEXT NOT NULL, outcome TEXT NOT NULL CHECK(outcome IN ('dispatched','response','error')), settled_at TEXT);
+    CREATE TABLE IF NOT EXISTS provider_attempt_outcomes (id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, dispatched_at TEXT NOT NULL, outcome TEXT NOT NULL CHECK(outcome IN ('dispatched','response','error')), settled_at TEXT, checkpointed_at TEXT);
     CREATE TABLE IF NOT EXISTS generation_recovery (run_id TEXT PRIMARY KEY, job_id TEXT NOT NULL, consent_id TEXT NOT NULL, scope_hash TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('running','paused','cancelled','complete')), snapshot TEXT NOT NULL, updated_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS generation_recovery_extensions (id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, prior_run_limit INTEGER NOT NULL, new_run_limit INTEGER NOT NULL, prior_time_limit_ms INTEGER NOT NULL, new_time_limit_ms INTEGER NOT NULL, recorded_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS draft_revisions (id TEXT PRIMARY KEY, job_id TEXT NOT NULL, revision INTEGER NOT NULL, data TEXT NOT NULL, UNIQUE(job_id, revision));
     CREATE TABLE IF NOT EXISTS document_fit_reports (job_id TEXT PRIMARY KEY, data TEXT NOT NULL);`)
+  const providerOutcomeColumns = db.pragma('table_info(provider_attempt_outcomes)') as Array<{ name: string }>
+  if (!providerOutcomeColumns.some(column => column.name === 'checkpointed_at')) db.exec('ALTER TABLE provider_attempt_outcomes ADD COLUMN checkpointed_at TEXT')
   db.prepare('INSERT OR IGNORE INTO schema_migrations (version) VALUES (1), (2), (4), (5)').run()
 
   const readProfile = (): ProfileSnapshot => {
@@ -210,7 +213,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
     try { key = readStoredOpenRouterKey() }
     catch { throw Object.assign(new Error('OpenRouter API key is unavailable.'), { status: 401 }) }
     return createOpenRouterAnalysisTransport(key).generate(input)
-  } }, onAttempt: (timestamp, runId) => { previousAttempts.push(timestamp); const dispatchedAt = new Date(timestamp).toISOString(); db.prepare('INSERT INTO analysis_attempts (run_id, attempted_at) VALUES (?, ?)').run(runId, dispatchedAt); db.prepare('INSERT INTO provider_attempt_outcomes (run_id, dispatched_at, outcome) VALUES (?, ?, \'dispatched\')').run(runId, dispatchedAt) }, onAttemptComplete: (runId, succeeded) => { db.prepare(`UPDATE provider_attempt_outcomes SET outcome=?, settled_at=? WHERE id=(SELECT id FROM provider_attempt_outcomes WHERE run_id=? AND outcome='dispatched' ORDER BY id DESC LIMIT 1)`).run(succeeded ? 'response' : 'error', new Date().toISOString(), runId) }, onProgress: (runId, jobId, progress, attempts) => { const observed = (db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id = ?').get(runId) as { count: number }).count; saveAnalysisState({ jobId, runId, status: 'running', analysis: null, progress, attempts: observed || attempts, cacheHit: false }) } })
+  } }, onAttempt: (timestamp, runId) => { previousAttempts.push(timestamp); const dispatchedAt = new Date(timestamp).toISOString(); db.prepare('INSERT INTO analysis_attempts (run_id, attempted_at) VALUES (?, ?)').run(runId, dispatchedAt); db.prepare('INSERT INTO provider_attempt_outcomes (run_id, dispatched_at, outcome) VALUES (?, ?, \'dispatched\')').run(runId, dispatchedAt) }, onAttemptComplete: (runId, succeeded) => { if (succeeded) db.prepare(`UPDATE provider_attempt_outcomes SET outcome='response', settled_at=? WHERE id=(SELECT id FROM provider_attempt_outcomes WHERE run_id=? AND outcome='dispatched' AND checkpointed_at IS NULL ORDER BY id DESC LIMIT 1)`).run(new Date().toISOString(), runId) }, onProgress: (runId, jobId, progress, attempts) => { const observed = (db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id = ?').get(runId) as { count: number }).count; saveAnalysisState({ jobId, runId, status: 'running', analysis: null, progress, attempts: observed || attempts, cacheHit: false }) } })
   const currentConsentSource = (jobId: string): ConsentSource | null => {
     const job = db.prepare('SELECT data FROM jobs WHERE id = ?').get(jobId) as { data: string } | undefined
     if (!job) return null
@@ -571,6 +574,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       }
       if (activeAnalysisByJob.get(pending.jobId) === pending.runId) activeAnalysisByJob.delete(pending.jobId)
       db.prepare('INSERT OR REPLACE INTO posting_analysis_cache (cache_key, job_id, run_id, data) VALUES (?, ?, ?, ?)').run(cacheKey, pending.jobId, pending.runId, JSON.stringify(result.analysis))
+      db.prepare('UPDATE provider_attempt_outcomes SET checkpointed_at=? WHERE run_id=? AND checkpointed_at IS NULL').run(new Date().toISOString(), pending.runId)
       const value = analysisResultSchema.parse({ jobId: pending.jobId, runId: pending.runId, status: 'complete', analysis: result.analysis, progress: 'Posting analysis complete.', attempts: result.usage.attempts, cacheHit: false })
       saveAnalysisState(value)
       return value
@@ -581,7 +585,12 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       if (!pending?.consentId) return { ok: false, message: 'Review and authorize this exact outgoing bundle before generation.' }
       const recoveryRow = resumeRunId ? db.prepare('SELECT snapshot, status FROM generation_recovery WHERE run_id=? AND job_id=?').get(resumeRunId, pending.jobId) as { snapshot: string; status: string } | undefined : undefined
       if (resumeRunId && (!recoveryRow || !['running','paused'].includes(recoveryRow.status) || pending.runId !== resumeRunId)) return { ok: false, message: 'This saved run is no longer resumable.' }
-      const frozen = recoveryRow ? JSON.parse(recoveryRow.snapshot) as { analysis: AnalysisResult | null; job: JobRecord; profile: ProfileSnapshot; experience: ExperienceSnapshot; draftInputs: ReturnType<typeof prepareDraftInputs>; safeItems: ReturnType<typeof prepareDraftInputs>['items']; identity: { id: string; jobId: string; revision: number; createdAt: string; lockedFields: ReturnType<typeof prepareDraftInputs>['lockedFields'] }; pageTarget: 1 | 2 } : undefined
+      let frozen: ReturnType<typeof generationRecoverySnapshotSchema.parse> | undefined
+      if (recoveryRow) {
+        try { frozen = generationRecoverySnapshotSchema.parse(JSON.parse(recoveryRow.snapshot)) }
+        catch { return { ok: false, message: 'The saved recovery snapshot is corrupt or incompatible. No requests were sent; cancel this run and inspect the source data.' } }
+        if (frozen.runId !== resumeRunId || frozen.jobId !== pending.jobId || frozen.consentId !== pending.consentId || frozen.scopeHash !== pending.bundle.scopeHash) return { ok: false, message: 'Saved run identity or consent no longer matches this recovery request. No requests were sent.' }
+      }
       const latestScope = resumeRunId ? null : currentConsentSource(pending.jobId)
       if (!resumeRunId && (!latestScope || prepareOutboundBundle(latestScope).scopeHash !== pending.bundle.scopeHash)) return { ok: false, message: 'Your job, profile, or model settings changed after consent. Review the outgoing data again.' }
       const analysis = frozen?.analysis ?? await this.getAnalysis(pending.jobId)
@@ -619,7 +628,10 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       const minimizeRestoredText = (text: string) => minimizedStringPairs.reduce((value, [restored, minimized]) => value.replaceAll(restored, minimized), text)
       activeAnalysisByJob.set(pending.jobId, pending.runId)
       const failedDraftIdentity = frozen?.identity ?? { id: randomUUID(), jobId: pending.jobId, revision: ((db.prepare('SELECT MAX(revision) AS revision FROM draft_revisions WHERE job_id = ?').get(pending.jobId) as { revision: number | null }).revision ?? 0) + 1, createdAt: new Date().toISOString(), lockedFields: draftInputs.lockedFields }
-      if (!resumeRunId) db.prepare('INSERT OR REPLACE INTO generation_recovery (run_id,job_id,consent_id,scope_hash,status,snapshot,updated_at) VALUES (?,?,?,?,?,?,?)').run(pending.runId,pending.jobId,pending.consentId,pending.bundle.scopeHash,'running',JSON.stringify({ analysis, job, profile, experience, draftInputs, safeItems, identity: failedDraftIdentity, pageTarget, source: pending.source, faithfulnessCheck: pending.faithfulnessCheck, budgets: readAnalysisBudgets() }),new Date().toISOString())
+      if (!resumeRunId) {
+        const snapshot = generationRecoverySnapshotSchema.parse({ version: 1, runId: pending.runId, jobId: pending.jobId, consentId: pending.consentId, scopeHash: pending.bundle.scopeHash, analysis, job, profile, experience, draftInputs, safeItems, identity: failedDraftIdentity, pageTarget, source: pending.source, faithfulnessCheck: pending.faithfulnessCheck, budgets: readAnalysisBudgets() })
+        db.prepare('INSERT OR REPLACE INTO generation_recovery (run_id,job_id,consent_id,scope_hash,status,snapshot,updated_at) VALUES (?,?,?,?,?,?,?)').run(pending.runId,pending.jobId,pending.consentId,pending.bundle.scopeHash,'running',JSON.stringify(snapshot),new Date().toISOString())
+      }
       else db.prepare("UPDATE generation_recovery SET status='running',updated_at=? WHERE run_id=?").run(new Date().toISOString(), resumeRunId)
       try {
         const result = await runSourceLinkedGraph({ job: approvedPayload.job, analysis: analysis.analysis, items: safeItems, pageTarget, restoreText: pending.bundle.restoreIdentifiers, checkpointer: graphCheckpointer, threadId: pending.runId, resume: Boolean(resumeRunId), onProgress: progress => { const observed = (db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id = ?').get(pending.runId) as { count: number }).count; saveAnalysisState({ jobId: pending.jobId, runId: pending.runId, status: 'running', analysis: analysis.analysis, progress, attempts: observed, cacheHit: analysis.cacheHit }) }, identity: failedDraftIdentity, call: async (prompt, responseSchema) => {
@@ -734,7 +746,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
         }
         const checkedDraft = draftRevisionSchema.parse({ ...result.draft, status: findings.length ? 'blocked' : 'unverified', checkReport: mergedReport, coverage, attempts: totalAttempts, progress: findings.length ? `Draft saved for its ${result.draft.pageTarget}-page target; blocked by ${findings.length} unresolved finding(s). The optional semantic review is a second opinion, not proof.` : `${result.draft.progress} Automated checks passed; semantic comparison is a second opinion, not proof. Human review remains required.` })
         result.draft = checkedDraft
-        const tx = db.transaction(() => { db.prepare('INSERT INTO draft_revisions (id,job_id,revision,data) VALUES (?,?,?,?)').run(result.draft.id, result.draft.jobId, result.draft.revision, JSON.stringify(result.draft)); db.prepare("UPDATE generation_recovery SET status='complete',updated_at=? WHERE run_id=?").run(new Date().toISOString(), pending.runId) })
+        const tx = db.transaction(() => { db.prepare('INSERT INTO draft_revisions (id,job_id,revision,data) VALUES (?,?,?,?)').run(result.draft.id, result.draft.jobId, result.draft.revision, JSON.stringify(result.draft)); db.prepare('UPDATE provider_attempt_outcomes SET checkpointed_at=? WHERE run_id=? AND checkpointed_at IS NULL').run(new Date().toISOString(), pending.runId); db.prepare("UPDATE generation_recovery SET status='complete',updated_at=? WHERE run_id=?").run(new Date().toISOString(), pending.runId) })
         tx()
         if (activeAnalysisByJob.get(pending.jobId) === pending.runId) activeAnalysisByJob.delete(pending.jobId)
         saveAnalysisState({ jobId: pending.jobId, runId: pending.runId, status: 'complete', analysis: analysis.analysis, progress: result.draft.progress, attempts: analysis.attempts + totalAttempts, cacheHit: analysis.cacheHit })
@@ -906,18 +918,21 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       const row = db.prepare("SELECT run_id,status,snapshot FROM generation_recovery WHERE job_id=? AND status IN ('running','paused') ORDER BY updated_at DESC LIMIT 1").get(jobId) as { run_id: string; status: 'running' | 'paused'; snapshot: string } | undefined
       if (!row) return null
       const attempts = (db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id=?').get(row.run_id) as { count: number }).count
-      const uncertainAttempts = (db.prepare("SELECT COUNT(*) AS count FROM provider_attempt_outcomes WHERE run_id=? AND outcome='dispatched'").get(row.run_id) as { count: number }).count
+      const uncertainAttempts = (db.prepare('SELECT COUNT(*) AS count FROM provider_attempt_outcomes WHERE run_id=? AND checkpointed_at IS NULL').get(row.run_id) as { count: number }).count
       const analysisRow = db.prepare('SELECT data FROM analysis_run_state WHERE job_id=?').get(jobId) as { data: string } | undefined
       const savedProgress = analysisRow ? (JSON.parse(analysisRow.data) as { progress?: string }).progress : undefined
       const budgetNextStep = /budget|time limit|time budget/i.test(savedProgress ?? '') ? ' If you deliberately increase the configured run ceiling in Settings before resuming, the extension is recorded and existing attempt counts are preserved.' : ''
-      const progress = uncertainAttempts ? `${uncertainAttempts} dispatched request outcome(s) are uncertain; the provider may have processed them. Choose whether to retry; it may duplicate a request and spend another attempt.` : `${savedProgress ?? 'Generation stopped before completion.'} Completed work, frozen inputs and consent are saved. No requests will be sent until you choose to resume.${budgetNextStep}`
+      const progress = uncertainAttempts ? `${uncertainAttempts} dispatched request outcome(s) are uncertain; the provider may have processed them. No requests will be sent until you explicitly choose whether to retry; it may duplicate a request and spend another attempt.` : `${savedProgress ?? 'Generation stopped before completion.'} Completed work, frozen inputs and consent are saved. No requests will be sent until you choose to resume.${budgetNextStep}`
       return generationRecoverySchema.parse({ jobId, runId: row.run_id, status: uncertainAttempts ? 'uncertain' : row.status === 'paused' ? 'paused' : 'interrupted', attempts, uncertainAttempts, progress, canResume: true })
     },
     async resumeGeneration(runId: string, choice?: RecoveryChoice) {
       const row = db.prepare("SELECT job_id,consent_id,scope_hash,status,snapshot FROM generation_recovery WHERE run_id=? AND status IN ('running','paused')").get(runId) as { job_id: string; consent_id: string; scope_hash: string; status: string; snapshot: string } | undefined
       if (!row) return { ok: false, message: 'This generation has no recoverable saved checkpoint.' }
-      const frozen = JSON.parse(row.snapshot) as { source: ConsentSource; pageTarget: 1 | 2; faithfulnessCheck: boolean; budgets?: AnalysisBudgets }
-      const uncertain = (db.prepare("SELECT COUNT(*) AS count FROM provider_attempt_outcomes WHERE run_id=? AND outcome='dispatched'").get(runId) as { count: number }).count
+      let frozen: ReturnType<typeof generationRecoverySnapshotSchema.parse>
+      try { frozen = generationRecoverySnapshotSchema.parse(JSON.parse(row.snapshot)) }
+      catch { return { ok: false, message: 'The saved recovery snapshot is corrupt or incompatible. No requests were sent; cancel this run and inspect the source data.' } }
+      if (frozen.runId !== runId || frozen.jobId !== row.job_id || frozen.consentId !== row.consent_id || frozen.scopeHash !== row.scope_hash) return { ok: false, message: 'Saved run identity or consent does not match its recovery record. No requests were sent.' }
+      const uncertain = (db.prepare('SELECT COUNT(*) AS count FROM provider_attempt_outcomes WHERE run_id=? AND checkpointed_at IS NULL').get(runId) as { count: number }).count
       if (uncertain && choice !== 'retry-uncertain') return { ok: false, message: 'A provider request may have completed before interruption. Choose explicitly to retry that uncertain step, or cancel this saved run.' }
       if (!uncertain && choice && choice !== 'resume') return { ok: false, message: 'This run has no uncertain request to retry.' }
       const consent = db.prepare('SELECT id,run_id,scope_hash,created_at,revoked FROM outbound_consents WHERE id=? AND run_id=?').get(row.consent_id, runId) as { id: string; run_id: string; scope_hash: string; created_at: string; revoked: number } | undefined

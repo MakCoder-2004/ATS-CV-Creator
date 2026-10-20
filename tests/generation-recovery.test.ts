@@ -51,7 +51,7 @@ test('public recovery restores frozen consent and resumes a confirmed checkpoint
   const interrupted = await workspace.api.generateDraft(token)
   expect(interrupted.ok).toBe(false)
   const recovery = await workspace.api.getGenerationRecovery(jobId)
-  expect(recovery).toMatchObject({ status: 'paused', attempts: 3, uncertainAttempts: 0, canResume: true })
+  expect(recovery).toMatchObject({ status: 'uncertain', attempts: 3, uncertainAttempts: 1, canResume: true })
   workspace.close(); opened.pop()
 
   workspace = createWorkbench(directory, undefined, capturing); opened.push(workspace)
@@ -61,7 +61,7 @@ test('public recovery restores frozen consent and resumes a confirmed checkpoint
   expect(changedJob.ok).toBe(true)
   const savedBudget = await workspace.api.getAnalysisUsage()
   await workspace.api.setAnalysisBudgets({ ...analysisBudgetValues(savedBudget), runLimit: 4 })
-  const resumed = await workspace.api.resumeGeneration(recovery!.runId)
+  const resumed = await workspace.api.resumeGeneration(recovery!.runId, 'retry-uncertain')
   expect(resumed.ok).toBe(true)
   expect((await workspace.api.getDraft(jobId))?.content.experience).toHaveLength(1)
   expect(prompts.filter(prompt => prompt.startsWith('Score these numbered'))).toHaveLength(1)
@@ -75,6 +75,49 @@ test('public recovery restores frozen consent and resumes a confirmed checkpoint
   extensionDb.close()
 }, 20000)
 
+test('a provider response without its graph checkpoint remains uncertain after restart', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'cv-tailor-response-gap-')); dirs.push(directory)
+  let failBeforeCheckpoint = true
+  const prompts: string[] = []
+  const transport: AnalysisTransport = { async generate(input) { prompts.push(input.prompt); return recoveryTransport().generate(input) } }
+  let workspace = createWorkbench(directory, undefined, transport, { beforeGraphCheckpoint(metadata) {
+    if (metadata.source === 'loop' && failBeforeCheckpoint) { failBeforeCheckpoint = false; throw new Error('simulated process loss after response, before graph checkpoint') }
+  } }); opened.push(workspace)
+  const { jobId, token } = await seed(workspace)
+  expect(await workspace.api.generateDraft(token)).toMatchObject({ ok: false })
+  const recovery = await workspace.api.getGenerationRecovery(jobId)
+  expect(recovery).toMatchObject({ status: 'uncertain', uncertainAttempts: 2 })
+  expect(prompts.filter(prompt => prompt.startsWith('Score these numbered'))).toHaveLength(1)
+  workspace.close(); opened.pop()
+
+  workspace = createWorkbench(directory, undefined, transport); opened.push(workspace)
+  expect((await workspace.api.getGenerationRecovery(jobId))?.status).toBe('uncertain')
+  expect(prompts.filter(prompt => prompt.startsWith('Score these numbered'))).toHaveLength(1)
+  const resumed = await workspace.api.resumeGeneration(recovery!.runId)
+  expect(resumed).toMatchObject({ ok: false, message: expect.stringMatching(/uncertain|explicitly/i) })
+  expect(prompts.filter(prompt => prompt.startsWith('Score these numbered'))).toHaveLength(1)
+  expect((await workspace.api.resumeGeneration(recovery!.runId, 'retry-uncertain')).ok).toBe(true)
+  expect(prompts.filter(prompt => prompt.startsWith('Score these numbered'))).toHaveLength(2)
+  expect((await workspace.api.getDraft(jobId))?.content.experience).toHaveLength(1)
+}, 20000)
+
+test('corrupt recovery snapshots fail closed without dispatch', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'cv-tailor-corrupt-recovery-')); dirs.push(directory)
+  const transport = recoveryTransport(async () => { throw Object.assign(new Error('offline'), { code: 'ECONNRESET' }) })
+  let workspace = createWorkbench(directory, undefined, transport); opened.push(workspace)
+  const { jobId, token } = await seed(workspace)
+  expect((await workspace.api.generateDraft(token)).ok).toBe(false)
+  const recovery = await workspace.api.getGenerationRecovery(jobId)
+  workspace.close(); opened.pop()
+  const sqlite = new Database(join(directory, 'workbench.sqlite'))
+  sqlite.prepare('UPDATE generation_recovery SET snapshot=? WHERE run_id=?').run('{invalid', recovery!.runId)
+  sqlite.close()
+  let calls = 0
+  workspace = createWorkbench(directory, undefined, { async generate() { calls++; throw new Error('must not dispatch') } }); opened.push(workspace)
+  expect(await workspace.api.resumeGeneration(recovery!.runId, 'retry-uncertain')).toMatchObject({ ok: false, message: expect.stringMatching(/corrupt|incompatible/i) })
+  expect(calls).toBe(0)
+}, 20000)
+
 test('an uncertain dispatched request requires an explicit duplicate-risk choice before replay', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'cv-tailor-uncertain-recovery-')); dirs.push(directory)
   const initialTransport = recoveryTransport(async () => { throw Object.assign(new Error('response was interrupted'), { code: 'ECONNRESET' }) })
@@ -82,12 +125,8 @@ test('an uncertain dispatched request requires an explicit duplicate-risk choice
   const { jobId, token } = await seed(workspace, 3)
   expect((await workspace.api.generateDraft(token)).ok).toBe(false)
   const paused = await workspace.api.getGenerationRecovery(jobId)
+  expect(paused).toMatchObject({ status: 'uncertain', uncertainAttempts: 1 })
   workspace.close(); opened.pop()
-
-  // Model the crash window after durable dispatch accounting but before the response outcome was checkpointed.
-  const sqlite = new Database(join(directory, 'workbench.sqlite'))
-  sqlite.prepare("UPDATE provider_attempt_outcomes SET outcome='dispatched',settled_at=NULL WHERE id=(SELECT id FROM provider_attempt_outcomes WHERE run_id=? AND outcome='error' ORDER BY id DESC LIMIT 1)").run(paused!.runId)
-  sqlite.close()
 
   let retryRequests = 0
   const retryTransport: AnalysisTransport = { async generate(input) { retryRequests++; return recoveryTransport().generate(input) } }

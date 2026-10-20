@@ -8,9 +8,10 @@ const configurable = (config: RunnableConfig): Configurable => (config.configura
 
 /** Durable LangGraph checkpoint storage backed by the workspace SQLite database. */
 export class SqliteCheckpointSaver extends BaseCheckpointSaver {
-  constructor(private readonly db: SqliteDatabase) {
+  constructor(private readonly db: SqliteDatabase, private readonly beforePut?: (metadata: CheckpointMetadata) => void) {
     super()
-    db.exec(`CREATE TABLE IF NOT EXISTS langgraph_checkpoints (
+    db.exec(`CREATE TABLE IF NOT EXISTS provider_attempt_outcomes (id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, dispatched_at TEXT NOT NULL, outcome TEXT NOT NULL CHECK(outcome IN ('dispatched','response','error')), settled_at TEXT, checkpointed_at TEXT);
+      CREATE TABLE IF NOT EXISTS langgraph_checkpoints (
       thread_id TEXT NOT NULL, checkpoint_ns TEXT NOT NULL, checkpoint_id TEXT NOT NULL,
       parent_checkpoint_id TEXT, checkpoint TEXT NOT NULL, metadata TEXT NOT NULL,
       created_at INTEGER NOT NULL, PRIMARY KEY(thread_id, checkpoint_ns, checkpoint_id));
@@ -58,9 +59,14 @@ export class SqliteCheckpointSaver extends BaseCheckpointSaver {
   async put(config: RunnableConfig, checkpoint: Checkpoint, metadata: CheckpointMetadata, _newVersions: ChannelVersions): Promise<RunnableConfig> {
     const c = configurable(config)
     if (!c.thread_id) throw new Error('LangGraph checkpoint requires a thread_id.')
-    this.db.prepare(`INSERT OR REPLACE INTO langgraph_checkpoints
-      (thread_id,checkpoint_ns,checkpoint_id,parent_checkpoint_id,checkpoint,metadata,created_at)
-      VALUES (?,?,?,?,?,?,?)`).run(c.thread_id, c.checkpoint_ns ?? '', checkpoint.id, c.checkpoint_id ?? null, JSON.stringify(checkpoint), JSON.stringify(metadata), Date.now())
+    this.beforePut?.(metadata)
+    const tx = this.db.transaction(() => {
+      this.db.prepare(`INSERT OR REPLACE INTO langgraph_checkpoints
+        (thread_id,checkpoint_ns,checkpoint_id,parent_checkpoint_id,checkpoint,metadata,created_at)
+        VALUES (?,?,?,?,?,?,?)`).run(c.thread_id, c.checkpoint_ns ?? '', checkpoint.id, c.checkpoint_id ?? null, JSON.stringify(checkpoint), JSON.stringify(metadata), Date.now())
+      if (metadata.source === 'loop' && metadata.step >= 0) this.db.prepare('UPDATE provider_attempt_outcomes SET checkpointed_at=? WHERE run_id=? AND checkpointed_at IS NULL').run(new Date().toISOString(), c.thread_id)
+    })
+    tx()
     return { configurable: { thread_id: c.thread_id, checkpoint_ns: c.checkpoint_ns ?? '', checkpoint_id: checkpoint.id } }
   }
 

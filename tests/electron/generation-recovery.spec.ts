@@ -25,7 +25,7 @@ test('visible recovery waits for explicit resume after Electron close and reopen
       return { jobId: job.value.id, generation, recovery: await window.workbench.getGenerationRecovery(job.value.id) }
     })
     expect(setup.generation.ok).toBe(false)
-    expect(setup.recovery).toMatchObject({ status: 'paused', canResume: true })
+    expect(setup.recovery).toMatchObject({ status: 'uncertain', uncertainAttempts: 1, canResume: true })
     await app.close(); app = undefined
 
     app = await electron.launch({ args: ['.'], timeout: 60000, env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData, CV_TAILOR_SCRIPTED_ANALYSIS: 'generation' } })
@@ -36,17 +36,65 @@ test('visible recovery waits for explicit resume after Electron close and reopen
     await expect(page.getByRole('heading', { name: 'Interrupted generation' })).toHaveCount(0)
     await page.getByRole('button', { name: /Engineer Target Inc/ }).click()
     const recovery = page.getByRole('heading', { name: 'Interrupted generation' }).locator('..')
-    await expect(recovery).toContainText('No requests will be sent until you choose to resume.')
+    await expect(recovery).toContainText('No requests will be sent until you explicitly choose whether to retry')
     const attemptsBefore = await page.evaluate(() => window.workbench.getAnalysisUsage().then(value => value.attempts))
-    await expect(recovery.getByRole('button', { name: 'Resume saved generation' })).toBeVisible()
+    await expect(recovery.getByRole('button', { name: /Retry uncertain step/ })).toBeVisible()
     expect(await page.evaluate(jobId => window.workbench.getGenerationRecovery(jobId).then(value => value?.runId), setup.jobId)).toBe(before?.runId)
     expect(await page.evaluate(() => window.workbench.getAnalysisUsage().then(value => value.attempts))).toBe(attemptsBefore)
-    await recovery.getByRole('button', { name: 'Resume saved generation' }).click()
+    await recovery.getByRole('button', { name: /Retry uncertain step/ }).click()
+    await expect.poll(async () => page.evaluate(() => window.workbench.getAnalysisUsage().then(value => value.attempts)), { timeout: 10000 }).toBe(attemptsBefore + 1)
     await expect(page.getByLabel('Source-linked draft')).toContainText('Draft · unverified and unapproved', { timeout: 15000 })
     expect(await page.evaluate(jobId => window.workbench.getDraft(jobId).then(value => value?.content.experience.length), setup.jobId)).toBe(1)
     expect(await page.evaluate(jobId => window.workbench.getGenerationRecovery(jobId), setup.jobId)).toBeNull()
   } finally {
     await app?.close().catch(() => {})
     await rm(userData, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 })
+  }
+})
+
+test('hard Electron close during a delayed provider request preserves uncertainty until explicit retry', async () => {
+  test.setTimeout(60000)
+  const userData = mkdtempSync(join(tmpdir(), 'cv-tailor-inflight-recovery-'))
+  let app: Awaited<ReturnType<typeof electron.launch>> | undefined
+  try {
+    app = await electron.launch({ args: ['.'], timeout: 60000, env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData, CV_TAILOR_SCRIPTED_ANALYSIS: 'delayed' } })
+    let page = await app.firstWindow()
+    await expect(page.locator('[data-ui-ready="true"]')).toBeVisible()
+    const jobId = await page.evaluate(async () => {
+      const { pacificDay, attempts, warning, ...budgets } = await window.workbench.getAnalysisUsage()
+      void pacificDay; void attempts; void warning
+      await window.workbench.setAnalysisBudgets({ ...budgets, minimumSpacingMs: 0, rateLimitWindowMs: 1000 })
+      const role = await window.workbench.saveExperience({ kind: 'employment', title: 'Engineer', organization: 'Frozen Employer', description: 'Built reliable software systems.' })
+      const job = await window.workbench.saveJob({ title: 'Engineer', company: 'Target Inc', description: 'Build reliable systems.' })
+      if (!role.ok || !job.ok) throw new Error('Could not set up in-flight recovery fixture.')
+      const consent = await window.workbench.prepareOutboundConsent(job.value.id)
+      if (!consent.ok) throw new Error(consent.message)
+      await window.workbench.acceptOutboundConsent(consent.token, true, true)
+      await window.workbench.startAnalysis(consent.token)
+      void window.workbench.generateDraft(consent.token)
+      return job.value.id
+    })
+    await expect.poll(async () => page.evaluate(id => window.workbench.getGenerationRecovery(id).then(value => value?.status), jobId), { timeout: 15000 }).toBe('uncertain')
+    const beforeCrash = await page.evaluate(id => window.workbench.getGenerationRecovery(id), jobId)
+    expect(beforeCrash?.uncertainAttempts).toBe(1)
+    const electronProcess = app.process()
+    const exited = new Promise<void>(resolve => electronProcess.once('exit', () => resolve()))
+    electronProcess.kill()
+    await exited; app = undefined
+
+    app = await electron.launch({ args: ['.'], timeout: 60000, env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData, CV_TAILOR_SCRIPTED_ANALYSIS: 'generation' } })
+    page = await app.firstWindow()
+    await expect(page.locator('[data-ui-ready="true"]')).toBeVisible()
+    await page.getByRole('button', { name: /Engineer Target Inc/ }).click()
+    const recovery = page.getByRole('heading', { name: 'Interrupted generation' }).locator('..')
+    await expect(recovery).toContainText('may have processed them')
+    const reopenedState = await page.evaluate(id => window.workbench.getGenerationRecovery(id), jobId)
+    expect(reopenedState).toMatchObject({ uncertainAttempts: 1, attempts: beforeCrash?.attempts })
+    await expect(recovery.getByRole('button', { name: /Retry uncertain step/ })).toBeVisible()
+    expect(reopenedState?.attempts).toBe(beforeCrash?.attempts)
+    expect(await page.evaluate(id => window.workbench.getGenerationRecovery(id).then(value => value?.uncertainAttempts), jobId)).toBe(1)
+  } finally {
+    if (app) { const child = app.process(); if (child.exitCode === null && child.signalCode === null) { const exited = new Promise<void>(resolve => child.once('exit', () => resolve())); child.kill(); await Promise.race([exited, new Promise<void>(resolve => setTimeout(resolve, 3000))]) } }
+    await Promise.race([rm(userData, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }), new Promise<void>(resolve => setTimeout(resolve, 5000))])
   }
 })
