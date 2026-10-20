@@ -5,6 +5,7 @@ import { geminiSettingsSchema, geminiModelSchema, type GeminiModel } from './gem
 import type { JobInput, JobRecord, JobSaveResult } from './jobs'
 import type { ProfileExchangeResult } from './profile-exchange'
 import type { OutboundConsentAction, OutboundConsentPreview } from './outbound-consent-contract'
+import type { AnalysisResult, AnalysisUsage } from './posting-analysis'
 
 export const appearanceSchema = z.enum(['light', 'dark'])
 export type Appearance = z.infer<typeof appearanceSchema>
@@ -42,6 +43,10 @@ export interface WorkbenchAPI {
   prepareOutboundConsent(jobId: string): Promise<OutboundConsentPreview>
   acceptOutboundConsent(token: string, accepted: boolean, freeTierTermsAcknowledged: boolean): Promise<OutboundConsentAction>
   cancelOutboundConsent(token: string): Promise<OutboundConsentAction>
+  startAnalysis(consentToken: string): Promise<AnalysisResult>
+  getAnalysis(jobId: string): Promise<AnalysisResult | null>
+  cancelAnalysis(jobId: string): Promise<AnalysisResult>
+  getAnalysisUsage(): Promise<AnalysisUsage>
 }
 
 export type WorkbenchStorageAPI = Omit<WorkbenchAPI, 'exportProfile' | 'previewProfileImport' | 'applyProfileImport' | 'cancelProfileImport'> & {

@@ -1,11 +1,7 @@
-import { z } from 'zod'
 import type { GeminiModel } from '../shared/gemini-settings'
-
-const words = z.array(z.string().trim().min(1).max(300)).max(100)
-export const postingAnalysisSchema = z.object({
-  required: words, preferred: words, tools: words, responsibilities: words, keywords: words
-}).strict()
-export type PostingAnalysis = z.infer<typeof postingAnalysisSchema>
+import { postingAnalysisSchema, type PostingAnalysis } from '../shared/posting-analysis'
+export { postingAnalysisSchema }
+export type { PostingAnalysis }
 export interface AnalysisTransport {
   generate(input: { model: GeminiModel; prompt: string; signal: AbortSignal; responseSchema: typeof postingAnalysisSchema }): Promise<string>
 }
@@ -41,7 +37,7 @@ function isPacificDay(timestamp: number, today: number): boolean {
 export function createAnalysisDispatcher(options: Options) {
   const now = options.now ?? Date.now, sleep = options.sleep ?? cancellableSleep
   const minSpacing = options.minimumSpacingMs ?? 5000, maxAttempts = options.maxAttempts ?? 12, maxElapsed = options.maxElapsedMs ?? 300000
-  const maxDaily = options.maxDailyAttempts ?? 1500, random = options.random ?? Math.random
+  const maxDaily = options.maxDailyAttempts ?? 50, random = options.random ?? Math.random
   const authorizations = new Map<string, string>(), cancelled = new Set<string>(), active = new Map<string, AbortController>(), attemptCounts = new Map<string, number>()
   const dispatched: number[] = []; let queue = Promise.resolve()
   // The caller binds this capability to a persisted, accepted consent record; a run ID alone is not authority.

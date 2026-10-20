@@ -28,6 +28,8 @@ export function WorkbenchStart({ activeJob, jobCount, onNavigate }: { activeJob:
   const [termsAcknowledged, setTermsAcknowledged] = useState(false)
   const [consentError, setConsentError] = useState('')
   const [consentBusy, setConsentBusy] = useState(false)
+  const [analysis, setAnalysis] = useState<Awaited<ReturnType<typeof window.workbench.getAnalysis>>>(null)
+  const [usage, setUsage] = useState<Awaited<ReturnType<typeof window.workbench.getAnalysisUsage>> | null>(null)
   const pendingToken = useRef<string | null>(null)
   const selectedJob = useRef(activeJob?.id)
   selectedJob.current = activeJob?.id
@@ -55,6 +57,14 @@ export function WorkbenchStart({ activeJob, jobCount, onNavigate }: { activeJob:
     } catch { setConsentError('Outgoing data could not be prepared. Try again.') }
     finally { setConsentBusy(false) }
   }
+  async function startAnalysis() {
+    const token = pendingToken.current
+    if (!token || consentBusy || !consentAccepted) return
+    setConsentBusy(true); setConsentError('')
+    try { setAnalysis(await window.workbench.startAnalysis(token)); setUsage(await window.workbench.getAnalysisUsage()) }
+    catch (failure) { setConsentError(failure instanceof Error ? failure.message : 'Analysis could not start. Check Settings and try again.') }
+    finally { setConsentBusy(false) }
+  }
   async function cancelOutgoing() {
     const token = pendingToken.current
     if (!token || consentBusy) return
@@ -75,6 +85,7 @@ export function WorkbenchStart({ activeJob, jobCount, onNavigate }: { activeJob:
       const result = await window.workbench.acceptOutboundConsent(token, true, true)
       if (!result.ok) { setConsentError(result.message); return }
       setConsentAccepted(true)
+      setUsage(await window.workbench.getAnalysisUsage())
     } catch { setConsentError('Consent could not be saved. Review the data and try again.') }
     finally { setConsentBusy(false) }
   }
@@ -134,7 +145,7 @@ export function WorkbenchStart({ activeJob, jobCount, onNavigate }: { activeJob:
           {!consentAccepted ? <>
             <label className="outbound-ack"><input type="checkbox" checked={termsAcknowledged} onChange={event => setTermsAcknowledged(event.target.checked)} />I understand the Gemini free-tier data-use terms and have reviewed this exact bundle.</label>
             <div className="outbound-actions"><button type="button" className="primary-button" disabled={!termsAcknowledged || consentBusy} onClick={() => void authorizeOutgoing()}>Authorize this run</button><button type="button" className="secondary-button" disabled={consentBusy} onClick={() => void cancelOutgoing()}>Cancel review</button></div>
-          </> : <><p role="status">Consent saved for this run only. No provider request was sent. Drafting is not available yet.</p><button type="button" className="secondary-button" disabled={consentBusy} onClick={() => void cancelOutgoing()}>Revoke this run</button></>}
+          </> : <><p role="status">Consent saved for this frozen bundle. Analysis requests are bounded and usage is a local observation, not provider quota.</p><button type="button" className="primary-button" disabled={consentBusy || analysis?.status === 'complete'} onClick={() => void startAnalysis()}>{consentBusy ? 'Analyzing…' : analysis?.status === 'complete' ? 'Analysis complete' : 'Analyze posting'}</button><button type="button" className="secondary-button" disabled={consentBusy} onClick={() => void window.workbench.cancelAnalysis(activeJob.id).then(setAnalysis)}>Cancel analysis</button>{usage && <p>Pacific day {usage.pacificDay}: {usage.attempts} observed attempts; max {usage.runLimit} per run, {usage.minimumSpacingMs / 1000}s spacing. {usage.warning}</p>}{analysis?.analysis && <div aria-label="Posting analysis"><h4>Required qualifications</h4><ul>{analysis.analysis.required.map(item => <li key={item}>{item}</li>)}</ul><h4>Preferred qualifications</h4><ul>{analysis.analysis.preferred.map(item => <li key={item}>{item}</li>)}</ul><h4>Tools and responsibilities</h4><p>{[...analysis.analysis.tools, ...analysis.analysis.responsibilities].join(' · ')}</p><h4>Keywords</h4><p>{analysis.analysis.keywords.join(' · ')}</p></div>}<button type="button" className="secondary-button" disabled={consentBusy} onClick={() => void cancelOutgoing()}>Revoke this run</button></>}
         </section>}
         {consentError && <p className="inspector-error" role="alert">{consentError}</p>}
       </div>}

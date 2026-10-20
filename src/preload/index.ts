@@ -6,6 +6,7 @@ import { experienceSnapshotSchema, experienceMutationResultSchema, type Experien
 import { jobRecordSchema, jobSaveResultSchema, type JobInput } from '../shared/jobs'
 import { profileExchangeResultSchema } from '../shared/profile-exchange'
 import { outboundConsentActionSchema, outboundConsentPreviewSchema } from '../shared/outbound-consent-contract'
+import { analysisIdSchema, analysisResultSchema, analysisUsageSchema, type AnalysisResult } from '../shared/posting-analysis'
 
 const api: WorkbenchAPI = Object.freeze({
   async getSettings() {
@@ -85,6 +86,10 @@ const api: WorkbenchAPI = Object.freeze({
   },
   async cancelOutboundConsent(token: string) {
     return outboundConsentActionSchema.parse(await ipcRenderer.invoke('consent:outbound:cancel', uuidSchema.parse(token)))
-  }
+  },
+  async startAnalysis(consentToken: string): Promise<AnalysisResult> { return analysisResultSchema.parse(await ipcRenderer.invoke('analysis:start', uuidSchema.parse(consentToken))) },
+  async getAnalysis(jobId: string) { const value = await ipcRenderer.invoke('analysis:get', analysisIdSchema.parse(jobId)); return value === null ? null : analysisResultSchema.parse(value) },
+  async cancelAnalysis(jobId: string) { return analysisResultSchema.parse(await ipcRenderer.invoke('analysis:cancel', analysisIdSchema.parse(jobId))) },
+  async getAnalysisUsage() { return analysisUsageSchema.parse(await ipcRenderer.invoke('analysis:usage')) }
 })
 contextBridge.exposeInMainWorld('workbench', api)

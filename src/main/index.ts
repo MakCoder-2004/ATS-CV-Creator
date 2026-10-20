@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { createWorkbench } from './workbench'
+import type { AnalysisTransport } from './posting-analysis'
 import { appearanceSchema } from '../shared/appearance'
 import { geminiKeyInputSchema, geminiModelSchema } from '../shared/gemini-settings'
 import { contactSaveInputSchema, evidenceRevisionSchema, profileEntrySaveSchema, profileMutationResultSchema, profileSnapshotSchema, skillSaveInputSchema, uuidSchema } from '../shared/profile'
@@ -11,6 +12,7 @@ import { experienceSaveInputSchema, experienceSnapshotSchema, experienceMutation
 import { jobRecordSchema, jobSaveInputSchema, jobSaveResultSchema } from '../shared/jobs'
 import { registerProfileExchangeIpc } from './profile-exchange-ipc'
 import { outboundConsentActionSchema, outboundConsentPreviewSchema } from '../shared/outbound-consent-contract'
+import { analysisIdSchema, analysisResultSchema, analysisStartInputSchema, analysisUsageSchema } from '../shared/posting-analysis'
 
 let window: BrowserWindow | undefined
 let workspace: ReturnType<typeof createWorkbench> | undefined
@@ -41,7 +43,8 @@ if (!app.isPackaged && process.env.CV_TAILOR_TEST_USER_DATA_DIR) {
   app.setPath('userData', process.env.CV_TAILOR_TEST_USER_DATA_DIR)
 }
 app.whenReady().then(() => {
-  workspace = createWorkbench(app.getPath('userData'), safeStorage)
+  const scriptedAnalysis: AnalysisTransport | undefined = !app.isPackaged && process.env.CV_TAILOR_SCRIPTED_ANALYSIS === '1' ? { generate: async () => JSON.stringify({ required: ['TypeScript'], preferred: [], tools: ['TypeScript'], responsibilities: ['Build reliable services'], keywords: ['TypeScript'] }) } : undefined
+  workspace = createWorkbench(app.getPath('userData'), safeStorage, scriptedAnalysis)
   ipcMain.handle('settings:get', (event, ...args: unknown[]) => {
     trusted(event)
     if (args.length) throw new Error('Unexpected arguments')
@@ -172,6 +175,10 @@ app.whenReady().then(() => {
     trusted(event); if (args.length !== 1) throw new Error('Expected preview token')
     return outboundConsentActionSchema.parse(await workspace!.api.cancelOutboundConsent(uuidSchema.parse(args[0])))
   })
+  ipcMain.handle('analysis:start', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected consent token'); const input = analysisStartInputSchema.parse({ consentToken: args[0] }); return analysisResultSchema.parse(await workspace!.api.startAnalysis(input.consentToken)) })
+  ipcMain.handle('analysis:get', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected job ID'); const result = await workspace!.api.getAnalysis(analysisIdSchema.parse(args[0])); return result === null ? null : analysisResultSchema.parse(result) })
+  ipcMain.handle('analysis:cancel', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected job ID'); return analysisResultSchema.parse(await workspace!.api.cancelAnalysis(analysisIdSchema.parse(args[0]))) })
+  ipcMain.handle('analysis:usage', async (event, ...args: unknown[]) => { trusted(event); if (args.length) throw new Error('Unexpected arguments'); return analysisUsageSchema.parse(await workspace!.api.getAnalysisUsage()) })
   ipcMain.handle('jobs:open', async (event, ...args: unknown[]) => {
     trusted(event)
     if (args.length !== 1) throw new Error('Expected job ID')

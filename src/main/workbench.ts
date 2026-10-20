@@ -15,11 +15,16 @@ import { prepareOutboundBundle, type ConsentSource, type EvidenceScopeRevision, 
 import { createOutboundConsentEngine } from './outbound-consent'
 import type { OutboundConsentAction, OutboundConsentPreview } from '../shared/outbound-consent-contract'
 import { outboundConsentActionSchema, outboundConsentPreviewSchema } from '../shared/outbound-consent-contract'
+import { createAnalysisDispatcher, type AnalysisTransport } from './posting-analysis'
+import { createGeminiAnalysisTransport } from './gemini-analysis-transport'
+import { createHash } from 'node:crypto'
+import { analysisResultSchema, analysisUsageSchema, postingAnalysisSchema } from '../shared/posting-analysis'
 
 export interface SecureStorage {
   isEncryptionAvailable(): boolean
   getSelectedStorageBackend?(): string
   encryptString(value: string): Buffer
+  decryptString?(value: Buffer): string
 }
 
 const unavailableSecureStorage: SecureStorage = {
@@ -41,7 +46,7 @@ function reconcileNestedItems(items: NestedInput[], previous: NestedRecord[], ow
 }
 
 /** One workspace per userData directory. Opening a workspace applies forward-only migrations. */
-export function createWorkbench(userData: string, secureStorage: SecureStorage = unavailableSecureStorage): { api: WorkbenchStorageAPI; authorizeOutboundPayload<T>(runId: string, payload: T): T; close(): void } {
+export function createWorkbench(userData: string, secureStorage: SecureStorage = unavailableSecureStorage, scriptedTransport?: AnalysisTransport): { api: WorkbenchStorageAPI; authorizeOutboundPayload<T>(runId: string, payload: T): T; close(): void } {
   mkdirSync(userData, { recursive: true })
   const db = new Database(join(userData, 'workbench.sqlite'))
   db.pragma('journal_mode = WAL')
@@ -56,7 +61,9 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
     CREATE TABLE IF NOT EXISTS profile_experience (id TEXT PRIMARY KEY, revision INTEGER NOT NULL, data TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS profile_projects (id TEXT PRIMARY KEY, revision INTEGER NOT NULL, data TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, data TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS outbound_consents (id TEXT PRIMARY KEY, run_id TEXT NOT NULL UNIQUE, scope_hash TEXT NOT NULL, created_at TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0);`)
+    CREATE TABLE IF NOT EXISTS outbound_consents (id TEXT PRIMARY KEY, run_id TEXT NOT NULL UNIQUE, scope_hash TEXT NOT NULL, created_at TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0);
+    CREATE TABLE IF NOT EXISTS posting_analysis_cache (cache_key TEXT PRIMARY KEY, job_id TEXT NOT NULL, run_id TEXT NOT NULL, data TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS analysis_attempts (id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, attempted_at TEXT NOT NULL);`)
   db.prepare('INSERT OR IGNORE INTO schema_migrations (version) VALUES (1), (2), (4), (5)').run()
 
   const readProfile = (): ProfileSnapshot => {
@@ -142,6 +149,14 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
   }
   const outboundEngine = createOutboundConsentEngine()
   const pendingOutbound = new Map<string, { jobId: string; source: ConsentSource; bundle: OutboundBundle; runId: string; consentId?: string }>()
+  const currentAnalysis = new Map<string, ReturnType<typeof analysisResultSchema.parse>>()
+  const dispatcher = createAnalysisDispatcher({ transport: scriptedTransport ?? { generate: async input => {
+    const row = db.prepare('SELECT ciphertext FROM encrypted_credentials WHERE key = ?').get('gemini-api-key') as { ciphertext: string } | undefined
+    if (!row || !secureStorage.decryptString || !secureStorageAvailable()) throw Object.assign(new Error('Gemini API key is unavailable.'), { status: 401 })
+    const key = secureStorage.decryptString(Buffer.from(row.ciphertext, 'base64'))
+    return createGeminiAnalysisTransport(key).generate(input)
+  } }, onAttempt: timestamp => db.prepare('INSERT INTO analysis_attempts (run_id, attempted_at) VALUES (?, ?)').run(activeRun, new Date(timestamp).toISOString()) })
+  let activeRun = ''
   const currentConsentSource = (jobId: string): ConsentSource | null => {
     const job = db.prepare('SELECT data FROM jobs WHERE id = ?').get(jobId) as { data: string } | undefined
     if (!job) return null
@@ -455,6 +470,40 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
         pending.consentId = record.id
         return outboundConsentActionSchema.parse({ ok: true, runId: pending.runId, message: 'Consent saved for this run only. No provider request was sent.' })
       } catch (error) { return outboundConsentActionSchema.parse({ ok: false, message: error instanceof Error ? error.message : 'Consent could not be saved.' }) }
+    },
+    async startAnalysis(token: string) {
+      const pending = pendingOutbound.get(token)
+      if (!pending?.consentId) throw new Error('Review and authorize this exact outgoing bundle before analysis.')
+      const cacheKey = createHash('sha256').update(JSON.stringify({ job: pending.source.job.description, model: pending.source.model.name, prompt: 'posting-analysis-v1', schema: JSON.stringify(postingAnalysisSchema) })).digest('hex')
+      const cached = db.prepare('SELECT data FROM posting_analysis_cache WHERE cache_key = ?').get(cacheKey) as { data: string } | undefined
+      if (cached) return analysisResultSchema.parse({ jobId: pending.jobId, status: 'complete', analysis: JSON.parse(cached.data), progress: 'Loaded compatible saved analysis.', attempts: 0, cacheHit: true })
+      const credentials = db.prepare('SELECT ciphertext FROM encrypted_credentials WHERE key = ?').get('gemini-api-key')
+      if (!scriptedTransport && !credentials) throw new Error('Save a Gemini API key in Settings before starting analysis.')
+      const approvedPayload = authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
+      dispatcher.authorize(pending.runId, pending.consentId)
+      activeRun = pending.runId
+      const result = await dispatcher.analyze({ runId: pending.runId, jobId: pending.jobId, model: geminiModelSchema.parse(pending.source.model.name), prompt: `Extract only explicit qualifications from this authorized minimized posting. Do not infer missing requirements. Return JSON with required, preferred, tools, responsibilities, keywords.\n${JSON.stringify(approvedPayload)}`, consentId: pending.consentId })
+      db.prepare('INSERT OR REPLACE INTO posting_analysis_cache (cache_key, job_id, run_id, data) VALUES (?, ?, ?, ?)').run(cacheKey, pending.jobId, pending.runId, JSON.stringify(result.analysis))
+      const value = analysisResultSchema.parse({ jobId: pending.jobId, status: 'complete', analysis: result.analysis, progress: 'Posting analysis complete.', attempts: result.usage.attempts, cacheHit: false })
+      currentAnalysis.set(pending.jobId, value)
+      return value
+    },
+    async getAnalysis(jobId: string) {
+      if (!uuidSchema.safeParse(jobId).success) return null
+      const value = currentAnalysis.get(jobId)
+      return value ? analysisResultSchema.parse(value) : null
+    },
+    async cancelAnalysis(jobId: string) {
+      const pending = [...pendingOutbound.values()].find(item => item.jobId === jobId)
+      if (pending) dispatcher.cancel(pending.runId)
+      const value = analysisResultSchema.parse({ jobId, status: 'cancelled', analysis: null, progress: 'Analysis cancelled. No further requests will be sent.', attempts: 0, cacheHit: false })
+      currentAnalysis.set(jobId, value)
+      return value
+    },
+    async getAnalysisUsage() {
+      const attempts = (db.prepare("SELECT attempted_at FROM analysis_attempts WHERE date(attempted_at) = date('now')").all() as { attempted_at: string }[]).length
+      const day = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Los_Angeles', year: 'numeric', month: '2-digit', day: '2-digit' }).format(Date.now())
+      return analysisUsageSchema.parse({ pacificDay: day, attempts, configuredDailyLimit: 50, runLimit: 12, minimumSpacingMs: 5000, warning: 'Local observations only; requests from other clients or keys are not visible. Provider quotas vary and are not guaranteed.' })
     },
     async cancelOutboundConsent(token: string): Promise<OutboundConsentAction> {
       const pending = pendingOutbound.get(token)
