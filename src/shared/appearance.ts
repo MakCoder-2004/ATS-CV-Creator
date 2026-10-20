@@ -47,7 +47,7 @@ export interface WorkbenchAPI {
   startAnalysis(consentToken: string): Promise<AnalysisResult>
   getAnalysis(jobId: string): Promise<AnalysisResult | null>
   cancelAnalysis(jobId: string): Promise<AnalysisResult>
-  generateDraft(consentToken: string): Promise<{ ok: boolean; message: string; draft?: DraftRevision }>
+  generateDraft(consentToken: string, pageTarget?: 1 | 2): Promise<{ ok: boolean; message: string; draft?: DraftRevision }>
   getDraft(jobId: string): Promise<DraftRevision | null>
   getAnalysisUsage(): Promise<AnalysisUsage>
   setAnalysisBudgets(value: AnalysisBudgets): Promise<AnalysisUsage>

@@ -519,17 +519,19 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       currentAnalysis.set(pending.jobId, value)
       return value
     },
-    async generateDraft(token: string) {
+    async generateDraft(token: string, pageTarget: 1 | 2 = 1) {
+      if (pageTarget !== 1 && pageTarget !== 2) return { ok: false, message: 'Choose a one- or two-page target.' }
       const pending = pendingOutbound.get(token)
       if (!pending?.consentId) return { ok: false, message: 'Review and authorize this exact outgoing bundle before generation.' }
       const analysis = await this.getAnalysis(pending.jobId)
       if (!analysis || analysis.status !== 'complete' || !analysis.analysis) return { ok: false, message: 'Complete posting analysis before generating a draft.' }
+      if (activeAnalysisByJob.has(pending.jobId)) return { ok: false, message: 'Generation is already active for this saved job.' }
       const job = await this.openJob(pending.jobId), profile = readProfile(), experience = readExperience()
       if (!job) return { ok: false, message: 'The saved job is unavailable.' }
       const items: GenerationItem[] = [
         ...profile.education.map(item => ({ id: item.id, revision: item.revision, category: 'education' as const, snapshot: item as unknown as Record<string, unknown>, text: [item.title, item.field, item.description].filter(Boolean).join('. '), chronology: item.endDate ?? item.startDate })),
-        ...experience.experience.flatMap(item => [{ id: item.id, revision: item.revision, category: 'experience' as const, snapshot: item as unknown as Record<string, unknown>, text: `${item.title}. ${item.description} ${(item.factualItems ?? []).map(f => f.text).join(' ')}`, chronology: item.endDate ?? item.startDate }, ...item.factualItems.map(f => ({ id: f.id, revision: f.revision, category: 'experience' as const, snapshot: f as unknown as Record<string, unknown>, text: f.text, chronology: item.endDate ?? item.startDate }))]),
-        ...experience.projects.map(item => ({ id: item.id, revision: item.revision, category: 'projects' as const, snapshot: item as unknown as Record<string, unknown>, text: `${item.name}. ${item.description} ${(item.factualItems ?? []).map(f => f.text).join(' ')}` })),
+        ...experience.experience.flatMap(item => [{ id: item.id, revision: item.revision, category: 'experience' as const, snapshot: item as unknown as Record<string, unknown>, text: `${item.title}. ${item.description} ${(item.factualItems ?? []).map(f => f.text).join(' ')}`, chronology: item.endDate ?? item.startDate, parentId: item.id }, ...item.factualItems.map(f => ({ id: f.id, revision: f.revision, category: 'experience' as const, snapshot: f as unknown as Record<string, unknown>, text: f.text, chronology: item.endDate ?? item.startDate, parentId: item.id }))]),
+        ...experience.projects.map(item => ({ id: item.id, revision: item.revision, category: 'projects' as const, snapshot: item as unknown as Record<string, unknown>, text: `${item.name}. ${item.description} ${(item.factualItems ?? []).map(f => f.text).join(' ')}`, parentId: item.id })),
         ...profile.skills.map(item => ({ id: item.id, revision: item.revision, category: 'skills' as const, snapshot: item as unknown as Record<string, unknown>, text: `${item.name} (${item.category})` })),
         ...profile.certificates.map(item => ({ id: item.id, revision: item.revision, category: 'certificates' as const, snapshot: item as unknown as Record<string, unknown>, text: [item.title, item.description].filter(Boolean).join('. ') }))
       ]
@@ -543,7 +545,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       const safeItems = items.map(item => ({ ...item, text: scrubbed.get(item.id) ?? '' })).filter(item => item.text)
       activeAnalysisByJob.set(pending.jobId, pending.runId)
       try {
-        const result = await runSourceLinkedGraph({ job: approvedPayload.job, analysis: analysis.analysis, items: safeItems, restoreText: pending.bundle.restoreIdentifiers, identity: { id: randomUUID(), jobId: pending.jobId, revision: ((db.prepare('SELECT MAX(revision) AS revision FROM draft_revisions WHERE job_id = ?').get(pending.jobId) as { revision: number | null }).revision ?? 0) + 1, createdAt: new Date().toISOString(), lockedFields: { fullName: profile.contact?.fullName ?? '', ...(profile.contact?.headline ? { headline: profile.contact.headline } : {}), experience: experience.experience.map(item => ({ evidenceId: item.id, title: item.title, organization: item.organization, ...(item.startDate ? { startDate: item.startDate } : {}), ...(item.endDate ? { endDate: item.endDate } : {}) })), education: profile.education.map(item => ({ evidenceId: item.id, title: item.title, ...(item.institution ? { institution: item.institution } : {}), ...(item.startDate ? { startDate: item.startDate } : {}), ...(item.endDate ? { endDate: item.endDate } : {}) })), projects: experience.projects.map(item => ({ evidenceId: item.id, name: item.name })), certificates: profile.certificates.map(item => ({ evidenceId: item.id, title: item.title, ...(item.issuer ? { issuer: item.issuer } : {}), ...(item.year ? { year: item.year } : {}) })) } }, call: async (prompt, responseSchema) => {
+        const result = await runSourceLinkedGraph({ job: approvedPayload.job, analysis: analysis.analysis, items: safeItems, pageTarget, restoreText: pending.bundle.restoreIdentifiers, identity: { id: randomUUID(), jobId: pending.jobId, revision: ((db.prepare('SELECT MAX(revision) AS revision FROM draft_revisions WHERE job_id = ?').get(pending.jobId) as { revision: number | null }).revision ?? 0) + 1, createdAt: new Date().toISOString(), lockedFields: { fullName: profile.contact?.fullName ?? '', ...(profile.contact?.headline ? { headline: profile.contact.headline } : {}), experience: experience.experience.map(item => ({ evidenceId: item.id, title: item.title, organization: item.organization, ...(item.startDate ? { startDate: item.startDate } : {}), ...(item.endDate ? { endDate: item.endDate } : {}) })), education: profile.education.map(item => ({ evidenceId: item.id, title: item.title, ...(item.institution ? { institution: item.institution } : {}), ...(item.startDate ? { startDate: item.startDate } : {}), ...(item.endDate ? { endDate: item.endDate } : {}) })), projects: experience.projects.map(item => ({ evidenceId: item.id, name: item.name })), certificates: profile.certificates.map(item => ({ evidenceId: item.id, title: item.title, ...(item.issuer ? { issuer: item.issuer } : {}), ...(item.year ? { year: item.year } : {}) })) } }, call: async (prompt, responseSchema) => {
           authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
           const generated = await dispatcher.generate({ runId: pending.runId, jobId: pending.jobId, model: geminiModelSchema.parse(pending.source.model.name), prompt, consentId: pending.consentId!, responseSchema })
           return { value: responseSchema.parse(JSON.parse(generated.text)), attempts: generated.attempts }
@@ -555,13 +557,19 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
         return { ok: true, message: 'Draft saved locally. It is unverified and unapproved.', draft: result.draft }
       } catch (error) {
         if (activeAnalysisByJob.get(pending.jobId) === pending.runId) activeAnalysisByJob.delete(pending.jobId)
-        return { ok: false, message: error instanceof Error ? error.message : 'Draft generation failed. Existing work was retained.' }
+        const message = error instanceof Error ? error.message : 'Draft generation failed. Existing work was retained.'
+        const previous = currentAnalysis.get(pending.jobId)
+        const cancelled = error instanceof AnalysisError && error.code === 'CANCELLED'
+        currentAnalysis.set(pending.jobId, analysisResultSchema.parse({ jobId: pending.jobId, runId: pending.runId, status: cancelled ? 'cancelled' : 'failed', analysis: analysis.analysis, progress: message, attempts: analysis.attempts + (previous?.attempts ?? 0), error: message, cacheHit: analysis.cacheHit }))
+        return { ok: false, message }
       }
     },
     async getDraft(jobId: string) {
       if (!uuidSchema.safeParse(jobId).success) return null
       const row = db.prepare('SELECT data FROM draft_revisions WHERE job_id = ? ORDER BY revision DESC LIMIT 1').get(jobId) as { data: string } | undefined
-      return row ? draftRevisionSchema.parse(JSON.parse(row.data)) : null
+      if (!row) return null
+      const stored = JSON.parse(row.data) as Record<string, unknown>
+      return draftRevisionSchema.parse({ ...stored, pageTarget: stored.pageTarget ?? 1 })
     },
     async getAnalysis(jobId: string) {
       if (!uuidSchema.safeParse(jobId).success) return null
