@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { openRouterModelSchema } from './openrouter-settings'
 
 export type EvidenceScopeRevision = readonly [id: string, revision: number]
 
@@ -50,7 +51,7 @@ function digest(value: unknown): string { return createHash('sha256').update(JSO
 function escapeRegExp(value: string): string { return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') }
 
 export function prepareOutboundBundle(source: ConsentSource): OutboundBundle {
-  if (!['gemini-3.6-flash', 'gemini-2.5-flash', 'gemini-2.5-pro'].includes(source.model.name)) throw new Error('Unsupported model configuration.')
+  if (!openRouterModelSchema.safeParse(source.model.name).success) throw new Error('Invalid OpenRouter model ID.')
   if (source.model.temperature !== undefined && (!Number.isFinite(source.model.temperature) || source.model.temperature < 0 || source.model.temperature > 2)) throw new Error('Invalid model temperature.')
   if (source.model.topP !== undefined && (!Number.isFinite(source.model.topP) || source.model.topP < 0 || source.model.topP > 1)) throw new Error('Invalid model topP.')
   if (source.model.maxOutputTokens !== undefined && (!Number.isInteger(source.model.maxOutputTokens) || source.model.maxOutputTokens < 1)) throw new Error('Invalid model output limit.')

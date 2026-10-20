@@ -13,3 +13,7 @@ Use `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, and `won
 ### Domain docs
 
 This is a single-context repo; read the root `GLOSSARY.md` and relevant ADRs under `docs/adr/` when present. See `docs/agents/domain.md`.
+
+### Frontend design system
+
+Before any renderer UI design, implementation, or review, read `design system/README.md` and the relevant contracts in `design system/`. Those documents are normative: Tailor CV and Saved jobs follow the approved Variant A prototype; My profile and Settings preserve their implemented structure. Use `docs/design-system.md` as the index; update the system when intentionally changing a shared visual or interaction rule.

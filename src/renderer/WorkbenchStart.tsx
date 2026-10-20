@@ -1,32 +1,20 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
-import { BriefcaseBusiness, FileText, UserRound } from 'lucide-react'
-import type { ExperienceSnapshot } from '../shared/experience'
 import type { JobRecord } from '../shared/jobs'
-import type { ProfileSnapshot } from '../shared/profile'
+import type { OutboundPayload } from '../shared/outbound-consent'
 import type { OutboundConsentPreview } from '../shared/outbound-consent-contract'
 import type { CanonicalDocument, DocumentFitReport } from '../shared/document'
-import { DraftDocument, DraftEvidenceReview } from './DraftReview'
+import { WorkbenchStageLayout, type WorkbenchSources } from './WorkbenchStageLayout'
 import './workbench-start.css'
 
-type LocalSources = { profile: ProfileSnapshot; evidence: ExperienceSnapshot }
-type SourceEntry = { title: string; detail?: string }
+type LocalSources = WorkbenchSources
 
-function SourceSection({ title, entries }: { title: string; entries: SourceEntry[] }) {
-  return <section className="source-section" aria-label={`${title} source preview`}>
-    <h2>{title}</h2>
-    {entries.length ? <>
-      {entries.slice(0, 2).map((entry, index) => <div className="source-entry" key={`${title}-${index}`}><strong>{entry.title}</strong>{entry.detail && <span>{entry.detail}</span>}</div>)}
-      {entries.length > 2 && <p className="source-more">{entries.length - 2} more {entries.length - 2 === 1 ? 'record' : 'records'} in My profile</p>}
-    </> : <p className="source-unfilled">No {title.toLowerCase()} saved yet</p>}
-  </section>
-}
-
-export function WorkbenchStart({ activeJob, jobCount, onNavigate }: { activeJob: JobRecord | null; jobCount: number; onNavigate: (page: 'My profile' | 'Saved jobs') => void }) {
+export function WorkbenchStart({ activeJob, onNavigate }: { activeJob: JobRecord | null; onNavigate: (page: 'Saved jobs') => void }) {
   const [sources, setSources] = useState<LocalSources | null>(null)
   const [error, setError] = useState('')
   const [attempt, setAttempt] = useState(0)
   const [review, setReview] = useState<Extract<OutboundConsentPreview, { ok: true }> | null>(null)
   const [consentAccepted, setConsentAccepted] = useState(false)
+  const [newRun, setNewRun] = useState(false)
   const [termsAcknowledged, setTermsAcknowledged] = useState(false)
   const [consentError, setConsentError] = useState('')
   const [consentBusy, setConsentBusy] = useState(false)
@@ -46,7 +34,7 @@ export function WorkbenchStart({ activeJob, jobCount, onNavigate }: { activeJob:
   const selectedJob = useRef(activeJob?.id)
   selectedJob.current = activeJob?.id
   useEffect(() => {
-    setReview(null); setConsentAccepted(false); setTermsAcknowledged(false); setConsentError(''); setDraft(null); setCanonical(null); setFitReport(null); setAcceptedCuts([]); setDraftError(''); setDraftBusy(false)
+    setReview(null); setConsentAccepted(false); setNewRun(false); setTermsAcknowledged(false); setConsentError(''); setDraft(null); setCanonical(null); setFitReport(null); setAcceptedCuts([]); setDraftError(''); setDraftBusy(false)
     if (activeJob) {
       void window.workbench.getDraft(activeJob.id).then(async value => { setDraft(value); if (value) { setCanonical(await window.workbench.getCanonicalDocument(activeJob.id)); setFitReport(await window.workbench.getDocumentFitReport(activeJob.id)) } }).catch(() => setDraftError('Saved draft could not be opened offline.'))
       void window.workbench.getAnalysis(activeJob.id).then(value => { if (value) setAnalysis(value) }).catch(() => {})
@@ -62,6 +50,11 @@ export function WorkbenchStart({ activeJob, jobCount, onNavigate }: { activeJob:
     if (!activeJob || consentBusy) return
     setConsentBusy(true); setConsentError('')
     try {
+      if (pendingToken.current) {
+        const cancelled = await window.workbench.cancelOutboundConsent(pendingToken.current)
+        if (!cancelled.ok) { setConsentError(cancelled.message); return }
+        pendingToken.current = null
+      }
       const result = await window.workbench.prepareOutboundConsent(activeJob.id)
       if (selectedJob.current !== activeJob.id) {
         if (result.ok) void window.workbench.cancelOutboundConsent(result.token)
@@ -69,7 +62,7 @@ export function WorkbenchStart({ activeJob, jobCount, onNavigate }: { activeJob:
       }
       if (!result.ok) { setConsentError(result.message); return }
       pendingToken.current = result.token
-      setTermsAcknowledged(false); setConsentAccepted(false); setReview(result)
+      setTermsAcknowledged(false); setConsentAccepted(false); setReview(result); setNewRun(true)
     } catch { setConsentError('Outgoing data could not be prepared. Try again.') }
     finally { setConsentBusy(false) }
   }
@@ -90,7 +83,7 @@ export function WorkbenchStart({ activeJob, jobCount, onNavigate }: { activeJob:
     try {
       const result = await window.workbench.generateDraft(token, pageTarget)
       if (selectedJob.current !== jobId) return
-      if (result.ok && result.draft && result.draft.jobId === jobId) { setDraft(result.draft); setCanonical(await window.workbench.getCanonicalDocument(jobId)); setFitReport(null) }
+      if (result.ok && result.draft && result.draft.jobId === jobId) { setDraft(result.draft); setCanonical(await window.workbench.getCanonicalDocument(jobId)); setFitReport(null); setNewRun(false) }
       else if (!result.ok) setDraftError(result.message)
       const latest = await window.workbench.getAnalysis(jobId)
       if (latest && selectedJob.current === jobId) setAnalysis(latest)
@@ -159,7 +152,7 @@ export function WorkbenchStart({ activeJob, jobCount, onNavigate }: { activeJob:
       const result = await window.workbench.cancelOutboundConsent(token)
       if (!result.ok) { setConsentError(result.message); return }
       pendingToken.current = null
-      setReview(null); setConsentAccepted(false); setTermsAcknowledged(false)
+      setReview(null); setConsentAccepted(false); setNewRun(false); setTermsAcknowledged(false)
     } catch { setConsentError('This run could not be cancelled. Try again.') }
     finally { setConsentBusy(false) }
   }
@@ -196,63 +189,21 @@ export function WorkbenchStart({ activeJob, jobCount, onNavigate }: { activeJob:
     return () => { mounted = false }
   }, [attempt])
 
-  const profile = sources?.profile
-  const evidence = sources?.evidence
-  const education = (profile?.education ?? []).map(item => ({ title: item.title, detail: [item.institution, item.field].filter(Boolean).join(', ') }))
-  const experience = (evidence?.experience ?? []).map(item => ({ title: item.title, detail: `${item.kind === 'training' ? 'Training at' : 'At'} ${item.organization}` }))
-  const projects = (evidence?.projects ?? []).map(item => ({ title: item.name }))
-  const skills = (profile?.skills ?? []).map(item => ({ title: item.name }))
-  const certificates = (profile?.certificates ?? []).map(item => ({ title: item.title, detail: item.issuer }))
-  const total = education.length + experience.length + projects.length + skills.length + certificates.length
-  const sections = [
-    { title: 'Education', entries: education },
-    { title: 'Experience', entries: experience },
-    { title: 'Projects', entries: projects },
-    { title: 'Skills', entries: skills },
-    { title: 'Certificates', entries: certificates }
-  ]
-
-  return <div className="cv-workbench-start">
-    <section className="document-area" aria-label="CV document">
-      <div className="document-toolbar"><div className="document-toolbar-title"><FileText size={17} aria-hidden="true" /><strong>{draft ? 'Tailored CV draft' : 'Source outline'}</strong><span className="document-stage">{draft ? 'Unverified · not approved' : 'No CV draft yet'}</span></div><span className="document-target">{activeJob ? `Target: ${activeJob.title} · ${activeJob.company}` : 'No job selected'}</span></div>
-      <div className="paper-wrap">
-        <div className="paper-context"><span>{draft ? 'Tailored draft · local locked fields' : 'Layout reference'}</span><span>Five CV sections</span></div>
-        {draft && canonical ? <DraftDocument document={canonical} /> : <>
-          <article className="paper" aria-label="White Arial CV source outline, not a generated draft">
-            <header className="paper-header"><strong className={profile?.contact ? undefined : 'paper-placeholder'}>{profile?.contact?.fullName ?? 'Your name'}</strong><span className={profile?.contact?.headline ? undefined : 'paper-placeholder'}>{profile?.contact?.headline ?? 'Professional headline'}</span></header>
-            <div className="paper-rule" aria-hidden="true" />
-            {sections.map(section => <SourceSection key={section.title} {...section} />)}
-          </article>
-          <p className="paper-caption">Original profile facts only. This is not a draft, export preview, or page-fit check.</p>
-        </>}
-        {draft && canonical && <section className="page-fit-controls" aria-label="Actual PDF page fit"><p>Preview only · unverified and unapproved. No save or export is available.</p><button type="button" className="secondary-button" disabled={fitBusy} onClick={() => void measurePageFit()}>{fitBusy ? 'Measuring with Electron PDF…' : 'Measure actual A4 page fit'}</button>{fitReport && <div role="status">Revision {canonical.revision} · Electron PDF: {fitReport.actualPages} page{fitReport.actualPages === 1 ? '' : 's'}; target {fitReport.targetPages}. {fitReport.overflow ? 'Overflow requires review; no content was changed.' : 'Fits the selected page target.'}{fitReport.overflow && fitReport.proposedCuts.map(cut => <label key={cut.entryId}><input type="checkbox" checked={acceptedCuts.includes(cut.entryId)} onChange={event => setAcceptedCuts(value => event.target.checked ? [...value, cut.entryId] : value.filter(id => id !== cut.entryId))} />Proposed cut: {cut.section} — {cut.label}</label>)}{fitReport.overflow && <button type="button" className="primary-button" disabled={!acceptedCuts.length} onClick={() => void applyPageCuts()}>Accept selected cuts and create new draft revision</button>}</div>}{draftError && <p className="inspector-error" role="alert">{draftError}</p>}</section>}
-      </div>
-    </section>
-    {draft && <DraftEvidenceReview draft={draft} />}
-    <aside className="inspector" aria-label="Workspace guide">
-      <div className="inspector-heading"><h2>Prepare your workspace</h2><p>Two things anchor a tailored CV: what you have done and the role you are targeting.</p></div>
-      {error ? <div className="inspector-error" role="alert"><p>{error}</p><button type="button" className="secondary-button" onClick={() => setAttempt(value => value + 1)}>Retry loading sources</button></div> : !sources ? <p className="inspector-loading" role="status">Reading your local profile…</p> : <ol className="prep-list">
-        <li><span className="prep-index" aria-hidden="true">01</span><div className="prep-content"><div className="prep-label"><UserRound size={16} aria-hidden="true" /><h3>Your profile</h3></div><p>{total ? `${total} ${total === 1 ? 'record' : 'records'} across CV sections${profile?.contact ? ', with your name saved' : ''}.` : profile?.contact ? 'Your name is saved. Add experience or other CV facts next.' : 'Add your name and genuine career facts.'}</p><button type="button" className="prep-link" onClick={() => onNavigate('My profile')}>{total ? 'Review profile' : 'Build your profile'}</button></div></li>
-        <li><span className="prep-index" aria-hidden="true">02</span><div className="prep-content"><div className="prep-label"><BriefcaseBusiness size={16} aria-hidden="true" /><h3>Target job</h3></div><p>{activeJob ? `${activeJob.title} at ${activeJob.company} is selected.` : jobCount ? `${jobCount} saved ${jobCount === 1 ? 'posting' : 'postings'}. Choose the role you want to target.` : 'Save a posting so you can return to its original requirements.'}</p><button type="button" className="prep-link" onClick={() => onNavigate('Saved jobs')}>{activeJob ? 'Change target' : jobCount ? 'Choose a saved job' : 'Save a job posting'}</button></div></li>
-      </ol>}
-      {activeJob && <div className="outbound-consent">
-        <h3>Cloud data review</h3>
-        <p>Inspect minimized posting and profile facts before deciding whether to authorize a run. Inspection alone sends nothing.</p>
-        {!review && <button type="button" className="secondary-button" disabled={consentBusy} onClick={() => void inspectOutgoing()}>{consentBusy ? 'Preparing review…' : 'Inspect outgoing data'}</button>}
-        {review && <section className="outbound-review" aria-label="Outgoing data review">
-          <h4>Data that could be sent</h4>
-          <p>Target: {review.jobTitle} at {review.jobCompany}. These names are displayed locally; inspect the data below for what is eligible to leave this device.</p>
-          <pre aria-label="Eligible outgoing bundle">{JSON.stringify(review.outgoing, null, 2)}</pre>
-          <p>{review.warning}</p>
-          <p>{review.termsNotice} <a href="https://ai.google.dev/gemini-api/terms" target="_blank" rel="noopener noreferrer">Gemini API terms</a>.</p>
-          {!consentAccepted ? <>
-            <label className="outbound-ack"><input type="checkbox" checked={termsAcknowledged} onChange={event => setTermsAcknowledged(event.target.checked)} />I understand the Gemini free-tier data-use terms and have reviewed this exact bundle.</label>
-            <div className="outbound-actions"><button type="button" className="primary-button" disabled={!termsAcknowledged || consentBusy} onClick={() => void authorizeOutgoing()}>Authorize this run</button><button type="button" className="secondary-button" disabled={consentBusy} onClick={() => void cancelOutgoing()}>Cancel review</button></div>
-          </> : <><p role="status">Consent saved for this frozen bundle. Analysis requests are bounded and usage is a local observation, not provider quota.</p><button type="button" className="primary-button" disabled={consentBusy || analysis?.status === 'complete'} onClick={() => void startAnalysis()}>{consentBusy ? 'Analyzing…' : analysis?.status === 'complete' ? 'Analysis complete' : 'Analyze posting'}</button><button type="button" className="secondary-button" disabled={analysis?.status !== 'running'} onClick={() => void window.workbench.cancelAnalysis(activeJob.id).then(setAnalysis)}>Cancel analysis</button>{analysis?.status === 'running' && <p role="status">{analysis.progress} Dispatched attempts: {analysis.attempts}.</p>}{analysis?.status === 'failed' && <p className="inspector-error" role="alert">{analysis.error ?? analysis.progress} Check the connection or Settings, then explicitly start a new authorized run.</p>}{analysis?.status === 'cancelled' && <p role="status">{analysis.progress}</p>}{usage && <p>Pacific day {usage.pacificDay}: {usage.attempts} locally observed attempts; configured maximum {usage.runLimit} per run and {usage.minimumSpacingMs / 1000}s spacing. {usage.warning}</p>}{usage && usage.attempts + usage.runLimit > usage.configuredDailyLimit && <p role="alert">This run could reach the configured local daily attempt limit ({usage.configuredDailyLimit}); dispatch stops at that limit. It is not a provider quota estimate.</p>}{analysis?.analysis && <div aria-label="Posting analysis"><h4>Required qualifications</h4><ul>{analysis.analysis.required.map(item => <li key={item}>{item}</li>)}</ul><h4>Preferred qualifications</h4><ul>{analysis.analysis.preferred.map(item => <li key={item}>{item}</li>)}</ul><h4>Tools and responsibilities</h4><p>{[...analysis.analysis.tools, ...analysis.analysis.responsibilities].join(' · ')}</p><h4>Keywords</h4><p>{analysis.analysis.keywords.join(' · ')}</p></div>}{analysis?.status === 'complete' && <><label>Page target <select aria-label="Page target" value={pageTarget} onChange={event => setPageTarget(Number(event.target.value) as 1 | 2)}><option value={1}>One page</option><option value={2}>Two pages</option></select></label><button type="button" className="primary-button" disabled={draftBusy || !!draft} onClick={() => void generateDraft()}>{draftBusy ? 'Generating source-linked draft…' : draft ? 'Draft saved locally' : 'Generate tailored draft'}</button></>}{draftError && <p className="inspector-error" role="alert">{draftError}</p>}{draft && <section aria-label="Source-linked draft" className="draft-inspector"><h4>Draft · {draft.status === 'blocked' ? 'blocked by factual checks' : 'unverified and unapproved'}</h4>{draft.checkReport?.findings.some(finding => finding.itemPath === 'generation') && <form onSubmit={event => void addDraftItem(event)}><p>The invalid provider response was discarded. Add your own wording and cite one saved selected source revision; this does not clear the original failure.</p><label>Section <select aria-label="Correction section" value={addSection} onChange={event => setAddSection(event.target.value as typeof addSection)}>{(['education', 'experience', 'projects', 'skills', 'certificates'] as const).map(section => <option key={section} value={section}>{section}</option>)}</select></label><label>Saved evidence revision <select aria-label="Correction evidence" value={addEvidence} onChange={event => setAddEvidence(event.target.value)}><option value="">Choose selected source</option>{draft.evidence.filter(evidence => { const entry = [...(sources?.profile.education ?? []), ...(sources?.profile.certificates ?? []), ...(sources?.profile.skills ?? []), ...(sources?.evidence.experience.flatMap(item => [item, ...item.factualItems]) ?? []), ...(sources?.evidence.projects.flatMap(item => [item, ...item.factualItems, ...item.technologies]) ?? [])].find(candidate => candidate.id === evidence.evidenceId); const type = sources?.profile.skills.some(item => item.id === evidence.evidenceId) ? 'skills' : sources?.profile.education.some(item => item.id === evidence.evidenceId) ? 'education' : sources?.profile.certificates.some(item => item.id === evidence.evidenceId) ? 'certificates' : sources?.evidence.projects.some(item => item.id === evidence.evidenceId || item.factualItems.some(fact => fact.id === evidence.evidenceId) || item.technologies.some(fact => fact.id === evidence.evidenceId)) ? 'projects' : 'experience'; return !!entry && type === addSection }).map(evidence => <option key={evidence.evidenceId} value={evidence.evidenceId}>{evidence.evidenceId} · r{evidence.revision}</option>)}</select></label><label>Your correction<textarea name="local-correction" required maxLength={3000} /></label><button type="submit" disabled={draftBusy || !addEvidence}>Save local correction</button></form>}<p>{draft.progress} Dispatched requests: {draft.attempts}.</p>{draft.checkReport?.findings.map((finding, index) => { const match = /^(education|experience|projects|skills|certificates)\[(\d+)\]/.exec(finding.itemPath); if (!match) return <p role="alert" key={`${finding.code}-${index}`}>{finding.historical ? `Historical unresolved failure from draft ${finding.originDraftId} revision ${finding.originDraftRevision}; evidence ${finding.originEvidenceRevisionHash}. ` : ''}{finding.message} {finding.correction}</p>; const section = match[1] as 'education' | 'experience' | 'projects' | 'skills' | 'certificates'; const itemIndex = Number(match[2]); const entry = draft.content[section][itemIndex]; const current = entry ? ('text' in entry ? entry.text : entry.name) : ''; return <form key={`${finding.code}-${index}`} role="alert" onSubmit={event => { event.preventDefault(); const value = new FormData(event.currentTarget).get('correction'); if (typeof value === 'string') void correctDraft(section, itemIndex, value) }}><p>{finding.historical ? `Historical unresolved failure from draft ${finding.originDraftId} revision ${finding.originDraftRevision}; evidence ${finding.originEvidenceRevisionHash}. ` : ''}{finding.message} {finding.correction}</p><label>Correct {section} draft wording<textarea name="correction" defaultValue={current} /></label><button type="submit" disabled={draftBusy}>Save correction and recheck</button></form>})}<button type="button" className="secondary-button" disabled={draftBusy} onClick={() => void checkDraftNow()}>Check current draft and sources</button><button type="button" className="primary-button" disabled={draftBusy || !fitReport || fitReport.overflow || !draft.checkReport?.passed} onClick={() => void approveCurrentDraft()}>Review and approve whole document</button><p>{draft.checkReport?.limitation ?? 'Automated checks are second opinions, not proof.'} A citation is not proof of semantic truth; review wording against its source. New factual claims must be added to your saved profile and cited before approval.</p>{(['education', 'experience', 'projects', 'skills', 'certificates'] as const).map(section => <div key={section}><h5>{section[0].toUpperCase() + section.slice(1)}</h5>{draft.content[section].map((item, index) => <article key={`${section}-${index}`}><form onSubmit={event => { event.preventDefault(); const text = new FormData(event.currentTarget).get('wording'); if (typeof text === 'string') void correctDraft(section, index, text, new FormData(event.currentTarget).get('editIntent') === 'new-fact' ? 'new-fact' : 'wording-only') }}><label>Edit wording<textarea name="wording" defaultValue={'text' in item ? item.text : item.name} /></label><label>Change type<select name="editIntent" defaultValue="wording-only"><option value="wording-only">Wording-only (no new facts)</option><option value="new-fact">New or changed factual claim (must be supported by the cited saved evidence)</option></select></label><button type="submit" disabled={draftBusy}>Save wording and recheck</button></form><small>Source revision{item.citations.length === 1 ? '' : 's'}: {item.citations.map(citation => `${citation.evidenceId} · r${citation.revision}`).join(', ')}</small><p className="future-note">{item.rationale}</p></article>)}</div>)}</section>}<button type="button" className="secondary-button" disabled={consentBusy} onClick={() => void cancelOutgoing()}>Revoke this run</button></>}
-        </section>}
-        {consentError && <p className="inspector-error" role="alert">{consentError}</p>}
-      </div>}
-      <div className="inspector-future" aria-label="Evidence and qualification coverage"><h3>Evidence &amp; coverage</h3>{draft?.coverage ? <><p>{draft.coverage.label}</p><h4>Supported matches</h4>{draft.coverage.supportedMatches.length ? <ul>{draft.coverage.supportedMatches.map((match, index) => <li key={`${match.qualification}-${index}`}>{match.qualification} · {match.kind}, supported as “{match.matchedAs}” · evidence {match.evidence.join(', ')}</li>)}</ul> : <p>No supported required/preferred matches found.</p>}<h4>Advisory gaps</h4>{draft.coverage.gaps.length ? <ul>{draft.coverage.gaps.map((gap, index) => <li key={`${gap.qualification}-${index}`}>{gap.qualification} · missing {gap.kind} qualification (advisory; does not block factual-valid partial-match drafts)</li>)}</ul> : <p>No explicit required/preferred gaps.</p>}<p>Keyword repair dispatch attempts: {draft.coverage.repairAttempts} (at most one repair cycle, within the shared run budget). Factual checks rerun: {draft.coverage.factualChecksRerun ? 'yes' : 'no'}.</p></> : <p>{draft ? 'Coverage will appear when generated with a completed posting analysis.' : 'A draft will expose evidence-backed matches and advisory qualification gaps.'}</p>}<p className="future-note">Gaps never authorize invented experience. Drafts remain unverified and unapproved. No online ATS checker is used.</p></div>
-    </aside>
-  </div>
+  const outgoing = review?.outgoing as unknown as OutboundPayload | undefined
+  const outgoingProfileCounts = outgoing ? [
+    { label: 'Experience and training', count: outgoing.profile.experience.length, unit: 'record' },
+    { label: 'Projects', count: outgoing.profile.projects.length, unit: 'record' },
+    { label: 'Skills', count: outgoing.profile.skills.length, unit: 'skill' },
+    { label: 'Education', count: outgoing.profile.education.length, unit: 'record' },
+    { label: 'Certificates', count: outgoing.profile.certificates.length, unit: 'record' }
+  ].filter(item => item.count > 0) : []
+  const activePhase: 1 | 2 | 3 | 4 = newRun && review ? consentAccepted ? 3 : 2 : draft ? 4 : consentAccepted ? 3 : review ? 2 : 1
+  return <WorkbenchStageLayout
+    activeJob={activeJob} onNavigate={page => onNavigate(page)} error={error} retry={() => setAttempt(value => value + 1)} activePhase={activePhase}
+    review={review} consentAccepted={consentAccepted} termsAcknowledged={termsAcknowledged} setTermsAcknowledged={setTermsAcknowledged} consentError={consentError} consentBusy={consentBusy}
+    analysis={analysis} draft={draft} canonical={canonical} fitReport={fitReport} fitBusy={fitBusy} acceptedCuts={acceptedCuts} setAcceptedCuts={setAcceptedCuts} draftBusy={draftBusy} draftError={draftError}
+    pageTarget={pageTarget} setPageTarget={setPageTarget} usage={usage} addSection={addSection} setAddSection={setAddSection} addEvidence={addEvidence} setAddEvidence={setAddEvidence} sources={sources} outgoingProfileCounts={outgoingProfileCounts}
+    inspectOutgoing={inspectOutgoing} cancelOutgoing={cancelOutgoing} authorizeOutgoing={authorizeOutgoing} startAnalysis={startAnalysis} generateDraft={generateDraft} cancelAnalysis={async () => { if (activeJob) setAnalysis(await window.workbench.cancelAnalysis(activeJob.id)) }}
+    measurePageFit={measurePageFit} applyPageCuts={applyPageCuts} addDraftItem={addDraftItem} correctDraft={correctDraft} checkDraftNow={checkDraftNow} approveCurrentDraft={approveCurrentDraft}
+  />
 }

@@ -1,0 +1,50 @@
+# Page composition contracts
+
+## Shared shell
+
+The production shell is the implemented four-page navigation: **Tailor CV**, **Saved jobs**, **My profile**, **Settings**. Desktop uses a 220px left rail with brand, appearance toggle, vertical navigation, saved posting shortcuts and local-storage note; a 68px top header holds the Workspace / page breadcrumb and appearance control. The page title and content begin on a shared 28px left edge. Current implementation hides the desktop header, job shortcuts and footer at 760px, moves appearance control into the compact top rail and displays navigation in a 4-column grid (2 columns below 520px). Preserve accessible page names and `aria-current` selected navigation. Keep both appearance controls if their duplicated responsive placement remains in implementation; expose one at a time visually.
+
+## Tailor CV — prototype Variant A Workbench target
+
+**Target reference:** `prototypes/cv-tailor-ui/src/App.tsx`, Workbench (Variant A), `src/index.css`, associated workflow/document/management components. Reproduce the approved composition, hierarchy, alignment and user-facing interaction patterns exactly. This page supersedes the current Tailor CV visual composition; actual production capabilities remain authoritative.
+
+- Use the shared desktop rail and header. Rail contains brand/appearance, main navigation, saved jobs list with clear selected job state, a visible add-job affordance and a persistent local-only reassurance at its bottom.
+- Main workspace starts with current-job context (company mark/name, role and posting identity) and workflow status. Provide a clear, sequential stage strip for the active workflow; current stage must be visually and programmatically identified. Stage names and availability reflect real production state.
+- Primary workspace is a three-zone workbench: CV document workspace as the largest central column, contextual evidence/selection inspector beside it, and explicit review/next-step controls in the workflow area. Align their top edges; use constrained min-widths and responsive stacking rather than clipping. The document is the visual anchor; inspector is secondary and must not compete with the page title.
+- Document workspace has a quiet toolbar above an A4-like white paper. Paper remains white in dark app mode and uses Arial, dark ink and restrained section dividers. Paragraph selection is visible but subtle; selected content can reveal source/why-included context in the inspector. Editing and review controls remain attached to the relevant content and use plain verbs.
+- Inspector has a clear heading, selected paragraph context, evidence/source citation, associated keywords or gaps and explicit state. Source text is visually distinct with a slim interactive-colored rule; do not style evidence as a generic alert.
+- Use prototype A typography refinement: Manrope UI, Sora headings; do not borrow B/C's IBM Plex-only or review-room alternative layouts. Light/dark themes are both supported.
+- Preserve the prototype's information hierarchy and visible controls, but do not imply that fixture generation, coverage scores, simulated export, scenario toggles, fake state persistence or fixture-only content exist in production. If corresponding real behavior is unavailable, omit the unsupported action rather than shipping a simulation.
+- Empty/blocked states explain the next available step without abandoning the document/workbench framing. Never indicate approval, evidence grounding, privacy filtering, export completion or generation completion until the real operation succeeds.
+- Responsive: keep the document first in reading order. Collapse to document then inspector and workflow controls; workflow stage navigation may scroll horizontally within its own region. Controls remain reachable without hover.
+
+## Saved jobs — prototype page target
+
+**Target reference:** the approved Workbench's Saved jobs management page in `prototypes/cv-tailor-ui/src/App.tsx` and related management component. Match its page-specific organization, not the production Saved jobs split editor/list redesign. Retain the production shared shell and real persistence, errors and validation.
+
+- Page heading is left-aligned: context label “Your applications”, title “Give every CV a clear target.”, supporting sentence “Saved postings, drafts, and the evidence behind them.” and a right-aligned “New job” action.
+- With saved jobs, show one bordered table with exactly three column roles: **Posting**, **Draft status**, **Next action**. Each full-width row presents title and company as primary/secondary text, a truthful draft-state badge, and the “Open posting” action. Selecting the row opens the posting in Tailor CV. Keep column alignments consistent between header and rows.
+- With no saved jobs, show the prototype's one bordered/dashed empty-state surface: folder icon, “Your first job starts here” heading, explanatory paragraph and inline add-posting form. Keep the “New job” dialog action available in the page heading too.
+- Add-posting dialog groups labeled Job title and Company fields on one row at desktop widths, then a full-width Posting and requirements multiline field; validation appears beside the invalid field. Show truthful local-storage guidance and an explicit save action. Production should provide cancel/close and real save feedback without changing this visual structure.
+- Preserve the prototype's closing history note beneath the list/state, but replace prototype-only copy with truthful production history/revision behavior. Do not claim history if none exists.
+- Selected/hover/focus states are differentiated; selection is not conveyed by color alone. Long company/title/posting content wraps instead of widening the page.
+- Keep the prototype's spatial organization and interaction sequence exactly; replace prototype fixtures and transient-only state with real application data. Do not retain the live app's split list/editor as the default Saved jobs page.
+- At narrow widths, preserve row information and reorder/stack actions without horizontal scrolling.
+
+## My profile — current implementation contract
+
+Preserve existing live information architecture and functionality. Do not substitute prototype Profile. Current page uses title/supporting description, a profile summary, data-exchange toolbar, nine section navigation items, and a content panel for the selected area. Existing sections cover profile facts, experience, education, projects, skills and supporting evidence; some destinations are explicitly upcoming. Keep current section labels and statuses truthful.
+
+- Keep summary, exchange actions and section navigation in their current order. Active section uses surface and bottom indicator. At 1200px section nav wraps to 3 columns.
+- Keep forms grouped by related facts; use two-column grids for paired fields, wide rows for longer text, and a single column at 520px. Labels remain persistent above controls; optional fields are explicitly marked; validation appears adjacent to the affected field.
+- Evidence groups use fieldset/legend semantics and consistent row/action alignment. Existing save/edit/remove flows keep their current meaning and feedback.
+- Keep profile panels white/surface on the shared canvas, 24px desktop padding (18px mobile), 8px radius and 1px border. Do not redesign its information architecture under the Tailor CV/Saved jobs prototype exception.
+
+## Settings — current implementation contract
+
+Preserve existing live Settings structure, model/credential controls, privacy/faithfulness settings, secure-storage disclosures, and their current interaction semantics. Do not substitute prototype Settings.
+
+- Retain the existing grid: two equal columns on wide screens, single column at 980px; faithfulness-wide section spans both columns above the breakpoint. Blocks use responsive 20–32px padding, 10px radius, 1px border and surface background.
+- Each block starts with a 38px raised icon tile and heading/description; form controls and explanatory text stay in the same logical group. Sensitive credential controls must preserve masking and existing secure-storage behavior.
+- Settings controls are at least 48px high; helper text is 12px with readable 1.5–1.65 line spacing. Disclosures are plain, scannable, link-underlined and max 100ch.
+- Do not state a setting was saved until persistence confirms it. Loading, storage errors and disabled states remain visible and accurately described.

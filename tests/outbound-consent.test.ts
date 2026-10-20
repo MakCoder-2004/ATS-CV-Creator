@@ -13,7 +13,7 @@ const source: ConsentSource = {
     education: [{ id: 'edu-1', revision: 1, section: 'education', title: 'MSc', institution: 'Westbridge University', startDate: '2015', endDate: '2017' }],
     summary: [{ section: 'summary', description: 'SECRET SUMMARY' }], languages: [{ section: 'languages', title: 'Secret language' }], extras: [{ section: 'extras', title: 'Secret extra' }]
   },
-  model: { name: 'gemini-3.6-flash', temperature: 0.2, ...({ apiKey: 'DO_NOT_SEND_KEY', arbitrary: 'private config' } as {}) }
+  model: { name: 'minimax/minimax-m3.1-flash:free', temperature: 0.2, ...({ apiKey: 'DO_NOT_SEND_KEY', arbitrary: 'private config' } as {}) }
 }
 
 describe('outbound consent public contract', () => {
@@ -74,6 +74,6 @@ describe('outbound consent public contract', () => {
     expect(() => engine.grantConsent('run', bundle, { accepted: true, freeTierTermsAcknowledged: false })).toThrow(/terms/i)
     engine.grantConsent('run-1', bundle, { accepted: true, freeTierTermsAcknowledged: true })
     expect(() => engine.authorizePayload('run-2', bundle, { text: 'retry' })).toThrow(/consent/i)
-    expect(() => engine.authorizePayload('run-1', prepareOutboundBundle({ ...source, model: { name: 'gemini-2.5-pro', temperature: 0.2 } }), { text: 'retry' })).toThrow(/scope|stale/i)
+    expect(() => engine.authorizePayload('run-1', prepareOutboundBundle({ ...source, model: { name: 'anthropic/claude-3.5-sonnet', temperature: 0.2 } }), { text: 'retry' })).toThrow(/scope|stale/i)
   })
 })

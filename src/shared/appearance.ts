@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import type { ContactInput, EvidenceRevision, ProfileEntryInput, ProfileMutationResult, ProfileSnapshot, SkillInput } from './profile'
 import type { ExperienceInput, ExperienceMutationResult, ExperienceSnapshot, ProjectInput } from './experience'
-import { geminiSettingsSchema, geminiModelSchema, type GeminiModel } from './gemini-settings'
+import { openRouterSettingsSchema, openRouterModelSchema, type OpenRouterModel } from './openrouter-settings'
 import type { JobInput, JobRecord, JobSaveResult } from './jobs'
 import type { ProfileExchangeResult } from './profile-exchange'
 import type { OutboundConsentAction, OutboundConsentPreview } from './outbound-consent-contract'
@@ -12,18 +12,20 @@ import type { CanonicalDocument, DocumentFitReport } from './document'
 
 export const appearanceSchema = z.enum(['light', 'dark'])
 export type Appearance = z.infer<typeof appearanceSchema>
-export const settingsSchema = z.object({ appearance: appearanceSchema, gemini: geminiSettingsSchema }).strict()
+export const settingsSchema = z.object({ appearance: appearanceSchema, openRouter: openRouterSettingsSchema }).strict()
 export type Settings = z.infer<typeof settingsSchema>
-export const geminiModelInputSchema = geminiModelSchema
+export const openRouterModelInputSchema = openRouterModelSchema
 
 /** Public renderer-facing application contract; no generic invoke or file access. */
 export interface WorkbenchAPI {
   getSettings(): Promise<Settings>
   setAppearance(value: Appearance): Promise<Settings>
-  setGeminiModel(value: GeminiModel): Promise<Settings>
+  setOpenRouterModel(value: OpenRouterModel): Promise<Settings>
   setFaithfulnessCheck(value: boolean): Promise<Settings>
-  saveGeminiApiKey(value: string): Promise<Settings>
-  removeGeminiApiKey(): Promise<Settings>
+  saveOpenRouterApiKey(value: string): Promise<Settings>
+  revealOpenRouterApiKey(): Promise<string>
+  copyOpenRouterApiKey(): Promise<void>
+  removeOpenRouterApiKey(): Promise<Settings>
   getProfile(): Promise<ProfileSnapshot>
   exportProfile(): Promise<{ ok: boolean; cancelled: boolean; message: string }>
   previewProfileImport(): Promise<ProfileExchangeResult>
@@ -65,7 +67,7 @@ export interface WorkbenchAPI {
   setAnalysisBudgets(value: AnalysisBudgets): Promise<AnalysisUsage>
 }
 
-export type WorkbenchStorageAPI = Omit<WorkbenchAPI, 'exportProfile' | 'previewProfileImport' | 'applyProfileImport' | 'cancelProfileImport' | 'measureDocument'> & {
+export type WorkbenchStorageAPI = Omit<WorkbenchAPI, 'exportProfile' | 'previewProfileImport' | 'applyProfileImport' | 'cancelProfileImport' | 'measureDocument' | 'copyOpenRouterApiKey'> & {
   saveDocumentFitReport(jobId: string, report: DocumentFitReport): Promise<DocumentFitReport>
   validateProfileImport(input: string): Promise<{ ok: boolean; message: string }>
   replaceProfile(input: string): Promise<{ ok: boolean; message: string; profile?: ProfileSnapshot }>

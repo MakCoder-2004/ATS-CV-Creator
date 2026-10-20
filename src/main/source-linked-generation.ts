@@ -49,8 +49,21 @@ export async function runSourceLinkedGraph(input: { job: unknown; analysis: unkn
       const order = selectWithinPageBudget(input.items, state.scored?.relevance ?? [], input.pageTarget ?? 1)
       if (!order.length) throw new Error('No authorized profile evidence fits the selected page budget.')
       const selected = order.map(x => ({ ...input.items[x.index], index: x.index, rationale: x.rationale })).filter(x => x.id)
-      const response = await input.call(`Write conservative paragraph descriptions and supported skill selections using only selected evidence. Cite selected integer evidence indexes. Keep responsibility/scope/certainty unchanged. Return exactly this schema.\n${JSON.stringify({ job: input.job, analysis: input.analysis, selected: selected.map(({ index, category, text }) => ({ index, category, text })) })}`, tailoredSchema)
-      return { tailored: tailoredSchema.parse(response.value), attempts: response.attempts }
+      const categories = ['education', 'experience', 'projects', 'skills', 'certificates'] as const
+      const allowed = Object.fromEntries(categories.map(category => [category, selected.filter(item => item.category === category).map(item => item.index)])) as Record<typeof categories[number], number[]>
+      const prompt = `Write conservative CV wording using only selected evidence. Each output section may cite ONLY indexes from its own section in allowedEvidenceBySection. For example, skills may cite only skills indexes, never experience indexes, even when a role also demonstrates that skill. Every item needs at least one citation from its own section; leave sections with no eligible evidence empty. Do not infer absent qualifications or strengthen responsibility, scope, or certainty. Return only the requested JSON.\n${JSON.stringify({ job: input.job, analysis: input.analysis, allowedEvidenceBySection: allowed, selected: selected.map(({ index, category, text }) => ({ index, category, text })) })}`
+      const validCitations = (value: z.infer<typeof tailoredSchema>) => categories.every(category => value[category].every(entry => entry.evidence.every(index => allowed[category].includes(index))))
+      let response = await input.call(prompt, tailoredSchema)
+      let tailored = tailoredSchema.parse(response.value)
+      let attempts = response.attempts
+      if (!validCitations(tailored)) {
+        input.onProgress?.('Retrying draft wording with category-specific citation constraints.')
+        response = await input.call(`${prompt}\nImportant: citation indexes must come from allowedEvidenceBySection for the corresponding output section. Do not cross-cite a role in the skills section.`, tailoredSchema)
+        tailored = tailoredSchema.parse(response.value)
+        attempts += response.attempts
+      }
+      if (!validCitations(tailored)) throw new CitationValidationError('foreign-citation')
+      return { tailored, attempts }
     })
     .addEdge(START, 'batch_score').addEdge('batch_score', 'tailor').addEdge('tailor', END).compile()
   const result = await graph.invoke({})

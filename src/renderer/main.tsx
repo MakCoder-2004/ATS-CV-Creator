@@ -1,8 +1,8 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import { BriefcaseBusiness, FileText, LayoutPanelLeft, Moon, Settings2, Sun, UserRound } from 'lucide-react'
+import { BriefcaseBusiness, FileText, LayoutPanelLeft, Moon, Plus, Settings2, Sun, UserRound } from 'lucide-react'
 import type { Appearance } from '../shared/appearance'
-import { GeminiSettingsPanel } from './GeminiSettings'
+import { OpenRouterSettingsPanel } from './OpenRouterSettings'
 import { ProfileEditor } from './ProfileEditor'
 import { SavedJobs } from './SavedJobs'
 import { WorkbenchStart } from './WorkbenchStart'
@@ -26,10 +26,12 @@ function App() {
   const [ready, setReady] = useState(false)
   const [jobs, setJobs] = useState<JobRecord[]>([])
   const [activeJob, setActiveJob] = useState<JobRecord | null>(null)
+  const contentRef = useRef<HTMLElement>(null)
   useEffect(() => {
     window.workbench.getSettings().then(settings => { setAppearance(settings.appearance); setReady(true) }).catch(() => setError('Could not open workspace settings. Restart the app to retry.'))
     window.workbench.listJobs().then(setJobs).catch(() => setError('Saved postings could not be loaded. Restart the app to retry.'))
   }, [])
+  useEffect(() => { if (ready) contentRef.current?.focus() }, [page, ready])
   function keepJob(job: JobRecord) {
     setJobs(current => [job, ...current.filter(item => item.id !== job.id).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))])
     setActiveJob(job)
@@ -49,15 +51,15 @@ function App() {
     <aside className="sidebar" aria-label="Workspace navigation">
       <div className="sidebar-top"><div className="brand"><span className="brand-icon"><LayoutPanelLeft aria-hidden="true" size={20} /></span><div><strong>CV Tailor</strong><small>Your experience, supported.</small></div></div><AppearanceControls className="sidebar-appearance" appearance={appearance} change={value => void changeAppearance(value)} /></div>
       <nav aria-label="Main navigation">{pages.map(({ label, icon: Icon }) => <button type="button" key={label} aria-current={page === label ? 'page' : undefined} onClick={() => setPage(label)}><Icon size={18} aria-hidden="true" />{label}</button>)}</nav>
-      <div className="sidebar-jobs"><div className="section-label">Saved postings <span>{jobs.length}</span></div>{jobs.length ? <div className="sidebar-job-items">{jobs.map(job => <button type="button" key={job.id} aria-current={activeJob?.id === job.id ? 'true' : undefined} onClick={() => { setPage('Tailor CV'); void activateJob(job.id) }}>{job.title}<small>{job.company}</small></button>)}</div> : <p>No saved postings yet. Use Saved jobs to add your first target.</p>}</div>
+      <div className="sidebar-jobs"><div className="section-label">Saved jobs <span>{jobs.length}</span></div>{jobs.length > 0 && <div className="sidebar-job-items">{jobs.map(job => <button type="button" key={job.id} aria-current={activeJob?.id === job.id ? 'true' : undefined} onClick={() => { setPage('Tailor CV'); void activateJob(job.id) }}>{job.title}<small>{job.company}</small></button>)}</div>}<button type="button" className="sidebar-new-job" onClick={() => setPage('Saved jobs')}><Plus size={16} aria-hidden="true" /> New job</button></div>
       <div className="sidebar-bottom"><div className="storage-note">Personal workspace<br /><span>Saved on this device</span></div></div>
     </aside>
     <div className="workspace-main">
       <header className="header"><span className="breadcrumb">Workspace <span aria-hidden="true">/</span> {page}</span><AppearanceControls className="header-appearance" appearance={appearance} change={value => void changeAppearance(value)} /></header>
       {error && <p role="alert" className="error">{error}</p>}
-      <main id="content" tabIndex={-1}>
-        {page === 'Tailor CV' ? <div className="title cv-title"><h1>Your CV workbench</h1><p>Bring your original career facts and a saved job together before drafting a tailored CV.</p></div> : <div className="title"><span className="context">Personal workspace</span><h1>{page}</h1><p>{page === 'Saved jobs' ? 'Keep original job postings ready to revisit, even offline.' : page === 'My profile' ? 'Keep the career facts that support your CV in one place.' : 'Manage the model and credentials for future CV generation.'}</p></div>}
-        {page === 'Tailor CV' ? <WorkbenchStart activeJob={activeJob} jobCount={jobs.length} onNavigate={setPage} /> : page === 'My profile' ? <ProfileEditor /> : page === 'Saved jobs' ? <SavedJobs jobs={jobs} activeJob={activeJob} onSaved={keepJob} onOpened={keepJob} /> : <div className="settings-page"><GeminiSettingsPanel /></div>}
+      <main id="content" ref={contentRef} tabIndex={-1}>
+        {(page === 'My profile' || page === 'Settings') && <div className="title"><span className="context">Personal workspace</span><h1>{page}</h1><p>{page === 'My profile' ? 'Keep the career facts that support your CV in one place.' : 'Manage the model and credentials for future CV generation.'}</p></div>}
+        {page === 'Tailor CV' ? <WorkbenchStart activeJob={activeJob} onNavigate={setPage} /> : page === 'My profile' ? <ProfileEditor /> : page === 'Saved jobs' ? <SavedJobs jobs={jobs} activeJob={activeJob} onSaved={keepJob} onOpened={keepJob} onNavigate={setPage} /> : <div className="settings-page"><OpenRouterSettingsPanel /></div>}
       </main>
     </div>
   </div>

@@ -105,7 +105,7 @@ test('public analysis reports malformed structured output after one counted sche
   const preview = await wb.api.prepareOutboundConsent(job.value.id)
   if (!preview.ok) throw Error('preview fixture')
   await wb.api.acceptOutboundConsent(preview.token, true, true)
-  expect(await wb.api.startAnalysis(preview.token)).toMatchObject({ status: 'failed', attempts: 2, error: expect.stringMatching(/malformed/i) })
+  expect(await wb.api.startAnalysis(preview.token)).toMatchObject({ status: 'failed', attempts: 2, error: expect.stringMatching(/invalid JSON/i) })
   expect(requests).toHaveLength(2)
 })
 

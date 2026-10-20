@@ -14,7 +14,7 @@ test('workbench opens and remembers a keyboard-accessible appearance choice', as
     first = await launch()
     const firstPage = await first.firstWindow()
     await expect(firstPage.locator('[data-ui-ready="true"]')).toBeVisible()
-    await expect(firstPage.getByRole('heading', { name: 'Your CV workbench' })).toBeVisible()
+    await expect(firstPage.getByRole('heading', { name: 'Job posting' })).toBeVisible()
     await expect(firstPage.getByRole('button', { name: 'Use light mode' })).toHaveAttribute('aria-pressed', 'true')
     const bridgeMethods = await firstPage.evaluate(() => Object.keys(window.workbench))
     expect(bridgeMethods).toEqual(expect.arrayContaining(['getSettings', 'setAppearance', 'getProfile', 'listJobs']))
@@ -40,8 +40,8 @@ test('workbench opens and remembers a keyboard-accessible appearance choice', as
     const page = await reopened.firstWindow()
     await expect(page.locator('[data-ui-ready="true"]')).toBeVisible()
     await expect(page.getByRole('button', { name: 'Use dark mode' })).toHaveAttribute('aria-pressed', 'true')
-    await expect(page.locator('.paper')).toHaveCSS('background-color', 'rgb(255, 255, 255)')
-    await expect(page.locator('.paper')).toHaveCSS('font-family', 'Arial, sans-serif')
+    await expect(page.getByRole('region', { name: 'CV document' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Your tailored CV will appear here' })).toBeVisible()
     await reopened.close()
     reopened = undefined
   } finally {

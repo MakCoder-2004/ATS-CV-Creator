@@ -1,13 +1,13 @@
-import type { GeminiModel } from '../shared/gemini-settings'
+import type { OpenRouterModel } from '../shared/openrouter-settings'
 import { defaultAnalysisBudgets, postingAnalysisSchema, type AnalysisBudgets, type PostingAnalysis } from '../shared/posting-analysis'
 import { pacificDay } from '../shared/pacific-day'
 import type { ZodTypeAny } from 'zod'
 export { postingAnalysisSchema }
 export type { PostingAnalysis }
 export interface AnalysisTransport {
-  generate(input: { model: GeminiModel; prompt: string; signal: AbortSignal; responseSchema: ZodTypeAny }): Promise<string>
+  generate(input: { model: OpenRouterModel; prompt: string; signal: AbortSignal; responseSchema: ZodTypeAny }): Promise<string>
 }
-export interface AnalysisInput { runId: string; jobId: string; prompt: string; model: GeminiModel }
+export interface AnalysisInput { runId: string; jobId: string; prompt: string; model: OpenRouterModel }
 export interface AnalysisUsage { runId: string; jobId: string; attempts: number; status: 'complete' | 'failed' | 'cancelled'; startedAt: number; finishedAt: number }
 export class AnalysisError extends Error {
   usage?: AnalysisUsage
@@ -24,7 +24,7 @@ const cancellableSleep = (ms: number, signal: AbortSignal) => new Promise<void>(
 function providerError(error: unknown, now: () => number): { retry: boolean; delay?: number; kind: AnalysisError['code'] } {
   const status = Number((error as { status?: number })?.status)
   const code = String((error as { code?: string })?.code ?? '')
-  if (status === 401 || status === 403 || /API_KEY|INVALID_ARGUMENT/i.test(code)) return { retry: false, kind: 'INVALID_KEY' }
+  if (status === 401 || status === 403 || /API_KEY/i.test(code)) return { retry: false, kind: 'INVALID_KEY' }
   if (status === 429 || /RESOURCE_EXHAUSTED/i.test(code)) {
     const raw = (error as { retryAfter?: number | string })?.retryAfter
     const delay = typeof raw === 'number' ? raw * 1000 : typeof raw === 'string' ? (/^\d+(?:\.\d+)?$/.test(raw) ? Number(raw) * 1000 : Math.max(0, Date.parse(raw) - now())) : undefined
@@ -88,7 +88,7 @@ export function createAnalysisDispatcher(options: Options) {
           if (controller.signal.aborted || cancelled.has(input.runId)) throw cancelledError()
           if (error instanceof AnalysisError) throw error
           const result = providerError(error, now)
-          if (!result.retry) throw new AnalysisError(result.kind, result.kind === 'INVALID_KEY' ? 'Gemini rejected the API key. Check the saved key in Settings.' : result.kind === 'OFFLINE' ? 'The network is unavailable. Check the connection, then start a new authorized run.' : 'Gemini could not complete the analysis. Review the posting and try again.')
+          if (!result.retry) throw new AnalysisError(result.kind, result.kind === 'INVALID_KEY' ? 'OpenRouter rejected the API key. Check the saved key in Settings.' : result.kind === 'OFFLINE' ? 'The network is unavailable. Check the connection, then start a new authorized run.' : 'OpenRouter could not complete the analysis. Check the model ID, model availability or credits in Settings, then try again.')
           checkBudget()
           const backoff = result.delay ?? Math.min(30000, 1000 * (2 ** Math.max(0, usage.attempts - 1))) * (0.75 + random() * 0.5)
           const boundedBackoff = Math.min(backoff, Math.max(0, runBudgets.runTimeLimitMs - (now() - startedAt)))
@@ -110,7 +110,7 @@ export function createAnalysisDispatcher(options: Options) {
         output = await request(`${input.prompt}\nReturn only valid JSON matching the required posting-analysis schema. Do not infer absent qualifications.`)
         try { parsed = postingAnalysisSchema.safeParse(JSON.parse(output)) } catch { parsed = null }
       }
-      if (!parsed || !parsed.success) throw new AnalysisError('MALFORMED', 'Gemini returned malformed analysis twice. Review the posting and try again.')
+      if (!parsed || !parsed.success) throw new AnalysisError('MALFORMED', 'The selected OpenRouter model returned invalid JSON twice. Choose a model that follows structured prompts, then try again.')
       if (cancelled.has(input.runId)) throw cancelledError()
       usage.status = 'complete'; return { analysis: parsed.data, usage }
     } catch (error) {
@@ -150,7 +150,7 @@ export function createAnalysisDispatcher(options: Options) {
           if (timedOut) throw new AnalysisError('TIMEOUT', 'Analysis time budget is exhausted.')
           if (error instanceof AnalysisError) throw error
           const failure = providerError(error, now)
-          if (!failure.retry) throw new AnalysisError(failure.kind, failure.kind === 'INVALID_KEY' ? 'Gemini rejected the API key. Check the saved key in Settings.' : failure.kind === 'OFFLINE' ? 'The network is unavailable. Check the connection, then start a new authorized run.' : 'Gemini could not complete generation.')
+          if (!failure.retry) throw new AnalysisError(failure.kind, failure.kind === 'INVALID_KEY' ? 'OpenRouter rejected the API key. Check the saved key in Settings.' : failure.kind === 'OFFLINE' ? 'The network is unavailable. Check the connection, then start a new authorized run.' : 'OpenRouter could not complete generation. Check the model ID, model availability or credits in Settings.')
           const delay = failure.delay ?? Math.min(30000, 1000 * (2 ** Math.max(0, attempts - 1))) * (0.75 + random() * 0.5)
           await sleep(Math.min(delay, Math.max(0, runBudgets.runTimeLimitMs - (now() - startedAt))), controller.signal)
         }

@@ -2,12 +2,38 @@ import { afterEach, expect, test } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { randomUUID } from 'node:crypto'
+import { runSourceLinkedGraph, CitationValidationError } from '../src/main/source-linked-generation'
 import { createWorkbench } from '../src/main/workbench'
 import type { AnalysisTransport } from '../src/main/posting-analysis'
 import { analysisBudgetValues } from '../src/shared/posting-analysis'
 
 const dirs: string[] = [], opened: Array<ReturnType<typeof createWorkbench>> = []
 afterEach(() => { for (const item of opened.splice(0)) item.close(); for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
+
+test('cross-category model citations get one bounded correction request without weakening citation checks', async () => {
+  const experienceId = randomUUID(), skillId = randomUUID()
+  const items = [
+    { id: experienceId, revision: 1, category: 'experience' as const, snapshot: {}, text: '{"title":"Engineer","description":"Built TypeScript tools"}' },
+    { id: skillId, revision: 1, category: 'skills' as const, snapshot: {}, text: '{"name":"TypeScript","category":"Programming"}' }
+  ]
+  const calls: string[] = []
+  let correctOnRetry = true
+  const invoke = () => runSourceLinkedGraph({ job: { title: 'Engineer' }, analysis: {}, items, identity: { id: randomUUID(), jobId: randomUUID(), revision: 1, createdAt: new Date().toISOString(), lockedFields: { fullName: 'Synthetic Candidate', experience: [], education: [], projects: [], certificates: [] } }, call: async prompt => {
+    calls.push(prompt)
+    if (prompt.startsWith('Score these numbered')) return { value: { relevance: items.map((_, index) => ({ index, score: 1, rationale: 'Relevant synthetic source.' })) }, attempts: 1 }
+    const invalid = calls.length === 2 || !correctOnRetry
+    return { value: { education: [], experience: [{ text: 'Built TypeScript tools', evidence: [0], rationale: 'Synthetic source.' }], projects: [], skills: [{ name: 'TypeScript', evidence: invalid ? [1, 0] : [1], rationale: 'Saved skill.' }], certificates: [] }, attempts: 1 }
+  } })
+  const result = await invoke()
+  expect(calls).toHaveLength(3)
+  expect(calls[1]).toContain('allowedEvidenceBySection')
+  expect(result.draft.attempts).toBe(3)
+  expect(result.draft.content.skills[0].citations).toEqual([{ evidenceId: skillId, revision: 1 }])
+  calls.length = 0; correctOnRetry = false
+  await expect(invoke()).rejects.toBeInstanceOf(CitationValidationError)
+  expect(calls).toHaveLength(3)
+})
 
 test('accepted frozen consent generates a batched source-linked draft that reopens offline with stable identity', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'source-linked-draft-')); dirs.push(dir)

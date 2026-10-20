@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } from 'electron'
+import { app, BrowserWindow, clipboard, dialog, ipcMain, safeStorage, shell } from 'electron'
 import type { ZodError } from 'zod'
 import { fileURLToPath } from 'node:url'
 import { mkdirSync } from 'node:fs'
@@ -8,7 +8,7 @@ import { renderDocumentHtml } from '../shared/document'
 import { createWorkbench } from './workbench'
 import type { AnalysisTransport } from './posting-analysis'
 import { appearanceSchema } from '../shared/appearance'
-import { geminiKeyInputSchema, geminiModelSchema } from '../shared/gemini-settings'
+import { openRouterKeyInputSchema, openRouterModelSchema } from '../shared/openrouter-settings'
 import { contactSaveInputSchema, evidenceRevisionSchema, profileEntrySaveSchema, profileMutationResultSchema, profileSnapshotSchema, skillSaveInputSchema, uuidSchema } from '../shared/profile'
 import { experienceSaveInputSchema, experienceSnapshotSchema, experienceMutationResultSchema, projectSaveInputSchema } from '../shared/experience'
 import { jobRecordSchema, jobSaveInputSchema, jobSaveResultSchema } from '../shared/jobs'
@@ -80,27 +80,40 @@ app.whenReady().then(() => {
     if (args.length !== 1) throw new Error('Expected appearance')
     return workspace!.api.setAppearance(appearanceSchema.parse(args[0]))
   })
-  ipcMain.handle('settings:gemini-model', (event, ...args: unknown[]) => {
+  ipcMain.handle('settings:openrouter-model', (event, ...args: unknown[]) => {
     trusted(event)
-    if (args.length !== 1) throw new Error('Expected Gemini model')
-    return workspace!.api.setGeminiModel(geminiModelSchema.parse(args[0]))
+    if (args.length !== 1) throw new Error('Expected OpenRouter model')
+    return workspace!.api.setOpenRouterModel(openRouterModelSchema.parse(args[0]))
   })
   ipcMain.handle('settings:faithfulness', (event, ...args: unknown[]) => {
     trusted(event)
     if (args.length !== 1 || typeof args[0] !== 'boolean') throw new Error('Expected faithfulness setting')
     return workspace!.api.setFaithfulnessCheck(args[0])
   })
-  ipcMain.handle('settings:gemini-key:save', (event, ...args: unknown[]) => {
+  ipcMain.handle('settings:openrouter-key:save', (event, ...args: unknown[]) => {
     trusted(event)
-    if (args.length !== 1) throw new Error('Expected Gemini API key')
-    const input = geminiKeyInputSchema.safeParse(args[0])
+    if (args.length !== 1) throw new Error('Expected OpenRouter API key')
+    const input = openRouterKeyInputSchema.safeParse(args[0])
     if (!input.success) throw new Error('API key input is invalid. Correct it and try again.')
-    return workspace!.api.saveGeminiApiKey(input.data)
+    return workspace!.api.saveOpenRouterApiKey(input.data)
   })
-  ipcMain.handle('settings:gemini-key:remove', (event, ...args: unknown[]) => {
+  ipcMain.handle('settings:openrouter-key:reveal', (event, ...args: unknown[]) => {
     trusted(event)
     if (args.length) throw new Error('Unexpected arguments')
-    return workspace!.api.removeGeminiApiKey()
+    return workspace!.api.revealOpenRouterApiKey()
+  })
+  ipcMain.handle('settings:openrouter-key:copy', async (event, ...args: unknown[]) => {
+    trusted(event)
+    if (args.length) throw new Error('Unexpected arguments')
+    clipboard.writeText(await workspace!.api.revealOpenRouterApiKey())
+  })
+  ipcMain.handle('settings:openrouter-key:remove', async (event, ...args: unknown[]) => {
+    trusted(event)
+    if (args.length) throw new Error('Unexpected arguments')
+    // Clear only our copied key; never overwrite unrelated clipboard contents.
+    try { if (clipboard.readText() === await workspace!.api.revealOpenRouterApiKey()) clipboard.clear() }
+    catch { /* Removing a stored key must still work if decryption is unavailable. */ }
+    return workspace!.api.removeOpenRouterApiKey()
   })
   registerProfileExchangeIpc(() => window!, () => workspace!.api, trusted)
   ipcMain.handle('profile:get', async (event, ...args: unknown[]) => {
@@ -269,7 +282,7 @@ app.whenReady().then(() => {
     }
   })
   window.webContents.setWindowOpenHandler(({ url }) => {
-    if (url === 'https://ai.google.dev/gemini-api/terms') void shell.openExternal(url)
+    if (url === 'https://openrouter.ai/privacy') void shell.openExternal(url)
     return { action: 'deny' }
   })
   window.webContents.on('will-navigate', (event) => event.preventDefault())

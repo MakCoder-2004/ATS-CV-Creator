@@ -5,7 +5,7 @@ import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import { appearanceSchema, settingsSchema, type WorkbenchStorageAPI } from '../shared/appearance'
-import { geminiKeyInputSchema, geminiModelSchema, type GeminiModel } from '../shared/gemini-settings'
+import { defaultOpenRouterModel, openRouterKeyInputSchema, openRouterModelSchema, type OpenRouterModel } from '../shared/openrouter-settings'
 import { contactInputSchema, contactRecordSchema, evidenceRevisionSchema, profileEntryInputSchema, profileEntrySchema, profileMutationResultSchema, profileSnapshotSchema, skillInputSchema, skillRecordSchema, uuidSchema, type ContactRecord, type EvidenceRevision, type ProfileEntry, type ProfileSnapshot, type SkillRecord } from '../shared/profile'
 import { experienceInputSchema, experienceRecordSchema, experienceSnapshotSchema, experienceMutationResultSchema, projectInputSchema, projectRecordSchema, type ExperienceRecord, type ProjectRecord, type FactualItemRecord, type ExperienceSnapshot } from '../shared/experience'
 import { jobInputSchema, jobRecordSchema, jobSaveResultSchema } from '../shared/jobs'
@@ -16,7 +16,7 @@ import { createOutboundConsentEngine } from './outbound-consent'
 import type { OutboundConsentAction, OutboundConsentPreview } from '../shared/outbound-consent-contract'
 import { outboundConsentActionSchema, outboundConsentPreviewSchema } from '../shared/outbound-consent-contract'
 import { AnalysisError, createAnalysisDispatcher, type AnalysisTransport } from './posting-analysis'
-import { createGeminiAnalysisTransport } from './gemini-analysis-transport'
+import { createOpenRouterAnalysisTransport } from './openrouter-analysis-transport'
 import { createHash } from 'node:crypto'
 import { z } from 'zod'
 import { analysisBudgetsSchema, analysisResultSchema, analysisUsageSchema, defaultAnalysisBudgets, postingAnalysisSchema, type AnalysisBudgets } from '../shared/posting-analysis'
@@ -190,11 +190,18 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
     try { return analysisBudgetsSchema.parse(row ? JSON.parse(row.value) : defaultAnalysisBudgets) } catch { return defaultAnalysisBudgets }
   }
   const previousAttempts = (db.prepare('SELECT attempted_at FROM analysis_attempts').all() as { attempted_at: string }[]).map(row => Date.parse(row.attempted_at)).filter(Number.isFinite)
+  const readStoredOpenRouterKey = () => {
+    const row = db.prepare('SELECT ciphertext FROM encrypted_credentials WHERE key = ?').get('openrouter-api-key') as { ciphertext: string } | undefined
+    if (!row) throw new Error('No OpenRouter API key is saved on this device.')
+    if (!secureStorage.decryptString || !secureStorageAvailable()) throw new Error('Secure storage is unavailable. The saved key cannot be read.')
+    try { return secureStorage.decryptString(Buffer.from(row.ciphertext, 'base64')) }
+    catch { throw new Error('The saved key could not be decrypted on this device.') }
+  }
   const dispatcher = createAnalysisDispatcher({ ...readAnalysisBudgets(), maxAttempts: readAnalysisBudgets().runLimit, maxElapsedMs: readAnalysisBudgets().runTimeLimitMs, maxDailyAttempts: readAnalysisBudgets().configuredDailyLimit, observedAttempts: previousAttempts, transport: scriptedTransport ?? { generate: async input => {
-    const row = db.prepare('SELECT ciphertext FROM encrypted_credentials WHERE key = ?').get('gemini-api-key') as { ciphertext: string } | undefined
-    if (!row || !secureStorage.decryptString || !secureStorageAvailable()) throw Object.assign(new Error('Gemini API key is unavailable.'), { status: 401 })
-    const key = secureStorage.decryptString(Buffer.from(row.ciphertext, 'base64'))
-    return createGeminiAnalysisTransport(key).generate(input)
+    let key: string
+    try { key = readStoredOpenRouterKey() }
+    catch { throw Object.assign(new Error('OpenRouter API key is unavailable.'), { status: 401 }) }
+    return createOpenRouterAnalysisTransport(key).generate(input)
   } }, onAttempt: (timestamp, runId) => { previousAttempts.push(timestamp); db.prepare('INSERT INTO analysis_attempts (run_id, attempted_at) VALUES (?, ?)').run(runId, new Date(timestamp).toISOString()) }, onProgress: (runId, jobId, progress, attempts) => { const observed = (db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id = ?').get(runId) as { count: number }).count; saveAnalysisState({ jobId, runId, status: 'running', analysis: null, progress, attempts: observed || attempts, cacheHit: false }) } })
   const currentConsentSource = (jobId: string): ConsentSource | null => {
     const job = db.prepare('SELECT data FROM jobs WHERE id = ?').get(jobId) as { data: string } | undefined
@@ -206,10 +213,10 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       ...experience.projects, ...experience.projects.flatMap(item => [...item.factualItems, ...item.technologies])]
       .filter((item): item is NonNullable<typeof item> => item !== null)
     const revisions: EvidenceScopeRevision[] = eligible.map(item => [item.id, item.revision])
-    const settings = db.prepare('SELECT value FROM settings WHERE key = ?').get('gemini-model') as { value: string } | undefined
+    const settings = db.prepare('SELECT value FROM settings WHERE key = ?').get('openrouter-model') as { value: string } | undefined
     return { job: { id: savedJob.id, revision: savedJob.updatedAt, title: savedJob.title, company: savedJob.company, description: savedJob.description },
       profile: { ...profile, revision: revisions, experience: experience.experience, projects: experience.projects },
-      model: { name: geminiModelSchema.parse(settings?.value ?? 'gemini-3.6-flash') } }
+      model: { name: openRouterModelSchema.parse(settings?.value ?? defaultOpenRouterModel) } }
   }
   const currentSourceStatus = (draft: DraftRevision) => {
     const currentById = new Map(profileRecords(readProfile(), readExperience()).map(record => [record.id, record.revision]))
@@ -218,17 +225,17 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
   }
   const api: WorkbenchStorageAPI = {
     async getSettings() {
-      const rows = db.prepare('SELECT key, value FROM settings WHERE key IN (?, ?, ?)').all('appearance', 'gemini-model', 'faithfulness-check') as { key: string; value: string }[]
+      const rows = db.prepare('SELECT key, value FROM settings WHERE key IN (?, ?, ?)').all('appearance', 'openrouter-model', 'faithfulness-check') as { key: string; value: string }[]
       const stored = Object.fromEntries(rows.map(row => [row.key, row.value]))
-      const configured = Boolean(db.prepare('SELECT 1 FROM encrypted_credentials WHERE key = ?').get('gemini-api-key'))
-      return settingsSchema.parse({ appearance: stored.appearance ?? 'light', gemini: { model: stored['gemini-model'] ?? 'gemini-3.6-flash', faithfulnessCheck: stored['faithfulness-check'] === 'true', credential: { configured, secureStorageAvailable: secureStorageAvailable() } } })
+      const configured = Boolean(db.prepare('SELECT 1 FROM encrypted_credentials WHERE key = ?').get('openrouter-api-key'))
+      return settingsSchema.parse({ appearance: stored.appearance ?? 'light', openRouter: { model: stored['openrouter-model'] ?? defaultOpenRouterModel, faithfulnessCheck: stored['faithfulness-check'] === 'true', credential: { configured, secureStorageAvailable: secureStorageAvailable() } } })
     },
     async setAppearance(value) {
       saveSetting('appearance', appearanceSchema.parse(value))
       return this.getSettings()
     },
-    async setGeminiModel(value: GeminiModel) {
-      saveSetting('gemini-model', geminiModelSchema.parse(value))
+    async setOpenRouterModel(value: OpenRouterModel) {
+      saveSetting('openrouter-model', openRouterModelSchema.parse(value))
       return this.getSettings()
     },
     async setFaithfulnessCheck(value: boolean) {
@@ -236,18 +243,21 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       saveSetting('faithfulness-check', String(value))
       return this.getSettings()
     },
-    async saveGeminiApiKey(value: string) {
-      const key = geminiKeyInputSchema.parse(value)
+    async saveOpenRouterApiKey(value: string) {
+      const key = openRouterKeyInputSchema.parse(value)
       if (!secureStorageAvailable()) throw new Error('Secure storage is unavailable. Your API key was not saved.')
       let encrypted: Buffer
       try { encrypted = secureStorage.encryptString(key) }
       catch { throw new Error('Secure storage could not encrypt the API key. The key was not saved.') }
       if (!Buffer.isBuffer(encrypted) || encrypted.length === 0) throw new Error('Secure storage could not encrypt the API key. The key was not saved.')
-      db.prepare('INSERT INTO encrypted_credentials (key, ciphertext) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET ciphertext = excluded.ciphertext').run('gemini-api-key', encrypted.toString('base64'))
+      db.prepare('INSERT INTO encrypted_credentials (key, ciphertext) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET ciphertext = excluded.ciphertext').run('openrouter-api-key', encrypted.toString('base64'))
       return this.getSettings()
     },
-    async removeGeminiApiKey() {
-      db.prepare('DELETE FROM encrypted_credentials WHERE key = ?').run('gemini-api-key')
+    async revealOpenRouterApiKey() {
+      return readStoredOpenRouterKey()
+    },
+    async removeOpenRouterApiKey() {
+      db.prepare('DELETE FROM encrypted_credentials WHERE key = ?').run('openrouter-api-key')
       return this.getSettings()
     },
     async getProfile() { return readProfile() },
@@ -496,7 +506,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
         const token = randomUUID(), runId = randomUUID()
         const faithfulnessRow = db.prepare('SELECT value FROM settings WHERE key = ?').get('faithfulness-check') as { value: string } | undefined
         pendingOutbound.set(token, { jobId, source, bundle, runId, faithfulnessCheck: faithfulnessRow?.value === 'true' })
-        return outboundConsentPreviewSchema.parse({ ok: true, token, jobTitle: source.job.title, jobCompany: source.job.company, outgoing: bundle.outgoing, warning: bundle.preview.residualSensitivityNotice, termsNotice: 'Google Gemini free-tier requests may be used to improve Google products. Do not submit personal, sensitive, or confidential information. This app minimizes data but cannot guarantee anonymity.' })
+        return outboundConsentPreviewSchema.parse({ ok: true, token, jobTitle: source.job.title, jobCompany: source.job.company, outgoing: bundle.outgoing, warning: bundle.preview.residualSensitivityNotice, termsNotice: 'OpenRouter routes requests to third-party model providers. Provider data-use policies depend on the chosen model and endpoint. Do not submit personal, sensitive, or confidential information. Redaction cannot guarantee anonymity.' })
       } catch { return outboundConsentPreviewSchema.parse({ ok: false, message: 'Outgoing data could not be prepared safely. Review your profile and model settings, then try again.' }) }
     },
     async acceptOutboundConsent(token: string, accepted: boolean, freeTierTermsAcknowledged: boolean): Promise<OutboundConsentAction> {
@@ -532,8 +542,8 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
         saveAnalysisState(value)
         return value
       }
-      const credentials = db.prepare('SELECT ciphertext FROM encrypted_credentials WHERE key = ?').get('gemini-api-key')
-      if (!scriptedTransport && !credentials) throw new Error('Save a Gemini API key in Settings before starting analysis.')
+      const credentials = db.prepare('SELECT ciphertext FROM encrypted_credentials WHERE key = ?').get('openrouter-api-key')
+      if (!scriptedTransport && !credentials) throw new Error('Save a OpenRouter API key in Settings before starting analysis.')
       if (startedAnalysisTokens.has(token)) throw new Error('This accepted analysis run is already active or has already started. Review outgoing data and accept a new run to continue.')
       const approvedPayload = authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
       if (activeAnalysisByJob.has(pending.jobId)) throw new Error('An analysis for this job is already active. Cancel it before starting another run.')
@@ -542,7 +552,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       activeAnalysisByJob.set(pending.jobId, pending.runId)
       let result: Awaited<ReturnType<typeof dispatcher.analyze>>
       try {
-        result = await dispatcher.analyze({ runId: pending.runId, jobId: pending.jobId, model: geminiModelSchema.parse(pending.source.model.name), prompt: `Extract only explicit qualifications from this authorized minimized posting. Do not infer missing requirements. Return JSON with required, preferred, tools, responsibilities, keywords.\n${JSON.stringify(approvedPayload)}`, consentId: pending.consentId })
+        result = await dispatcher.analyze({ runId: pending.runId, jobId: pending.jobId, model: openRouterModelSchema.parse(pending.source.model.name), prompt: `Extract only explicit qualifications from this authorized minimized posting. Do not infer missing requirements. Return JSON with required, preferred, tools, responsibilities, keywords.\n${JSON.stringify(approvedPayload)}`, consentId: pending.consentId })
       } catch (error) {
         if (activeAnalysisByJob.get(pending.jobId) === pending.runId) activeAnalysisByJob.delete(pending.jobId)
         const failure = error instanceof AnalysisError ? error : new AnalysisError('PROVIDER', 'Analysis could not complete. Check Settings and try again.')
@@ -599,7 +609,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       try {
         const result = await runSourceLinkedGraph({ job: approvedPayload.job, analysis: analysis.analysis, items: safeItems, pageTarget, restoreText: pending.bundle.restoreIdentifiers, onProgress: progress => { const observed = (db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id = ?').get(pending.runId) as { count: number }).count; saveAnalysisState({ jobId: pending.jobId, runId: pending.runId, status: 'running', analysis: analysis.analysis, progress, attempts: observed, cacheHit: analysis.cacheHit }) }, identity: failedDraftIdentity, call: async (prompt, responseSchema) => {
           authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
-          const generated = await dispatcher.generate({ runId: pending.runId, jobId: pending.jobId, model: geminiModelSchema.parse(pending.source.model.name), prompt, consentId: pending.consentId!, responseSchema })
+          const generated = await dispatcher.generate({ runId: pending.runId, jobId: pending.jobId, model: openRouterModelSchema.parse(pending.source.model.name), prompt, consentId: pending.consentId!, responseSchema })
           authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
           return { value: responseSchema.parse(JSON.parse(generated.text)), attempts: generated.attempts }
         } })
@@ -615,7 +625,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
             return { finding, section, index, text: item && ('text' in item ? item.text : item.name), citedEvidence: item?.citations.map(citation => ({ ...citation, text: safeItems.find(source => source.id === citation.evidenceId)?.text ?? '' })) }
           })
           authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
-          const repair = await dispatcher.generate({ runId: pending.runId, jobId: pending.jobId, model: geminiModelSchema.parse(pending.source.model.name), consentId: pending.consentId!, responseSchema: repairSchema, prompt: `Factual repair cycle ${cycle + 1} of 2. Correct only the listed failing draft items using only their cited evidence. Preserve every unaffected item. Never infer facts or use uncited evidence. Return corrections for failed item paths only; keep citation IDs/revisions from the supplied evidence. If no safe correction is possible, remove that item by returning no correction for it.\n${JSON.stringify({ findings: failedItems })}` })
+          const repair = await dispatcher.generate({ runId: pending.runId, jobId: pending.jobId, model: openRouterModelSchema.parse(pending.source.model.name), consentId: pending.consentId!, responseSchema: repairSchema, prompt: `Factual repair cycle ${cycle + 1} of 2. Correct only the listed failing draft items using only their cited evidence. Preserve every unaffected item. Never infer facts or use uncited evidence. Return corrections for failed item paths only; keep citation IDs/revisions from the supplied evidence. If no safe correction is possible, remove that item by returning no correction for it.\n${JSON.stringify({ findings: failedItems })}` })
           authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
           repairAttempts += repair.attempts
           const response = repairSchema.parse(JSON.parse(repair.text))
@@ -637,7 +647,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
             const priorItem = result.draft.content[eligible.section][eligible.index]
             const priorText = 'text' in priorItem ? priorItem.text : priorItem.name
             authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
-            const coverageRepair = await dispatcher.generate({ runId: pending.runId, jobId: pending.jobId, model: geminiModelSchema.parse(pending.source.model.name), consentId: pending.consentId!, responseSchema: repairSchema, prompt: `Supported-keyword coverage repair (single exact item). Add only the explicitly supported term to this authored text. Preserve all existing wording, responsibility, scope, ownership, skill level, certainty, and citations exactly; do not change any other item. Return zero or one correction, only for the supplied section/index.\n${JSON.stringify({ opportunity: { qualification: opportunity.qualification, matchedAs: opportunity.matchedAs, section: eligible.section, index: eligible.index, evidenceId: eligible.evidenceId, revision: eligible.revision }, text: priorText, evidence: safeItems.find(source => source.id === eligible.evidenceId)?.text })}` })
+            const coverageRepair = await dispatcher.generate({ runId: pending.runId, jobId: pending.jobId, model: openRouterModelSchema.parse(pending.source.model.name), consentId: pending.consentId!, responseSchema: repairSchema, prompt: `Supported-keyword coverage repair (single exact item). Add only the explicitly supported term to this authored text. Preserve all existing wording, responsibility, scope, ownership, skill level, certainty, and citations exactly; do not change any other item. Return zero or one correction, only for the supplied section/index.\n${JSON.stringify({ opportunity: { qualification: opportunity.qualification, matchedAs: opportunity.matchedAs, section: eligible.section, index: eligible.index, evidenceId: eligible.evidenceId, revision: eligible.revision }, text: priorText, evidence: safeItems.find(source => source.id === eligible.evidenceId)?.text })}` })
             authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
             coverageRepairAttempts = coverageRepair.attempts
             const response = repairSchema.parse(JSON.parse(coverageRepair.text))
@@ -678,7 +688,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
             const attemptsBeforeReview = (db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id = ?').get(pending.runId) as { count: number }).count
             try {
               authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
-              const review = await dispatcher.generate({ runId: pending.runId, jobId: pending.jobId, model: geminiModelSchema.parse(pending.source.model.name), consentId: pending.consentId!, responseSchema: semanticSchema, prompt: `Compare all rewritten/source pairs in this single structured batch. Report each exact itemPath once. Mark unsupported only when the rewrite adds or strengthens factual meaning beyond its cited source. This is a second opinion, not proof. Do not rewrite content or request more data.\n${JSON.stringify({ pairs: finalSemanticPairs })}` })
+              const review = await dispatcher.generate({ runId: pending.runId, jobId: pending.jobId, model: openRouterModelSchema.parse(pending.source.model.name), consentId: pending.consentId!, responseSchema: semanticSchema, prompt: `Compare all rewritten/source pairs in this single structured batch. Report each exact itemPath once. Mark unsupported only when the rewrite adds or strengthens factual meaning beyond its cited source. This is a second opinion, not proof. Do not rewrite content or request more data.\n${JSON.stringify({ pairs: finalSemanticPairs })}` })
               authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
               semanticAttempts += review.attempts
               const parsed = semanticSchema.parse(JSON.parse(review.text))
@@ -873,7 +883,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       const day = pacificDay(Date.now())
       const attempts = previousAttempts.filter(timestamp => pacificDay(timestamp) === day).length
       const budgets = readAnalysisBudgets()
-      const localNotice = 'Local observations and configured app limits only; other clients or keys sharing the provider project are not visible. These are not provider quota guarantees.'
+      const localNotice = 'Local observations and configured app limits only; other clients or keys are not visible. These are not OpenRouter account limits.'
       const now = Date.now()
       const recentAttempts = previousAttempts.filter(timestamp => now - timestamp < budgets.rateLimitWindowMs).length
       const dailyWarning = budgets.configuredDailyLimit - attempts < budgets.runLimit ? `Warning before run: the remaining configured local daily attempts may be insufficient for this run (up to ${budgets.runLimit} attempts). ` : ''

@@ -4,7 +4,7 @@ import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-test('visible faithfulness report blocks a draft without requiring a Gemini key', async () => {
+test('visible faithfulness report blocks a draft without requiring an OpenRouter key', async () => {
   test.setTimeout(90000)
   const userData = mkdtempSync(join(tmpdir(), 'cv-tailor-faithfulness-'))
   const app = await electron.launch({ args: ['.'], timeout: 60000, env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData, CV_TAILOR_SCRIPTED_ANALYSIS: 'faithfulness' } })
@@ -20,12 +20,11 @@ test('visible faithfulness report blocks a draft without requiring a Gemini key'
     })
     await page.reload()
     await expect(page.locator('[data-ui-ready="true"]')).toBeVisible()
-    await page.getByRole('button', { name: 'Saved jobs' }).click()
-    await page.getByRole('button', { name: /Software Engineer Example Company Saved/ }).click()
-    await page.getByRole('button', { name: 'Tailor CV' }).click()
+    await page.getByRole('button', { name: 'Saved jobs', exact: true }).click()
+    await page.locator('.saved-job-row').getByRole('button', { name: 'Open posting' }).click()
     await page.getByRole('button', { name: 'Inspect outgoing data' }).click()
-    const review = page.getByRole('region', { name: 'Outgoing data review' })
-    await review.getByRole('checkbox', { name: /I understand the Gemini free-tier data-use terms/ }).check()
+    const review = page.getByRole('region', { name: 'Tailoring workflow' })
+    await review.getByRole('checkbox', { name: /reviewed what is sent/ }).check()
     await review.getByRole('button', { name: 'Authorize this run' }).click()
     await review.getByRole('button', { name: 'Analyze posting' }).click()
     await expect(review.getByRole('button', { name: 'Generate tailored draft' })).toBeVisible({ timeout: 60000 })
@@ -34,7 +33,7 @@ test('visible faithfulness report blocks a draft without requiring a Gemini key'
     await expect(draft).toContainText('blocked by factual checks', { timeout: 60000 })
     await expect(draft).toContainText('Second-opinion faithfulness check')
     await expect(draft).toContainText('second opinions, not proof')
-    expect(await page.evaluate(() => window.workbench.getSettings().then(value => value.gemini.credential.configured))).toBe(false)
+    expect(await page.evaluate(() => window.workbench.getSettings().then(value => value.openRouter.credential.configured))).toBe(false)
   } finally {
     await app.close()
     await rm(userData, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 })

@@ -2,7 +2,7 @@ import { expect, test, vi } from 'vitest'
 import { createAnalysisDispatcher, postingAnalysisSchema, type AnalysisTransport } from '../src/main/posting-analysis'
 
 const response = { required: ['TypeScript'], preferred: ['SQLite'], tools: ['TypeScript'], responsibilities: ['Build applications'], keywords: ['TypeScript', 'SQLite'] }
-const input = (runId: string, consentId: string) => ({ runId, consentId, jobId: 'j1', prompt: 'posting', model: 'gemini-3.6-flash' as const })
+const input = (runId: string, consentId: string) => ({ runId, consentId, jobId: 'j1', prompt: 'posting', model: 'minimax/minimax-m3.1-flash:free' as const })
 test('parses structured analysis through one dispatcher and records local usage', async () => {
   const transport: AnalysisTransport = { generate: vi.fn(async () => JSON.stringify(response)) }
   const dispatcher = createAnalysisDispatcher({ transport, now: () => 1000, sleep: async () => {}, minimumSpacingMs: 0 })
@@ -39,7 +39,7 @@ test('validates model output categories and sanitizes provider errors', async ()
   const transport: AnalysisTransport = { generate: vi.fn(async () => '{"required":[" "]}') }
   const dispatcher = createAnalysisDispatcher({ transport, now: () => 1000, sleep: async () => {}, minimumSpacingMs: 0 })
   dispatcher.authorize('r', 'consent-r')
-  await expect(dispatcher.analyze({ ...input('r', 'consent-r'), prompt: 'secret prompt' })).rejects.toThrow(/malformed/i)
+  await expect(dispatcher.analyze({ ...input('r', 'consent-r'), prompt: 'secret prompt' })).rejects.toThrow(/invalid JSON/i)
 })
 test('does not dispatch a retry when backoff exhausts the shared time limit', async () => {
   let now = 1000
