@@ -1,10 +1,11 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain, safeStorage, shell } from 'electron'
 import type { ZodError } from 'zod'
 import { fileURLToPath } from 'node:url'
-import { mkdirSync } from 'node:fs'
-import { join } from 'node:path'
-import { createHash } from 'node:crypto'
+import { mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { basename, dirname, join } from 'node:path'
+import { createHash, randomUUID } from 'node:crypto'
 import { renderDocumentHtml } from '../shared/document'
+import { renderCanonicalDocx } from './docx-export'
 import { createWorkbench } from './workbench'
 import type { AnalysisTransport } from './posting-analysis'
 import { appearanceSchema } from '../shared/appearance'
@@ -228,6 +229,28 @@ app.whenReady().then(() => {
   ipcMain.handle('draft:correct', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected correction input'); return await workspace!.api.correctDraft(draftCorrectionInputSchema.parse(args[0])) })
   ipcMain.handle('draft:add-item', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected draft item input'); return await workspace!.api.addDraftItem(addDraftItemInputSchema.parse(args[0])) })
   ipcMain.handle('document:preview', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected job ID'); return workspace!.api.getCanonicalDocument(analysisIdSchema.parse(args[0])) })
+  ipcMain.handle('document:export-docx', async (event, ...args: unknown[]) => {
+    trusted(event); if (args.length !== 1) throw new Error('Expected job ID')
+    const jobId = analysisIdSchema.parse(args[0]), guarded = await workspace!.api.assertDraftExportable(jobId)
+    if (!guarded.ok || !guarded.document) return { ok: false, cancelled: false, message: guarded.message }
+    const document = guarded.document
+    const job = await workspace!.api.openJob(jobId)
+    const safePart = (value: string) => value.normalize('NFKC').replace(/[<>:"/\\|?*\u0000-\u001f]/g, '').replace(/[. ]+$/g, '').trim().slice(0, 60)
+    const safeName = [safePart(document.identity.name), safePart(job?.company ?? ''), safePart(job?.title ?? '')].filter(Boolean).join(' - ') || 'Tailored CV'
+    const { canceled, filePath } = await dialog.showSaveDialog(window!, { title: 'Save editable CV', defaultPath: `${safeName}.docx`, buttonLabel: 'Save DOCX', filters: [{ name: 'Word document', extensions: ['docx'] }] })
+    if (canceled || !filePath) return { ok: false, cancelled: true, message: 'DOCX export cancelled.' }
+    const target = filePath.toLowerCase().endsWith('.docx') ? filePath : `${filePath}.docx`
+    const temporary = join(dirname(target), `.${basename(target)}.${randomUUID()}.tmp`)
+    try {
+      const bytes = await renderCanonicalDocx(document)
+      writeFileSync(temporary, bytes, { flag: 'wx' })
+      renameSync(temporary, target)
+      return { ok: true, cancelled: false, message: 'Editable DOCX saved. Word may reflow text differently; identical pagination is not guaranteed.', path: target }
+    } catch (error) {
+      try { rmSync(temporary, { force: true }) } catch { /* Preserve the original export error. */ }
+      return { ok: false, cancelled: false, message: `Could not save the DOCX: ${error instanceof Error ? error.message : 'unknown file error'}` }
+    }
+  })
   ipcMain.handle('document:measure', async (event, ...args: unknown[]) => {
     trusted(event); if (args.length !== 1) throw new Error('Expected job ID')
     const jobId = analysisIdSchema.parse(args[0]), document = await workspace!.api.getCanonicalDocument(jobId)

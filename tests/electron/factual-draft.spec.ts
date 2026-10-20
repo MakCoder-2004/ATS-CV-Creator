@@ -43,6 +43,7 @@ test('visible failed-draft findings can be corrected and rechecked without losin
     await expect(draft).toContainText('Correction passes deterministic checks', { timeout: 10000 })
     await expect(draft).toContainText('review wording against its source')
     await expect(review.getByRole('button', { name: /Export|Approve/ })).toHaveCount(0)
+    await expect(review.getByRole('button', { name: 'Export editable DOCX' })).toHaveCount(0)
   } finally {
     await app?.close().catch(() => {})
     await rm(userData, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 })
