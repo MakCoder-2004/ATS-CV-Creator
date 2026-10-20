@@ -8,6 +8,7 @@ import type { OutboundConsentAction, OutboundConsentPreview } from './outbound-c
 import type { AnalysisBudgets, AnalysisResult, AnalysisUsage } from './posting-analysis'
 import type { DraftCorrectionInput, DraftRevision } from './draft'
 import type { FactualCheckReport } from './factual-report'
+import type { CanonicalDocument, DocumentFitReport } from './document'
 
 export const appearanceSchema = z.enum(['light', 'dark'])
 export type Appearance = z.infer<typeof appearanceSchema>
@@ -52,11 +53,16 @@ export interface WorkbenchAPI {
   getDraft(jobId: string): Promise<DraftRevision | null>
   checkDraft(jobId: string): Promise<FactualCheckReport | null>
   correctDraft(input: DraftCorrectionInput): Promise<DraftRevision | null>
+  getCanonicalDocument(jobId: string): Promise<CanonicalDocument | null>
+  measureDocument(jobId: string): Promise<DocumentFitReport>
+  getDocumentFitReport(jobId: string): Promise<DocumentFitReport | null>
+  acceptDocumentCuts(jobId: string, documentHash: string, entryIds: string[]): Promise<{ ok: boolean; message: string; draft?: DraftRevision }>
   getAnalysisUsage(): Promise<AnalysisUsage>
   setAnalysisBudgets(value: AnalysisBudgets): Promise<AnalysisUsage>
 }
 
-export type WorkbenchStorageAPI = Omit<WorkbenchAPI, 'exportProfile' | 'previewProfileImport' | 'applyProfileImport' | 'cancelProfileImport'> & {
+export type WorkbenchStorageAPI = Omit<WorkbenchAPI, 'exportProfile' | 'previewProfileImport' | 'applyProfileImport' | 'cancelProfileImport' | 'measureDocument'> & {
+  saveDocumentFitReport(jobId: string, report: DocumentFitReport): Promise<DocumentFitReport>
   validateProfileImport(input: string): Promise<{ ok: boolean; message: string }>
   replaceProfile(input: string): Promise<{ ok: boolean; message: string; profile?: ProfileSnapshot }>
 }

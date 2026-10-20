@@ -3,6 +3,8 @@ import type { ZodError } from 'zod'
 import { fileURLToPath } from 'node:url'
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
+import { createHash } from 'node:crypto'
+import { renderDocumentHtml } from '../shared/document'
 import { createWorkbench } from './workbench'
 import type { AnalysisTransport } from './posting-analysis'
 import { appearanceSchema } from '../shared/appearance'
@@ -199,6 +201,37 @@ app.whenReady().then(() => {
   ipcMain.handle('draft:get', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected job ID'); const draft = await workspace!.api.getDraft(analysisIdSchema.parse(args[0])); return draft === null ? null : draftRevisionSchema.parse(draft) })
   ipcMain.handle('draft:check', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected job ID'); const report = await workspace!.api.checkDraft(analysisIdSchema.parse(args[0])); return report === null ? null : factualCheckReportSchema.parse(report) })
   ipcMain.handle('draft:correct', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected correction input'); return await workspace!.api.correctDraft(draftCorrectionInputSchema.parse(args[0])) })
+  ipcMain.handle('document:preview', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected job ID'); return workspace!.api.getCanonicalDocument(analysisIdSchema.parse(args[0])) })
+  ipcMain.handle('document:measure', async (event, ...args: unknown[]) => {
+    trusted(event); if (args.length !== 1) throw new Error('Expected job ID')
+    const jobId = analysisIdSchema.parse(args[0]), document = await workspace!.api.getCanonicalDocument(jobId)
+    if (!document) throw new Error('Generate a draft before measuring page fit.')
+    const html = renderDocumentHtml(document), pdfWindow = new BrowserWindow({ show: false, webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true } })
+    try {
+      await pdfWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`)
+      await pdfWindow.webContents.executeJavaScript('document.fonts.ready')
+      const pdf = await pdfWindow.webContents.printToPDF({ pageSize: 'A4', printBackground: true, preferCSSPageSize: true, margins: { top: 0, bottom: 0, left: 0, right: 0 } })
+      const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs')
+      const loadingTask = pdfjs.getDocument({ data: new Uint8Array(pdf), useSystemFonts: true })
+      const parsedPdf = await loadingTask.promise
+      const extractedText: string[] = [], linkTargets = new Set<string>()
+      for (let pageNumber = 1; pageNumber <= parsedPdf.numPages; pageNumber++) {
+        const page = await parsedPdf.getPage(pageNumber)
+        const textContent = await page.getTextContent()
+        extractedText.push(...textContent.items.flatMap(item => 'str' in item && item.str.trim() ? [item.str.trim()] : []))
+        const annotations = await page.getAnnotations({ intent: 'display' })
+        for (const annotation of annotations) if (annotation.subtype === 'Link' && annotation.url) linkTargets.add(annotation.url)
+      }
+      const actualPages = parsedPdf.numPages
+      await loadingTask.destroy()
+      if (!actualPages || !extractedText.length) throw new Error('Electron PDF has no measurable pages or extractable selectable text.')
+      const entries = document.sections.flatMap(section => section.entries.map(entry => ({ entryId: entry.id, label: entry.heading, section: section.name })))
+      const report = await workspace!.api.saveDocumentFitReport(jobId, { documentHash: createHash('sha256').update(JSON.stringify(document)).digest('hex'), targetPages: document.targetPages, actualPages, extractedText, linkTargets: [...linkTargets], overflow: actualPages > document.targetPages, proposedCuts: actualPages > document.targetPages ? entries.slice(1).reverse() : [], measuredAt: new Date().toISOString() })
+      return report
+    } finally { pdfWindow.destroy() }
+  })
+  ipcMain.handle('document:fit:get', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected job ID'); return workspace!.api.getDocumentFitReport(analysisIdSchema.parse(args[0])) })
+  ipcMain.handle('document:cuts:accept', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 3 || typeof args[1] !== 'string' || !Array.isArray(args[2]) || !args[2].every(id => typeof id === 'string')) throw new Error('Expected job ID, document hash and accepted cut IDs'); return workspace!.api.acceptDocumentCuts(analysisIdSchema.parse(args[0]), args[1], args[2]) })
   ipcMain.handle('analysis:cancel', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected job ID'); return analysisResultSchema.parse(await workspace!.api.cancelAnalysis(analysisIdSchema.parse(args[0]))) })
   ipcMain.handle('analysis:usage', async (event, ...args: unknown[]) => { trusted(event); if (args.length) throw new Error('Unexpected arguments'); return analysisUsageSchema.parse(await workspace!.api.getAnalysisUsage()) })
   ipcMain.handle('analysis:budgets:set', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected analysis budgets'); return analysisUsageSchema.parse(await workspace!.api.setAnalysisBudgets(analysisBudgetsSchema.parse(args[0]))) })
