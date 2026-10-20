@@ -3,14 +3,14 @@ import { z } from 'zod'
 const words = z.array(z.string().trim().min(1).max(300)).max(100)
 export const postingAnalysisSchema = z.object({ required: words, preferred: words, tools: words, responsibilities: words, keywords: words }).strict()
 export const analysisStatusSchema = z.enum(['queued', 'running', 'complete', 'failed', 'cancelled'])
-export const analysisResultSchema = z.object({ jobId: z.string().uuid(), status: analysisStatusSchema, analysis: postingAnalysisSchema.nullable(), progress: z.string(), attempts: z.number().int().nonnegative(), error: z.string().optional(), cacheHit: z.boolean() }).strict()
+export const analysisResultSchema = z.object({ jobId: z.string().uuid(), runId: z.string().uuid().optional(), status: analysisStatusSchema, analysis: postingAnalysisSchema.nullable(), progress: z.string(), attempts: z.number().int().nonnegative(), error: z.string().optional(), cacheHit: z.boolean() }).strict()
 export const analysisBudgetsSchema = z.object({
   minimumSpacingMs: z.number().int().min(0).max(60000),
   rateLimitAttempts: z.number().int().min(1).max(100),
   rateLimitWindowMs: z.number().int().min(1000).max(86400000),
   configuredDailyLimit: z.number().int().min(1).max(10000),
-  runLimit: z.number().int().min(1).max(100),
-  runTimeLimitMs: z.number().int().min(1000).max(3600000)
+  runLimit: z.number().int().min(1).max(12),
+  runTimeLimitMs: z.number().int().min(1000).max(300000)
 }).strict()
 export type AnalysisBudgets = z.infer<typeof analysisBudgetsSchema>
 export const defaultAnalysisBudgets: AnalysisBudgets = { minimumSpacingMs: 5000, rateLimitAttempts: 12, rateLimitWindowMs: 300000, configuredDailyLimit: 50, runLimit: 12, runTimeLimitMs: 300000 }

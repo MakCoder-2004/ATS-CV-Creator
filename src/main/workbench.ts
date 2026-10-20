@@ -20,6 +20,7 @@ import { createGeminiAnalysisTransport } from './gemini-analysis-transport'
 import { createHash } from 'node:crypto'
 import { z } from 'zod'
 import { analysisBudgetsSchema, analysisResultSchema, analysisUsageSchema, defaultAnalysisBudgets, postingAnalysisSchema, type AnalysisBudgets } from '../shared/posting-analysis'
+import { pacificDay } from '../shared/pacific-day'
 
 export interface SecureStorage {
   isEncryptionAvailable(): boolean
@@ -151,6 +152,8 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
   const outboundEngine = createOutboundConsentEngine()
   const pendingOutbound = new Map<string, { jobId: string; source: ConsentSource; bundle: OutboundBundle; runId: string; consentId?: string }>()
   const currentAnalysis = new Map<string, ReturnType<typeof analysisResultSchema.parse>>()
+  const startedAnalysisTokens = new Set<string>()
+  const analysisCacheKey = (source: ConsentSource) => createHash('sha256').update(JSON.stringify({ job: { title: source.job.title, company: source.job.company, description: source.job.description }, model: source.model.name, prompt: 'posting-analysis-v1', schema: JSON.stringify(z.toJSONSchema(postingAnalysisSchema)) })).digest('hex')
   const activeAnalysisByJob = new Map<string, string>()
   const readAnalysisBudgets = (): AnalysisBudgets => {
     const row = db.prepare('SELECT value FROM settings WHERE key = ?').get('analysis-budgets') as { value: string } | undefined
@@ -480,17 +483,19 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
     async startAnalysis(token: string) {
       const pending = pendingOutbound.get(token)
       if (!pending?.consentId) throw new Error('Review and authorize this exact outgoing bundle before analysis.')
-      const cacheKey = createHash('sha256').update(JSON.stringify({ job: { title: pending.source.job.title, company: pending.source.job.company, description: pending.source.job.description }, model: pending.source.model.name, prompt: 'posting-analysis-v1', schema: JSON.stringify(z.toJSONSchema(postingAnalysisSchema)) })).digest('hex')
-      const cached = db.prepare('SELECT data FROM posting_analysis_cache WHERE cache_key = ?').get(cacheKey) as { data: string } | undefined
+      const cacheKey = analysisCacheKey(pending.source)
+      const cached = db.prepare('SELECT data, run_id FROM posting_analysis_cache WHERE cache_key = ?').get(cacheKey) as { data: string; run_id: string } | undefined
       if (cached) {
-        const value = analysisResultSchema.parse({ jobId: pending.jobId, status: 'complete', analysis: postingAnalysisSchema.parse(JSON.parse(cached.data)), progress: 'Loaded compatible saved analysis.', attempts: 0, cacheHit: true })
+        const value = analysisResultSchema.parse({ jobId: pending.jobId, runId: cached.run_id, status: 'complete', analysis: postingAnalysisSchema.parse(JSON.parse(cached.data)), progress: 'Loaded compatible saved analysis.', attempts: 0, cacheHit: true })
         currentAnalysis.set(pending.jobId, value)
         return value
       }
       const credentials = db.prepare('SELECT ciphertext FROM encrypted_credentials WHERE key = ?').get('gemini-api-key')
       if (!scriptedTransport && !credentials) throw new Error('Save a Gemini API key in Settings before starting analysis.')
+      if (startedAnalysisTokens.has(token)) throw new Error('This accepted analysis run is already active or has already started. Review outgoing data and accept a new run to continue.')
       const approvedPayload = authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
       if (activeAnalysisByJob.has(pending.jobId)) throw new Error('An analysis for this job is already active. Cancel it before starting another run.')
+      startedAnalysisTokens.add(token)
       dispatcher.authorize(pending.runId, pending.consentId)
       activeAnalysisByJob.set(pending.jobId, pending.runId)
       let result: Awaited<ReturnType<typeof dispatcher.analyze>>
@@ -506,14 +511,21 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       }
       if (activeAnalysisByJob.get(pending.jobId) === pending.runId) activeAnalysisByJob.delete(pending.jobId)
       db.prepare('INSERT OR REPLACE INTO posting_analysis_cache (cache_key, job_id, run_id, data) VALUES (?, ?, ?, ?)').run(cacheKey, pending.jobId, pending.runId, JSON.stringify(result.analysis))
-      const value = analysisResultSchema.parse({ jobId: pending.jobId, status: 'complete', analysis: result.analysis, progress: 'Posting analysis complete.', attempts: result.usage.attempts, cacheHit: false })
+      const value = analysisResultSchema.parse({ jobId: pending.jobId, runId: pending.runId, status: 'complete', analysis: result.analysis, progress: 'Posting analysis complete.', attempts: result.usage.attempts, cacheHit: false })
       currentAnalysis.set(pending.jobId, value)
       return value
     },
     async getAnalysis(jobId: string) {
       if (!uuidSchema.safeParse(jobId).success) return null
       const value = currentAnalysis.get(jobId)
-      return value ? analysisResultSchema.parse(value) : null
+      if (value) return analysisResultSchema.parse(value)
+      const source = currentConsentSource(jobId)
+      if (!source) return null
+      const cached = db.prepare('SELECT data, run_id FROM posting_analysis_cache WHERE cache_key = ? AND job_id = ?').get(analysisCacheKey(source), jobId) as { data: string; run_id: string } | undefined
+      if (!cached) return null
+      const restored = analysisResultSchema.parse({ jobId, runId: cached.run_id, status: 'complete', analysis: postingAnalysisSchema.parse(JSON.parse(cached.data)), progress: 'Loaded compatible saved analysis from this workspace.', attempts: 0, cacheHit: true })
+      currentAnalysis.set(jobId, restored)
+      return restored
     },
     async cancelAnalysis(jobId: string) {
       const activeRunId = activeAnalysisByJob.get(jobId)
@@ -525,11 +537,15 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       return value
     },
     async getAnalysisUsage() {
-      const pacificDay = (timestamp: number) => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Los_Angeles', year: 'numeric', month: '2-digit', day: '2-digit' }).format(timestamp)
       const day = pacificDay(Date.now())
       const attempts = previousAttempts.filter(timestamp => pacificDay(timestamp) === day).length
       const budgets = readAnalysisBudgets()
-      return analysisUsageSchema.parse({ ...budgets, pacificDay: day, attempts, warning: 'Local observations and configured app limits only; other clients or keys sharing the provider project are not visible. These are not provider quota guarantees.' })
+      const localNotice = 'Local observations and configured app limits only; other clients or keys sharing the provider project are not visible. These are not provider quota guarantees.'
+      const now = Date.now()
+      const recentAttempts = previousAttempts.filter(timestamp => now - timestamp < budgets.rateLimitWindowMs).length
+      const dailyWarning = budgets.configuredDailyLimit - attempts < budgets.runLimit ? `Warning before run: the remaining configured local daily attempts may be insufficient for this run (up to ${budgets.runLimit} attempts). ` : ''
+      const rateWarning = recentAttempts + budgets.runLimit > budgets.rateLimitAttempts ? `Warning before run: this run may reach the configured ${budgets.rateLimitAttempts}-attempt rate window and require pacing. ` : ''
+      return analysisUsageSchema.parse({ ...budgets, pacificDay: day, attempts, warning: `${dailyWarning}${rateWarning}${localNotice}` })
     },
     async setAnalysisBudgets(value) {
       const budgets = analysisBudgetsSchema.parse(value)

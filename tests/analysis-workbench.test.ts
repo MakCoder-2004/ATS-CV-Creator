@@ -16,6 +16,8 @@ test('analysis budgets are validated, persisted, and reflected in local usage ob
   const configured = await wb.api.setAnalysisBudgets({ minimumSpacingMs: 7000, rateLimitAttempts: 8, rateLimitWindowMs: 60000, configuredDailyLimit: 25, runLimit: 6, runTimeLimitMs: 120000 })
   expect(configured).toMatchObject({ minimumSpacingMs: 7000, rateLimitAttempts: 8, rateLimitWindowMs: 60000, configuredDailyLimit: 25, runLimit: 6, runTimeLimitMs: 120000 })
   await expect(wb.api.setAnalysisBudgets({ ...configured, configuredDailyLimit: 0 })).rejects.toThrow()
+  await expect(wb.api.setAnalysisBudgets({ ...configured, runLimit: 13 })).rejects.toThrow()
+  await expect(wb.api.setAnalysisBudgets({ ...configured, runTimeLimitMs: 300001 })).rejects.toThrow()
   wb.close(); opened.pop()
   const reopened = createWorkbench(dir); opened.push(reopened)
   expect(await reopened.api.getAnalysisUsage()).toMatchObject({ minimumSpacingMs: 7000, rateLimitAttempts: 8, rateLimitWindowMs: 60000, configuredDailyLimit: 25, runLimit: 6, runTimeLimitMs: 120000 })
@@ -105,6 +107,50 @@ test('public analysis reports malformed structured output after one counted sche
   await wb.api.acceptOutboundConsent(preview.token, true, true)
   expect(await wb.api.startAnalysis(preview.token)).toMatchObject({ status: 'failed', attempts: 2, error: expect.stringMatching(/malformed/i) })
   expect(requests).toHaveLength(2)
+})
+
+test('failed accepted analysis cannot silently restart and reuse its consent or exhausted run budget', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'analysis-restart-contract-')); dirs.push(dir)
+  let calls = 0
+  const transport: AnalysisTransport = { async generate() { calls++; return '{malformed' } }
+  const wb = createWorkbench(dir, undefined, transport); opened.push(wb)
+  const defaults = await wb.api.getAnalysisUsage()
+  await wb.api.setAnalysisBudgets({ ...analysisBudgetValues(defaults), minimumSpacingMs: 0, runLimit: 1 })
+  const job = await wb.api.saveJob({ title: 'Developer', company: 'Local Corp', description: 'TypeScript required.' })
+  if (!job.ok) throw Error('job fixture')
+  const preview = await wb.api.prepareOutboundConsent(job.value.id)
+  if (!preview.ok) throw Error('preview fixture')
+  await wb.api.acceptOutboundConsent(preview.token, true, true)
+  expect(await wb.api.startAnalysis(preview.token)).toMatchObject({ status: 'failed', attempts: 1 })
+  await expect(wb.api.startAnalysis(preview.token)).rejects.toThrow(/already started/i)
+  expect(calls).toBe(1)
+})
+
+test('compatible persisted posting analysis is readable offline after restart without fresh consent', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'analysis-restart-cache-contract-')); dirs.push(dir)
+  const transport: AnalysisTransport = { async generate() { return JSON.stringify({ required: ['TypeScript'], preferred: [], tools: [], responsibilities: [], keywords: ['TypeScript'] }) } }
+  const wb = createWorkbench(dir, undefined, transport); opened.push(wb)
+  const defaults = await wb.api.getAnalysisUsage()
+  await wb.api.setAnalysisBudgets({ ...analysisBudgetValues(defaults), minimumSpacingMs: 0 })
+  const job = await wb.api.saveJob({ title: 'Developer', company: 'Local Corp', description: 'TypeScript required.' })
+  if (!job.ok) throw Error('job fixture')
+  const preview = await wb.api.prepareOutboundConsent(job.value.id)
+  if (!preview.ok) throw Error('preview fixture')
+  await wb.api.acceptOutboundConsent(preview.token, true, true)
+  const generated = await wb.api.startAnalysis(preview.token)
+  expect(generated.status).toBe('complete')
+  wb.close(); opened.pop()
+  const reopened = createWorkbench(dir, undefined, { async generate() { throw Error('offline') } }); opened.push(reopened)
+  expect(await reopened.api.getAnalysis(job.value.id)).toMatchObject({ jobId: job.value.id, runId: expect.any(String), status: 'complete', cacheHit: true, analysis: { required: ['TypeScript'] } })
+})
+
+test('warns before a run when remaining configured daily attempts may be insufficient', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'analysis-pre-run-warning-contract-')); dirs.push(dir)
+  const wb = createWorkbench(dir); opened.push(wb)
+  const defaults = await wb.api.getAnalysisUsage()
+  const usage = await wb.api.setAnalysisBudgets({ ...analysisBudgetValues(defaults), runLimit: 12, configuredDailyLimit: 1, rateLimitAttempts: 1 })
+  expect(usage.warning).toMatch(/before.*run.*configured local daily/i)
+  expect(usage.warning).toMatch(/before.*run.*rate window/i)
 })
 
 test('invalid provider credentials fail once with a sanitized actionable public result', async () => {

@@ -1,5 +1,6 @@
 import type { GeminiModel } from '../shared/gemini-settings'
 import { defaultAnalysisBudgets, postingAnalysisSchema, type AnalysisBudgets, type PostingAnalysis } from '../shared/posting-analysis'
+import { pacificDay } from '../shared/pacific-day'
 export { postingAnalysisSchema }
 export type { PostingAnalysis }
 export interface AnalysisTransport {
@@ -32,10 +33,7 @@ function providerError(error: unknown, now: () => number): { retry: boolean; del
   if (status >= 500) return { retry: true, kind: 'PROVIDER' }
   return { retry: false, kind: 'PROVIDER' }
 }
-function isPacificDay(timestamp: number, today: number): boolean {
-  const day = (value: number) => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Los_Angeles', year: 'numeric', month: '2-digit', day: '2-digit' }).format(value)
-  return day(timestamp) === day(today)
-}
+function isPacificDay(timestamp: number, today: number): boolean { return pacificDay(timestamp) === pacificDay(today) }
 export function createAnalysisDispatcher(options: Options) {
   const now = options.now ?? Date.now, sleep = options.sleep ?? cancellableSleep
   let budgets: AnalysisBudgets = { ...defaultAnalysisBudgets, minimumSpacingMs: options.minimumSpacingMs ?? defaultAnalysisBudgets.minimumSpacingMs, rateLimitAttempts: options.rateLimitAttempts ?? defaultAnalysisBudgets.rateLimitAttempts, rateLimitWindowMs: options.rateLimitWindowMs ?? defaultAnalysisBudgets.rateLimitWindowMs, runLimit: options.maxAttempts ?? defaultAnalysisBudgets.runLimit, runTimeLimitMs: options.maxElapsedMs ?? defaultAnalysisBudgets.runTimeLimitMs, configuredDailyLimit: options.maxDailyAttempts ?? defaultAnalysisBudgets.configuredDailyLimit }
