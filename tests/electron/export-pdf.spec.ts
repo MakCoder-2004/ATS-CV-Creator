@@ -16,10 +16,14 @@ test('user approves and exports a selectable PDF, while cancellation and overwri
     const saved = await page.evaluate(async () => {
       const contact = await window.workbench.saveContact({ fullName: 'Zoë Candidate', headline: 'Engineer', email: 'zoe@example.test', links: [{ label: 'Portfolio', url: 'https://example.test/portfolio' }] })
       const skill = await window.workbench.saveSkill({ name: 'CaféScript', category: 'Programming' })
-      return { contact, skill }
+      const newer = await window.workbench.saveExperience({ kind: 'employment', title: 'Platform Engineer', organization: 'Northstar Systems', startDate: '2023-01', endDate: '2024-06', description: 'Built dependable service infrastructure.', factualItems: [] })
+      const older = await window.workbench.saveExperience({ kind: 'employment', title: 'Software Engineer', organization: 'Harbor Technologies', startDate: '2020-01', endDate: '2022-12', description: 'Led a careful platform migration.', factualItems: [] })
+      return { contact, skill, newer, older }
     })
     expect(saved.contact.ok).toBe(true)
     expect(saved.skill.ok).toBe(true)
+    expect(saved.newer.ok).toBe(true)
+    expect(saved.older.ok).toBe(true)
     await page.getByRole('button', { name: 'Open saved jobs' }).click()
     await page.getByLabel('Job title').fill('Engineer')
     await page.getByLabel('Company').fill('Example Co')
@@ -85,6 +89,9 @@ test('user approves and exports a selectable PDF, while cancellation and overwri
     const folded = joined.toLocaleLowerCase()
     expect(folded.indexOf('education')).toBeLessThan(folded.indexOf('experience'))
     expect(folded.indexOf('experience')).toBeLessThan(folded.indexOf('projects'))
+    const orderedExperience = ['Platform Engineer', '01/2023 – 06/2024', 'Northstar Systems', 'Built dependable service infrastructure.', 'Software Engineer', '01/2020 – 12/2022', 'Harbor Technologies', 'Led a careful platform migration.']
+    let orderCursor = 0
+    for (const part of orderedExperience) { const found = joined.indexOf(part, orderCursor); expect(found, `expected extracted text in canonical order: ${part}`).toBeGreaterThanOrEqual(0); orderCursor = found + part.length }
     expect(targets).toContain('https://example.test/portfolio')
     await loadingTask.destroy()
 

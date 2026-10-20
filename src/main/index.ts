@@ -293,7 +293,7 @@ app.whenReady().then(() => {
       }
       await loadingTask.destroy()
       if (!parsed.numPages || parsed.numPages > canonical.targetPages || !extracted.length) throw new Error('The rendered PDF failed selectable-text or page-target checks.')
-      const requiredText = [canonical.identity.name, ...(canonical.identity.headline ? [canonical.identity.headline] : []), ...canonical.identity.contact, ...canonical.identity.links.map(link => link.label), ...canonical.sections.flatMap(section => [section.name, ...section.entries.flatMap(entry => [entry.heading, ...(entry.organization ? [entry.organization] : []), ...(entry.dates ? [entry.dates] : []), entry.text, ...entry.links.map(link => link.label)])])]
+      const requiredText = [canonical.identity.name, ...(canonical.identity.headline ? [canonical.identity.headline] : []), ...canonical.identity.contact, ...canonical.identity.links.map(link => link.label), ...canonical.sections.flatMap(section => [section.name, ...section.entries.flatMap(entry => [entry.heading, ...(entry.dates ? [entry.dates] : []), ...(entry.organization ? [entry.organization] : []), entry.text, ...entry.links.map(link => link.label)])])]
       if (!containsPdfTextInOrder(extracted, requiredText)) throw new Error('The rendered PDF content or reading order did not match the approved CV.')
       const requiredLinks = [...canonical.identity.links, ...canonical.sections.flatMap(section => section.entries.flatMap(entry => entry.links))].map(link => link.url)
       if (requiredLinks.some(url => !links.has(url))) throw new Error('A PDF hyperlink target did not survive local validation.')
