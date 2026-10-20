@@ -23,6 +23,7 @@ export function WorkbenchStart({ activeJob, onNavigate }: { activeJob: JobRecord
   const [canonical, setCanonical] = useState<CanonicalDocument | null>(null)
   const [fitReport, setFitReport] = useState<DocumentFitReport | null>(null)
   const [fitBusy, setFitBusy] = useState(false)
+  const [docxBusy, setDocxBusy] = useState(false)
   const [acceptedCuts, setAcceptedCuts] = useState<string[]>([])
   const [draftBusy, setDraftBusy] = useState(false)
   const [draftError, setDraftError] = useState('')
@@ -112,6 +113,16 @@ export function WorkbenchStart({ activeJob, onNavigate }: { activeJob: JobRecord
     setDraft(await window.workbench.getDraft(activeJob.id))
     setDraftError(report?.passed ? 'Current factual checks passed. Human review is still required.' : `Review blocked: ${report?.findings.length ?? 0} unresolved finding(s).`)
   }
+  async function exportDocx() {
+    if (!activeJob || docxBusy) return
+    setDocxBusy(true); setDraftError('')
+    try {
+      const result = await window.workbench.exportDraftDocx(activeJob.id)
+      setDraftError(result.message)
+      if (!result.ok && !result.cancelled) { const latest = await window.workbench.getDraft(activeJob.id); if (latest) setDraft(latest) }
+    } catch (failure) { setDraftError(failure instanceof Error ? failure.message : 'Editable DOCX export failed.') }
+    finally { setDocxBusy(false) }
+  }
   async function approveCurrentDraft() {
     if (!activeJob) return
     const result = await window.workbench.approveDraft(activeJob.id)
@@ -197,14 +208,14 @@ export function WorkbenchStart({ activeJob, onNavigate }: { activeJob: JobRecord
     { label: 'Education', count: outgoing.profile.education.length, unit: 'record' },
     { label: 'Certificates', count: outgoing.profile.certificates.length, unit: 'record' }
   ].filter(item => item.count > 0) : []
-  const activePhase: 1 | 2 | 3 | 4 = newRun && review ? consentAccepted ? 3 : 2 : draft ? 4 : consentAccepted ? 3 : review ? 2 : 1
+  const activePhase: 1 | 2 | 3 | 4 | 5 = newRun && review ? consentAccepted ? 3 : 2 : draft?.approved ? 5 : draft ? 4 : consentAccepted ? 3 : review ? 2 : 1
   return <WorkbenchStageLayout
     activeJob={activeJob} onNavigate={page => onNavigate(page)} error={error} retry={() => setAttempt(value => value + 1)} activePhase={activePhase}
     review={review} consentAccepted={consentAccepted} termsAcknowledged={termsAcknowledged} setTermsAcknowledged={setTermsAcknowledged} consentError={consentError} consentBusy={consentBusy}
     analysis={analysis} draft={draft} canonical={canonical} fitReport={fitReport} fitBusy={fitBusy} acceptedCuts={acceptedCuts} setAcceptedCuts={setAcceptedCuts} draftBusy={draftBusy} draftError={draftError}
     pageTarget={pageTarget} setPageTarget={setPageTarget} usage={usage} addSection={addSection} setAddSection={setAddSection} addEvidence={addEvidence} setAddEvidence={setAddEvidence} sources={sources} outgoingProfileCounts={outgoingProfileCounts}
     inspectOutgoing={inspectOutgoing} cancelOutgoing={cancelOutgoing} authorizeOutgoing={authorizeOutgoing} startAnalysis={startAnalysis} generateDraft={generateDraft} cancelAnalysis={async () => { if (activeJob) setAnalysis(await window.workbench.cancelAnalysis(activeJob.id)) }}
-    measurePageFit={measurePageFit} applyPageCuts={applyPageCuts} addDraftItem={addDraftItem} correctDraft={correctDraft} checkDraftNow={checkDraftNow} approveCurrentDraft={approveCurrentDraft}
+    measurePageFit={measurePageFit} applyPageCuts={applyPageCuts} addDraftItem={addDraftItem} correctDraft={correctDraft} checkDraftNow={checkDraftNow} approveCurrentDraft={approveCurrentDraft} exportDocx={exportDocx} docxBusy={docxBusy}
     onProposalAccepted={(next, document, fit) => { setDraft(next); setCanonical(document); setFitReport(fit); setAcceptedCuts([]) }}
   />
 }

@@ -114,6 +114,7 @@ const api: WorkbenchAPI = Object.freeze({
   async approveDraft(jobId: string) { return await ipcRenderer.invoke('draft:approve', analysisIdSchema.parse(jobId)) },
   async assertDraftExportable(jobId: string) { return await ipcRenderer.invoke('draft:export-guard', analysisIdSchema.parse(jobId)) },
   async exportApprovedPdf(jobId: string) { return z.object({ ok: z.boolean(), cancelled: z.boolean(), message: z.string() }).strict().parse(await ipcRenderer.invoke('document:export-pdf', analysisIdSchema.parse(jobId))) },
+  async exportDraftDocx(jobId: string) { return z.object({ ok: z.boolean(), cancelled: z.boolean(), message: z.string(), path: z.string().optional() }).strict().parse(await ipcRenderer.invoke('document:export-docx', analysisIdSchema.parse(jobId))) },
   async correctDraft(input: Parameters<WorkbenchAPI['correctDraft']>[0]) { const checked = draftCorrectionInputSchema.parse(input); const value = await ipcRenderer.invoke('draft:correct', checked); return value === null ? null : draftRevisionSchema.parse(value) },
   async addDraftItem(input: Parameters<WorkbenchAPI['addDraftItem']>[0]) { const checked = addDraftItemInputSchema.parse(input); const value = await ipcRenderer.invoke('draft:add-item', checked); return value === null ? null : draftRevisionSchema.parse(value) },
   async getCanonicalDocument(jobId: string) { const value = await ipcRenderer.invoke('document:preview', analysisIdSchema.parse(jobId)); return value === null ? null : canonicalDocumentSchema.parse(value) },

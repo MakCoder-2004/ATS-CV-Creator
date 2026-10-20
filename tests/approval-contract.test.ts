@@ -47,7 +47,7 @@ async function measure(workspace: ReturnType<typeof createWorkbench>, jobId: str
   const canonical = await workspace.api.getCanonicalDocument(jobId)
   if (!canonical) throw new Error('Canonical document unavailable')
   const documentHash = createHash('sha256').update(JSON.stringify(canonical)).digest('hex')
-  return workspace.api.saveDocumentFitReport(jobId, { documentHash, targetPages: canonical.targetPages, actualPages: overflow ? canonical.targetPages + 1 : canonical.targetPages, extractedText: ['CV'], linkTargets: [], overflow, proposedCuts: overflow ? [{ entryId: 'skills-0', label: 'TypeScript', section: 'Skills' }] : [], measuredAt: new Date().toISOString() })
+  return workspace.api.saveDocumentFitReport(jobId, { documentHash, targetPages: canonical.targetPages, actualPages: overflow ? canonical.targetPages + 1 : canonical.targetPages, extractedText: ['CV'], linkTargets: [], links: [], overflow, proposedCuts: overflow ? [{ entryId: 'skills-0', label: 'TypeScript', section: 'Skills' }] : [], measuredAt: new Date().toISOString() })
 }
 
 test('public export guard rejects unapproved, overflowing, and source-stale canonical documents', async () => {
@@ -61,7 +61,7 @@ test('public export guard rejects unapproved, overflowing, and source-stale cano
   const canonical = await workspace.api.getCanonicalDocument(jobId)
   if (!canonical) throw new Error('Expected current canonical document')
   const hash = createHash('sha256').update(JSON.stringify(canonical)).digest('hex')
-  await workspace.api.saveDocumentFitReport(jobId, { documentHash: hash, targetPages: canonical.targetPages, actualPages: canonical.targetPages + 1, extractedText: ['CV'], linkTargets: [], overflow: true, proposedCuts: [{ entryId: 'skills-0', label: 'TypeScript', section: 'Skills' }], measuredAt: new Date().toISOString() })
+  await workspace.api.saveDocumentFitReport(jobId, { documentHash: hash, targetPages: canonical.targetPages, actualPages: canonical.targetPages + 1, extractedText: ['CV'], linkTargets: [], links: [], overflow: true, proposedCuts: [{ entryId: 'skills-0', label: 'TypeScript', section: 'Skills' }], measuredAt: new Date().toISOString() })
   expect(await workspace.api.assertDraftExportable(jobId)).toMatchObject({ ok: false })
 
   const other = await fixture()

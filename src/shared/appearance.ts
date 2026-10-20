@@ -62,6 +62,7 @@ export interface WorkbenchAPI {
   approveDraft(jobId: string): Promise<{ ok: boolean; message: string; draft?: DraftRevision }>
   assertDraftExportable(jobId: string): Promise<{ ok: boolean; message: string; document?: CanonicalDocument }>
   exportApprovedPdf(jobId: string): Promise<{ ok: boolean; cancelled: boolean; message: string }>
+  exportDraftDocx(jobId: string): Promise<{ ok: boolean; cancelled: boolean; message: string; path?: string }>
   correctDraft(input: DraftCorrectionInput): Promise<DraftRevision | null>
   addDraftItem(input: AddDraftItemInput): Promise<DraftRevision | null>
   getCanonicalDocument(jobId: string): Promise<CanonicalDocument | null>
@@ -72,7 +73,7 @@ export interface WorkbenchAPI {
   setAnalysisBudgets(value: AnalysisBudgets): Promise<AnalysisUsage>
 }
 
-export type WorkbenchStorageAPI = Omit<WorkbenchAPI, 'exportProfile' | 'previewProfileImport' | 'applyProfileImport' | 'cancelProfileImport' | 'measureDocument' | 'copyOpenRouterApiKey' | 'exportApprovedPdf'> & {
+export type WorkbenchStorageAPI = Omit<WorkbenchAPI, 'exportProfile' | 'previewProfileImport' | 'applyProfileImport' | 'cancelProfileImport' | 'measureDocument' | 'copyOpenRouterApiKey' | 'exportApprovedPdf' | 'exportDraftDocx'> & {
   saveDocumentFitReport(jobId: string, report: DocumentFitReport): Promise<DocumentFitReport>
   validateProfileImport(input: string): Promise<{ ok: boolean; message: string }>
   replaceProfile(input: string): Promise<{ ok: boolean; message: string; profile?: ProfileSnapshot }>
