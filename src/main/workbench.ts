@@ -90,6 +90,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
     CREATE TABLE IF NOT EXISTS posting_analysis_cache (cache_key TEXT PRIMARY KEY, job_id TEXT NOT NULL, run_id TEXT NOT NULL, data TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS analysis_run_state (job_id TEXT PRIMARY KEY, run_id TEXT NOT NULL, data TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS analysis_attempts (id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, attempted_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS provider_attempt_outcomes (id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, dispatched_at TEXT NOT NULL, outcome TEXT NOT NULL CHECK(outcome IN ('dispatched','response','error')), settled_at TEXT);
     CREATE TABLE IF NOT EXISTS draft_revisions (id TEXT PRIMARY KEY, job_id TEXT NOT NULL, revision INTEGER NOT NULL, data TEXT NOT NULL, UNIQUE(job_id, revision));
     CREATE TABLE IF NOT EXISTS document_fit_reports (job_id TEXT PRIMARY KEY, data TEXT NOT NULL);`)
   db.prepare('INSERT OR IGNORE INTO schema_migrations (version) VALUES (1), (2), (4), (5)').run()
@@ -192,6 +193,8 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
     try { return analysisBudgetsSchema.parse(row ? JSON.parse(row.value) : defaultAnalysisBudgets) } catch { return defaultAnalysisBudgets }
   }
   const previousAttempts = (db.prepare('SELECT attempted_at FROM analysis_attempts').all() as { attempted_at: string }[]).map(row => Date.parse(row.attempted_at)).filter(Number.isFinite)
+  const persistedRunCounts = Object.fromEntries((db.prepare('SELECT run_id, COUNT(*) AS count FROM analysis_attempts GROUP BY run_id').all() as Array<{ run_id: string; count: number }>).map(row => [row.run_id, row.count]))
+  const persistedRunStarts = Object.fromEntries((db.prepare('SELECT run_id, MIN(attempted_at) AS first FROM analysis_attempts GROUP BY run_id').all() as Array<{ run_id: string; first: string }>).map(row => [row.run_id, Date.parse(row.first)]).filter(([, timestamp]) => Number.isFinite(timestamp)))
   const readStoredOpenRouterKey = () => {
     const row = db.prepare('SELECT ciphertext FROM encrypted_credentials WHERE key = ?').get('openrouter-api-key') as { ciphertext: string } | undefined
     if (!row) throw new Error('No OpenRouter API key is saved on this device.')
@@ -199,12 +202,12 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
     try { return secureStorage.decryptString(Buffer.from(row.ciphertext, 'base64')) }
     catch { throw new Error('The saved key could not be decrypted on this device.') }
   }
-  const dispatcher = createAnalysisDispatcher({ ...readAnalysisBudgets(), maxAttempts: readAnalysisBudgets().runLimit, maxElapsedMs: readAnalysisBudgets().runTimeLimitMs, maxDailyAttempts: readAnalysisBudgets().configuredDailyLimit, observedAttempts: previousAttempts, transport: scriptedTransport ?? { generate: async input => {
+  const dispatcher = createAnalysisDispatcher({ ...readAnalysisBudgets(), maxAttempts: readAnalysisBudgets().runLimit, maxElapsedMs: readAnalysisBudgets().runTimeLimitMs, maxDailyAttempts: readAnalysisBudgets().configuredDailyLimit, observedAttempts: previousAttempts, observedRunAttempts: persistedRunCounts, observedRunStartedAt: persistedRunStarts, transport: scriptedTransport ?? { generate: async input => {
     let key: string
     try { key = readStoredOpenRouterKey() }
     catch { throw Object.assign(new Error('OpenRouter API key is unavailable.'), { status: 401 }) }
     return createOpenRouterAnalysisTransport(key).generate(input)
-  } }, onAttempt: (timestamp, runId) => { previousAttempts.push(timestamp); db.prepare('INSERT INTO analysis_attempts (run_id, attempted_at) VALUES (?, ?)').run(runId, new Date(timestamp).toISOString()) }, onProgress: (runId, jobId, progress, attempts) => { const observed = (db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id = ?').get(runId) as { count: number }).count; saveAnalysisState({ jobId, runId, status: 'running', analysis: null, progress, attempts: observed || attempts, cacheHit: false }) } })
+  } }, onAttempt: (timestamp, runId) => { previousAttempts.push(timestamp); const dispatchedAt = new Date(timestamp).toISOString(); db.prepare('INSERT INTO analysis_attempts (run_id, attempted_at) VALUES (?, ?)').run(runId, dispatchedAt); db.prepare('INSERT INTO provider_attempt_outcomes (run_id, dispatched_at, outcome) VALUES (?, ?, \'dispatched\')').run(runId, dispatchedAt) }, onAttemptComplete: (runId, succeeded) => { db.prepare(`UPDATE provider_attempt_outcomes SET outcome=?, settled_at=? WHERE id=(SELECT id FROM provider_attempt_outcomes WHERE run_id=? AND outcome='dispatched' ORDER BY id DESC LIMIT 1)`).run(succeeded ? 'response' : 'error', new Date().toISOString(), runId) }, onProgress: (runId, jobId, progress, attempts) => { const observed = (db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id = ?').get(runId) as { count: number }).count; saveAnalysisState({ jobId, runId, status: 'running', analysis: null, progress, attempts: observed || attempts, cacheHit: false }) } })
   const currentConsentSource = (jobId: string): ConsentSource | null => {
     const job = db.prepare('SELECT data FROM jobs WHERE id = ?').get(jobId) as { data: string } | undefined
     if (!job) return null
