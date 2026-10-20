@@ -26,6 +26,7 @@ import { CitationValidationError, runSourceLinkedGraph } from './source-linked-g
 import { prepareDraftInputs } from './draft-inputs'
 import { checkDraftFacts } from './factual-verification'
 import { factualCheckReportSchema } from '../shared/factual-report'
+import { qualificationCoverage } from './qualification-coverage'
 import { createCanonicalDocument, documentFitReportSchema, type DocumentFitReport } from '../shared/document'
 
 export interface SecureStorage {
@@ -595,7 +596,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
           report = checkDraftFacts(result.draft)
         }
         const totalAttempts = result.attempts + repairAttempts
-        const checkedDraft = draftRevisionSchema.parse({ ...result.draft, status: report.passed ? 'unverified' : 'blocked', checkReport: report, progress: report.passed ? `${result.draft.progress} Deterministic factual checks passed; citations do not establish semantic truth. Human review remains required.` : `Draft saved for its ${result.draft.pageTarget}-page target; blocked by ${report.findings.length} deterministic factual finding(s). Edit the draft or correct its cited evidence, then check again.` })
+        const checkedDraft = draftRevisionSchema.parse({ ...result.draft, status: report.passed ? 'unverified' : 'blocked', checkReport: report, coverage: qualificationCoverage(analysis.runId ?? analysis.jobId, analysis.analysis, result.draft), progress: report.passed ? `${result.draft.progress} Deterministic factual checks passed; citations do not establish semantic truth. Human review remains required.` : `Draft saved for its ${result.draft.pageTarget}-page target; blocked by ${report.findings.length} deterministic factual finding(s). Edit the draft or correct its cited evidence, then check again.` })
         result.draft = checkedDraft
         const tx = db.transaction(() => { db.prepare('INSERT INTO draft_revisions (id,job_id,revision,data) VALUES (?,?,?,?)').run(result.draft.id, result.draft.jobId, result.draft.revision, JSON.stringify(result.draft)) })
         tx()
