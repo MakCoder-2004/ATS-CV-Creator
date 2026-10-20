@@ -207,10 +207,22 @@ app.whenReady().then(() => {
       await pdfWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`)
       await pdfWindow.webContents.executeJavaScript('document.fonts.ready')
       const pdf = await pdfWindow.webContents.printToPDF({ pageSize: 'A4', printBackground: true, preferCSSPageSize: true, margins: { top: 0, bottom: 0, left: 0, right: 0 } })
-      const actualPages = (Buffer.from(pdf).toString('latin1').match(/\/Type\s*\/Page\b/g) ?? []).length
-      if (!actualPages) throw new Error('Electron returned a PDF without measurable page objects.')
+      const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs')
+      const loadingTask = pdfjs.getDocument({ data: new Uint8Array(pdf), useSystemFonts: true })
+      const parsedPdf = await loadingTask.promise
+      const extractedText: string[] = [], linkTargets = new Set<string>()
+      for (let pageNumber = 1; pageNumber <= parsedPdf.numPages; pageNumber++) {
+        const page = await parsedPdf.getPage(pageNumber)
+        const textContent = await page.getTextContent()
+        extractedText.push(...textContent.items.flatMap(item => 'str' in item && item.str.trim() ? [item.str.trim()] : []))
+        const annotations = await page.getAnnotations({ intent: 'display' })
+        for (const annotation of annotations) if (annotation.subtype === 'Link' && annotation.url) linkTargets.add(annotation.url)
+      }
+      const actualPages = parsedPdf.numPages
+      await loadingTask.destroy()
+      if (!actualPages || !extractedText.length) throw new Error('Electron PDF has no measurable pages or extractable selectable text.')
       const entries = document.sections.flatMap(section => section.entries.map(entry => ({ entryId: entry.id, label: entry.heading, section: section.name })))
-      const report = await workspace!.api.saveDocumentFitReport(jobId, { documentHash: createHash('sha256').update(JSON.stringify(document)).digest('hex'), targetPages: document.targetPages, actualPages, overflow: actualPages > document.targetPages, proposedCuts: actualPages > document.targetPages ? entries.slice(1).reverse() : [], measuredAt: new Date().toISOString() })
+      const report = await workspace!.api.saveDocumentFitReport(jobId, { documentHash: createHash('sha256').update(JSON.stringify(document)).digest('hex'), targetPages: document.targetPages, actualPages, extractedText, linkTargets: [...linkTargets], overflow: actualPages > document.targetPages, proposedCuts: actualPages > document.targetPages ? entries.slice(1).reverse() : [], measuredAt: new Date().toISOString() })
       return report
     } finally { pdfWindow.destroy() }
   })
