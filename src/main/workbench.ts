@@ -26,7 +26,7 @@ import { CitationValidationError, runSourceLinkedGraph } from './source-linked-g
 import { prepareDraftInputs } from './draft-inputs'
 import { checkDraftFacts } from './factual-verification'
 import { factualCheckReportSchema } from '../shared/factual-report'
-import { qualificationCoverage } from './qualification-coverage'
+import { qualificationCoverage, supportedCoverageTerms } from './qualification-coverage'
 import { createCanonicalDocument, documentFitReportSchema, type DocumentFitReport } from '../shared/document'
 
 export interface SecureStorage {
@@ -595,8 +595,28 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
           result.draft.attempts += repair.attempts
           report = checkDraftFacts(result.draft)
         }
-        const totalAttempts = result.attempts + repairAttempts
-        const checkedDraft = draftRevisionSchema.parse({ ...result.draft, status: report.passed ? 'unverified' : 'blocked', checkReport: report, coverage: qualificationCoverage(analysis.runId ?? analysis.jobId, analysis.analysis, result.draft), progress: report.passed ? `${result.draft.progress} Deterministic factual checks passed; citations do not establish semantic truth. Human review remains required.` : `Draft saved for its ${result.draft.pageTarget}-page target; blocked by ${report.findings.length} deterministic factual finding(s). Edit the draft or correct its cited evidence, then check again.` })
+        let coverageRepairAttempts = 0
+        if (report.passed) {
+          const opportunities = supportedCoverageTerms(analysis.analysis, result.draft)
+          if (opportunities.length) {
+            authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
+            const coverageRepair = await dispatcher.generate({ runId: pending.runId, jobId: pending.jobId, model: geminiModelSchema.parse(pending.source.model.name), consentId: pending.consentId!, responseSchema: repairSchema, prompt: `Supported-keyword coverage repair (one opportunity only). Improve wording for these explicitly supported posting terms using only the supplied selected evidence and existing draft. Preserve every unaffected item and its citations, do not add claims or unsupported qualifications, and do not use evidence outside this frozen bundle. Return corrections only where appropriate.\n${JSON.stringify({ opportunities, draft: result.draft.content, evidence: opportunities.flatMap(item => item.evidence.map(id => safeItems.find(source => source.id === id)).filter(Boolean)) })}` })
+            authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
+            coverageRepairAttempts = coverageRepair.attempts
+            const response = repairSchema.parse(JSON.parse(coverageRepair.text))
+            for (const correction of response.corrections) {
+              const section = [...result.draft.content[correction.section]], prior = section[correction.index]
+              if (!prior || !correction.citations.every(citation => prior.citations.some(existing => existing.evidenceId === citation.evidenceId && existing.revision === citation.revision) && safeItems.some(source => source.id === citation.evidenceId && source.category === correction.section))) continue
+              section[correction.index] = 'text' in prior ? { ...prior, text: pending.bundle.restoreIdentifiers(correction.text) } : { ...prior, name: pending.bundle.restoreIdentifiers(correction.text) }
+              result.draft.content = { ...result.draft.content, [correction.section]: section }
+            }
+            result.draft.attempts += coverageRepair.attempts
+            report = checkDraftFacts(result.draft)
+          }
+        }
+        const totalAttempts = result.attempts + repairAttempts + coverageRepairAttempts
+        const coverage = { ...qualificationCoverage(analysis.runId ?? analysis.jobId, analysis.analysis, result.draft), repairAttempts: coverageRepairAttempts }
+        const checkedDraft = draftRevisionSchema.parse({ ...result.draft, status: report.passed ? 'unverified' : 'blocked', checkReport: report, coverage, progress: report.passed ? `${result.draft.progress} Deterministic factual checks passed after any supported-keyword repair; citations do not establish semantic truth. Human review remains required.` : `Draft saved for its ${result.draft.pageTarget}-page target; blocked by ${report.findings.length} deterministic factual finding(s). Edit the draft or correct its cited evidence, then check again.` })
         result.draft = checkedDraft
         const tx = db.transaction(() => { db.prepare('INSERT INTO draft_revisions (id,job_id,revision,data) VALUES (?,?,?,?)').run(result.draft.id, result.draft.jobId, result.draft.revision, JSON.stringify(result.draft)) })
         tx()
