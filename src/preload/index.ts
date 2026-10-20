@@ -6,7 +6,7 @@ import { experienceSnapshotSchema, experienceMutationResultSchema, type Experien
 import { jobRecordSchema, jobSaveResultSchema, type JobInput } from '../shared/jobs'
 import { profileExchangeResultSchema } from '../shared/profile-exchange'
 import { outboundConsentActionSchema, outboundConsentPreviewSchema } from '../shared/outbound-consent-contract'
-import { analysisBudgetsSchema, analysisIdSchema, analysisResultSchema, analysisUsageSchema, type AnalysisBudgets, type AnalysisResult } from '../shared/posting-analysis'
+import { analysisBudgetsSchema, analysisIdSchema, analysisResultSchema, analysisUsageSchema, generationRecoverySchema, recoveryChoiceSchema, type AnalysisBudgets, type AnalysisResult, type RecoveryChoice } from '../shared/posting-analysis'
 import { addDraftItemInputSchema, draftCorrectionInputSchema, draftGenerationSchema, draftRevisionSchema } from '../shared/draft'
 import { factualCheckReportSchema } from '../shared/factual-report'
 import { canonicalDocumentSchema, documentFitReportSchema } from '../shared/document'
@@ -115,6 +115,9 @@ const api: WorkbenchAPI = Object.freeze({
   async getDocumentFitReport(jobId: string) { const value = await ipcRenderer.invoke('document:fit:get', analysisIdSchema.parse(jobId)); return value === null ? null : documentFitReportSchema.parse(value) },
   async acceptDocumentCuts(jobId: string, documentHash: string, entryIds: string[]) { return await ipcRenderer.invoke('document:cuts:accept', analysisIdSchema.parse(jobId), documentHash, entryIds) },
   async cancelAnalysis(jobId: string) { return analysisResultSchema.parse(await ipcRenderer.invoke('analysis:cancel', analysisIdSchema.parse(jobId))) },
+  async getGenerationRecovery(jobId: string) { const value = await ipcRenderer.invoke('generation:recovery:get', analysisIdSchema.parse(jobId)); return value === null ? null : generationRecoverySchema.parse(value) },
+  async resumeGeneration(runId: string, choice?: RecoveryChoice) { return await ipcRenderer.invoke('generation:recovery:resume', analysisIdSchema.parse(runId), choice === undefined ? undefined : recoveryChoiceSchema.parse(choice)) },
+  async cancelGenerationRecovery(runId: string) { return await ipcRenderer.invoke('generation:recovery:cancel', analysisIdSchema.parse(runId)) },
   async getAnalysisUsage() { return analysisUsageSchema.parse(await ipcRenderer.invoke('analysis:usage')) },
   async setAnalysisBudgets(value: AnalysisBudgets) { return analysisUsageSchema.parse(await ipcRenderer.invoke('analysis:budgets:set', analysisBudgetsSchema.parse(value))) }
 })

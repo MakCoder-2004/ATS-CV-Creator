@@ -5,7 +5,7 @@ import { openRouterSettingsSchema, openRouterModelSchema, type OpenRouterModel }
 import type { JobInput, JobRecord, JobSaveResult } from './jobs'
 import type { ProfileExchangeResult } from './profile-exchange'
 import type { OutboundConsentAction, OutboundConsentPreview } from './outbound-consent-contract'
-import type { AnalysisBudgets, AnalysisResult, AnalysisUsage } from './posting-analysis'
+import type { AnalysisBudgets, AnalysisResult, AnalysisUsage, GenerationRecovery, RecoveryChoice } from './posting-analysis'
 import type { AddDraftItemInput, DraftCorrectionInput, DraftRevision } from './draft'
 import type { FactualCheckReport } from './factual-report'
 import type { CanonicalDocument, DocumentFitReport } from './document'
@@ -52,6 +52,9 @@ export interface WorkbenchAPI {
   startAnalysis(consentToken: string): Promise<AnalysisResult>
   getAnalysis(jobId: string): Promise<AnalysisResult | null>
   cancelAnalysis(jobId: string): Promise<AnalysisResult>
+  getGenerationRecovery(jobId: string): Promise<GenerationRecovery | null>
+  resumeGeneration(runId: string, choice?: RecoveryChoice): Promise<{ ok: boolean; message: string }>
+  cancelGenerationRecovery(runId: string): Promise<{ ok: boolean; message: string }>
   generateDraft(consentToken: string, pageTarget?: 1 | 2): Promise<{ ok: boolean; message: string; draft?: DraftRevision }>
   getDraft(jobId: string): Promise<DraftRevision | null>
   checkDraft(jobId: string): Promise<FactualCheckReport | null>

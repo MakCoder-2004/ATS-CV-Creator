@@ -12,6 +12,10 @@ export function createOutboundConsentEngine() {
       records.set(record.id, { ...record })
       return record
     },
+    restoreConsent(record: ConsentRecord): void {
+      if (!record.id || !record.runId || !record.scopeHash || !record.createdAt || record.revoked) throw new Error('Persisted consent is invalid or revoked.')
+      records.set(record.id, { ...record })
+    },
     revoke(consentId: string): void {
       const record = records.get(consentId)
       if (record) record.revoked = true

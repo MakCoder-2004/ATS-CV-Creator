@@ -14,7 +14,7 @@ import { experienceSaveInputSchema, experienceSnapshotSchema, experienceMutation
 import { jobRecordSchema, jobSaveInputSchema, jobSaveResultSchema } from '../shared/jobs'
 import { registerProfileExchangeIpc } from './profile-exchange-ipc'
 import { outboundConsentActionSchema, outboundConsentPreviewSchema } from '../shared/outbound-consent-contract'
-import { analysisBudgetsSchema, analysisIdSchema, analysisResultSchema, analysisStartInputSchema, analysisUsageSchema } from '../shared/posting-analysis'
+import { analysisBudgetsSchema, analysisIdSchema, analysisResultSchema, analysisStartInputSchema, analysisUsageSchema, generationRecoverySchema, recoveryChoiceSchema } from '../shared/posting-analysis'
 import { addDraftItemInputSchema, draftCorrectionInputSchema, draftGenerationSchema, draftRevisionSchema } from '../shared/draft'
 import { factualCheckReportSchema } from '../shared/factual-report'
 
@@ -48,20 +48,22 @@ if (!app.isPackaged && process.env.CV_TAILOR_TEST_USER_DATA_DIR) {
 }
 app.whenReady().then(() => {
   let scriptedAttempts = 0
-  const scriptedAnalysis: AnalysisTransport | undefined = !app.isPackaged && ['1', 'retry', 'generation', 'factual', 'invalid', 'faithfulness'].includes(process.env.CV_TAILOR_SCRIPTED_ANALYSIS ?? '') ? { generate: async ({ prompt }) => {
+  let recoveryFailureSent = false
+  const scriptedAnalysis: AnalysisTransport | undefined = !app.isPackaged && ['1', 'retry', 'generation', 'factual', 'invalid', 'faithfulness', 'recovery'].includes(process.env.CV_TAILOR_SCRIPTED_ANALYSIS ?? '') ? { generate: async ({ prompt }) => {
     scriptedAttempts++
+    if (process.env.CV_TAILOR_SCRIPTED_ANALYSIS === 'recovery' && prompt.startsWith('Write conservative') && !recoveryFailureSent) { recoveryFailureSent = true; throw Object.assign(new Error('scripted offline interruption'), { code: 'ECONNRESET' }) }
     if (prompt.startsWith('Factual repair cycle')) return JSON.stringify({ corrections: [] })
     if (process.env.CV_TAILOR_SCRIPTED_ANALYSIS === 'faithfulness' && prompt.startsWith('Compare all rewritten/source pairs')) {
       const { pairs } = JSON.parse(prompt.slice(prompt.indexOf('{')))
       return JSON.stringify({ results: pairs.map((pair: { itemPath: string }) => ({ itemPath: pair.itemPath, supported: false, explanation: 'Scripted smoke finding: wording needs human comparison with its source.' })) })
     }
     if (process.env.CV_TAILOR_SCRIPTED_ANALYSIS === 'retry' && scriptedAttempts === 1) throw { status: 429, retryAfter: 3 }
-    if (['generation', 'factual', 'invalid', 'faithfulness'].includes(process.env.CV_TAILOR_SCRIPTED_ANALYSIS ?? '') && prompt.startsWith('Score these numbered')) {
+    if (['generation', 'factual', 'invalid', 'faithfulness', 'recovery'].includes(process.env.CV_TAILOR_SCRIPTED_ANALYSIS ?? '') && prompt.startsWith('Score these numbered')) {
       const { items } = JSON.parse(prompt.slice(prompt.indexOf('{')))
       return JSON.stringify({ relevance: items.map((item: { index: number }) => ({ index: item.index, score: 0.9, rationale: 'Directly supports the posting.' })) })
     }
     if (process.env.CV_TAILOR_SCRIPTED_ANALYSIS === 'invalid' && prompt.startsWith('Write conservative')) return '{ malformed response'
-    if (['generation', 'factual', 'invalid', 'faithfulness'].includes(process.env.CV_TAILOR_SCRIPTED_ANALYSIS ?? '') && prompt.startsWith('Write conservative')) {
+    if (['generation', 'factual', 'invalid', 'faithfulness', 'recovery'].includes(process.env.CV_TAILOR_SCRIPTED_ANALYSIS ?? '') && prompt.startsWith('Write conservative')) {
       const { selected } = JSON.parse(prompt.slice(prompt.indexOf('{')))
       const paragraphs = (category: string) => selected.filter((item: { category: string }) => item.category === category).map((item: { index: number; text: string }) => ({ text: process.env.CV_TAILOR_SCRIPTED_ANALYSIS === 'factual' && category === 'experience' ? 'Reduced delivery time by 900 percent.' : item.text, evidence: [item.index], rationale: 'Selected from authorized profile evidence.' }))
       const skills = selected.filter((item: { category: string }) => item.category === 'skills').map((item: { index: number; text: string }) => ({ name: JSON.parse(item.text).name, evidence: [item.index], rationale: 'Selected from the saved skill inventory.' }))
@@ -259,6 +261,9 @@ app.whenReady().then(() => {
   ipcMain.handle('document:fit:get', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected job ID'); return workspace!.api.getDocumentFitReport(analysisIdSchema.parse(args[0])) })
   ipcMain.handle('document:cuts:accept', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 3 || typeof args[1] !== 'string' || !Array.isArray(args[2]) || !args[2].every(id => typeof id === 'string')) throw new Error('Expected job ID, document hash and accepted cut IDs'); return workspace!.api.acceptDocumentCuts(analysisIdSchema.parse(args[0]), args[1], args[2]) })
   ipcMain.handle('analysis:cancel', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected job ID'); return analysisResultSchema.parse(await workspace!.api.cancelAnalysis(analysisIdSchema.parse(args[0]))) })
+  ipcMain.handle('generation:recovery:get', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected job ID'); const result = await workspace!.api.getGenerationRecovery(analysisIdSchema.parse(args[0])); return result === null ? null : generationRecoverySchema.parse(result) })
+  ipcMain.handle('generation:recovery:resume', async (event, ...args: unknown[]) => { trusted(event); if (args.length < 1 || args.length > 2) throw new Error('Expected run ID and optional recovery choice'); const runId = analysisIdSchema.parse(args[0]); const choice = args[1] === undefined ? undefined : recoveryChoiceSchema.parse(args[1]); return workspace!.api.resumeGeneration(runId, choice) })
+  ipcMain.handle('generation:recovery:cancel', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected run ID'); return workspace!.api.cancelGenerationRecovery(analysisIdSchema.parse(args[0])) })
   ipcMain.handle('analysis:usage', async (event, ...args: unknown[]) => { trusted(event); if (args.length) throw new Error('Unexpected arguments'); return analysisUsageSchema.parse(await workspace!.api.getAnalysisUsage()) })
   ipcMain.handle('analysis:budgets:set', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected analysis budgets'); return analysisUsageSchema.parse(await workspace!.api.setAnalysisBudgets(analysisBudgetsSchema.parse(args[0]))) })
   ipcMain.handle('jobs:open', async (event, ...args: unknown[]) => {

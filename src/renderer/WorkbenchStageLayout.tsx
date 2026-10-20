@@ -5,6 +5,7 @@ import type { OutboundPayload } from '../shared/outbound-consent'
 import type { OutboundConsentPreview } from '../shared/outbound-consent-contract'
 import type { CanonicalDocument, DocumentFitReport } from '../shared/document'
 import type { DraftRevision } from '../shared/draft'
+import type { GenerationRecovery } from '../shared/posting-analysis'
 import type { ExperienceSnapshot } from '../shared/experience'
 import type { ProfileSnapshot } from '../shared/profile'
 import { DraftDocument } from './DraftReview'
@@ -26,6 +27,10 @@ type Props = {
   consentError: string
   consentBusy: boolean
   analysis: Awaited<ReturnType<typeof window.workbench.getAnalysis>>
+  recovery: GenerationRecovery | null
+  recoveryBusy: boolean
+  resumeSavedGeneration: (retryUncertain: boolean) => Promise<void>
+  cancelSavedGeneration: () => Promise<void>
   draft: DraftRevision | null
   canonical: CanonicalDocument | null
   fitReport: DocumentFitReport | null
@@ -96,7 +101,7 @@ function EmptyDocument({ message }: { message: string }) {
 }
 
 export function WorkbenchStageLayout(props: Props) {
-  const { activeJob, onNavigate, error, retry, activePhase, review, consentAccepted, termsAcknowledged, setTermsAcknowledged, consentError, consentBusy, analysis, draft, canonical, fitReport, fitBusy, acceptedCuts, setAcceptedCuts, draftBusy, draftError, pageTarget, setPageTarget, usage, addSection, setAddSection, addEvidence, setAddEvidence, sources, outgoingProfileCounts, inspectOutgoing, cancelOutgoing, authorizeOutgoing, startAnalysis, generateDraft, cancelAnalysis, measurePageFit, applyPageCuts, addDraftItem, correctDraft, checkDraftNow, approveCurrentDraft } = props
+  const { activeJob, onNavigate, error, retry, activePhase, review, consentAccepted, termsAcknowledged, setTermsAcknowledged, consentError, consentBusy, analysis, recovery, recoveryBusy, resumeSavedGeneration, cancelSavedGeneration, draft, canonical, fitReport, fitBusy, acceptedCuts, setAcceptedCuts, draftBusy, draftError, pageTarget, setPageTarget, usage, addSection, setAddSection, addEvidence, setAddEvidence, sources, outgoingProfileCounts, inspectOutgoing, cancelOutgoing, authorizeOutgoing, startAnalysis, generateDraft, cancelAnalysis, measurePageFit, applyPageCuts, addDraftItem, correctDraft, checkDraftNow, approveCurrentDraft } = props
   const outgoing = review?.outgoing as unknown as OutboundPayload | undefined
   const headings = ['Job posting', 'Outgoing data', 'Generate', 'Review your tailored CV', 'Export']
   const descriptions = ['Select the job posting this CV should address.', 'Review this bundle before authorizing.', 'Analyze the posting and create a source-linked draft.', draft?.approved ? 'This draft is approved.' : 'Review the wording and supporting evidence.', 'Export is not available in this version.']
@@ -110,7 +115,9 @@ export function WorkbenchStageLayout(props: Props) {
     <PhaseNavigation current={activePhase} />
     {activePhase === 1 && <section className="workbench-columns" aria-label="Tailoring workspace">
       <EmptyDocument message={activeJob ? 'Review the job posting and authorize a run before creating a draft.' : 'Choose a saved job to set the target before creating a draft.'} />
-      <aside className="inspector" aria-label="Run review"><section className="job-stage" aria-labelledby="job-stage-heading">
+      <aside className="inspector" aria-label="Run review">
+        {recovery && <section className="job-stage recovery-panel" aria-labelledby="generation-recovery-heading"><h2 id="generation-recovery-heading">Interrupted generation</h2><p role="status">{recovery.progress} Lifetime dispatched attempts: {recovery.attempts}.</p>{recovery.status === 'uncertain' ? <><p role="alert">Retrying may duplicate a provider request and spend another attempt. No retry happens until you choose it.</p><button className="primary-button" type="button" disabled={recoveryBusy} onClick={() => void resumeSavedGeneration(true)}>{recoveryBusy ? 'Resuming…' : 'Retry uncertain step (may duplicate request)'}</button></> : <button className="primary-button" type="button" disabled={recoveryBusy} onClick={() => void resumeSavedGeneration(false)}>{recoveryBusy ? 'Resuming…' : 'Resume saved generation'}</button>}<button className="secondary-button" type="button" disabled={recoveryBusy} onClick={() => void cancelSavedGeneration()}>Cancel saved generation</button></section>}
+        <section className="job-stage" aria-labelledby="job-stage-heading">
         {error && <div className="job-stage-error" role="alert"><p>{error}</p><button className="secondary-button" type="button" onClick={retry}>Retry</button></div>}
         {activeJob ? <><header><h2 id="job-stage-heading">{activeJob.title}</h2><p>{activeJob.company}</p></header><div className="posting-text">{activeJob.description}</div><p className="job-stage-note">The posting sets the target. Your profile supplies the candidate facts.</p><div className="job-stage-actions"><button className="secondary-button" type="button" onClick={() => onNavigate('Saved jobs')}>Choose another job</button><button className="primary-button" type="button" disabled={consentBusy} onClick={() => void inspectOutgoing()}>{consentBusy ? 'Preparing…' : 'Inspect outgoing data'}</button></div></> : <><h2 id="job-stage-heading">Choose a posting first</h2><p>Open a saved job or add a new one.</p><button className="primary-button" type="button" onClick={() => onNavigate('Saved jobs')}>Open saved jobs</button></>}
       </section></aside>
