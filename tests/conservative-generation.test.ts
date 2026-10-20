@@ -10,9 +10,10 @@ const workspaces: Array<ReturnType<typeof createWorkbench>> = []
 const directories: string[] = []
 afterEach(() => { for (const workspace of workspaces.splice(0)) workspace.close(); for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true }) })
 
-test('public generation contract rejects a number absent from the cited source', async () => {
+test('public generation contract persists a blocked editable draft when a number is absent from cited evidence', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'unsupported-number-')); directories.push(directory)
   const transport: AnalysisTransport = { async generate({ prompt }) {
+    if (prompt.startsWith('Factual repair cycle')) return JSON.stringify({ corrections: [] })
     if (prompt.includes('Extract only explicit qualifications')) return JSON.stringify({ required: ['TypeScript'], preferred: [], tools: [], responsibilities: [], keywords: ['TypeScript'] })
     if (prompt.startsWith('Score these numbered')) {
       const { items } = JSON.parse(prompt.slice(prompt.indexOf('{')))
@@ -32,12 +33,13 @@ test('public generation contract rejects a number absent from the cited source',
   if (!preview.ok) throw Error('consent preview could not be prepared')
   await workspace.api.acceptOutboundConsent(preview.token, true, true)
   expect(await workspace.api.startAnalysis(preview.token)).toMatchObject({ status: 'complete' })
-  expect(await workspace.api.generateDraft(preview.token)).toMatchObject({ ok: false, message: expect.stringMatching(/unsupported number|metric/i) })
-  expect(await workspace.api.getAnalysis(job.value.id)).toMatchObject({ status: 'failed', progress: expect.stringMatching(/unsupported number|metric/i), attempts: 3 })
+  const generated = await workspace.api.generateDraft(preview.token)
+  expect(generated).toMatchObject({ ok: true, draft: { status: 'blocked', checkReport: { passed: false, findings: [expect.objectContaining({ code: 'unsupported-number' })] } } })
+  expect(await workspace.api.getAnalysis(job.value.id)).toMatchObject({ status: 'complete', attempts: 5 })
   workspace.close(); workspaces.pop()
   const reopened = createWorkbench(directory, undefined, { async generate() { throw Error('offline') } }); workspaces.push(reopened)
-  expect(await reopened.api.getDraft(job.value.id)).toBeNull()
-  expect(await reopened.api.getAnalysis(job.value.id)).toMatchObject({ status: 'failed', progress: expect.stringMatching(/unsupported number|metric/i), attempts: 3 })
+  expect(await reopened.api.getDraft(job.value.id)).toMatchObject({ status: 'blocked', checkReport: { passed: false, findings: [expect.objectContaining({ code: 'unsupported-number' })] } })
+  expect(await reopened.api.getAnalysis(job.value.id)).toMatchObject({ status: 'complete', attempts: 5 })
 })
 
 test('public generation contract discards a provider response if its consent scope changes in flight', async () => {

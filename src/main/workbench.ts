@@ -21,9 +21,11 @@ import { createHash } from 'node:crypto'
 import { z } from 'zod'
 import { analysisBudgetsSchema, analysisResultSchema, analysisUsageSchema, defaultAnalysisBudgets, postingAnalysisSchema, type AnalysisBudgets } from '../shared/posting-analysis'
 import { pacificDay } from '../shared/pacific-day'
-import { draftRevisionSchema, type DraftRevision } from '../shared/draft'
+import { draftCorrectionInputSchema, draftRevisionSchema, type DraftRevision } from '../shared/draft'
 import { runSourceLinkedGraph } from './source-linked-generation'
 import { prepareDraftInputs } from './draft-inputs'
+import { checkDraftFacts } from './factual-verification'
+import { factualCheckReportSchema } from '../shared/factual-report'
 
 export interface SecureStorage {
   isEncryptionAvailable(): boolean
@@ -560,11 +562,38 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
           return { value: responseSchema.parse(JSON.parse(generated.text)), attempts: generated.attempts }
         } })
         authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
+        const repairSchema = z.object({ corrections: z.array(z.object({ section: z.enum(['education', 'experience', 'projects', 'skills', 'certificates']), index: z.number().int().nonnegative(), text: z.string().trim().min(1).max(3000), citations: z.array(z.object({ evidenceId: uuidSchema, revision: z.number().int().positive() }).strict()).min(1) }).strict()).max(200) }).strict()
+        let report = checkDraftFacts(result.draft)
+        let repairAttempts = 0
+        for (let cycle = 0; cycle < 2 && !report.passed; cycle++) {
+          const failedItems = report.findings.map(finding => {
+            const found = /^(education|experience|projects|skills|certificates)\[(\d+)\]/.exec(finding.itemPath)
+            if (!found) return { finding }
+            const section = found[1] as keyof DraftRevision['content'], index = Number(found[2]), item = result.draft.content[section][index]
+            return { finding, section, index, text: item && ('text' in item ? item.text : item.name), citedEvidence: item?.citations.map(citation => ({ ...citation, text: safeItems.find(source => source.id === citation.evidenceId)?.text ?? '' })) }
+          })
+          authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
+          const repair = await dispatcher.generate({ runId: pending.runId, jobId: pending.jobId, model: geminiModelSchema.parse(pending.source.model.name), consentId: pending.consentId!, responseSchema: repairSchema, prompt: `Factual repair cycle ${cycle + 1} of 2. Correct only the listed failing draft items using only their cited evidence. Preserve every unaffected item. Never infer facts or use uncited evidence. Return corrections for failed item paths only; keep citation IDs/revisions from the supplied evidence. If no safe correction is possible, remove that item by returning no correction for it.\n${JSON.stringify({ findings: failedItems })}` })
+          authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
+          repairAttempts += repair.attempts
+          const response = repairSchema.parse(JSON.parse(repair.text))
+          for (const correction of response.corrections) {
+            const section = [...result.draft.content[correction.section]], prior = section[correction.index]
+            if (!prior || !correction.citations.every(citation => result.draft.evidence.some(source => source.evidenceId === citation.evidenceId && source.revision === citation.revision) && safeItems.some(source => source.id === citation.evidenceId && source.category === correction.section))) continue
+            section[correction.index] = 'text' in prior ? { ...prior, text: pending.bundle.restoreIdentifiers(correction.text), citations: correction.citations } : { ...prior, name: pending.bundle.restoreIdentifiers(correction.text), citations: correction.citations }
+            result.draft.content = { ...result.draft.content, [correction.section]: section }
+          }
+          result.draft.attempts += repair.attempts
+          report = checkDraftFacts(result.draft)
+        }
+        const totalAttempts = result.attempts + repairAttempts
+        const checkedDraft = draftRevisionSchema.parse({ ...result.draft, status: report.passed ? 'unverified' : 'blocked', checkReport: report, progress: report.passed ? `${result.draft.progress} Deterministic factual checks passed; citations do not establish semantic truth. Human review remains required.` : `Draft saved for its ${result.draft.pageTarget}-page target; blocked by ${report.findings.length} deterministic factual finding(s). Edit the draft or correct its cited evidence, then check again.` })
+        result.draft = checkedDraft
         const tx = db.transaction(() => { db.prepare('INSERT INTO draft_revisions (id,job_id,revision,data) VALUES (?,?,?,?)').run(result.draft.id, result.draft.jobId, result.draft.revision, JSON.stringify(result.draft)) })
         tx()
         if (activeAnalysisByJob.get(pending.jobId) === pending.runId) activeAnalysisByJob.delete(pending.jobId)
-        saveAnalysisState({ jobId: pending.jobId, runId: pending.runId, status: 'complete', analysis: analysis.analysis, progress: result.draft.progress, attempts: analysis.attempts + result.attempts, cacheHit: analysis.cacheHit })
-        return { ok: true, message: 'Draft saved locally. It is unverified and unapproved.', draft: result.draft }
+        saveAnalysisState({ jobId: pending.jobId, runId: pending.runId, status: 'complete', analysis: analysis.analysis, progress: result.draft.progress, attempts: analysis.attempts + totalAttempts, cacheHit: analysis.cacheHit })
+        return { ok: true, message: result.draft.status === 'blocked' ? 'Draft saved locally, editable, and blocked by factual findings.' : 'Draft saved locally. It is unverified and unapproved.', draft: result.draft }
       } catch (error) {
         if (activeAnalysisByJob.get(pending.jobId) === pending.runId) activeAnalysisByJob.delete(pending.jobId)
         const message = error instanceof Error ? error.message : 'Draft generation failed. Existing work was retained.'
@@ -573,6 +602,32 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
         saveAnalysisState({ jobId: pending.jobId, runId: pending.runId, status: cancelled ? 'cancelled' : 'failed', analysis: analysis.analysis, progress: message, attempts: observedAttempts, error: message, cacheHit: analysis.cacheHit })
         return { ok: false, message }
       }
+    },
+    async correctDraft(input: { jobId: string; section: 'education' | 'experience' | 'projects' | 'skills' | 'certificates'; index: number; text: string }) {
+      const parsed = draftCorrectionInputSchema.safeParse(input)
+      if (!parsed.success) return null
+      const row = db.prepare('SELECT data FROM draft_revisions WHERE job_id = ? ORDER BY revision DESC LIMIT 1').get(parsed.data.jobId) as { data: string } | undefined
+      if (!row) return null
+      const prior = draftRevisionSchema.parse(JSON.parse(row.data))
+      const section = [...prior.content[parsed.data.section]]
+      const target = section[parsed.data.index]
+      if (!target) return null
+      const updatedContent = { ...prior.content, [parsed.data.section]: section.map((item, index) => index !== parsed.data.index ? item : 'text' in item ? { ...item, text: parsed.data.text } : { ...item, name: parsed.data.text }) }
+      const next = draftRevisionSchema.parse({ ...prior, id: randomUUID(), revision: prior.revision + 1, status: 'unverified', checkReport: undefined, content: updatedContent, progress: 'Draft wording corrected locally. Recheck before human review.' })
+      const report = checkDraftFacts(next)
+      const checked = draftRevisionSchema.parse({ ...next, status: report.passed ? 'unverified' : 'blocked', checkReport: report, progress: report.passed ? 'Correction passes deterministic checks; semantic truth still requires human review.' : `Blocked by ${report.findings.length} factual finding(s). Use the correction guidance below.` })
+      db.prepare('INSERT INTO draft_revisions (id,job_id,revision,data) VALUES (?,?,?,?)').run(checked.id, checked.jobId, checked.revision, JSON.stringify(checked))
+      return checked
+    },
+    async checkDraft(jobId: string) {
+      if (!uuidSchema.safeParse(jobId).success) return null
+      const row = db.prepare('SELECT data FROM draft_revisions WHERE job_id = ? ORDER BY revision DESC LIMIT 1').get(jobId) as { data: string } | undefined
+      if (!row) return null
+      const draft = draftRevisionSchema.parse(JSON.parse(row.data))
+      const report = factualCheckReportSchema.parse(checkDraftFacts(draft))
+      const updated = draftRevisionSchema.parse({ ...draft, status: report.passed ? 'unverified' : 'blocked', checkReport: report, progress: report.passed ? 'Deterministic factual checks passed; citations do not establish semantic truth. Human review remains required.' : `Blocked by ${report.findings.length} deterministic factual finding(s). Correct the draft and check again.` })
+      db.prepare('UPDATE draft_revisions SET data = ? WHERE id = ?').run(JSON.stringify(updated), draft.id)
+      return report
     },
     async getDraft(jobId: string) {
       if (!uuidSchema.safeParse(jobId).success) return null

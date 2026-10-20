@@ -6,7 +6,8 @@ import type { JobInput, JobRecord, JobSaveResult } from './jobs'
 import type { ProfileExchangeResult } from './profile-exchange'
 import type { OutboundConsentAction, OutboundConsentPreview } from './outbound-consent-contract'
 import type { AnalysisBudgets, AnalysisResult, AnalysisUsage } from './posting-analysis'
-import type { DraftRevision } from './draft'
+import type { DraftCorrectionInput, DraftRevision } from './draft'
+import type { FactualCheckReport } from './factual-report'
 
 export const appearanceSchema = z.enum(['light', 'dark'])
 export type Appearance = z.infer<typeof appearanceSchema>
@@ -49,6 +50,8 @@ export interface WorkbenchAPI {
   cancelAnalysis(jobId: string): Promise<AnalysisResult>
   generateDraft(consentToken: string, pageTarget?: 1 | 2): Promise<{ ok: boolean; message: string; draft?: DraftRevision }>
   getDraft(jobId: string): Promise<DraftRevision | null>
+  checkDraft(jobId: string): Promise<FactualCheckReport | null>
+  correctDraft(input: DraftCorrectionInput): Promise<DraftRevision | null>
   getAnalysisUsage(): Promise<AnalysisUsage>
   setAnalysisBudgets(value: AnalysisBudgets): Promise<AnalysisUsage>
 }

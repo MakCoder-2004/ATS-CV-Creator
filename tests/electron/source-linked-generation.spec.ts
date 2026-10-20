@@ -50,7 +50,8 @@ test('real Electron UI generates and exposes cited draft with a DEV-only scripte
     await expect(page.getByRole('article', { name: 'Unverified tailored CV draft' }).getByText(String(new Date().getFullYear()), { exact: true })).toBeVisible()
     await expect(draft).toContainText('TypeScript')
     await expect(draft).toContainText('Source revision')
-    await expect(draft).toContainText('No verification, approval, or export is available yet.')
+    await expect(draft).toContainText('No approval or export override is available.')
+    await expect(draft).toContainText('A citation is not proof of semantic truth; review wording against its source.')
     await expect(review.getByRole('button', { name: /Export|Approve|Verify/ })).toHaveCount(0)
   } finally {
     await app?.close().catch(() => {})

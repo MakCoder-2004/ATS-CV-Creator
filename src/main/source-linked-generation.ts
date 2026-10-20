@@ -16,24 +16,6 @@ const wordCount = (text: string) => {
   } catch { /* plain text source */ }
   return content.trim().split(/\s+/).filter(Boolean).length
 }
-function sourceText(item: GenerationItem): string {
-  try {
-    const value: unknown = JSON.parse(item.text)
-    const collect = (entry: unknown): string[] => Array.isArray(entry) ? entry.flatMap(collect) : entry && typeof entry === 'object' ? Object.entries(entry).filter(([key]) => !/^(id|revision)$/i.test(key)).flatMap(([, child]) => collect(child)) : typeof entry === 'string' ? [entry] : []
-    return collect(value).join(' ')
-  } catch { return item.text }
-}
-const scopeInflationClaims = /\b(led|managed|owned|directed|founded|architected)\b/gi
-const numericClaims = /\b\d+(?:[,.]\d+)?%?\b/g
-function assertConservativeClaims(text: string, cited: GenerationItem[]) {
-  const sources = cited.map(sourceText).join(' ')
-  const sourceClaims = new Set((sources.match(scopeInflationClaims) ?? []).map(claim => claim.toLocaleLowerCase()))
-  const inflated = (text.match(scopeInflationClaims) ?? []).find(claim => !sourceClaims.has(claim.toLocaleLowerCase()))
-  if (inflated) throw new Error(`Generated wording introduces unsupported responsibility or scope (${inflated}).`)
-  const sourceNumbers = new Set(sources.match(numericClaims) ?? [])
-  const unsupportedNumber = (text.match(numericClaims) ?? []).find(value => !sourceNumbers.has(value))
-  if (unsupportedNumber) throw new Error(`Generated wording introduces an unsupported number or metric (${unsupportedNumber}).`)
-}
 function selectWithinPageBudget(items: GenerationItem[], relevance: Array<{ index: number; score: number; rationale: string }>, target: 1 | 2) {
   const limit = WORD_BUDGETS[target]
   const selected: Array<{ index: number; score: number; rationale: string }> = []
@@ -87,12 +69,11 @@ export async function runSourceLinkedGraph(input: { job: unknown; analysis: unkn
   }).map(entry => {
     const cited = itemFor(entry.evidence, category)
     if ((category === 'experience' || category === 'projects') && new Set(cited.map(item => item.parentId ?? item.id)).size > 1) throw new Error('A generated paragraph cannot combine evidence from different experience or project parents.')
-    assertConservativeClaims(entry.text, cited)
     return { text: input.restoreText?.(entry.text) ?? entry.text, citations: cited.map(item => ({ evidenceId: item.id, revision: item.revision })), rationale: entry.rationale }
   })
   const content = draftContentSchema.parse({
     education: buildParagraphs(result.tailored!.education, 'education'), experience: buildParagraphs(result.tailored!.experience, 'experience'), projects: buildParagraphs(result.tailored!.projects, 'projects'),
-    skills: result.tailored!.skills.map(entry => { const cited = itemFor(entry.evidence, 'skills'); if (!cited.some(item => String(item.snapshot.name).toLowerCase() === entry.name.toLowerCase())) throw new Error('Generated skill is not present in cited profile evidence.'); return { name: entry.name, citations: cited.map(item => ({ evidenceId: item.id, revision: item.revision })), rationale: entry.rationale } }),
+    skills: result.tailored!.skills.map(entry => { const cited = itemFor(entry.evidence, 'skills'); return { name: entry.name, citations: cited.map(item => ({ evidenceId: item.id, revision: item.revision })), rationale: entry.rationale } }),
     certificates: buildParagraphs(result.tailored!.certificates, 'certificates')
   })
   const evidenceIds = new Set(Object.values(content).flatMap(section => section.flatMap(item => item.citations.map(c => c.evidenceId))))

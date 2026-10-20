@@ -92,7 +92,8 @@ test('accepted frozen consent generates a batched source-linked draft that reope
   await wb.api.acceptOutboundConsent(staleConsent.token, true, true)
   expect(await wb.api.startAnalysis(staleConsent.token)).toMatchObject({ status: 'complete' })
   unsupportedClaim = 'responsibility'
-  expect(await wb.api.generateDraft(staleConsent.token)).toMatchObject({ ok: false, message: expect.stringMatching(/unsupported responsibility|scope/i) })
+  const semanticallyUnverified = await wb.api.generateDraft(staleConsent.token)
+  expect(semanticallyUnverified).toMatchObject({ ok: true, draft: { checkReport: { limitation: expect.stringContaining('do not prove semantic truth') } } })
   unsupportedClaim = null
   const changedRole = await wb.api.saveExperience({ id: role.value.experience[0].id, kind: 'employment', title: 'Developer', organization: 'Secret Employer', startDate: '2021', endDate: '2023', description: 'Led a global team of 500 people.' })
   expect(changedRole.ok).toBe(true)
