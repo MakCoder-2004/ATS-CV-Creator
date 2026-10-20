@@ -21,6 +21,7 @@ export interface WorkbenchAPI {
   getSettings(): Promise<Settings>
   setAppearance(value: Appearance): Promise<Settings>
   setGeminiModel(value: GeminiModel): Promise<Settings>
+  setFaithfulnessCheck(value: boolean): Promise<Settings>
   saveGeminiApiKey(value: string): Promise<Settings>
   removeGeminiApiKey(): Promise<Settings>
   getProfile(): Promise<ProfileSnapshot>

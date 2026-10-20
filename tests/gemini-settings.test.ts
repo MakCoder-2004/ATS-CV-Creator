@@ -22,7 +22,7 @@ test('credentials are encrypted before persistence and never returned through se
   const dir = workspace()
   const app = createWorkbench(dir, fakeSecureStorage)
   const canary = 'secret-canary-gemini-key'
-  expect(await app.api.getSettings()).toEqual({ appearance: 'light', gemini: { model: 'gemini-3.6-flash', credential: { configured: false, secureStorageAvailable: true } } })
+  expect(await app.api.getSettings()).toEqual({ appearance: 'light', gemini: { model: 'gemini-3.6-flash', faithfulnessCheck: false, credential: { configured: false, secureStorageAvailable: true } } })
   const saved = await app.api.saveGeminiApiKey(canary)
   expect(saved.gemini.credential).toEqual({ configured: true, secureStorageAvailable: true })
   expect(JSON.stringify(saved)).not.toContain(canary)
@@ -38,13 +38,18 @@ test('credentials are encrypted before persistence and never returned through se
 
   const reopened = createWorkbench(dir, fakeSecureStorage)
   expect((await reopened.api.getSettings()).gemini.credential.configured).toBe(true)
-  const changed = await reopened.api.saveGeminiApiKey('replacement-key-canary')
-  expect(JSON.stringify(changed)).not.toContain('replacement-key-canary')
-  const modelSettings = await reopened.api.setGeminiModel('gemini-2.5-flash')
-  expect(modelSettings.gemini.model).toBe('gemini-2.5-flash')
-  await reopened.api.removeGeminiApiKey()
-  expect((await reopened.api.getSettings()).gemini.credential.configured).toBe(false)
+  const enabled = await reopened.api.setFaithfulnessCheck(true)
+  expect(enabled.gemini.faithfulnessCheck).toBe(true)
   reopened.close()
+  const reopenedWithFaithfulness = createWorkbench(dir, fakeSecureStorage)
+  expect((await reopenedWithFaithfulness.api.getSettings()).gemini.faithfulnessCheck).toBe(true)
+  const changed = await reopenedWithFaithfulness.api.saveGeminiApiKey('replacement-key-canary')
+  expect(JSON.stringify(changed)).not.toContain('replacement-key-canary')
+  const modelSettings = await reopenedWithFaithfulness.api.setGeminiModel('gemini-2.5-flash')
+  expect(modelSettings.gemini.model).toBe('gemini-2.5-flash')
+  await reopenedWithFaithfulness.api.removeGeminiApiKey()
+  expect((await reopenedWithFaithfulness.api.getSettings()).gemini.credential.configured).toBe(false)
+  reopenedWithFaithfulness.close()
 })
 
 test('secure storage failure refuses the key without creating plaintext or credential state', async () => {
