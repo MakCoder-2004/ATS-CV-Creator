@@ -150,12 +150,13 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
   const outboundEngine = createOutboundConsentEngine()
   const pendingOutbound = new Map<string, { jobId: string; source: ConsentSource; bundle: OutboundBundle; runId: string; consentId?: string }>()
   const currentAnalysis = new Map<string, ReturnType<typeof analysisResultSchema.parse>>()
-  const dispatcher = createAnalysisDispatcher({ transport: scriptedTransport ?? { generate: async input => {
+  const previousAttempts = (db.prepare('SELECT attempted_at FROM analysis_attempts').all() as { attempted_at: string }[]).map(row => Date.parse(row.attempted_at)).filter(Number.isFinite)
+  const dispatcher = createAnalysisDispatcher({ observedAttempts: previousAttempts, transport: scriptedTransport ?? { generate: async input => {
     const row = db.prepare('SELECT ciphertext FROM encrypted_credentials WHERE key = ?').get('gemini-api-key') as { ciphertext: string } | undefined
     if (!row || !secureStorage.decryptString || !secureStorageAvailable()) throw Object.assign(new Error('Gemini API key is unavailable.'), { status: 401 })
     const key = secureStorage.decryptString(Buffer.from(row.ciphertext, 'base64'))
     return createGeminiAnalysisTransport(key).generate(input)
-  } }, onAttempt: timestamp => db.prepare('INSERT INTO analysis_attempts (run_id, attempted_at) VALUES (?, ?)').run(activeRun, new Date(timestamp).toISOString()) })
+  } }, onAttempt: timestamp => { previousAttempts.push(timestamp); db.prepare('INSERT INTO analysis_attempts (run_id, attempted_at) VALUES (?, ?)').run(activeRun, new Date(timestamp).toISOString()) } })
   let activeRun = ''
   const currentConsentSource = (jobId: string): ConsentSource | null => {
     const job = db.prepare('SELECT data FROM jobs WHERE id = ?').get(jobId) as { data: string } | undefined
@@ -501,8 +502,9 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       return value
     },
     async getAnalysisUsage() {
-      const attempts = (db.prepare("SELECT attempted_at FROM analysis_attempts WHERE date(attempted_at) = date('now')").all() as { attempted_at: string }[]).length
-      const day = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Los_Angeles', year: 'numeric', month: '2-digit', day: '2-digit' }).format(Date.now())
+      const pacificDay = (timestamp: number) => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Los_Angeles', year: 'numeric', month: '2-digit', day: '2-digit' }).format(timestamp)
+      const day = pacificDay(Date.now())
+      const attempts = previousAttempts.filter(timestamp => pacificDay(timestamp) === day).length
       return analysisUsageSchema.parse({ pacificDay: day, attempts, configuredDailyLimit: 50, runLimit: 12, minimumSpacingMs: 5000, warning: 'Local observations only; requests from other clients or keys are not visible. Provider quotas vary and are not guaranteed.' })
     },
     async cancelOutboundConsent(token: string): Promise<OutboundConsentAction> {

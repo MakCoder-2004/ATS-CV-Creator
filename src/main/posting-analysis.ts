@@ -10,7 +10,7 @@ export interface AnalysisUsage { runId: string; jobId: string; attempts: number;
 export class AnalysisError extends Error {
   constructor(readonly code: 'BUDGET' | 'TIMEOUT' | 'CANCELLED' | 'INVALID_KEY' | 'OFFLINE' | 'MALFORMED' | 'PROVIDER', message: string) { super(message); this.name = 'AnalysisError' }
 }
-type Options = { transport: AnalysisTransport; now?: () => number; sleep?: (ms: number, signal: AbortSignal) => Promise<void>; minimumSpacingMs?: number; maxAttempts?: number; maxElapsedMs?: number; maxDailyAttempts?: number; random?: () => number; onAttempt?: (timestamp: number) => void }
+type Options = { transport: AnalysisTransport; now?: () => number; sleep?: (ms: number, signal: AbortSignal) => Promise<void>; minimumSpacingMs?: number; maxAttempts?: number; maxElapsedMs?: number; maxDailyAttempts?: number; observedAttempts?: number[]; random?: () => number; onAttempt?: (timestamp: number) => void }
 const cancelledError = () => new AnalysisError('CANCELLED', 'Analysis cancelled.')
 const cancellableSleep = (ms: number, signal: AbortSignal) => new Promise<void>((resolve, reject) => {
   if (signal.aborted) return reject(cancelledError())
@@ -39,7 +39,7 @@ export function createAnalysisDispatcher(options: Options) {
   const minSpacing = options.minimumSpacingMs ?? 5000, maxAttempts = options.maxAttempts ?? 12, maxElapsed = options.maxElapsedMs ?? 300000
   const maxDaily = options.maxDailyAttempts ?? 50, random = options.random ?? Math.random
   const authorizations = new Map<string, string>(), cancelled = new Set<string>(), active = new Map<string, AbortController>(), attemptCounts = new Map<string, number>()
-  const dispatched: number[] = []; let queue = Promise.resolve()
+  const dispatched: number[] = [...(options.observedAttempts ?? [])]; let queue = Promise.resolve()
   // The caller binds this capability to a persisted, accepted consent record; a run ID alone is not authority.
   const authorize = (runId: string, consentId: string) => { if (runId && consentId) authorizations.set(runId, consentId) }
   const cancel = (runId: string) => { cancelled.add(runId); active.get(runId)?.abort() }
