@@ -21,8 +21,8 @@ import { createHash } from 'node:crypto'
 import { z } from 'zod'
 import { analysisBudgetsSchema, analysisResultSchema, analysisUsageSchema, defaultAnalysisBudgets, postingAnalysisSchema, type AnalysisBudgets } from '../shared/posting-analysis'
 import { pacificDay } from '../shared/pacific-day'
-import { draftCorrectionInputSchema, draftRevisionSchema, type DraftRevision } from '../shared/draft'
-import { runSourceLinkedGraph } from './source-linked-generation'
+import { addDraftItemInputSchema, draftCorrectionInputSchema, draftRevisionSchema, type DraftRevision } from '../shared/draft'
+import { CitationValidationError, runSourceLinkedGraph } from './source-linked-generation'
 import { prepareDraftInputs } from './draft-inputs'
 import { checkDraftFacts } from './factual-verification'
 import { factualCheckReportSchema } from '../shared/factual-report'
@@ -602,16 +602,19 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
         const cancelled = error instanceof AnalysisError && error.code === 'CANCELLED'
         const observedAttempts = (db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id = ?').get(pending.runId) as { count: number }).count
         const message = cancelled ? 'Draft generation was cancelled. No generated wording was retained.' : 'The generated response could not be safely validated. No model wording was retained; author a correction in the blocked draft or retry.'
-        if (!cancelled) {
+        const validationFailure = error instanceof SyntaxError || error instanceof z.ZodError || error instanceof CitationValidationError
+        if (validationFailure) {
           const failed = draftRevisionSchema.parse({ ...failedDraftIdentity, pageTarget, status: 'blocked', approved: false, content: { education: [], experience: [], projects: [], skills: [], certificates: [] }, evidence: safeItems.map(item => ({ evidenceId: item.id, revision: item.revision, snapshot: item.snapshot })), progress: 'Generation failed validation; model output was discarded. This empty draft is editable only by adding locally authored content and remains blocked pending factual checks.', attempts: observedAttempts })
-          const report = factualCheckReportSchema.parse({ ...checkDraftFacts(failed), passed: false, findings: [{ code: 'generation-failure', itemPath: 'generation', message: 'The tailored response was malformed or referenced invalid, missing, foreign, or incompatible evidence citations. Model output was discarded.', correction: 'Author or correct draft wording using the saved evidence revisions, then run factual checks.' }] })
+          const code = error instanceof CitationValidationError ? error.finding : 'schema'
+          const report = factualCheckReportSchema.parse({ ...checkDraftFacts(failed), passed: false, findings: [{ code, itemPath: 'generation', message: code === 'foreign-citation' ? 'The response referenced evidence outside the selected authorized sources. Model output was discarded.' : 'The tailored response did not match the required structured schema. Model output was discarded.', correction: 'Author or correct draft wording using the saved evidence revisions, then run factual checks.' }] })
           const blocked = draftRevisionSchema.parse({ ...failed, checkReport: report })
           db.prepare('INSERT INTO draft_revisions (id,job_id,revision,data) VALUES (?,?,?,?)').run(blocked.id, blocked.jobId, blocked.revision, JSON.stringify(blocked))
           saveAnalysisState({ jobId: pending.jobId, runId: pending.runId, status: 'complete', analysis: analysis.analysis, progress: blocked.progress, attempts: observedAttempts, cacheHit: analysis.cacheHit })
           return { ok: true, message: 'A blocked draft was saved; no invalid model output was retained.', draft: blocked }
         }
-        saveAnalysisState({ jobId: pending.jobId, runId: pending.runId, status: 'cancelled', analysis: analysis.analysis, progress: message, attempts: observedAttempts, error: message, cacheHit: analysis.cacheHit })
-        return { ok: false, message }
+        const safeMessage = cancelled ? message : error instanceof Error && /scope|authorization|stale|changed/i.test(error.message) ? 'Your authorized scope changed during generation. Review the outgoing data and try again.' : 'Draft generation failed safely. No draft was created; check authorization, connection, and model settings before retrying.'
+        saveAnalysisState({ jobId: pending.jobId, runId: pending.runId, status: cancelled ? 'cancelled' : 'failed', analysis: analysis.analysis, progress: safeMessage, attempts: observedAttempts, error: safeMessage, cacheHit: analysis.cacheHit })
+        return { ok: false, message: safeMessage }
       }
     },
     async correctDraft(input: { jobId: string; section: 'education' | 'experience' | 'projects' | 'skills' | 'certificates'; index: number; text: string }) {
@@ -625,17 +628,41 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       if (!target) return null
       const updatedContent = { ...prior.content, [parsed.data.section]: section.map((item, index) => index !== parsed.data.index ? item : 'text' in item ? { ...item, text: parsed.data.text } : { ...item, name: parsed.data.text }) }
       const next = draftRevisionSchema.parse({ ...prior, id: randomUUID(), revision: prior.revision + 1, status: 'unverified', checkReport: undefined, content: updatedContent, progress: 'Draft wording corrected locally. Recheck before human review.' })
-      const report = checkDraftFacts(next)
+      const checkedReport = checkDraftFacts(next)
+      const known = prior.checkReport?.findings.filter(finding => finding.itemPath === 'generation') ?? []
+      const report = factualCheckReportSchema.parse({ ...checkedReport, passed: checkedReport.passed && known.length === 0, findings: [...known, ...checkedReport.findings] })
       const checked = draftRevisionSchema.parse({ ...next, status: report.passed ? 'unverified' : 'blocked', checkReport: report, progress: report.passed ? 'Correction passes deterministic checks; semantic truth still requires human review.' : `Blocked by ${report.findings.length} factual finding(s). Use the correction guidance below.` })
       db.prepare('INSERT INTO draft_revisions (id,job_id,revision,data) VALUES (?,?,?,?)').run(checked.id, checked.jobId, checked.revision, JSON.stringify(checked))
       return checked
+    },
+    async addDraftItem(input: { jobId: string; section: 'education' | 'experience' | 'projects' | 'skills' | 'certificates'; text: string; citation: { evidenceId: string; revision: number } }) {
+      const parsed = addDraftItemInputSchema.safeParse(input)
+      if (!parsed.success) return null
+      const prior = await this.getDraft(parsed.data.jobId)
+      if (!prior) return null
+      const selected = prior.evidence.find(item => item.evidenceId === parsed.data.citation.evidenceId && item.revision === parsed.data.citation.revision)
+      if (!selected) return null
+      const current = prepareDraftInputs(readProfile(), readExperience()).items.find(item => item.id === selected.evidenceId)
+      if (!current || current.revision !== selected.revision || current.category !== parsed.data.section) return null
+      const parent = parsed.data.section === 'experience' ? prior.lockedFields.experience.find(item => item.sourceIds?.includes(current.id)) : parsed.data.section === 'projects' ? prior.lockedFields.projects.find(item => item.sourceIds?.includes(current.id)) : undefined
+      if ((parsed.data.section === 'experience' || parsed.data.section === 'projects') && !parent) return null
+      const items = [...prior.content[parsed.data.section]]
+      const draftItem = parsed.data.section === 'skills' ? { name: parsed.data.text, citations: [parsed.data.citation], rationale: 'Locally authored correction from selected saved evidence.' } : { text: parsed.data.text, citations: [parsed.data.citation], rationale: 'Locally authored correction from selected saved evidence.' }
+      items.push(draftItem as never)
+      const next = draftRevisionSchema.parse({ ...prior, id: randomUUID(), revision: prior.revision + 1, status: 'blocked', checkReport: undefined, content: { ...prior.content, [parsed.data.section]: items }, progress: 'The invalid provider response was discarded and replaced by locally authored, cited content. Automated checks do not replace human review.' })
+      const report = checkDraftFacts(next)
+      const saved = draftRevisionSchema.parse({ ...next, status: report.passed ? 'unverified' : 'blocked', checkReport: report })
+      db.prepare('INSERT INTO draft_revisions (id,job_id,revision,data) VALUES (?,?,?,?)').run(saved.id, saved.jobId, saved.revision, JSON.stringify(saved))
+      return saved
     },
     async checkDraft(jobId: string) {
       if (!uuidSchema.safeParse(jobId).success) return null
       const row = db.prepare('SELECT data FROM draft_revisions WHERE job_id = ? ORDER BY revision DESC LIMIT 1').get(jobId) as { data: string } | undefined
       if (!row) return null
       const draft = draftRevisionSchema.parse(JSON.parse(row.data))
-      const report = factualCheckReportSchema.parse(checkDraftFacts(draft))
+      const checked = checkDraftFacts(draft)
+      const known = draft.checkReport?.findings.filter(finding => finding.itemPath === 'generation') ?? []
+      const report = factualCheckReportSchema.parse({ ...checked, passed: checked.passed && known.length === 0, findings: [...known, ...checked.findings] })
       const updated = draftRevisionSchema.parse({ ...draft, status: report.passed ? 'unverified' : 'blocked', checkReport: report, progress: report.passed ? 'Deterministic factual checks passed; citations do not establish semantic truth. Human review remains required.' : `Blocked by ${report.findings.length} deterministic factual finding(s). Correct the draft and check again.` })
       db.prepare('UPDATE draft_revisions SET data = ? WHERE id = ?').run(JSON.stringify(updated), draft.id)
       return report

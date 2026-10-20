@@ -5,6 +5,8 @@ import { draftContentSchema, type DraftRevision } from '../shared/draft'
 const scoredSchema = z.object({ relevance: z.array(z.object({ index: z.number().int().nonnegative(), score: z.number().min(0).max(1), rationale: z.string().min(1).max(500) }).strict()) }).strict()
 const tailoredSchema = z.object({ education: z.array(z.object({ text: z.string(), evidence: z.array(z.number().int().nonnegative()).min(1), rationale: z.string().min(1) }).strict()), experience: z.array(z.object({ text: z.string(), evidence: z.array(z.number().int().nonnegative()).min(1), rationale: z.string().min(1) }).strict()), projects: z.array(z.object({ text: z.string(), evidence: z.array(z.number().int().nonnegative()).min(1), rationale: z.string().min(1) }).strict()), skills: z.array(z.object({ name: z.string(), evidence: z.array(z.number().int().nonnegative()).min(1), rationale: z.string().min(1) }).strict()), certificates: z.array(z.object({ text: z.string(), evidence: z.array(z.number().int().nonnegative()).min(1), rationale: z.string().min(1) }).strict()) }).strict()
 
+export class CitationValidationError extends Error { constructor(readonly finding: 'foreign-citation' | 'missing-citation') { super(finding) } }
+
 export type GenerationItem = { id: string; revision: number; category: 'education' | 'experience' | 'projects' | 'skills' | 'certificates'; snapshot: Record<string, unknown>; text: string; chronology?: string; parentId?: string }
 const WORD_BUDGETS = { 1: { education: 105, experience: 300, projects: 135, skills: 100, certificates: 55 }, 2: { education: 190, experience: 570, projects: 260, skills: 180, certificates: 100 } } as const
 const wordCount = (text: string) => {
@@ -57,7 +59,7 @@ export async function runSourceLinkedGraph(input: { job: unknown; analysis: unkn
   const selectedIndices = new Set(selected.map(x => x.index))
   const itemFor = (indices: number[], category: GenerationItem['category']) => indices.map(index => {
     const item = input.items[index]
-    if (!item || !selectedIndices.has(index) || item.category !== category) throw new Error('Generated draft referenced evidence outside the selected authorized sources.')
+    if (!item || !selectedIndices.has(index) || item.category !== category) throw new CitationValidationError('foreign-citation')
     return item
   })
   const buildParagraphs = (items: Array<{ text: string; evidence: number[]; rationale: string }>, category: GenerationItem['category']) => [...items].sort((a, b) => {
@@ -68,7 +70,6 @@ export async function runSourceLinkedGraph(input: { job: unknown; analysis: unkn
     return Math.min(...a.evidence) - Math.min(...b.evidence)
   }).map(entry => {
     const cited = itemFor(entry.evidence, category)
-    if ((category === 'experience' || category === 'projects') && new Set(cited.map(item => item.parentId ?? item.id)).size > 1) throw new Error('A generated paragraph cannot combine evidence from different experience or project parents.')
     return { text: input.restoreText?.(entry.text) ?? entry.text, citations: cited.map(item => ({ evidenceId: item.id, revision: item.revision })), rationale: entry.rationale }
   })
   const content = draftContentSchema.parse({

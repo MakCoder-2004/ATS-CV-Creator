@@ -11,3 +11,5 @@ export type DraftRevision = z.infer<typeof draftRevisionSchema>
 export const draftGenerationSchema = z.object({ ok: z.boolean(), message: z.string(), draft: draftRevisionSchema.optional() }).strict()
 export const draftCorrectionInputSchema = z.object({ jobId: z.string().uuid(), section: z.enum(['education', 'experience', 'projects', 'skills', 'certificates']), index: z.number().int().nonnegative(), text: z.string().trim().min(1).max(3000) }).strict()
 export type DraftCorrectionInput = z.infer<typeof draftCorrectionInputSchema>
+export const addDraftItemInputSchema = z.object({ jobId: z.string().uuid(), section: z.enum(['education', 'experience', 'projects', 'skills', 'certificates']), text: z.string().trim().min(1).max(3000), citation: draftCitationSchema }).strict()
+export type AddDraftItemInput = z.infer<typeof addDraftItemInputSchema>

@@ -6,7 +6,7 @@ import type { JobInput, JobRecord, JobSaveResult } from './jobs'
 import type { ProfileExchangeResult } from './profile-exchange'
 import type { OutboundConsentAction, OutboundConsentPreview } from './outbound-consent-contract'
 import type { AnalysisBudgets, AnalysisResult, AnalysisUsage } from './posting-analysis'
-import type { DraftCorrectionInput, DraftRevision } from './draft'
+import type { AddDraftItemInput, DraftCorrectionInput, DraftRevision } from './draft'
 import type { FactualCheckReport } from './factual-report'
 import type { CanonicalDocument, DocumentFitReport } from './document'
 
@@ -53,6 +53,7 @@ export interface WorkbenchAPI {
   getDraft(jobId: string): Promise<DraftRevision | null>
   checkDraft(jobId: string): Promise<FactualCheckReport | null>
   correctDraft(input: DraftCorrectionInput): Promise<DraftRevision | null>
+  addDraftItem(input: AddDraftItemInput): Promise<DraftRevision | null>
   getCanonicalDocument(jobId: string): Promise<CanonicalDocument | null>
   measureDocument(jobId: string): Promise<DocumentFitReport>
   getDocumentFitReport(jobId: string): Promise<DocumentFitReport | null>

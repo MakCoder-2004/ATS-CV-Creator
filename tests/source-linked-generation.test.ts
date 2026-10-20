@@ -17,6 +17,7 @@ test('accepted frozen consent generates a batched source-linked draft that reope
   const transport: AnalysisTransport = { async generate({ prompt }) {
     requests.push(prompt)
     if (prompt.includes('Extract only explicit qualifications')) return JSON.stringify({ required: ['TypeScript'], preferred: [], tools: ['TypeScript'], responsibilities: ['Build reliable services'], keywords: ['TypeScript'] })
+    if (prompt.startsWith('Factual repair cycle')) return JSON.stringify({ corrections: [] })
     if (prompt.startsWith('Score these numbered')) {
       const { items } = JSON.parse(prompt.slice(prompt.indexOf('{')))
       return JSON.stringify({ relevance: items.map((item: { index: number }) => ({ index: item.index, score: 0.9, rationale: 'Directly supports the posting.' })) })
@@ -29,7 +30,7 @@ test('accepted frozen consent generates a batched source-linked draft that reope
   } }
   let wb = createWorkbench(dir, undefined, transport); opened.push(wb)
   const budget = await wb.api.getAnalysisUsage()
-  await wb.api.setAnalysisBudgets({ ...analysisBudgetValues(budget), minimumSpacingMs: 0 })
+  await wb.api.setAnalysisBudgets({ ...analysisBudgetValues(budget), minimumSpacingMs: 0, rateLimitWindowMs: 1000 })
   const contact = await wb.api.saveContact({ fullName: 'Private Candidate', headline: 'Senior engineer', email: 'private@example.test' })
   expect(contact.ok).toBe(true)
   const skill = await wb.api.saveSkill({ name: 'TypeScript', category: 'Programming' })
@@ -79,7 +80,7 @@ test('accepted frozen consent generates a batched source-linked draft that reope
   await wb.api.acceptOutboundConsent(thirdConsent.token, true, true)
   expect(await wb.api.startAnalysis(thirdConsent.token)).toMatchObject({ status: 'complete' })
   crossParentProjectCitation = true
-  expect(await wb.api.generateDraft(thirdConsent.token)).toMatchObject({ ok: false, message: expect.stringContaining('different experience or project parents') })
+  expect(await wb.api.generateDraft(thirdConsent.token)).toMatchObject({ ok: true, draft: { status: 'blocked', checkReport: { passed: false, findings: expect.arrayContaining([expect.objectContaining({ code: 'wrong-parent' })]) } } })
   crossParentProjectCitation = false
   expect(originalDraft.content.experience[0].citations).toContainEqual({ evidenceId: role.value.experience[0].id, revision: 1 })
   expect(originalDraft.content.projects[0].citations).toContainEqual({ evidenceId: projectA.value.projects[0].id, revision: 1 })

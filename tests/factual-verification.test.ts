@@ -10,10 +10,10 @@ const dirs: string[] = [], opened: Array<ReturnType<typeof createWorkbench>> = [
 afterEach(() => { for (const item of opened.splice(0)) item.close(); for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
 
 test.each([
-  ['invalid citation', JSON.stringify({ education: [], experience: [{ text: 'Secret model output', evidence: [99], rationale: 'bad' }], projects: [], skills: [], certificates: [] })],
-  ['malformed JSON', '{"experience":"Sensitive provider output'],
-  ['missing citations', JSON.stringify({ education: [], experience: [{ text: 'Secret model output', rationale: 'bad' }], projects: [], skills: [], certificates: [] })]
-])('public API persists a blocked editable draft after %s', async (_case, tailored) => {
+  ['invalid citation', JSON.stringify({ education: [], experience: [{ text: 'Secret model output', evidence: [99], rationale: 'bad' }], projects: [], skills: [], certificates: [] }), 'foreign-citation'],
+  ['malformed JSON', '{"experience":"Sensitive provider output', 'schema'],
+  ['missing citations', JSON.stringify({ education: [], experience: [{ text: 'Secret model output', rationale: 'bad' }], projects: [], skills: [], certificates: [] }), 'schema']
+])('public API persists a blocked editable draft after %s', async (_case, tailored, expectedCode) => {
   const dir = mkdtempSync(join(tmpdir(), 'factual-failure-')); dirs.push(dir)
   const transport: AnalysisTransport = { async generate({ prompt }) {
     if (prompt.includes('Extract only explicit qualifications')) return JSON.stringify({ required: [], preferred: [], tools: [], responsibilities: [], keywords: [] })
@@ -32,9 +32,15 @@ test.each([
   await wb.api.acceptOutboundConsent(consent.token, true, true)
   await wb.api.startAnalysis(consent.token)
   const result = await wb.api.generateDraft(consent.token)
-  expect(result).toMatchObject({ ok: true, draft: { status: 'blocked', approved: false, content: { experience: [] }, checkReport: { passed: false, findings: [{ code: 'generation-failure' }] } } })
+  expect(result).toMatchObject({ ok: true, draft: { status: 'blocked', approved: false, content: { experience: [] }, checkReport: { passed: false, findings: [{ code: expectedCode }] } } })
   expect(JSON.stringify(result)).not.toContain('Secret model output')
   expect(await wb.api.getDraft(job.value.id)).toMatchObject({ id: result.draft!.id, revision: result.draft!.revision, status: 'blocked', evidence: [{ evidenceId: role.value.experience[0].id, revision: 1 }], checkReport: { draftId: result.draft!.id, draftRevision: result.draft!.revision, evidenceRevisionHash: expect.any(String) } })
+  expect(await wb.api.checkDraft(job.value.id)).toMatchObject({ passed: false, findings: [{ code: expectedCode, itemPath: 'generation' }] })
+  const authored = await wb.api.addDraftItem({ jobId: job.value.id, section: 'experience', text: 'Built reliable services.', citation: { evidenceId: role.value.experience[0].id, revision: 1 } })
+  expect(authored).toMatchObject({ revision: result.draft!.revision + 1, status: 'unverified', content: { experience: [{ text: 'Built reliable services.', citations: [{ evidenceId: role.value.experience[0].id, revision: 1 }] }] }, checkReport: { passed: true, findings: [] } })
+  expect(await wb.api.checkDraft(job.value.id)).toMatchObject({ passed: true, findings: [] })
+  expect(await wb.api.addDraftItem({ jobId: job.value.id, section: 'projects', text: 'Borrowed.', citation: { evidenceId: role.value.experience[0].id, revision: 1 } })).toBeNull()
+  expect(await wb.api.addDraftItem({ jobId: job.value.id, section: 'experience', text: 'Stale.', citation: { evidenceId: role.value.experience[0].id, revision: 9 } })).toBeNull()
 })
 
 test('public API saves revision-bound factual check reports and rejects unsupported metrics on their own cited evidence', async () => {

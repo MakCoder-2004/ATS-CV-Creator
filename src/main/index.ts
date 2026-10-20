@@ -15,7 +15,7 @@ import { jobRecordSchema, jobSaveInputSchema, jobSaveResultSchema } from '../sha
 import { registerProfileExchangeIpc } from './profile-exchange-ipc'
 import { outboundConsentActionSchema, outboundConsentPreviewSchema } from '../shared/outbound-consent-contract'
 import { analysisBudgetsSchema, analysisIdSchema, analysisResultSchema, analysisStartInputSchema, analysisUsageSchema } from '../shared/posting-analysis'
-import { draftCorrectionInputSchema, draftGenerationSchema, draftRevisionSchema } from '../shared/draft'
+import { addDraftItemInputSchema, draftCorrectionInputSchema, draftGenerationSchema, draftRevisionSchema } from '../shared/draft'
 import { factualCheckReportSchema } from '../shared/factual-report'
 
 let window: BrowserWindow | undefined
@@ -48,15 +48,16 @@ if (!app.isPackaged && process.env.CV_TAILOR_TEST_USER_DATA_DIR) {
 }
 app.whenReady().then(() => {
   let scriptedAttempts = 0
-  const scriptedAnalysis: AnalysisTransport | undefined = !app.isPackaged && ['1', 'retry', 'generation', 'factual'].includes(process.env.CV_TAILOR_SCRIPTED_ANALYSIS ?? '') ? { generate: async ({ prompt }) => {
+  const scriptedAnalysis: AnalysisTransport | undefined = !app.isPackaged && ['1', 'retry', 'generation', 'factual', 'invalid'].includes(process.env.CV_TAILOR_SCRIPTED_ANALYSIS ?? '') ? { generate: async ({ prompt }) => {
     scriptedAttempts++
     if (prompt.startsWith('Factual repair cycle')) return JSON.stringify({ corrections: [] })
     if (process.env.CV_TAILOR_SCRIPTED_ANALYSIS === 'retry' && scriptedAttempts === 1) throw { status: 429, retryAfter: 3 }
-    if (['generation', 'factual'].includes(process.env.CV_TAILOR_SCRIPTED_ANALYSIS ?? '') && prompt.startsWith('Score these numbered')) {
+    if (['generation', 'factual', 'invalid'].includes(process.env.CV_TAILOR_SCRIPTED_ANALYSIS ?? '') && prompt.startsWith('Score these numbered')) {
       const { items } = JSON.parse(prompt.slice(prompt.indexOf('{')))
       return JSON.stringify({ relevance: items.map((item: { index: number }) => ({ index: item.index, score: 0.9, rationale: 'Directly supports the posting.' })) })
     }
-    if (['generation', 'factual'].includes(process.env.CV_TAILOR_SCRIPTED_ANALYSIS ?? '') && prompt.startsWith('Write conservative')) {
+    if (process.env.CV_TAILOR_SCRIPTED_ANALYSIS === 'invalid' && prompt.startsWith('Write conservative')) return '{ malformed response'
+    if (['generation', 'factual', 'invalid'].includes(process.env.CV_TAILOR_SCRIPTED_ANALYSIS ?? '') && prompt.startsWith('Write conservative')) {
       const { selected } = JSON.parse(prompt.slice(prompt.indexOf('{')))
       const paragraphs = (category: string) => selected.filter((item: { category: string }) => item.category === category).map((item: { index: number; text: string }) => ({ text: process.env.CV_TAILOR_SCRIPTED_ANALYSIS === 'factual' && category === 'experience' ? 'Reduced delivery time by 900 percent.' : item.text, evidence: [item.index], rationale: 'Selected from authorized profile evidence.' }))
       const skills = selected.filter((item: { category: string }) => item.category === 'skills').map((item: { index: number; text: string }) => ({ name: JSON.parse(item.text).name, evidence: [item.index], rationale: 'Selected from the saved skill inventory.' }))
@@ -201,6 +202,7 @@ app.whenReady().then(() => {
   ipcMain.handle('draft:get', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected job ID'); const draft = await workspace!.api.getDraft(analysisIdSchema.parse(args[0])); return draft === null ? null : draftRevisionSchema.parse(draft) })
   ipcMain.handle('draft:check', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected job ID'); const report = await workspace!.api.checkDraft(analysisIdSchema.parse(args[0])); return report === null ? null : factualCheckReportSchema.parse(report) })
   ipcMain.handle('draft:correct', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected correction input'); return await workspace!.api.correctDraft(draftCorrectionInputSchema.parse(args[0])) })
+  ipcMain.handle('draft:add-item', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected draft item input'); return await workspace!.api.addDraftItem(addDraftItemInputSchema.parse(args[0])) })
   ipcMain.handle('document:preview', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected job ID'); return workspace!.api.getCanonicalDocument(analysisIdSchema.parse(args[0])) })
   ipcMain.handle('document:measure', async (event, ...args: unknown[]) => {
     trusted(event); if (args.length !== 1) throw new Error('Expected job ID')
