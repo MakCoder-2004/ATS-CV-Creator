@@ -147,8 +147,8 @@ export function createAnalysisDispatcher(options: Options) {
         queue = work.then(() => undefined, () => undefined)
         try { const text = await work; if (cancelled.has(input.runId)) throw cancelledError(); return { text, attempts } }
         catch (error) {
-          if (controller.signal.aborted || cancelled.has(input.runId)) throw cancelledError()
           if (timedOut) throw new AnalysisError('TIMEOUT', 'Analysis time budget is exhausted.')
+          if (controller.signal.aborted || cancelled.has(input.runId)) throw cancelledError()
           if (error instanceof AnalysisError) throw error
           const failure = providerError(error, now)
           if (!failure.retry) throw new AnalysisError(failure.kind, failure.kind === 'INVALID_KEY' ? 'OpenRouter rejected the API key. Check the saved key in Settings.' : failure.kind === 'OFFLINE' ? 'The network is unavailable. Check the connection, then start a new authorized run.' : 'OpenRouter could not complete generation. Check the model ID, model availability or credits in Settings.')

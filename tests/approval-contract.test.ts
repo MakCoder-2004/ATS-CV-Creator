@@ -12,18 +12,20 @@ const opened: Array<ReturnType<typeof createWorkbench>> = []
 afterEach(() => { for (const workspace of opened.splice(0)) workspace.close(); for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true }) })
 
 async function fixture(regenerationTransport?: (signal: AbortSignal) => Promise<string>) {
+  const prompts: string[] = []
   const directory = mkdtempSync(join(tmpdir(), 'approval-contract-')); directories.push(directory)
   const transport: AnalysisTransport = { async generate({ prompt, signal }) {
+    prompts.push(prompt)
     if (prompt.includes('Extract only explicit qualifications')) return JSON.stringify({ required: [], preferred: [], tools: [], responsibilities: [], keywords: [] })
     if (prompt.startsWith('Score these numbered')) { const { items } = JSON.parse(prompt.slice(prompt.indexOf('{'))); return JSON.stringify({ relevance: items.map((item: { index: number }) => ({ index: item.index, score: 1, rationale: 'Relevant saved evidence.' })) }) }
     if (prompt.startsWith('Factual repair cycle')) return JSON.stringify({ corrections: [] })
     if (prompt.startsWith('Propose conservative replacement wording')) {
       if (regenerationTransport) return regenerationTransport(signal)
-      const { items } = JSON.parse(prompt.slice(prompt.indexOf('{')))
-      return JSON.stringify({ items: items.map((item: { text: string }) => ({ text: item.text, rationale: 'Retains the cited source while emphasizing its relevance.' })) })
+      const { sourcesByItem } = JSON.parse(prompt.slice(prompt.indexOf('{')))
+      return JSON.stringify({ items: sourcesByItem.map((sources: string[]) => ({ text: sources[0], rationale: 'Retains the cited source while emphasizing its relevance.' })) })
     }
     const { selected } = JSON.parse(prompt.slice(prompt.indexOf('{')))
-    return JSON.stringify({ education: [], experience: [], projects: [], skills: selected.filter((item: { category: string }) => item.category === 'skills').map((item: { index: number; text: string }) => ({ name: JSON.parse(item.text).name, evidence: [item.index], rationale: 'Saved skill.' })), certificates: [] })
+    return JSON.stringify({ education: [], experience: [], projects: [], skills: selected.filter((item: { category: string }) => item.category === 'skills').map((item: { index: number; text: string }) => ({ name: JSON.parse(item.text).name, evidence: [item.index], rationale: 'Saved skill. PRIVATE_DRAFT_RATIONALE_CANARY' })), certificates: [] })
   } }
   const workspace = createWorkbench(directory, undefined, transport); opened.push(workspace)
   const budgets = await workspace.api.getAnalysisUsage()
@@ -38,7 +40,7 @@ async function fixture(regenerationTransport?: (signal: AbortSignal) => Promise<
   await workspace.api.startAnalysis(preview.token)
   const generated = await workspace.api.generateDraft(preview.token)
   if (!generated.ok || !generated.draft) throw new Error('Could not generate draft fixture')
-  return { directory, workspace, jobId: job.value.id, draft: generated.draft, skillId: skill.value.skills[0].id }
+  return { directory, workspace, jobId: job.value.id, draft: generated.draft, skillId: skill.value.skills[0].id, prompts }
 }
 
 async function measure(workspace: ReturnType<typeof createWorkbench>, jobId: string, overflow = false) {
@@ -49,7 +51,7 @@ async function measure(workspace: ReturnType<typeof createWorkbench>, jobId: str
 }
 
 test('regeneration proposals require fresh consent, compare without mutation, reject cleanly, accept scoped edits, and reject stale bases', async () => {
-  const { workspace, jobId } = await fixture()
+  const { workspace, jobId, prompts } = await fixture()
   const extra = await workspace.api.saveSkill({ name: 'Rust', category: 'Programming' })
   if (!extra.ok) throw new Error('Could not create unrelated evidence')
   const withExtra = await workspace.api.addDraftItem({ jobId, section: 'skills', text: 'Rust', citation: { evidenceId: extra.value.skills.find(item => item.name === 'Rust')!.id, revision: 1 } })
@@ -73,6 +75,9 @@ test('regeneration proposals require fresh consent, compare without mutation, re
   expect(await workspace.api.getDraft(jobId)).toMatchObject({ id: initial.id, revision: initial.revision, approved: initial.approved, content: initial.content })
   expect(await workspace.api.regenerateDraft(token, { kind: 'paragraph', section: 'skills', index: 0 })).toMatchObject({ ok: false, message: expect.stringMatching(/fresh outgoing-data preview/i) })
   const proposal = generated.proposal!
+  const regenPrompt = prompts.find(prompt => prompt.startsWith('Propose conservative replacement wording'))!
+  expect(regenPrompt).not.toContain('PRIVATE_DRAFT_RATIONALE_CANARY')
+  expect(regenPrompt).toContain('TypeScript')
   expect(await workspace.api.resolveRegenerationProposal(jobId, proposal.id, 'reject')).toMatchObject({ ok: true, proposal: { status: 'rejected' } })
   expect(await workspace.api.getDraft(jobId)).toMatchObject({ id: initial.id, revision: initial.revision, content: initial.content })
 
@@ -90,8 +95,39 @@ test('regeneration proposals require fresh consent, compare without mutation, re
   const token3 = await authorize()
   const third = await workspace.api.regenerateDraft(token3, { kind: 'section', section: 'skills' })
   const accepted = await workspace.api.resolveRegenerationProposal(jobId, third.proposal!.id, 'accept')
-  expect(accepted).toMatchObject({ ok: true, draft: { revision: restored.revision + 1, approved: false, approval: undefined, content: { skills: [{ name: 'TypeScript' }, { name: 'Rust' }] }, checkReport: { passed: true } } })
+  expect(accepted).toMatchObject({ ok: false, message: expect.stringMatching(/PDF page measurement is pending/i), draft: { revision: restored.revision + 1, approved: false, approval: undefined, content: { skills: [{ name: 'TypeScript' }, { name: 'Rust' }] }, checkReport: { passed: true } } })
   expect(await workspace.api.getDocumentFitReport(jobId)).toBeNull()
+})
+
+test('regeneration reuses cached analysis and shared run ceilings bound retries and elapsed time', async () => {
+  let retryCalls = 0
+  const retryState = await fixture(async () => { retryCalls++; throw Object.assign(new Error('temporary provider failure'), { status: 503 }) })
+  const retryBudgets = await retryState.workspace.api.getAnalysisUsage()
+  await retryState.workspace.api.setAnalysisBudgets({ ...analysisBudgetValues(retryBudgets), runLimit: 1, runTimeLimitMs: 5000, minimumSpacingMs: 0, rateLimitWindowMs: 1000 })
+  const retryPreview = await retryState.workspace.api.prepareOutboundConsent(retryState.jobId)
+  if (!retryPreview.ok) throw new Error('Could not prepare retry preview')
+  await retryState.workspace.api.acceptOutboundConsent(retryPreview.token, true, true)
+  const retryResult = await retryState.workspace.api.regenerateDraft(retryPreview.token, { kind: 'paragraph', section: 'skills', index: 0 })
+  expect(retryResult).toMatchObject({ ok: false })
+  expect(retryCalls).toBe(1)
+  expect(retryState.prompts.filter(prompt => prompt.includes('Extract only explicit qualifications'))).toHaveLength(1)
+  expect(await retryState.workspace.api.getDraft(retryState.jobId)).toMatchObject({ revision: retryState.draft.revision })
+
+  let timedOutCalls = 0
+  const timeoutState = await fixture(signal => new Promise<string>((_resolve, reject) => {
+    timedOutCalls++
+    signal.addEventListener('abort', () => reject(new Error('transport aborted')), { once: true })
+  }))
+  const timeoutBudgets = await timeoutState.workspace.api.getAnalysisUsage()
+  await timeoutState.workspace.api.setAnalysisBudgets({ ...analysisBudgetValues(timeoutBudgets), runTimeLimitMs: 1000, minimumSpacingMs: 0, rateLimitWindowMs: 1000 })
+  const timeoutPreview = await timeoutState.workspace.api.prepareOutboundConsent(timeoutState.jobId)
+  if (!timeoutPreview.ok) throw new Error('Could not prepare timeout preview')
+  await timeoutState.workspace.api.acceptOutboundConsent(timeoutPreview.token, true, true)
+  const timedOut = await timeoutState.workspace.api.regenerateDraft(timeoutPreview.token, { kind: 'paragraph', section: 'skills', index: 0 })
+  expect(timedOut).toMatchObject({ ok: false })
+  expect(timedOutCalls).toBe(1)
+  expect(await timeoutState.workspace.api.getDraft(timeoutState.jobId)).toMatchObject({ revision: timeoutState.draft.revision })
+  expect(await timeoutState.workspace.api.getAnalysis(timeoutState.jobId)).toMatchObject({ status: 'failed' })
 })
 
 test('cancelling an in-flight authorized regeneration preserves the current draft and creates no proposal', async () => {

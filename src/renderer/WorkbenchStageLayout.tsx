@@ -135,12 +135,9 @@ export function WorkbenchStageLayout(props: Props) {
       const result = await window.workbench.resolveRegenerationProposal(activeJob.id, proposal.id, decision)
       if (result.proposal) setProposal(result.proposal)
       setRegenMessage(result.message)
-      if (result.ok && decision === 'accept' && result.draft) {
-        const document = await window.workbench.getCanonicalDocument(activeJob.id)
-        let fit: DocumentFitReport | null = null
-        try { fit = await window.workbench.measureDocument(activeJob.id) }
-        catch { setRegenMessage(`${result.message} Actual PDF page fit could not be measured; measure it again before approval.`) }
-        setProposal(result.proposal ?? null); onProposalAccepted(result.draft, document, fit)
+      if (result.proposal?.status === 'accepted' && result.draft) {
+        const [document, fit] = await Promise.all([window.workbench.getCanonicalDocument(activeJob.id), result.ok ? window.workbench.getDocumentFitReport(activeJob.id) : Promise.resolve(null)])
+        setProposal(result.proposal); onProposalAccepted(result.draft, document, fit)
       }
     } catch (failure) { setRegenMessage(failure instanceof Error ? failure.message : 'The proposal could not be resolved.') } finally { setRegenBusy(false) }
   }

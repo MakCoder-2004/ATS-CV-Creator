@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 test('real Electron UI generates and exposes cited draft with a DEV-only scripted provider', async () => {
-  test.setTimeout(90000)
+  test.setTimeout(150000)
   const userData = mkdtempSync(join(tmpdir(), 'cv-tailor-generation-ui-'))
   let app: Awaited<ReturnType<typeof electron.launch>> | undefined
   try {
@@ -160,14 +160,16 @@ test('real Electron UI generates and exposes cited draft with a DEV-only scripte
     const acceptedComparison = regenDraft.getByRole('region', { name: 'Replacement proposal comparison' })
     await expect(acceptedComparison.getByRole('button', { name: 'Accept replacement and recheck' })).toBeVisible({ timeout: 30000 })
     await acceptedComparison.getByRole('button', { name: 'Accept replacement and recheck' }).click()
-    await expect(regenDraft).toContainText('Accepted replacement proposal')
+    await expect(regenDraft).toContainText('Actual Electron PDF fit checked')
+    expect(await page.evaluate(id => window.workbench.getDocumentFitReport(id).then(value => value?.actualPages), jobId)).toBeGreaterThan(0)
     expect(await page.evaluate(id => window.workbench.getDraft(id).then(value => value?.revision), jobId)).toBe(unchangedRevision! + 1)
     expect(await page.evaluate(id => window.workbench.assertDraftExportable(id), jobId)).toMatchObject({ ok: false })
     await app.close()
     app = await electron.launch({ args: ['.'], timeout: 60000, env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData, CV_TAILOR_SCRIPTED_ANALYSIS: 'generation' } })
     page = await app.firstWindow()
     await expect(page.locator('[data-ui-ready="true"]')).toBeVisible()
-    expect(await page.evaluate(id => window.workbench.getDocumentFitReport(id), jobId)).toBeNull()
+    const reopenedFit = await page.evaluate(id => window.workbench.getDocumentFitReport(id), jobId)
+    expect(reopenedFit?.actualPages).toBeGreaterThan(0)
     expect(await page.evaluate(id => window.workbench.getDraft(id).then(value => value?.approved), jobId)).toBe(false)
   } finally {
     await app?.close().catch(() => {})
