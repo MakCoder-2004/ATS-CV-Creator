@@ -1,11 +1,11 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain, safeStorage, shell } from 'electron'
 import type { ZodError } from 'zod'
 import { fileURLToPath } from 'node:url'
-import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
-import { basename, dirname, join } from 'node:path'
+import { existsSync, mkdirSync } from 'node:fs'
+import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { renderDocumentHtml } from '../shared/document'
-import { containsAllPdfContent, containsPdfTextInOrder, pdfFilename } from '../shared/export'
+import { containsPdfTextInOrder, pdfFilename, writePdfAtomically } from '../shared/export'
 import { z } from 'zod'
 import { createWorkbench } from './workbench'
 import type { AnalysisTransport } from './posting-analysis'
@@ -268,11 +268,12 @@ app.whenReady().then(() => {
     if (!job) return { ok: false, cancelled: false, message: 'The saved job is no longer available.' }
     const destination = await dialog.showSaveDialog(window!, { title: 'Export approved CV as PDF', defaultPath: pdfFilename(canonical.identity.name, job.company, job.title), filters: [{ name: 'PDF document', extensions: ['pdf'] }] })
     if (destination.canceled || !destination.filePath) return { ok: false, cancelled: true, message: 'PDF export cancelled.' }
-    let temporary = ''
+    let overwriteApproved = false
     try {
       if (existsSync(destination.filePath)) {
         const overwrite = await dialog.showMessageBox(window!, { type: 'warning', buttons: ['Cancel', 'Replace file'], defaultId: 0, cancelId: 0, title: 'Replace existing PDF?', message: 'A file already exists at this location.', detail: 'Replace it only after the new PDF has rendered and passed local checks.' })
         if (overwrite.response !== 1) return { ok: false, cancelled: true, message: 'PDF export cancelled; the existing file was kept.' }
+        overwriteApproved = true
       }
       const pdfWindow = new BrowserWindow({ show: false, webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true } })
       let pdf: Buffer
@@ -292,21 +293,15 @@ app.whenReady().then(() => {
       }
       await loadingTask.destroy()
       if (!parsed.numPages || parsed.numPages > canonical.targetPages || !extracted.length) throw new Error('The rendered PDF failed selectable-text or page-target checks.')
-      const requiredText = [canonical.identity.name, ...canonical.identity.contact, ...canonical.identity.links.map(link => link.label), ...canonical.sections.flatMap(section => [section.name, ...section.entries.flatMap(entry => [entry.heading, ...(entry.organization ? [entry.organization] : []), ...(entry.dates ? [entry.dates] : []), entry.text, ...entry.links.map(link => link.label)])])]
-      const missingContent = requiredText.flatMap((part, index) => containsAllPdfContent(extracted, [part]) ? [] : [index])
-      const sectionsInOrder = containsPdfTextInOrder(extracted, canonical.sections.map(section => section.name))
-      if (missingContent.length || !sectionsInOrder) throw new Error(`The rendered PDF content or section reading order did not match the approved CV (content checks: ${missingContent.length}, section order: ${sectionsInOrder ? 'passed' : 'failed'}).`)
+      const requiredText = [canonical.identity.name, ...(canonical.identity.headline ? [canonical.identity.headline] : []), ...canonical.identity.contact, ...canonical.identity.links.map(link => link.label), ...canonical.sections.flatMap(section => [section.name, ...section.entries.flatMap(entry => [entry.heading, ...(entry.organization ? [entry.organization] : []), ...(entry.dates ? [entry.dates] : []), entry.text, ...entry.links.map(link => link.label)])])]
+      if (!containsPdfTextInOrder(extracted, requiredText)) throw new Error('The rendered PDF content or reading order did not match the approved CV.')
       const requiredLinks = [...canonical.identity.links, ...canonical.sections.flatMap(section => section.entries.flatMap(entry => entry.links))].map(link => link.url)
       if (requiredLinks.some(url => !links.has(url))) throw new Error('A PDF hyperlink target did not survive local validation.')
       const latest = await workspace!.api.assertDraftExportable(jobId)
       if (!latest.ok || !latest.document || JSON.stringify(latest.document) !== JSON.stringify(canonical)) throw new Error('The approved CV changed during export. No file was written.')
-      temporary = join(dirname(destination.filePath), `.${basename(destination.filePath)}.${process.pid}.${Date.now()}.tmp`)
-      writeFileSync(temporary, pdf, { flag: 'wx' })
-      renameSync(temporary, destination.filePath)
-      temporary = ''
+      writePdfAtomically(destination.filePath, pdf, overwriteApproved)
       return { ok: true, cancelled: false, message: 'Approved PDF saved and checked locally.' }
     } catch (error) {
-      if (temporary) rmSync(temporary, { force: true })
       return { ok: false, cancelled: false, message: error instanceof Error ? error.message : 'PDF export failed; no success was reported.' }
     }
   })
