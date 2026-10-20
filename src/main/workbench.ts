@@ -55,6 +55,8 @@ function reconcileNestedItems(items: NestedInput[], previous: NestedRecord[], ow
 }
 
 /** One workspace per userData directory. Opening a workspace applies forward-only migrations. */
+const escapeCoverageTerm = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
 function preserveGenerationFinding(checked: ReturnType<typeof checkDraftFacts>, prior: DraftRevision) {
   const known = prior.checkReport?.findings.filter(finding => finding.itemPath === 'generation') ?? []
   return factualCheckReportSchema.parse({ ...checked, passed: checked.passed && known.length === 0, findings: [...known, ...checked.findings] })
@@ -571,7 +573,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
           return { value: responseSchema.parse(JSON.parse(generated.text)), attempts: generated.attempts }
         } })
         authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
-        const repairSchema = z.object({ corrections: z.array(z.object({ section: z.enum(['education', 'experience', 'projects', 'skills', 'certificates']), index: z.number().int().nonnegative(), text: z.string().trim().min(1).max(3000), citations: z.array(z.object({ evidenceId: uuidSchema, revision: z.number().int().positive() }).strict()).min(1) }).strict()).max(200) }).strict()
+        const repairSchema = z.object({ corrections: z.array(z.object({ section: z.enum(['education', 'experience', 'projects', 'skills', 'certificates']), index: z.number().int().nonnegative(), text: z.string().trim().min(1).max(3000), citations: z.array(z.object({ evidenceId: uuidSchema, revision: z.number().int().positive() }).strict()).min(1) }).strict()).max(1) }).strict()
         let report = checkDraftFacts(result.draft)
         let repairAttempts = 0
         for (let cycle = 0; cycle < 2 && !report.passed; cycle++) {
@@ -599,16 +601,26 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
         if (report.passed) {
           const opportunities = supportedCoverageTerms(analysis.analysis, result.draft)
           if (opportunities.length) {
+            const opportunity = opportunities[0]
+            const eligible = opportunity.eligible[0]
+            const priorItem = result.draft.content[eligible.section][eligible.index]
+            const priorText = 'text' in priorItem ? priorItem.text : priorItem.name
             authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
-            const coverageRepair = await dispatcher.generate({ runId: pending.runId, jobId: pending.jobId, model: geminiModelSchema.parse(pending.source.model.name), consentId: pending.consentId!, responseSchema: repairSchema, prompt: `Supported-keyword coverage repair (one opportunity only). Improve wording for these explicitly supported posting terms using only the supplied selected evidence and existing draft. Preserve every unaffected item and its citations, do not add claims or unsupported qualifications, and do not use evidence outside this frozen bundle. Return corrections only where appropriate.\n${JSON.stringify({ opportunities, draft: result.draft.content, evidence: opportunities.flatMap(item => item.evidence.map(id => safeItems.find(source => source.id === id)).filter(Boolean)) })}` })
+            const coverageRepair = await dispatcher.generate({ runId: pending.runId, jobId: pending.jobId, model: geminiModelSchema.parse(pending.source.model.name), consentId: pending.consentId!, responseSchema: repairSchema, prompt: `Supported-keyword coverage repair (single exact item). Add only the explicitly supported term to this authored text. Preserve all existing wording, responsibility, scope, ownership, skill level, certainty, and citations exactly; do not change any other item. Return zero or one correction, only for the supplied section/index.\n${JSON.stringify({ opportunity: { qualification: opportunity.qualification, matchedAs: opportunity.matchedAs, section: eligible.section, index: eligible.index, evidenceId: eligible.evidenceId, revision: eligible.revision }, text: priorText, evidence: safeItems.find(source => source.id === eligible.evidenceId)?.text })}` })
             authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
             coverageRepairAttempts = coverageRepair.attempts
             const response = repairSchema.parse(JSON.parse(coverageRepair.text))
             for (const correction of response.corrections) {
-              const section = [...result.draft.content[correction.section]], prior = section[correction.index]
-              if (!prior || !correction.citations.every(citation => prior.citations.some(existing => existing.evidenceId === citation.evidenceId && existing.revision === citation.revision) && safeItems.some(source => source.id === citation.evidenceId && source.category === correction.section))) continue
-              section[correction.index] = 'text' in prior ? { ...prior, text: pending.bundle.restoreIdentifiers(correction.text) } : { ...prior, name: pending.bundle.restoreIdentifiers(correction.text) }
-              result.draft.content = { ...result.draft.content, [correction.section]: section }
+              if (correction.section !== eligible.section || correction.index !== eligible.index) continue
+              const section = [...result.draft.content[eligible.section]], prior = section[eligible.index]
+              const expectedCitation = { evidenceId: eligible.evidenceId, revision: eligible.revision }
+              if (!prior || correction.citations.length !== 1 || correction.citations[0].evidenceId !== expectedCitation.evidenceId || correction.citations[0].revision !== expectedCitation.revision) continue
+              const priorText = 'text' in prior ? prior.text : prior.name
+              const term = escapeCoverageTerm(opportunity.matchedAs)
+              const withoutTerm = correction.text.replace(new RegExp(`(?:^|\\s)${term}(?=$|\\s)`, 'iu'), ' ').replace(/\s+/g, ' ').trim()
+              if (withoutTerm !== priorText.replace(/\s+/g, ' ').trim()) continue
+              section[eligible.index] = 'text' in prior ? { ...prior, text: pending.bundle.restoreIdentifiers(correction.text) } : { ...prior, name: pending.bundle.restoreIdentifiers(correction.text) }
+              result.draft.content = { ...result.draft.content, [eligible.section]: section }
             }
             result.draft.attempts += coverageRepair.attempts
             report = checkDraftFacts(result.draft)
