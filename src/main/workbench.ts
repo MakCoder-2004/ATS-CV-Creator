@@ -684,10 +684,13 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
     async approveDraft(jobId: string) {
       const draft = await this.getDraft(jobId)
       if (!draft) return { ok: false, message: 'There is no saved draft to approve.' }
-      let report = preserveGenerationFinding(checkDraftFacts(draft), draft)
+      const savedReport = draft.checkReport
+      const expectedEvidenceHash = createHash('sha256').update(JSON.stringify([...draft.evidence].sort((a, b) => a.evidenceId.localeCompare(b.evidenceId)))).digest('hex')
       const stale = currentSourceStatus(draft)
+      if (!savedReport?.passed || savedReport.draftId !== draft.id || savedReport.draftRevision !== draft.revision || savedReport.evidenceRevisionHash !== expectedEvidenceHash || draft.status === 'blocked') return { ok: false, message: 'Recheck the current draft and cited source revisions before approval.' }
+      let report = preserveGenerationFinding(checkDraftFacts(draft), draft)
       if (stale.length) report = factualCheckReportSchema.parse({ ...report, passed: false, findings: [...report.findings, ...stale.map(evidenceId => ({ code: 'stale-source' as const, itemPath: 'sources', evidenceId, message: 'A cited profile source changed or was deleted after this draft was created.', correction: 'Review the current source and regenerate or remove the affected wording.' }))] })
-      if (!report.passed || report.draftId !== draft.id || report.draftRevision !== draft.revision || report.evidenceRevisionHash !== createHash('sha256').update(JSON.stringify([...draft.evidence].sort((a, b) => a.evidenceId.localeCompare(b.evidenceId)))).digest('hex') || currentSourceStatus(draft).length || draft.status === 'blocked') return { ok: false, message: 'Current factual checks and cited source revisions must pass before approval.' }
+      if (!report.passed || report.draftId !== draft.id || report.draftRevision !== draft.revision || report.evidenceRevisionHash !== expectedEvidenceHash || stale.length) return { ok: false, message: 'Current factual checks and cited source revisions must pass before approval.' }
       const canonical = await this.getCanonicalDocument(jobId)
       const fit = await this.getDocumentFitReport(jobId)
       if (!canonical || !fit || fit.overflow || fit.actualPages > fit.targetPages) return { ok: false, message: 'Measure the current document and resolve page overflow before approval.' }
