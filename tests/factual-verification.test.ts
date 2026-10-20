@@ -44,6 +44,39 @@ test.each([
   expect(await wb.api.addDraftItem({ jobId: job.value.id, section: 'experience', text: 'Stale.', citation: { evidenceId: role.value.experience[0].id, revision: 9 } })).toBeNull()
 })
 
+test('public API rejects unsupported skill equivalence and binds the blocked report to frozen evidence', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'factual-adversarial-')); dirs.push(dir)
+  const transport: AnalysisTransport = { async generate({ prompt }) {
+    if (prompt.startsWith('Factual repair cycle')) return JSON.stringify({ corrections: [] })
+    if (prompt.includes('Extract only explicit qualifications')) return JSON.stringify({ required: [], preferred: [], tools: [], responsibilities: [], keywords: [] })
+    if (prompt.startsWith('Score these numbered')) { const { items } = JSON.parse(prompt.slice(prompt.indexOf('{'))); return JSON.stringify({ relevance: items.map((item: { index: number }) => ({ index: item.index, score: 0.9, rationale: 'Relevant.' })) }) }
+    const { selected } = JSON.parse(prompt.slice(prompt.indexOf('{')))
+    const skill = selected.find((item: { category: string }) => item.category === 'skills')
+    const experience = selected.find((item: { category: string }) => item.category === 'experience')
+    const project = selected.find((item: { category: string }) => item.category === 'projects')
+    return JSON.stringify({ education: [], experience: experience ? [{ text: 'Managed budgets over $5,000.', evidence: [experience.index], rationale: 'Relevant.' }] : [], projects: project ? [{ text: project.text, evidence: [project.index], rationale: 'Project.' }] : [], skills: skill ? [{ name: 'Cloud architecture', evidence: [skill.index], rationale: 'Equivalent terminology.' }] : [], certificates: [] })
+  } }
+  const wb = createWorkbench(dir, undefined, transport); opened.push(wb)
+  await wb.api.setAnalysisBudgets({ ...analysisBudgetValues(await wb.api.getAnalysisUsage()), minimumSpacingMs: 0 })
+  const role = await wb.api.saveExperience({ kind: 'employment', title: 'Engineer', organization: 'Sample Org', description: 'Managed engineering budgets of about $5,000 and oversaw finance operations.' })
+  const project = await wb.api.saveProject({ name: 'Harbor Console', description: 'Built a deployment tool.' })
+  const skill = await wb.api.saveSkill({ name: 'Cloud operations', category: 'Tools' })
+  const job = await wb.api.saveJob({ title: 'Finance Engineer', company: 'Target Org', description: 'Engineering budgets and finance operations.' })
+  if (!role.ok || !project.ok || !skill.ok || !job.ok) throw new Error('adversarial fixture')
+  const consent = await wb.api.prepareOutboundConsent(job.value.id)
+  if (!consent.ok) throw new Error('consent fixture')
+  await wb.api.acceptOutboundConsent(consent.token, true, true)
+  await wb.api.startAnalysis(consent.token)
+  const result = await wb.api.generateDraft(consent.token)
+  expect(result).toMatchObject({ ok: true, draft: { status: 'blocked', approved: false } })
+  const report = result.draft!.checkReport!
+  expect(report.findings).toEqual(expect.arrayContaining([
+    expect.objectContaining({ code: 'unsupported-skill', itemPath: 'skills[0]' })
+  ]))
+  expect(report.findings.some(finding => finding.code === 'wrong-parent' && finding.itemPath === 'projects[0]')).toBe(false)
+  expect(await wb.api.getDraft(job.value.id)).toMatchObject({ status: 'blocked', checkReport: { draftId: result.draft!.id, draftRevision: result.draft!.revision, evidenceRevisionHash: expect.any(String), passed: false } })
+})
+
 test('public API saves revision-bound factual check reports and rejects unsupported metrics on their own cited evidence', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'factual-check-')); dirs.push(dir)
   const requests: string[] = []
@@ -53,7 +86,7 @@ test('public API saves revision-bound factual check reports and rejects unsuppor
     if (prompt.includes('Extract only explicit qualifications')) return JSON.stringify({ required: [], preferred: [], tools: [], responsibilities: [], keywords: [] })
     if (prompt.startsWith('Score these numbered')) { const { items } = JSON.parse(prompt.slice(prompt.indexOf('{'))); return JSON.stringify({ relevance: items.map((item: { index: number }) => ({ index: item.index, score: 0.9, rationale: 'Relevant.' })) }) }
     const { selected } = JSON.parse(prompt.slice(prompt.indexOf('{')))
-    const experience = selected.filter((item: { category: string }) => item.category === 'experience').map((item: { index: number }) => ({ text: 'Reduced latency by over 12 percent.', evidence: [item.index], rationale: 'Relevant result.' }))
+    const experience = selected.filter((item: { category: string }) => item.category === 'experience').map((item: { index: number }) => ({ text: 'Reduced latency by over 12 dollars.', evidence: [item.index], rationale: 'Relevant result.' }))
     const projects = selected.filter((item: { category: string }) => item.category === 'projects').map((item: { index: number; text: string }) => ({ text: item.text, evidence: [item.index], rationale: 'Separate project evidence.' }))
     return JSON.stringify({ education: [], experience, projects, skills: [], certificates: [] })
   } }
