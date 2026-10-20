@@ -13,7 +13,7 @@ function strings(value: unknown): string[] {
 function numericExpressions(text: string): string[] {
   const qualifier = '(?:(?:more\\s+than|less\\s+than|at\\s+least|up\\s+to|over|under|above|below|about|around|approximately|approx\\.?|nearly|almost|roughly)\\s+)?'
   const unit = '(?:%|percent(?:age)?|USD|EUR|GBP|CAD|AUD|dollars?|euros?|pounds?|yen|CNY|INR|currency|k|m|million|billion|thousand|hours?|days?|weeks?|months?|years?|users?|customers?|projects?|teams?|employees?|requests?|records?|items?|bytes?|MB|GB|TB|ms|seconds?|minutes?)'
-  const pattern = new RegExp(`(?:[$€£]\\s*)?${qualifier}\\b\\d+(?:[,.]\\d+)*(?:\\s*(?:%|${unit.slice(3, -1)}\\b))?`, 'giu')
+  const pattern = new RegExp(`(?<![\\p{L}\\p{N}])${qualifier}(?:[$€£]\\s*)?\\d+(?:[,.]\\d+)*(?:\\s*(?:%|${unit}\\b))?`, 'giu')
   return [...text.matchAll(pattern)].map(match => normalized(match[0]))
 }
 

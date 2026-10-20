@@ -71,7 +71,8 @@ test('public API rejects unsupported skill equivalence and binds the blocked rep
   expect(result).toMatchObject({ ok: true, draft: { status: 'blocked', approved: false } })
   const report = result.draft!.checkReport!
   expect(report.findings).toEqual(expect.arrayContaining([
-    expect.objectContaining({ code: 'unsupported-skill', itemPath: 'skills[0]' })
+    expect.objectContaining({ code: 'unsupported-skill', itemPath: 'skills[0]' }),
+    expect.objectContaining({ code: 'unsupported-number', itemPath: 'experience[0]' })
   ]))
   expect(report.findings.some(finding => finding.code === 'wrong-parent' && finding.itemPath === 'projects[0]')).toBe(false)
   expect(await wb.api.getDraft(job.value.id)).toMatchObject({ status: 'blocked', checkReport: { draftId: result.draft!.id, draftRevision: result.draft!.revision, evidenceRevisionHash: expect.any(String), passed: false } })
