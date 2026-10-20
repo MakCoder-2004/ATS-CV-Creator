@@ -14,8 +14,14 @@ test('accepted frozen consent generates a batched source-linked draft that reope
   const requests: string[] = []
   let crossParentProjectCitation = false
   let unsupportedClaim: 'responsibility' | 'number' | null = null
+  let semanticMode: 'supported' | 'malformed' = 'supported'
   const transport: AnalysisTransport = { async generate({ prompt }) {
     requests.push(prompt)
+    if (prompt.startsWith('Compare all rewritten/source pairs')) {
+      if (semanticMode === 'malformed') return '{ malformed faithfulness response'
+      const { pairs } = JSON.parse(prompt.slice(prompt.indexOf('{')))
+      return JSON.stringify({ results: pairs.map((pair: { itemPath: string; rewritten: string }) => ({ itemPath: pair.itemPath, supported: !(unsupportedClaim === 'responsibility' && pair.rewritten.includes('Led a global team')), explanation: 'The wording matches the cited evidence.' })) })
+    }
     if (prompt.includes('Extract only explicit qualifications')) return JSON.stringify({ required: ['TypeScript'], preferred: [], tools: ['TypeScript'], responsibilities: ['Build reliable services'], keywords: ['TypeScript'] })
     if (prompt.startsWith('Factual repair cycle')) return JSON.stringify({ corrections: [] })
     if (prompt.startsWith('Score these numbered')) {
@@ -47,22 +53,56 @@ test('accepted frozen consent generates a batched source-linked draft that reope
   }
   const job = await wb.api.saveJob({ title: 'Engineer', company: 'Private Company', description: 'TypeScript and reliable services required.' })
   if (!job.ok) throw Error('job fixture')
+  await wb.api.setFaithfulnessCheck(true)
   const consent = await wb.api.prepareOutboundConsent(job.value.id)
   if (!consent.ok) throw Error('consent fixture')
   await wb.api.acceptOutboundConsent(consent.token, true, true)
+  await wb.api.setFaithfulnessCheck(false)
   expect(await wb.api.startAnalysis(consent.token)).toMatchObject({ status: 'complete' })
   const generated = await wb.api.generateDraft(consent.token)
-  expect(generated).toMatchObject({ ok: true, draft: { jobId: job.value.id, pageTarget: 1, progress: expect.stringContaining('1-page target'), status: 'unverified', approved: false, lockedFields: { fullName: 'Private Candidate', experience: [{ evidenceId: role.value.experience[0].id, title: 'Developer', organization: 'Secret Employer', startDate: '2021', endDate: '2023' }, { evidenceId: tiedRole.value.experience[1].id, title: 'Consultant', organization: 'Other Employer', startDate: '2022', endDate: '2023' }, { evidenceId: olderRole.value.experience[2].id, title: 'Junior Developer', organization: 'Old Employer', startDate: '2018', endDate: '2020' }] } } })
+  expect(generated).toMatchObject({ ok: true, draft: { jobId: job.value.id, pageTarget: 1, progress: expect.stringContaining('1-page target'), status: 'unverified', approved: false, checkReport: { passed: true, limitation: expect.stringContaining('second opinions, not proof') }, lockedFields: { fullName: 'Private Candidate', experience: [{ evidenceId: role.value.experience[0].id, title: 'Developer', organization: 'Secret Employer', startDate: '2021', endDate: '2023' }, { evidenceId: tiedRole.value.experience[1].id, title: 'Consultant', organization: 'Other Employer', startDate: '2022', endDate: '2023' }, { evidenceId: olderRole.value.experience[2].id, title: 'Junior Developer', organization: 'Old Employer', startDate: '2018', endDate: '2020' }] } } })
+  expect(generated.draft!.attempts).toBe(3)
   expect(generated.draft!.content.experience.map(paragraph => paragraph.citations[0].evidenceId)).toEqual([role.value.experience[0].id, tiedRole.value.experience[1].id, olderRole.value.experience[2].id])
   expect(generated.draft!.content.projects.map(paragraph => paragraph.citations[0].evidenceId)).toEqual([projectA.value.projects[0].id, projectB.value.projects[1].id])
   expect(generated.draft!.content.skills.length).toBeGreaterThan(24)
   expect(generated.draft!.content.skills.every(entry => entry.citations.length > 0)).toBe(true)
-  expect(requests).toHaveLength(3)
+  expect(requests).toHaveLength(4)
+  const faithfulnessRequest = requests.find(prompt => prompt.startsWith('Compare all rewritten/source pairs'))
+  expect(faithfulnessRequest).toBeDefined()
+  expect(faithfulnessRequest).not.toContain('Private Candidate')
+  expect(faithfulnessRequest).not.toContain('Secret Employer')
+  expect(faithfulnessRequest).not.toContain('2021')
   expect(requests.join('\n')).not.toContain('Private Candidate')
   expect(requests.join('\n')).not.toContain('private@example.test')
   expect(requests.join('\n')).not.toContain('Secret Employer')
   expect(requests.join('\n')).not.toContain('2021')
   const originalDraft = generated.draft!
+  const malformedJob = await wb.api.saveJob({ title: 'Malformed review case', company: 'Another Private Company', description: 'TypeScript service engineering.' })
+  if (!malformedJob.ok) throw Error('malformed review job fixture')
+  await wb.api.setFaithfulnessCheck(true)
+  const malformedConsent = await wb.api.prepareOutboundConsent(malformedJob.value.id)
+  if (!malformedConsent.ok) throw Error('malformed review consent fixture')
+  await wb.api.acceptOutboundConsent(malformedConsent.token, true, true)
+  expect(await wb.api.startAnalysis(malformedConsent.token)).toMatchObject({ status: 'complete' })
+  semanticMode = 'malformed'
+  const malformedReview = await wb.api.generateDraft(malformedConsent.token)
+  expect(malformedReview).toMatchObject({ ok: true, draft: { status: 'blocked', checkReport: { findings: expect.arrayContaining([expect.objectContaining({ code: 'semantic-unsupported', itemPath: 'faithfulness', message: expect.stringContaining('malformed structured output') })]) } } })
+  expect((await wb.api.getDraft(malformedJob.value.id))?.content.experience.length).toBeGreaterThan(0)
+  semanticMode = 'supported'
+  await wb.api.setFaithfulnessCheck(false)
+  const quotaJob = await wb.api.saveJob({ title: 'Bounded review case', company: 'Budget Company', description: 'TypeScript service engineering.' })
+  if (!quotaJob.ok) throw Error('quota review job fixture')
+  await wb.api.setAnalysisBudgets({ ...analysisBudgetValues(await wb.api.getAnalysisUsage()), runLimit: 3 })
+  await wb.api.setFaithfulnessCheck(true)
+  const quotaConsent = await wb.api.prepareOutboundConsent(quotaJob.value.id)
+  if (!quotaConsent.ok) throw Error('quota review consent fixture')
+  await wb.api.acceptOutboundConsent(quotaConsent.token, true, true)
+  expect(await wb.api.startAnalysis(quotaConsent.token)).toMatchObject({ status: 'complete' })
+  const budgetExhaustedReview = await wb.api.generateDraft(quotaConsent.token)
+  expect(budgetExhaustedReview).toMatchObject({ ok: true, draft: { status: 'blocked', attempts: 2, checkReport: { findings: expect.arrayContaining([expect.objectContaining({ itemPath: 'faithfulness', message: expect.stringContaining('budget') })]) } } })
+  expect((await wb.api.getAnalysisUsage()).attempts).toBeGreaterThanOrEqual(3)
+  await wb.api.setAnalysisBudgets({ ...analysisBudgetValues(budget), minimumSpacingMs: 0, rateLimitWindowMs: 1000 })
+  await wb.api.setFaithfulnessCheck(false)
   const secondJob = await wb.api.saveJob({ title: 'Analyst', company: 'Different Company', description: 'TypeScript analysis.' })
   if (!secondJob.ok) throw Error('second job fixture')
   const secondConsent = await wb.api.prepareOutboundConsent(secondJob.value.id)
@@ -88,13 +128,18 @@ test('accepted frozen consent generates a batched source-linked draft that reope
   expect(originalDraft.evidence.map(e => e.evidenceId)).toContain(role.value.experience[0].id)
   const staleJob = await wb.api.saveJob({ title: 'Stale scope role', company: 'Scope Company', description: 'TypeScript engineering.' })
   if (!staleJob.ok) throw Error('stale-scope job fixture')
+  await wb.api.setFaithfulnessCheck(true)
   const staleConsent = await wb.api.prepareOutboundConsent(staleJob.value.id)
   if (!staleConsent.ok) throw Error('stale-scope consent fixture')
   await wb.api.acceptOutboundConsent(staleConsent.token, true, true)
+  await wb.api.setFaithfulnessCheck(false)
   expect(await wb.api.startAnalysis(staleConsent.token)).toMatchObject({ status: 'complete' })
   unsupportedClaim = 'responsibility'
   const semanticallyUnverified = await wb.api.generateDraft(staleConsent.token)
-  expect(semanticallyUnverified).toMatchObject({ ok: true, draft: { checkReport: { limitation: expect.stringContaining('do not prove semantic truth') } } })
+  expect(semanticallyUnverified).toMatchObject({ ok: true, draft: { status: 'blocked', checkReport: { limitation: expect.stringContaining('second opinions, not proof'), findings: expect.arrayContaining([expect.objectContaining({ code: 'semantic-unsupported', itemPath: 'experience[0]' })]) } } })
+  const semanticDraft = semanticallyUnverified.draft!
+  expect(await wb.api.checkDraft(staleJob.value.id)).toMatchObject({ passed: false, findings: expect.arrayContaining([expect.objectContaining({ code: 'semantic-unsupported' })]) })
+  expect((await wb.api.getDraft(staleJob.value.id))?.revision).toBe(semanticDraft.revision)
   unsupportedClaim = null
   const changedRole = await wb.api.saveExperience({ id: role.value.experience[0].id, kind: 'employment', title: 'Developer', organization: 'Secret Employer', startDate: '2021', endDate: '2023', description: 'Led a global team of 500 people.' })
   expect(changedRole.ok).toBe(true)
@@ -107,5 +152,5 @@ test('accepted frozen consent generates a batched source-linked draft that reope
   const reopened = await wb.api.getDraft(job.value.id)
   expect(reopened).toEqual(originalDraft)
   expect(await wb.api.getDraft(secondJob.value.id)).toEqual(secondDraft.draft)
-  expect(await wb.api.getAnalysis(job.value.id)).toMatchObject({ status: 'complete', progress: expect.stringContaining('Draft generated'), attempts: 3, runId: expect.any(String) })
+  expect(await wb.api.getAnalysis(job.value.id)).toMatchObject({ status: 'complete', progress: expect.stringContaining('Draft generated'), attempts: 4, runId: expect.any(String) })
 }, 20000)

@@ -61,7 +61,7 @@ test('real Electron UI generates and exposes cited draft with a DEV-only scripte
     await expect(page.getByRole('article', { name: 'Unapproved canonical CV preview' }).getByText(/20\d{2}/).first()).toBeVisible()
     await expect(draft).toContainText('TypeScript')
     await expect(draft).toContainText('Source revision')
-    await expect(draft).toContainText('A citation is not proof of semantic truth; review wording against its source.')
+    await expect(draft).toContainText('Automated checks and optional LLM comparison are second opinions, not proof of semantic truth; human review remains required.')
     const preview = page.getByRole('article', { name: 'Unapproved canonical CV preview' })
     await expect(preview.locator('h2')).toHaveText(['Education', 'Experience', 'Projects', 'Skills', 'Certificates'])
     await expect(review.getByRole('button', { name: /Export|Approve|Verify/ })).toHaveCount(0)

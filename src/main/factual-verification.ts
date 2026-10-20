@@ -61,5 +61,5 @@ export function checkDraftFacts(draft: DraftRevision) {
     if (fields.some(field => value[field as keyof typeof value] !== snapshot[field])) findings.push({ code: 'locked-field-mismatch', itemPath: `lockedFields.${value.evidenceId}`, evidenceId: value.evidenceId, message: 'A locked authoritative field differs from its frozen evidence snapshot.', correction: 'Restore the local authoritative title, organization, institution, issuer, or date; do not edit it as generated wording.' })
   }
   const evidenceRevisionHash = createHash('sha256').update(JSON.stringify([...draft.evidence].sort((a, b) => a.evidenceId.localeCompare(b.evidenceId)))).digest('hex')
-  return factualCheckReportSchema.parse({ draftId: draft.id, draftRevision: draft.revision, evidenceRevisionHash, passed: findings.length === 0, findings, checkedAt: new Date().toISOString(), limitation: 'Deterministic checks catch specified structural mismatches; citations do not prove semantic truth or detect every invention.' })
+  return factualCheckReportSchema.parse({ draftId: draft.id, draftRevision: draft.revision, evidenceRevisionHash, passed: findings.length === 0, findings, checkedAt: new Date().toISOString(), limitation: 'Automated checks and optional LLM comparison are second opinions, not proof of semantic truth; human review remains required.' })
 }

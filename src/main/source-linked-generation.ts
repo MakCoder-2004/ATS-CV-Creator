@@ -33,7 +33,7 @@ function selectWithinPageBudget(items: GenerationItem[], relevance: Array<{ inde
   }
   return selected.sort((a, b) => a.index - b.index)
 }
-export async function runSourceLinkedGraph(input: { job: unknown; analysis: unknown; items: GenerationItem[]; pageTarget?: 1 | 2; call(prompt: string, schema: z.ZodTypeAny): Promise<{ value: unknown; attempts: number }>; onProgress?: (progress: string) => void; identity: { id: string; jobId: string; revision: number; createdAt: string; lockedFields: { fullName: string; headline?: string; experience: Array<{ evidenceId: string; title: string; organization: string; startDate?: string; endDate?: string }>; education: Array<{ evidenceId: string; title: string; institution?: string; startDate?: string; endDate?: string }>; projects: Array<{ evidenceId: string; name: string }>; certificates: Array<{ evidenceId: string; title: string; issuer?: string; year?: number }> } }; restoreText?: (text: string) => string }): Promise<{ draft: DraftRevision; attempts: number }> {
+export async function runSourceLinkedGraph(input: { job: unknown; analysis: unknown; items: GenerationItem[]; pageTarget?: 1 | 2; call(prompt: string, schema: z.ZodTypeAny): Promise<{ value: unknown; attempts: number }>; onProgress?: (progress: string) => void; identity: { id: string; jobId: string; revision: number; createdAt: string; lockedFields: { fullName: string; headline?: string; experience: Array<{ evidenceId: string; title: string; organization: string; startDate?: string; endDate?: string }>; education: Array<{ evidenceId: string; title: string; institution?: string; startDate?: string; endDate?: string }>; projects: Array<{ evidenceId: string; name: string }>; certificates: Array<{ evidenceId: string; title: string; issuer?: string; year?: number }> } }; restoreText?: (text: string) => string }): Promise<{ draft: DraftRevision; attempts: number; semanticPairs: Array<{ section: keyof DraftRevision['content']; itemPath: string; rewritten: string; evidence: string[] }> }> {
   const State = Annotation.Root({ scored: Annotation<z.infer<typeof scoredSchema> | undefined>(), tailored: Annotation<z.infer<typeof tailoredSchema> | undefined>(), attempts: Annotation<number>({ reducer: (a, b) => a + b, default: () => 0 }) })
   const graph = new StateGraph(State)
     .addNode('batch_score', async () => {
@@ -79,5 +79,16 @@ export async function runSourceLinkedGraph(input: { job: unknown; analysis: unkn
   })
   const evidenceIds = new Set(Object.values(content).flatMap(section => section.flatMap(item => item.citations.map(c => c.evidenceId))))
   const evidence = input.items.filter(item => evidenceIds.has(item.id)).map(item => ({ evidenceId: item.id, revision: item.revision, snapshot: item.snapshot }))
-  return { draft: { ...input.identity, pageTarget: input.pageTarget ?? 1, status: 'unverified', approved: false, content, evidence, progress: `Draft generated for a ${input.pageTarget ?? 1}-page target; automated verification and human approval have not run.`, attempts: result.attempts ?? 0 }, attempts: result.attempts ?? 0 }
+  const semanticPairs: Array<{ section: keyof DraftRevision['content']; itemPath: string; rewritten: string; evidence: string[] }> = []
+  for (const section of ['education', 'experience', 'projects', 'skills', 'certificates'] as const) {
+    const generated = result.tailored![section]
+    generated.forEach((entry, index) => {
+      const rewritten = 'text' in entry ? entry.text : entry.name
+      const cited = itemFor(entry.evidence, section)
+      const citationIds = cited.map(item => item.id).sort()
+      const draftIndex = content[section].findIndex(item => [...item.citations.map(citation => citation.evidenceId)].sort().join('|') === citationIds.join('|'))
+      semanticPairs.push({ section, itemPath: `${section}[${draftIndex >= 0 ? draftIndex : index}]`, rewritten, evidence: cited.map(item => item.text) })
+    })
+  }
+  return { draft: { ...input.identity, pageTarget: input.pageTarget ?? 1, status: 'unverified', approved: false, content, evidence, progress: `Draft generated for a ${input.pageTarget ?? 1}-page target; automated verification and human approval have not run.`, attempts: result.attempts ?? 0 }, attempts: result.attempts ?? 0, semanticPairs }
 }

@@ -12,6 +12,7 @@ export type CredentialStatus = z.infer<typeof credentialStatusSchema>
 
 export const geminiSettingsSchema = z.object({
   model: geminiModelSchema,
+  faithfulnessCheck: z.boolean(),
   credential: credentialStatusSchema
 }).strict()
 export type GeminiSettings = z.infer<typeof geminiSettingsSchema>
