@@ -19,6 +19,10 @@
 .cv-workbench-start .phase-label { max-width: 100%; overflow-wrap: anywhere; }
 .cv-workbench-start .workflow-card { max-width: 900px; margin: 0 auto; padding: 28px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
 .cv-workbench-start .workbench-columns[aria-label="Tailoring workspace"] > .inspector { display: block; }
+.cv-workbench-start .recovery-panel { display: grid; justify-items: start; gap: 12px; max-width: 1000px; margin-bottom: 20px; padding: 16px; border: 1px solid var(--warning-border); border-radius: 8px; background: var(--warning-surface); color: var(--warning-ink); }
+.cv-workbench-start .recovery-panel h2 { margin: 0; font: 700 16px/1.4 'Sora Variable', sans-serif; }
+.cv-workbench-start .recovery-panel p { margin: 0; overflow-wrap: anywhere; }
+.cv-workbench-start .recovery-panel button { min-height: 44px; }
 .cv-workbench-start .job-stage { display: grid; justify-items: start; gap: 16px; padding: 18px; }
 .cv-workbench-start .job-stage > header h2 { font: 700 18px/1.35 'Sora Variable', sans-serif; letter-spacing: -.03em; overflow-wrap: anywhere; }
 .cv-workbench-start .job-stage > header p { margin-top: 4px; color: var(--muted); font-size: 12px; }

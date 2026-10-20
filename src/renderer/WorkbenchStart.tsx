@@ -19,6 +19,8 @@ export function WorkbenchStart({ activeJob, onNavigate }: { activeJob: JobRecord
   const [consentError, setConsentError] = useState('')
   const [consentBusy, setConsentBusy] = useState(false)
   const [analysis, setAnalysis] = useState<Awaited<ReturnType<typeof window.workbench.getAnalysis>>>(null)
+  const [recovery, setRecovery] = useState<Awaited<ReturnType<typeof window.workbench.getGenerationRecovery>>>(null)
+  const [recoveryBusy, setRecoveryBusy] = useState(false)
   const [draft, setDraft] = useState<Awaited<ReturnType<typeof window.workbench.getDraft>>>(null)
   const [canonical, setCanonical] = useState<CanonicalDocument | null>(null)
   const [fitReport, setFitReport] = useState<DocumentFitReport | null>(null)
@@ -39,7 +41,8 @@ export function WorkbenchStart({ activeJob, onNavigate }: { activeJob: JobRecord
     if (activeJob) {
       void window.workbench.getDraft(activeJob.id).then(async value => { setDraft(value); if (value) { setCanonical(await window.workbench.getCanonicalDocument(activeJob.id)); setFitReport(await window.workbench.getDocumentFitReport(activeJob.id)) } }).catch(() => setDraftError('Saved draft could not be opened offline.'))
       void window.workbench.getAnalysis(activeJob.id).then(value => { if (value) setAnalysis(value) }).catch(() => {})
-    } else { setAnalysis(null) }
+      void window.workbench.getGenerationRecovery(activeJob.id).then(setRecovery).catch(() => setDraftError('Saved run recovery state could not be read.'))
+    } else { setAnalysis(null); setRecovery(null) }
     return () => {
       const token = pendingToken.current
       pendingToken.current = null
@@ -66,6 +69,27 @@ export function WorkbenchStart({ activeJob, onNavigate }: { activeJob: JobRecord
       setTermsAcknowledged(false); setConsentAccepted(false); setReview(result); setNewRun(true)
     } catch { setConsentError('Outgoing data could not be prepared. Try again.') }
     finally { setConsentBusy(false) }
+  }
+  async function resumeSavedGeneration(retryUncertain: boolean) {
+    if (!recovery || recoveryBusy) return
+    setRecoveryBusy(true); setDraftError('')
+    try {
+      const result = await window.workbench.resumeGeneration(recovery.runId, retryUncertain ? 'retry-uncertain' : 'resume')
+      if (!result.ok) { setDraftError(result.message); return }
+      const [savedDraft, latestAnalysis, latestRecovery] = await Promise.all([window.workbench.getDraft(recovery.jobId), window.workbench.getAnalysis(recovery.jobId), window.workbench.getGenerationRecovery(recovery.jobId)])
+      if (selectedJob.current !== recovery.jobId) return
+      setDraft(savedDraft); setAnalysis(latestAnalysis); setRecovery(latestRecovery)
+      if (savedDraft) { setCanonical(await window.workbench.getCanonicalDocument(recovery.jobId)); setFitReport(await window.workbench.getDocumentFitReport(recovery.jobId)) }
+      setDraftError(result.message)
+    } catch (failure) { setDraftError(failure instanceof Error ? failure.message : 'Saved generation could not resume. No automatic request was sent.') }
+    finally { setRecoveryBusy(false) }
+  }
+  async function cancelSavedGeneration() {
+    if (!recovery || recoveryBusy) return
+    setRecoveryBusy(true)
+    try { const result = await window.workbench.cancelGenerationRecovery(recovery.runId); setRecovery(null); setDraftError(result.message) }
+    catch { setDraftError('Saved generation could not be cancelled. Try again.') }
+    finally { setRecoveryBusy(false) }
   }
   async function startAnalysis() {
     const token = pendingToken.current
@@ -212,7 +236,7 @@ export function WorkbenchStart({ activeJob, onNavigate }: { activeJob: JobRecord
   return <WorkbenchStageLayout
     activeJob={activeJob} onNavigate={page => onNavigate(page)} error={error} retry={() => setAttempt(value => value + 1)} activePhase={activePhase}
     review={review} consentAccepted={consentAccepted} termsAcknowledged={termsAcknowledged} setTermsAcknowledged={setTermsAcknowledged} consentError={consentError} consentBusy={consentBusy}
-    analysis={analysis} draft={draft} canonical={canonical} fitReport={fitReport} fitBusy={fitBusy} acceptedCuts={acceptedCuts} setAcceptedCuts={setAcceptedCuts} draftBusy={draftBusy} draftError={draftError}
+    analysis={analysis} recovery={recovery} recoveryBusy={recoveryBusy} resumeSavedGeneration={resumeSavedGeneration} cancelSavedGeneration={cancelSavedGeneration} draft={draft} canonical={canonical} fitReport={fitReport} fitBusy={fitBusy} acceptedCuts={acceptedCuts} setAcceptedCuts={setAcceptedCuts} draftBusy={draftBusy} draftError={draftError}
     pageTarget={pageTarget} setPageTarget={setPageTarget} usage={usage} addSection={addSection} setAddSection={setAddSection} addEvidence={addEvidence} setAddEvidence={setAddEvidence} sources={sources} outgoingProfileCounts={outgoingProfileCounts}
     inspectOutgoing={inspectOutgoing} cancelOutgoing={cancelOutgoing} authorizeOutgoing={authorizeOutgoing} startAnalysis={startAnalysis} generateDraft={generateDraft} cancelAnalysis={async () => { if (activeJob) setAnalysis(await window.workbench.cancelAnalysis(activeJob.id)) }}
     measurePageFit={measurePageFit} applyPageCuts={applyPageCuts} addDraftItem={addDraftItem} correctDraft={correctDraft} checkDraftNow={checkDraftNow} approveCurrentDraft={approveCurrentDraft} exportDocx={exportDocx} docxBusy={docxBusy}

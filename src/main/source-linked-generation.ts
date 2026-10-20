@@ -1,4 +1,4 @@
-import { StateGraph, Annotation, START, END } from '@langchain/langgraph'
+import { StateGraph, Annotation, START, END, type BaseCheckpointSaver } from '@langchain/langgraph'
 import { z } from 'zod'
 import { draftContentSchema, type DraftRevision } from '../shared/draft'
 
@@ -33,7 +33,7 @@ function selectWithinPageBudget(items: GenerationItem[], relevance: Array<{ inde
   }
   return selected.sort((a, b) => a.index - b.index)
 }
-export async function runSourceLinkedGraph(input: { job: unknown; analysis: unknown; items: GenerationItem[]; pageTarget?: 1 | 2; call(prompt: string, schema: z.ZodTypeAny): Promise<{ value: unknown; attempts: number }>; onProgress?: (progress: string) => void; identity: { id: string; jobId: string; revision: number; createdAt: string; lockedFields: { fullName: string; headline?: string; experience: Array<{ evidenceId: string; title: string; organization: string; startDate?: string; endDate?: string }>; education: Array<{ evidenceId: string; title: string; institution?: string; startDate?: string; endDate?: string }>; projects: Array<{ evidenceId: string; name: string }>; certificates: Array<{ evidenceId: string; title: string; issuer?: string; year?: number }> } }; restoreText?: (text: string) => string }): Promise<{ draft: DraftRevision; attempts: number; semanticPairs: Array<{ section: keyof DraftRevision['content']; itemPath: string; rewritten: string; evidence: string[] }> }> {
+export async function runSourceLinkedGraph(input: { job: unknown; analysis: unknown; items: GenerationItem[]; pageTarget?: 1 | 2; call(prompt: string, schema: z.ZodTypeAny): Promise<{ value: unknown; attempts: number }>; onProgress?: (progress: string) => void; checkpointer?: BaseCheckpointSaver; threadId?: string; resume?: boolean; identity: { id: string; jobId: string; revision: number; createdAt: string; lockedFields: { fullName: string; headline?: string; experience: Array<{ evidenceId: string; title: string; organization: string; startDate?: string; endDate?: string }>; education: Array<{ evidenceId: string; title: string; institution?: string; startDate?: string; endDate?: string }>; projects: Array<{ evidenceId: string; name: string }>; certificates: Array<{ evidenceId: string; title: string; issuer?: string; year?: number }> } }; restoreText?: (text: string) => string }): Promise<{ draft: DraftRevision; attempts: number; semanticPairs: Array<{ section: keyof DraftRevision['content']; itemPath: string; rewritten: string; evidence: string[] }> }> {
   const State = Annotation.Root({ scored: Annotation<z.infer<typeof scoredSchema> | undefined>(), tailored: Annotation<z.infer<typeof tailoredSchema> | undefined>(), attempts: Annotation<number>({ reducer: (a, b) => a + b, default: () => 0 }) })
   const graph = new StateGraph(State)
     .addNode('batch_score', async () => {
@@ -65,8 +65,9 @@ export async function runSourceLinkedGraph(input: { job: unknown; analysis: unkn
       if (!validCitations(tailored)) throw new CitationValidationError('foreign-citation')
       return { tailored, attempts }
     })
-    .addEdge(START, 'batch_score').addEdge('batch_score', 'tailor').addEdge('tailor', END).compile()
-  const result = await graph.invoke({})
+    .addEdge(START, 'batch_score').addEdge('batch_score', 'tailor').addEdge('tailor', END)
+  const compiled = graph.compile({ checkpointer: input.checkpointer })
+  const result = await compiled.invoke(input.resume ? null : {}, input.threadId ? { configurable: { thread_id: input.threadId } } : undefined)
   const selected = selectWithinPageBudget(input.items, result.scored?.relevance ?? [], input.pageTarget ?? 1)
   if (!selected.length) throw new Error('No eligible profile evidence was selected for this posting.')
   const selectedIndices = new Set(selected.map(x => x.index))

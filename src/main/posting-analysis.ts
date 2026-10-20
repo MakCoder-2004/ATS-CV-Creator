@@ -13,7 +13,7 @@ export class AnalysisError extends Error {
   usage?: AnalysisUsage
   constructor(readonly code: 'BUDGET' | 'TIMEOUT' | 'CANCELLED' | 'INVALID_KEY' | 'OFFLINE' | 'MALFORMED' | 'PROVIDER', message: string) { super(message); this.name = 'AnalysisError' }
 }
-type Options = { transport: AnalysisTransport; now?: () => number; sleep?: (ms: number, signal: AbortSignal) => Promise<void>; minimumSpacingMs?: number; rateLimitAttempts?: number; rateLimitWindowMs?: number; maxAttempts?: number; maxElapsedMs?: number; maxDailyAttempts?: number; observedAttempts?: number[]; random?: () => number; onAttempt?: (timestamp: number, runId: string) => void; onProgress?: (runId: string, jobId: string, progress: string, attempts: number) => void }
+type Options = { transport: AnalysisTransport; now?: () => number; sleep?: (ms: number, signal: AbortSignal) => Promise<void>; minimumSpacingMs?: number; rateLimitAttempts?: number; rateLimitWindowMs?: number; maxAttempts?: number; maxElapsedMs?: number; maxDailyAttempts?: number; observedAttempts?: number[]; observedRunAttempts?: Record<string, number>; observedRunStartedAt?: Record<string, number>; random?: () => number; onAttempt?: (timestamp: number, runId: string) => void; onAttemptComplete?: (runId: string, succeeded: boolean) => void; onProgress?: (runId: string, jobId: string, progress: string, attempts: number) => void }
 const cancelledError = () => new AnalysisError('CANCELLED', 'Analysis cancelled.')
 const cancellableSleep = (ms: number, signal: AbortSignal) => new Promise<void>((resolve, reject) => {
   if (signal.aborted) return reject(cancelledError())
@@ -39,7 +39,7 @@ export function createAnalysisDispatcher(options: Options) {
   const now = options.now ?? Date.now, sleep = options.sleep ?? cancellableSleep
   let budgets: AnalysisBudgets = { ...defaultAnalysisBudgets, minimumSpacingMs: options.minimumSpacingMs ?? defaultAnalysisBudgets.minimumSpacingMs, rateLimitAttempts: options.rateLimitAttempts ?? defaultAnalysisBudgets.rateLimitAttempts, rateLimitWindowMs: options.rateLimitWindowMs ?? defaultAnalysisBudgets.rateLimitWindowMs, runLimit: options.maxAttempts ?? defaultAnalysisBudgets.runLimit, runTimeLimitMs: options.maxElapsedMs ?? defaultAnalysisBudgets.runTimeLimitMs, configuredDailyLimit: options.maxDailyAttempts ?? defaultAnalysisBudgets.configuredDailyLimit }
   const random = options.random ?? Math.random
-  const authorizations = new Map<string, string>(), cancelled = new Set<string>(), active = new Map<string, AbortController>(), attemptCounts = new Map<string, number>(), runStartedAt = new Map<string, number>()
+  const authorizations = new Map<string, string>(), cancelled = new Set<string>(), active = new Map<string, AbortController>(), attemptCounts = new Map(Object.entries(options.observedRunAttempts ?? {}).map(([runId, count]) => [runId, count])), runStartedAt = new Map(Object.entries(options.observedRunStartedAt ?? {}).map(([runId, timestamp]) => [runId, timestamp]))
   const dispatched: number[] = [...(options.observedAttempts ?? [])]; let queue = Promise.resolve()
   // The caller binds this capability to a persisted, accepted consent record; a run ID alone is not authority.
   const authorize = (runId: string, consentId: string) => { if (runId && consentId) authorizations.set(runId, consentId) }
@@ -74,7 +74,11 @@ export function createAnalysisDispatcher(options: Options) {
         const timestamp = now()
         dispatched.push(timestamp); usage.attempts++; attemptCounts.set(input.runId, (attemptCounts.get(input.runId) ?? 0) + 1); options.onAttempt?.(timestamp, input.runId)
         options.onProgress?.(input.runId, input.jobId, `Sending posting-analysis request ${usage.attempts} within this run's configured budget.`, usage.attempts)
-        return options.transport.generate({ model: input.model, prompt, signal: controller.signal, responseSchema: postingAnalysisSchema })
+        try {
+          const response = await options.transport.generate({ model: input.model, prompt, signal: controller.signal, responseSchema: postingAnalysisSchema })
+          options.onAttemptComplete?.(input.runId, true)
+          return response
+        } catch (error) { options.onAttemptComplete?.(input.runId, false); throw error }
       })
       queue = work.then(() => undefined, () => undefined)
       return work
@@ -142,7 +146,11 @@ export function createAnalysisDispatcher(options: Options) {
           if (controller.signal.aborted) throw cancelledError()
           const timestamp = now(); dispatched.push(timestamp); attempts++; attemptCounts.set(input.runId, (attemptCounts.get(input.runId) ?? 0) + 1); options.onAttempt?.(timestamp, input.runId)
           options.onProgress?.(input.runId, input.jobId, `Sending source-linked generation request ${attempts} within the shared run budget.`, attempts)
-          return options.transport.generate({ model: input.model, prompt: input.prompt, signal: controller.signal, responseSchema: input.responseSchema })
+          try {
+            const response = await options.transport.generate({ model: input.model, prompt: input.prompt, signal: controller.signal, responseSchema: input.responseSchema })
+            options.onAttemptComplete?.(input.runId, true)
+            return response
+          } catch (error) { options.onAttemptComplete?.(input.runId, false); throw error }
         })
         queue = work.then(() => undefined, () => undefined)
         try { const text = await work; if (cancelled.has(input.runId)) throw cancelledError(); return { text, attempts } }
@@ -158,5 +166,6 @@ export function createAnalysisDispatcher(options: Options) {
       }
     } finally { clearTimeout(timer); if (active.get(input.runId) === controller) active.delete(input.runId) }
   }
-  return { authorize, cancel, analyze, generate, getUsage, setBudgets }
+  const isCancelled = (runId: string) => cancelled.has(runId)
+  return { authorize, cancel, analyze, generate, getUsage, setBudgets, isCancelled }
 }
