@@ -4,7 +4,7 @@ import type { DraftRevision } from '../shared/draft'
 const labels = { education: 'Education', experience: 'Experience', projects: 'Projects', skills: 'Skills', certificates: 'Certificates' } as const
 
 export function DraftDocument({ document }: { document: CanonicalDocument }) {
-  return <article className="paper" aria-label="Unapproved canonical CV preview">
+  return <article className="paper paper--canonical" aria-label="Unapproved canonical CV preview">
     <header className="paper-header"><strong>{document.identity.name}</strong>{document.identity.headline && <span>{document.identity.headline}</span>}<span>{document.identity.contact.join(' · ')}</span><span>{document.identity.links.map(link => link.label).join(' · ')}</span></header>
     <div className="paper-rule" aria-hidden="true" />
     {document.sections.map(section => <section className="source-section" key={section.name}><h2>{section.name}</h2>

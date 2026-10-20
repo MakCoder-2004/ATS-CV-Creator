@@ -109,7 +109,8 @@ export function WorkbenchStart({ activeJob, jobCount, onNavigate }: { activeJob:
       const result = await window.workbench.acceptDocumentCuts(activeJob.id, fitReport.documentHash, acceptedCuts)
       if (!result.ok) { setDraftError(result.message); return }
       const revised = await window.workbench.getDraft(activeJob.id)
-      setDraft(revised); setCanonical(await window.workbench.getCanonicalDocument(activeJob.id)); setFitReport(null); setAcceptedCuts([])
+      setDraft(revised); setCanonical(await window.workbench.getCanonicalDocument(activeJob.id)); setAcceptedCuts([])
+      setFitReport(await window.workbench.measureDocument(activeJob.id))
     } catch (failure) { setDraftError(failure instanceof Error ? failure.message : 'Accepted cuts could not be applied.') }
   }
   async function cancelOutgoing() {
@@ -186,7 +187,7 @@ export function WorkbenchStart({ activeJob, jobCount, onNavigate }: { activeJob:
           </article>
           <p className="paper-caption">Original profile facts only. This is not a draft, export preview, or page-fit check.</p>
         </>}
-        {draft && canonical && <section className="page-fit-controls" aria-label="Actual PDF page fit"><p>Preview only · unverified and unapproved. No save or export is available.</p><button type="button" className="secondary-button" disabled={fitBusy} onClick={() => void measurePageFit()}>{fitBusy ? 'Measuring with Electron PDF…' : 'Measure actual A4 page fit'}</button>{fitReport && <div role="status">Electron PDF: {fitReport.actualPages} page{fitReport.actualPages === 1 ? '' : 's'}; target {fitReport.targetPages}. {fitReport.overflow ? 'Overflow requires review; no content was changed.' : 'Fits the selected page target.'}{fitReport.overflow && fitReport.proposedCuts.map(cut => <label key={cut.entryId}><input type="checkbox" checked={acceptedCuts.includes(cut.entryId)} onChange={event => setAcceptedCuts(value => event.target.checked ? [...value, cut.entryId] : value.filter(id => id !== cut.entryId))} />Proposed cut: {cut.section} — {cut.label}</label>)}{fitReport.overflow && <button type="button" className="primary-button" disabled={!acceptedCuts.length} onClick={() => void applyPageCuts()}>Accept selected cuts and create new draft revision</button>}</div>}{draftError && <p className="inspector-error" role="alert">{draftError}</p>}</section>}
+        {draft && canonical && <section className="page-fit-controls" aria-label="Actual PDF page fit"><p>Preview only · unverified and unapproved. No save or export is available.</p><button type="button" className="secondary-button" disabled={fitBusy} onClick={() => void measurePageFit()}>{fitBusy ? 'Measuring with Electron PDF…' : 'Measure actual A4 page fit'}</button>{fitReport && <div role="status">Revision {canonical.revision} · Electron PDF: {fitReport.actualPages} page{fitReport.actualPages === 1 ? '' : 's'}; target {fitReport.targetPages}. {fitReport.overflow ? 'Overflow requires review; no content was changed.' : 'Fits the selected page target.'}{fitReport.overflow && fitReport.proposedCuts.map(cut => <label key={cut.entryId}><input type="checkbox" checked={acceptedCuts.includes(cut.entryId)} onChange={event => setAcceptedCuts(value => event.target.checked ? [...value, cut.entryId] : value.filter(id => id !== cut.entryId))} />Proposed cut: {cut.section} — {cut.label}</label>)}{fitReport.overflow && <button type="button" className="primary-button" disabled={!acceptedCuts.length} onClick={() => void applyPageCuts()}>Accept selected cuts and create new draft revision</button>}</div>}{draftError && <p className="inspector-error" role="alert">{draftError}</p>}</section>}
       </div>
     </section>
     {draft && <DraftEvidenceReview draft={draft} />}
