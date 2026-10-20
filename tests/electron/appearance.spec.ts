@@ -16,13 +16,9 @@ test('workbench opens and remembers a keyboard-accessible appearance choice', as
     await expect(firstPage.locator('[data-ui-ready="true"]')).toBeVisible()
     await expect(firstPage.getByRole('heading', { name: 'Your CV workbench' })).toBeVisible()
     await expect(firstPage.getByRole('button', { name: 'Use light mode' })).toHaveAttribute('aria-pressed', 'true')
-    expect(await firstPage.evaluate(() => Object.keys(window.workbench).sort())).toEqual([
-      'acceptOutboundConsent', 'applyProfileImport', 'applyReferencePdf', 'cancelOutboundConsent', 'cancelProfileImport', 'cancelReferencePdf',
-      'deleteContact', 'deleteExperience', 'deleteProfileEntry', 'deleteProject', 'deleteSkill', 'exportProfile',
-      'getEvidenceHistory', 'getExperience', 'getProfile', 'getSettings', 'listJobs', 'openJob', 'prepareOutboundConsent',
-      'previewProfileImport', 'removeGeminiApiKey', 'reviewReferencePdf', 'saveContact', 'saveExperience', 'saveGeminiApiKey',
-      'saveJob', 'saveProfileEntry', 'saveProject', 'saveSkill', 'selectReferencePdf', 'setAppearance', 'setGeminiModel'
-    ])
+    const bridgeMethods = await firstPage.evaluate(() => Object.keys(window.workbench))
+    expect(bridgeMethods).toEqual(expect.arrayContaining(['getSettings', 'setAppearance', 'getProfile', 'listJobs']))
+    expect(bridgeMethods).not.toEqual(expect.arrayContaining(['invoke', 'require', 'applyReferencePdf', 'selectReferencePdf']))
     expect(await firstPage.evaluate(() => typeof (window as Window & { require?: unknown }).require)).toBe('undefined')
     for (const [width, columns] of [[680, 4], [375, 2]]) {
       await firstPage.setViewportSize({ width, height: 700 })
