@@ -1,5 +1,6 @@
-import { useState, type Dispatch, type FormEvent, type SetStateAction } from 'react'
+import { useEffect, useState, type Dispatch, type FormEvent, type SetStateAction } from 'react'
 import { FileText } from 'lucide-react'
+import type { RegenerationProposal, RegenerationTarget } from '../shared/regeneration'
 import type { JobRecord } from '../shared/jobs'
 import type { OutboundPayload } from '../shared/outbound-consent'
 import type { OutboundConsentPreview } from '../shared/outbound-consent-contract'
@@ -55,6 +56,7 @@ type Props = {
   correctDraft: (section: Section, index: number, text: string, intent?: 'wording-only' | 'new-fact') => Promise<void>
   checkDraftNow: () => Promise<void>
   approveCurrentDraft: () => Promise<void>
+  onProposalAccepted: (draft: DraftRevision, document: CanonicalDocument | null, fit: DocumentFitReport | null) => void
 }
 
 function PhaseNavigation({ current }: { current: Phase }) {
@@ -96,12 +98,67 @@ function EmptyDocument({ message }: { message: string }) {
 }
 
 export function WorkbenchStageLayout(props: Props) {
-  const { activeJob, onNavigate, error, retry, activePhase, review, consentAccepted, termsAcknowledged, setTermsAcknowledged, consentError, consentBusy, analysis, draft, canonical, fitReport, fitBusy, acceptedCuts, setAcceptedCuts, draftBusy, draftError, pageTarget, setPageTarget, usage, addSection, setAddSection, addEvidence, setAddEvidence, sources, outgoingProfileCounts, inspectOutgoing, cancelOutgoing, authorizeOutgoing, startAnalysis, generateDraft, cancelAnalysis, measurePageFit, applyPageCuts, addDraftItem, correctDraft, checkDraftNow, approveCurrentDraft } = props
+  const { activeJob, onNavigate, error, retry, activePhase, review, consentAccepted, termsAcknowledged, setTermsAcknowledged, consentError, consentBusy, analysis, draft, canonical, fitReport, fitBusy, acceptedCuts, setAcceptedCuts, draftBusy, draftError, pageTarget, setPageTarget, usage, addSection, setAddSection, addEvidence, setAddEvidence, sources, outgoingProfileCounts, inspectOutgoing, cancelOutgoing, authorizeOutgoing, startAnalysis, generateDraft, cancelAnalysis, measurePageFit, applyPageCuts, addDraftItem, correctDraft, checkDraftNow, approveCurrentDraft, onProposalAccepted } = props
   const [exportMessage, setExportMessage] = useState('')
   const [exportBusy, setExportBusy] = useState(false)
+  const [regenTarget, setRegenTarget] = useState<RegenerationTarget>({ kind: 'section', section: 'experience' })
+  const [regenPreview, setRegenPreview] = useState<Extract<OutboundConsentPreview, { ok: true }> | null>(null)
+  const [regenTerms, setRegenTerms] = useState(false)
+  const [regenBusy, setRegenBusy] = useState(false)
+  const [regenMessage, setRegenMessage] = useState('')
+  const [proposal, setProposal] = useState<RegenerationProposal | null>(null)
+  async function prepareRegeneration(target?: RegenerationTarget) {
+    if (!activeJob || !draft) return
+    if (target) setRegenTarget(target)
+    setRegenBusy(true); setRegenMessage('Preparing a fresh outgoing-data preview…')
+    try { const result = await window.workbench.prepareOutboundConsent(activeJob.id); if (!result.ok) { setRegenMessage(result.message); return }; setRegenPreview(result); setRegenTerms(false); setRegenMessage('') }
+    catch { setRegenMessage('The outgoing-data preview could not be prepared. Try again.') } finally { setRegenBusy(false) }
+  }
+  async function cancelRegeneration() {
+    if (!regenPreview) return
+    await window.workbench.cancelOutboundConsent(regenPreview.token); setRegenPreview(null); setRegenTerms(false)
+  }
+  async function cancelActiveRegeneration() {
+    if (!activeJob) return
+    const result = await window.workbench.cancelAnalysis(activeJob.id)
+    setRegenPreview(null); setRegenTerms(false)
+    setRegenMessage(result.progress || 'Regeneration cancelled. The draft remains unchanged.')
+  }
+  async function runRegeneration() {
+    if (!regenPreview || !regenTerms || regenBusy) return
+    setRegenBusy(true); setRegenMessage('Starting a fresh bounded regeneration operation…')
+    try { const authorized = await window.workbench.acceptOutboundConsent(regenPreview.token, true, true); if (!authorized.ok) { setRegenMessage(authorized.message); return }; const result = await window.workbench.regenerateDraft(regenPreview.token, regenTarget); if (!result.ok || !result.proposal) { setRegenMessage(result.message); return }; setProposal(result.proposal); setRegenMessage(result.message); setRegenPreview(null) }
+    catch (failure) { setRegenMessage(failure instanceof Error ? failure.message : 'Regeneration failed safely; the current draft was preserved.') } finally { setRegenBusy(false) }
+  }
+  async function resolveProposal(decision: 'accept' | 'reject') {
+    if (!activeJob || !proposal) return
+    setRegenBusy(true)
+    try {
+      const result = await window.workbench.resolveRegenerationProposal(activeJob.id, proposal.id, decision)
+      if (result.proposal) setProposal(result.proposal)
+      setRegenMessage(result.message)
+      if (result.proposal?.status === 'accepted' && result.draft) {
+        const [document, fit] = await Promise.all([window.workbench.getCanonicalDocument(activeJob.id), result.ok ? window.workbench.getDocumentFitReport(activeJob.id) : Promise.resolve(null)])
+        setProposal(result.proposal); onProposalAccepted(result.draft, document, fit)
+      }
+    } catch (failure) { setRegenMessage(failure instanceof Error ? failure.message : 'The proposal could not be resolved.') } finally { setRegenBusy(false) }
+  }
+  useEffect(() => {
+    let current = true
+    setProposal(null); setRegenPreview(null); setRegenMessage('')
+    if (activeJob) void window.workbench.getRegenerationProposal(activeJob.id).then(value => { if (current) setProposal(value) }).catch(() => {})
+    return () => { current = false }
+  }, [activeJob?.id])
+  useEffect(() => {
+    if (!regenBusy || !activeJob) return
+    let mounted = true
+    const poll = async () => { const result = await window.workbench.getAnalysis(activeJob.id).catch(() => null); if (mounted && result?.status === 'running') setRegenMessage(result.progress) }
+    const timer = window.setInterval(() => void poll(), 250); void poll()
+    return () => { mounted = false; window.clearInterval(timer) }
+  }, [activeJob?.id, regenBusy])
   const outgoing = review?.outgoing as unknown as OutboundPayload | undefined
   const headings = ['Job posting', 'Outgoing data', 'Generate', 'Review your tailored CV', 'Export']
-  const descriptions = ['Select the job posting this CV should address.', 'Review this bundle before authorizing.', 'Analyze the posting and create a source-linked draft.', draft?.approved ? 'This draft is approved.' : 'Review the wording and supporting evidence.', 'Export is not available in this version.']
+  const descriptions = ['Select the job posting this CV should address.', 'Review this bundle before authorizing.', 'Analyze the posting and create a source-linked draft.', draft?.approved ? 'This draft is approved.' : 'Review the wording and supporting evidence.', 'Export the approved document as a local file.']
 
   return <div className="cv-workbench-start">
     <header className="cv-workbench-heading">
@@ -154,9 +211,14 @@ export function WorkbenchStageLayout(props: Props) {
       <aside className="inspector" aria-label="Run review">
         <section className="review-inspector-panel" aria-label="Evidence and qualification coverage"><h2>Evidence &amp; coverage</h2>{draft.coverage ? <><p>{draft.coverage.label}</p><h3>Supported matches</h3>{draft.coverage.supportedMatches.length ? <ul>{draft.coverage.supportedMatches.map((match, index) => <li key={`${match.qualification}-${index}`}>{match.qualification} · {match.kind}, supported as “{match.matchedAs}” · {match.evidence.length} source{match.evidence.length === 1 ? '' : 's'}</li>)}</ul> : <p>No supported required/preferred matches found.</p>}<h3>Advisory gaps</h3>{draft.coverage.gaps.length ? <ul>{draft.coverage.gaps.map((gap, index) => <li key={`${gap.qualification}-${index}`}>{gap.qualification} · missing {gap.kind} qualification (advisory; does not block factual-valid partial-match drafts)</li>)}</ul> : <p>No explicit required/preferred gaps.</p>}<p className="future-note">Gaps never authorize invented experience. Keyword repair dispatch attempts: {draft.coverage.repairAttempts} (at most one repair cycle within the shared run budget). Factual checks rerun: {draft.coverage.factualChecksRerun ? 'yes' : 'no'}.</p></> : <p>Posting coverage is not available for this draft.</p>}</section>
         <section className="draft-inspector" aria-label="Source-linked draft"><h2>Draft · {draft.status === 'blocked' ? 'blocked by factual checks' : draft.approved ? 'approved' : 'unverified and unapproved'}</h2><p>{draft.progress} Dispatched requests: {draft.attempts}.</p>
+          <section className="regeneration-controls" aria-label="Regeneration proposals"><h3>Propose a replacement</h3><p>Regeneration is a fresh bounded operation. It does not change this draft until you accept a proposal.</p><label>Section<select aria-label="Regeneration section" value={regenTarget.section} onChange={event => { const section = event.target.value as Section; setRegenTarget(regenTarget.kind === 'paragraph' ? { kind: 'paragraph', section, index: 0 } : { kind: 'section', section }) }}>{(['education', 'experience', 'projects', 'skills', 'certificates'] as const).map(section => <option key={section} value={section}>{section}</option>)}</select></label><label>Scope<select aria-label="Regeneration scope" value={regenTarget.kind} onChange={event => setRegenTarget(event.target.value === 'section' ? { kind: 'section', section: regenTarget.section } : { kind: 'paragraph', section: regenTarget.section, index: 0 })}><option value="section">Whole section</option><option value="paragraph">One paragraph</option></select></label>{regenTarget.kind === 'paragraph' && <label>Paragraph<select aria-label="Regeneration paragraph" value={regenTarget.index} onChange={event => setRegenTarget({ ...regenTarget, kind: 'paragraph', index: Number(event.target.value) })}>{draft.content[regenTarget.section].map((item, index) => <option key={index} value={index}>{index + 1}. {('text' in item ? item.text : item.name).slice(0, 70)}</option>)}</select></label>}<button type="button" className="secondary-button" disabled={regenBusy || !draft.content[regenTarget.section].length} onClick={() => void prepareRegeneration()}>{regenBusy ? 'Preparing…' : `Review data for ${regenTarget.kind} regeneration`}</button>
+            {regenPreview && <div className="regeneration-consent"><h4>Outgoing data for this regeneration</h4><p>{regenPreview.warning}</p><p>{regenPreview.termsNotice}</p><IncludedContent outgoing={regenPreview.outgoing as unknown as OutboundPayload} /><label><input type="checkbox" checked={regenTerms} onChange={event => setRegenTerms(event.target.checked)} />I reviewed this bundle and understand the provider data-use notice.</label><div><button type="button" className="secondary-button" disabled={regenBusy} onClick={() => void cancelRegeneration()}>Cancel</button><button type="button" className="primary-button" disabled={regenBusy || !regenTerms} onClick={() => void runRegeneration()}>{regenBusy ? 'Regenerating…' : 'Authorize and propose'}</button>{regenBusy && <button type="button" className="secondary-button" onClick={() => void cancelActiveRegeneration()}>Cancel operation</button>}</div></div>}
+            {proposal && <section className="proposal-comparison" aria-label="Replacement proposal comparison"><h4>Current and proposed wording</h4><p>Base draft r{proposal.baseDraftRevision} · {proposal.status}</p>{proposal.proposed.map((item, index) => { const prior = proposal.before?.[index]; const beforeText = typeof prior === 'string' ? prior : prior?.text ?? ''; return <article key={index}><h5>Current</h5><p>{beforeText}</p><h5>Proposed</h5><p>{item.text}</p><p>Sources: {item.citations.map(citation => sourceLabel(draft, citation.evidenceId, citation.revision)).join('; ')}</p><p>{item.rationale}</p></article>})}{proposal.status === 'pending' && <div><button type="button" className="secondary-button" disabled={regenBusy} onClick={() => void resolveProposal('reject')}>Reject proposal</button><button type="button" className="primary-button" disabled={regenBusy} onClick={() => void resolveProposal('accept')}>Accept replacement and recheck</button></div>}</section>}
+            {regenMessage && <p className="regeneration-status" role="status">{regenMessage}</p>}
+          </section>
           {draft.checkReport?.findings.some(finding => finding.itemPath === 'generation') && <form onSubmit={event => void addDraftItem(event)}><p>The invalid provider response was discarded. Add your own wording and cite one saved selected source revision.</p><label>Section<select aria-label="Correction section" value={addSection} onChange={event => setAddSection(event.target.value as Section)}>{(['education', 'experience', 'projects', 'skills', 'certificates'] as const).map(section => <option key={section} value={section}>{section}</option>)}</select></label><label>Saved evidence revision<select aria-label="Correction evidence" value={addEvidence} onChange={event => setAddEvidence(event.target.value)}><option value="">Choose selected source</option>{sourceOptions(sources, draft, addSection).map(item => <option key={item.evidenceId} value={item.evidenceId}>{sourceLabel(draft, item.evidenceId, item.revision)}</option>)}</select></label><label>Your correction<textarea name="local-correction" required maxLength={3000} /></label><button type="submit" disabled={draftBusy || !addEvidence}>Save local correction</button></form>}
           {draft.checkReport?.findings.map((finding, index) => { const match = /^(education|experience|projects|skills|certificates)\[(\d+)\]/.exec(finding.itemPath); if (!match) return <p role="alert" key={`${finding.code}-${index}`}>{finding.historical ? `Historical unresolved failure from draft ${finding.originDraftId} revision ${finding.originDraftRevision}; evidence ${finding.originEvidenceRevisionHash}. ` : ''}{finding.message} {finding.correction}</p>; const section = match[1] as Section; const itemIndex = Number(match[2]); const entry = draft.content[section][itemIndex]; const current = entry ? ('text' in entry ? entry.text : entry.name) : ''; return <form key={`${finding.code}-${index}`} role="alert" onSubmit={event => { event.preventDefault(); const value = new FormData(event.currentTarget).get('correction'); if (typeof value === 'string') void correctDraft(section, itemIndex, value) }}><p>{finding.historical ? `Historical unresolved failure from draft ${finding.originDraftId} revision ${finding.originDraftRevision}; evidence ${finding.originEvidenceRevisionHash}. ` : ''}{finding.message} {finding.correction}</p><label>Correct {section} draft wording<textarea name="correction" defaultValue={current} /></label><button type="submit" disabled={draftBusy}>Save correction and recheck</button></form>})}
-          <div className="draft-edit-list">{(['education', 'experience', 'projects', 'skills', 'certificates'] as const).map(section => draft.content[section].map((item, index) => <details className="draft-edit-item" key={`${section}-${index}`}><summary>{section[0].toUpperCase() + section.slice(1)} · {'text' in item ? item.text.slice(0, 70) : item.name}</summary><form onSubmit={event => { event.preventDefault(); const data = new FormData(event.currentTarget); const text = data.get('wording'); if (typeof text === 'string') void correctDraft(section, index, text, data.get('editIntent') === 'new-fact' ? 'new-fact' : 'wording-only') }}><label>Edit wording<textarea name="wording" defaultValue={'text' in item ? item.text : item.name} /></label><label>Change type<select name="editIntent" defaultValue="wording-only"><option value="wording-only">Wording only</option><option value="new-fact">New or changed factual claim</option></select></label><button type="submit" disabled={draftBusy}>Save wording and recheck</button></form><small>Source revisions: {item.citations.map(citation => sourceLabel(draft, citation.evidenceId, citation.revision)).join(', ')}</small><p className="future-note">{item.rationale}</p></details>))}</div>
+          <div className="draft-edit-list">{(['education', 'experience', 'projects', 'skills', 'certificates'] as const).map(section => draft.content[section].map((item, index) => <details className="draft-edit-item" key={`${section}-${index}`}><summary>{section[0].toUpperCase() + section.slice(1)} · {'text' in item ? item.text.slice(0, 70) : item.name}</summary><form onSubmit={event => { event.preventDefault(); const data = new FormData(event.currentTarget); const text = data.get('wording'); if (typeof text === 'string') void correctDraft(section, index, text, data.get('editIntent') === 'new-fact' ? 'new-fact' : 'wording-only') }}><label>Edit wording<textarea name="wording" defaultValue={'text' in item ? item.text : item.name} /></label><label>Change type<select name="editIntent" defaultValue="wording-only"><option value="wording-only">Wording only</option><option value="new-fact">New or changed factual claim</option></select></label><button type="submit" disabled={draftBusy}>Save wording and recheck</button></form><small>Source revisions: {item.citations.map(citation => sourceLabel(draft, citation.evidenceId, citation.revision)).join(', ')}</small><p className="future-note">{item.rationale}</p><button type="button" className="secondary-button" disabled={regenBusy} onClick={() => void prepareRegeneration({ kind: 'paragraph', section, index })}>Propose replacement for this paragraph</button></details>))}</div>
           <p>{draft.checkReport?.limitation ?? 'Automated checks are second opinions, not proof.'} Human review remains required. Citations do not prove faithfulness; review wording against its source.</p>{draftError && <p className="inspector-error" role="alert">{draftError}</p>}
           <div className="review-controls"><button type="button" className="secondary-button" disabled={draftBusy} onClick={() => void checkDraftNow()}>Check current draft and sources</button><button type="button" className="primary-button" disabled={draftBusy || !fitReport || fitReport.overflow || !draft.checkReport?.passed || draft.approved} onClick={() => void approveCurrentDraft()}>{draft.approved ? 'Approved for export' : 'Review and approve whole document'}</button></div>{draft.approved && <div className="export-actions"><button type="button" className="primary-button" disabled={exportBusy || !fitReport || fitReport.overflow} onClick={async () => { if (!activeJob) return; setExportBusy(true); setExportMessage(''); try { setExportMessage((await window.workbench.exportApprovedPdf(activeJob.id)).message) } catch { setExportMessage('PDF export failed. The existing file, if any, was kept.') } finally { setExportBusy(false) } }}>{exportBusy ? 'Exporting…' : 'Export approved PDF'}</button><p role="status" aria-live="polite">{exportMessage || 'The PDF is checked locally; no ATS service is used. Word and PDF may paginate differently.'}</p></div>}
           <button type="button" className="secondary-button new-run-button" disabled={consentBusy || draftBusy} onClick={() => void inspectOutgoing()}>{consentBusy ? 'Preparing…' : 'New generation'}</button>

@@ -9,6 +9,7 @@ import type { AnalysisBudgets, AnalysisResult, AnalysisUsage } from './posting-a
 import type { AddDraftItemInput, DraftCorrectionInput, DraftRevision } from './draft'
 import type { FactualCheckReport } from './factual-report'
 import type { CanonicalDocument, DocumentFitReport } from './document'
+import type { RegenerationProposal, RegenerationTarget } from './regeneration'
 
 export const appearanceSchema = z.enum(['light', 'dark'])
 export type Appearance = z.infer<typeof appearanceSchema>
@@ -53,6 +54,9 @@ export interface WorkbenchAPI {
   getAnalysis(jobId: string): Promise<AnalysisResult | null>
   cancelAnalysis(jobId: string): Promise<AnalysisResult>
   generateDraft(consentToken: string, pageTarget?: 1 | 2): Promise<{ ok: boolean; message: string; draft?: DraftRevision }>
+  regenerateDraft(consentToken: string, target: RegenerationTarget): Promise<{ ok: boolean; message: string; proposal?: RegenerationProposal }>
+  getRegenerationProposal(jobId: string): Promise<RegenerationProposal | null>
+  resolveRegenerationProposal(jobId: string, proposalId: string, decision: 'accept' | 'reject'): Promise<{ ok: boolean; message: string; draft?: DraftRevision; proposal?: RegenerationProposal }>
   getDraft(jobId: string): Promise<DraftRevision | null>
   checkDraft(jobId: string): Promise<FactualCheckReport | null>
   approveDraft(jobId: string): Promise<{ ok: boolean; message: string; draft?: DraftRevision }>
