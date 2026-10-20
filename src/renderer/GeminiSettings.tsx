@@ -20,6 +20,10 @@ export function GeminiSettingsPanel() {
   function budgetField(key: keyof AnalysisBudgets, label: string, min: number, max: number, step = 1) {
     return <label className="form-field">{label}<input type="number" min={min} max={max} step={step} value={budgets[key]} onChange={event => setBudgets(current => ({ ...current, [key]: Number(event.target.value) }))} /></label>
   }
+  async function saveFaithfulness(value: boolean) {
+    try { const saved = await window.workbench.setFaithfulnessCheck(value); setSettings(saved.gemini); setError(''); setMessage('Faithfulness preference saved locally. Existing unresolved findings are not waived.') }
+    catch { setError('Faithfulness preference could not be saved. Try again.'); setMessage('') }
+  }
   async function saveModel(value: GeminiModel) {
     try { const saved = await window.workbench.setGeminiModel(value); setSettings(saved.gemini); setError(''); setMessage('Model preference saved. No provider request was sent.') }
     catch { setError('Model preference could not be saved. Choose a supported Gemini model and try again.'); setMessage('') }
@@ -40,6 +44,7 @@ export function GeminiSettingsPanel() {
         <FieldSelect id="gemini-model" label="Gemini model" value={settings?.model ?? 'gemini-3.6-flash'} onValueChange={value => void saveModel(value as GeminiModel)} options={geminiModels.map(model => ({ value: model, label: model }))} />
         <p className="settings-helper">Changing the model or saving a key never sends a request.</p>
       </section>
+      <section className="settings-block" aria-labelledby="faithfulness-heading"><div className="settings-block-heading"><div><h2 id="faithfulness-heading">Optional faithfulness review</h2><p>One structured, batched second opinion compares rewritten wording with its cited minimized evidence.</p></div></div><label className="form-field"><input aria-label="Enable optional faithfulness review for newly authorized runs" type="checkbox" checked={settings?.faithfulnessCheck ?? false} onChange={event => void saveFaithfulness(event.target.checked)} /> Enable semantic faithfulness check for newly authorized runs</label><p className="settings-helper">Findings remain blocking even if you later disable this option. An LLM check is not proof and does not replace your review; calls count against the same run and time budgets.</p></section>
       <section className="settings-block credential-panel" aria-labelledby="credential-heading">
         <div className="settings-block-heading"><span className="settings-block-icon"><KeyRound size={18} aria-hidden="true" /></span><div><h2 id="credential-heading">API key</h2><p>{settings?.credential.configured ? 'An encrypted key is saved on this device. Its value is never shown here.' : 'No API key is saved.'}</p></div></div>
         {!settings?.credential.secureStorageAvailable && <p className="secure-storage-error" role="alert">Secure storage is unavailable. A key cannot be saved; CV Tailor will not store it in plaintext.</p>}

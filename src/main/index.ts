@@ -48,22 +48,26 @@ if (!app.isPackaged && process.env.CV_TAILOR_TEST_USER_DATA_DIR) {
 }
 app.whenReady().then(() => {
   let scriptedAttempts = 0
-  const scriptedAnalysis: AnalysisTransport | undefined = !app.isPackaged && ['1', 'retry', 'generation', 'factual', 'invalid'].includes(process.env.CV_TAILOR_SCRIPTED_ANALYSIS ?? '') ? { generate: async ({ prompt }) => {
+  const scriptedAnalysis: AnalysisTransport | undefined = !app.isPackaged && ['1', 'retry', 'generation', 'factual', 'invalid', 'faithfulness'].includes(process.env.CV_TAILOR_SCRIPTED_ANALYSIS ?? '') ? { generate: async ({ prompt }) => {
     scriptedAttempts++
     if (prompt.startsWith('Factual repair cycle')) return JSON.stringify({ corrections: [] })
+    if (process.env.CV_TAILOR_SCRIPTED_ANALYSIS === 'faithfulness' && prompt.startsWith('Compare all rewritten/source pairs')) {
+      const { pairs } = JSON.parse(prompt.slice(prompt.indexOf('{')))
+      return JSON.stringify({ results: pairs.map((pair: { itemPath: string }) => ({ itemPath: pair.itemPath, supported: false, explanation: 'Scripted smoke finding: wording needs human comparison with its source.' })) })
+    }
     if (process.env.CV_TAILOR_SCRIPTED_ANALYSIS === 'retry' && scriptedAttempts === 1) throw { status: 429, retryAfter: 3 }
-    if (['generation', 'factual', 'invalid'].includes(process.env.CV_TAILOR_SCRIPTED_ANALYSIS ?? '') && prompt.startsWith('Score these numbered')) {
+    if (['generation', 'factual', 'invalid', 'faithfulness'].includes(process.env.CV_TAILOR_SCRIPTED_ANALYSIS ?? '') && prompt.startsWith('Score these numbered')) {
       const { items } = JSON.parse(prompt.slice(prompt.indexOf('{')))
       return JSON.stringify({ relevance: items.map((item: { index: number }) => ({ index: item.index, score: 0.9, rationale: 'Directly supports the posting.' })) })
     }
     if (process.env.CV_TAILOR_SCRIPTED_ANALYSIS === 'invalid' && prompt.startsWith('Write conservative')) return '{ malformed response'
-    if (['generation', 'factual', 'invalid'].includes(process.env.CV_TAILOR_SCRIPTED_ANALYSIS ?? '') && prompt.startsWith('Write conservative')) {
+    if (['generation', 'factual', 'invalid', 'faithfulness'].includes(process.env.CV_TAILOR_SCRIPTED_ANALYSIS ?? '') && prompt.startsWith('Write conservative')) {
       const { selected } = JSON.parse(prompt.slice(prompt.indexOf('{')))
       const paragraphs = (category: string) => selected.filter((item: { category: string }) => item.category === category).map((item: { index: number; text: string }) => ({ text: process.env.CV_TAILOR_SCRIPTED_ANALYSIS === 'factual' && category === 'experience' ? 'Reduced delivery time by 900 percent.' : item.text, evidence: [item.index], rationale: 'Selected from authorized profile evidence.' }))
       const skills = selected.filter((item: { category: string }) => item.category === 'skills').map((item: { index: number; text: string }) => ({ name: JSON.parse(item.text).name, evidence: [item.index], rationale: 'Selected from the saved skill inventory.' }))
       return JSON.stringify({ education: paragraphs('education'), experience: paragraphs('experience'), projects: paragraphs('projects'), skills, certificates: paragraphs('certificates') })
     }
-    return JSON.stringify({ required: ['TypeScript'], preferred: [], tools: ['TypeScript'], responsibilities: ['Build reliable services'], keywords: ['TypeScript'] })
+    return JSON.stringify({ required: ['TypeScript', 'Kubernetes'], preferred: ['Cloud architecture'], tools: ['TypeScript'], responsibilities: ['Build reliable services'], keywords: ['TypeScript', 'Kubernetes', 'Cloud architecture'] })
   } } : undefined
   workspace = createWorkbench(app.getPath('userData'), safeStorage, scriptedAnalysis)
   ipcMain.handle('settings:get', (event, ...args: unknown[]) => {
@@ -80,6 +84,11 @@ app.whenReady().then(() => {
     trusted(event)
     if (args.length !== 1) throw new Error('Expected Gemini model')
     return workspace!.api.setGeminiModel(geminiModelSchema.parse(args[0]))
+  })
+  ipcMain.handle('settings:faithfulness', (event, ...args: unknown[]) => {
+    trusted(event)
+    if (args.length !== 1 || typeof args[0] !== 'boolean') throw new Error('Expected faithfulness setting')
+    return workspace!.api.setFaithfulnessCheck(args[0])
   })
   ipcMain.handle('settings:gemini-key:save', (event, ...args: unknown[]) => {
     trusted(event)

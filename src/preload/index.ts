@@ -21,6 +21,10 @@ const api: WorkbenchAPI = Object.freeze({
   async setGeminiModel(value: GeminiModel) {
     return settingsSchema.parse(await ipcRenderer.invoke('settings:gemini-model', geminiModelSchema.parse(value)))
   },
+  async setFaithfulnessCheck(value: boolean) {
+    if (typeof value !== 'boolean') throw new Error('Faithfulness setting must be boolean.')
+    return settingsSchema.parse(await ipcRenderer.invoke('settings:faithfulness', value))
+  },
   async saveGeminiApiKey(value: string) {
     return settingsSchema.parse(await ipcRenderer.invoke('settings:gemini-key:save', geminiKeyInputSchema.parse(value)))
   },

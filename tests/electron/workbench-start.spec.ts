@@ -13,6 +13,7 @@ test('CV workbench guides setup without implying a generated draft and tracks th
     await expect(page.locator('[data-ui-ready="true"]')).toBeVisible()
     await expect(page.getByRole('heading', { name: 'Your CV workbench' })).toBeVisible()
     await expect(page.getByText('No CV draft yet')).toBeVisible()
+    await expect(page.getByRole('complementary', { name: 'Workspace guide' }).getByRole('heading', { name: 'Evidence & coverage' })).toBeVisible()
     const document = page.getByRole('region', { name: 'CV document' })
     await expect(document.getByText('Five CV sections')).toBeVisible()
     await expect(document.getByRole('heading', { level: 2 })).toHaveText(['Education', 'Experience', 'Projects', 'Skills', 'Certificates'])

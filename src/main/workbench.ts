@@ -26,6 +26,7 @@ import { CitationValidationError, runSourceLinkedGraph } from './source-linked-g
 import { prepareDraftInputs } from './draft-inputs'
 import { checkDraftFacts } from './factual-verification'
 import { factualCheckReportSchema } from '../shared/factual-report'
+import { qualificationCoverage, supportedCoverageTerms } from './qualification-coverage'
 import { createCanonicalDocument, documentFitReportSchema, type DocumentFitReport } from '../shared/document'
 
 export interface SecureStorage {
@@ -54,9 +55,18 @@ function reconcileNestedItems(items: NestedInput[], previous: NestedRecord[], ow
 }
 
 /** One workspace per userData directory. Opening a workspace applies forward-only migrations. */
-function preserveGenerationFinding(checked: ReturnType<typeof checkDraftFacts>, prior: DraftRevision) {
-  const known = prior.checkReport?.findings.filter(finding => finding.itemPath === 'generation') ?? []
-  return factualCheckReportSchema.parse({ ...checked, passed: checked.passed && known.length === 0, findings: [...known, ...checked.findings] })
+const escapeCoverageTerm = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+function preserveKnownFindings(checked: ReturnType<typeof checkDraftFacts>, prior: DraftRevision) {
+  const known = prior.checkReport?.findings.filter(finding => finding.itemPath === 'generation' || finding.code === 'semantic-unsupported').map(finding => {
+    if (finding.code !== 'semantic-unsupported') return finding
+    const originDraftId = finding.originDraftId ?? prior.checkReport?.draftId ?? prior.id
+    const originDraftRevision = finding.originDraftRevision ?? prior.checkReport?.draftRevision ?? prior.revision
+    const originEvidenceRevisionHash = finding.originEvidenceRevisionHash ?? prior.checkReport?.evidenceRevisionHash
+    return { ...finding, originDraftId, originDraftRevision, ...(originEvidenceRevisionHash ? { originEvidenceRevisionHash } : {}), historical: originDraftId !== checked.draftId || originDraftRevision !== checked.draftRevision }
+  }) ?? []
+  const findings = [...known, ...checked.findings.filter(finding => !known.some(item => item.code === finding.code && item.itemPath === finding.itemPath))]
+  return factualCheckReportSchema.parse({ ...checked, passed: checked.passed && known.length === 0, findings })
 }
 
 export function createWorkbench(userData: string, secureStorage: SecureStorage = unavailableSecureStorage, scriptedTransport?: AnalysisTransport): { api: WorkbenchStorageAPI; authorizeOutboundPayload<T>(runId: string, payload: T): T; close(): void } {
@@ -164,7 +174,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
     return { ok: true, data }
   }
   const outboundEngine = createOutboundConsentEngine()
-  const pendingOutbound = new Map<string, { jobId: string; source: ConsentSource; bundle: OutboundBundle; runId: string; consentId?: string }>()
+  const pendingOutbound = new Map<string, { jobId: string; source: ConsentSource; bundle: OutboundBundle; runId: string; faithfulnessCheck: boolean; consentId?: string }>()
   const currentAnalysis = new Map<string, ReturnType<typeof analysisResultSchema.parse>>()
   const saveAnalysisState = (input: unknown) => {
     const value = analysisResultSchema.parse(input)
@@ -208,10 +218,10 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
   }
   const api: WorkbenchStorageAPI = {
     async getSettings() {
-      const rows = db.prepare('SELECT key, value FROM settings WHERE key IN (?, ?)').all('appearance', 'gemini-model') as { key: string; value: string }[]
+      const rows = db.prepare('SELECT key, value FROM settings WHERE key IN (?, ?, ?)').all('appearance', 'gemini-model', 'faithfulness-check') as { key: string; value: string }[]
       const stored = Object.fromEntries(rows.map(row => [row.key, row.value]))
       const configured = Boolean(db.prepare('SELECT 1 FROM encrypted_credentials WHERE key = ?').get('gemini-api-key'))
-      return settingsSchema.parse({ appearance: stored.appearance ?? 'light', gemini: { model: stored['gemini-model'] ?? 'gemini-3.6-flash', credential: { configured, secureStorageAvailable: secureStorageAvailable() } } })
+      return settingsSchema.parse({ appearance: stored.appearance ?? 'light', gemini: { model: stored['gemini-model'] ?? 'gemini-3.6-flash', faithfulnessCheck: stored['faithfulness-check'] === 'true', credential: { configured, secureStorageAvailable: secureStorageAvailable() } } })
     },
     async setAppearance(value) {
       saveSetting('appearance', appearanceSchema.parse(value))
@@ -219,6 +229,11 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
     },
     async setGeminiModel(value: GeminiModel) {
       saveSetting('gemini-model', geminiModelSchema.parse(value))
+      return this.getSettings()
+    },
+    async setFaithfulnessCheck(value: boolean) {
+      if (typeof value !== 'boolean') throw new Error('Faithfulness setting must be boolean.')
+      saveSetting('faithfulness-check', String(value))
       return this.getSettings()
     },
     async saveGeminiApiKey(value: string) {
@@ -479,7 +494,8 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       try {
         const bundle = prepareOutboundBundle(source)
         const token = randomUUID(), runId = randomUUID()
-        pendingOutbound.set(token, { jobId, source, bundle, runId })
+        const faithfulnessRow = db.prepare('SELECT value FROM settings WHERE key = ?').get('faithfulness-check') as { value: string } | undefined
+        pendingOutbound.set(token, { jobId, source, bundle, runId, faithfulnessCheck: faithfulnessRow?.value === 'true' })
         return outboundConsentPreviewSchema.parse({ ok: true, token, jobTitle: source.job.title, jobCompany: source.job.company, outgoing: bundle.outgoing, warning: bundle.preview.residualSensitivityNotice, termsNotice: 'Google Gemini free-tier requests may be used to improve Google products. Do not submit personal, sensitive, or confidential information. This app minimizes data but cannot guarantee anonymity.' })
       } catch { return outboundConsentPreviewSchema.parse({ ok: false, message: 'Outgoing data could not be prepared safely. Review your profile and model settings, then try again.' }) }
     },
@@ -565,6 +581,19 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       profile.skills.forEach((item, i) => { const safe = approvedPayload.profile.skills[i]; if (safe) scrubbed.set(item.id, JSON.stringify(safe)) })
       profile.certificates.forEach((item, i) => { const safe = approvedPayload.profile.certificates[i]; if (safe) scrubbed.set(item.id, JSON.stringify(safe)) })
       const safeItems = items.map(item => ({ ...item, text: scrubbed.get(item.id) ?? '' })).filter(item => item.text)
+      const minimizedStringPairs: Array<[string, string]> = []
+      const collectStringPairs = (original: unknown, minimized: unknown) => {
+        if (typeof original === 'string' && typeof minimized === 'string' && original !== minimized) minimizedStringPairs.push([original, minimized])
+        else if (Array.isArray(original) && Array.isArray(minimized)) original.forEach((value, index) => collectStringPairs(value, minimized[index]))
+        else if (original && minimized && typeof original === 'object' && typeof minimized === 'object') for (const [key, value] of Object.entries(original)) collectStringPairs(value, (minimized as Record<string, unknown>)[key])
+      }
+      for (const item of items) {
+        const safe = scrubbed.get(item.id)
+        if (safe) try { collectStringPairs(item.snapshot, JSON.parse(safe)) } catch { /* non-JSON source text is already minimized independently */ }
+      }
+      const exactLocalDates = [...draftInputs.lockedFields.experience, ...draftInputs.lockedFields.education].flatMap(item => [item.startDate, item.endDate]).filter((value): value is string => Boolean(value))
+      for (const date of exactLocalDates) minimizedStringPairs.push([date, ''])
+      const minimizeRestoredText = (text: string) => minimizedStringPairs.reduce((value, [restored, minimized]) => value.replaceAll(restored, minimized), text)
       activeAnalysisByJob.set(pending.jobId, pending.runId)
       const failedDraftIdentity = { id: randomUUID(), jobId: pending.jobId, revision: ((db.prepare('SELECT MAX(revision) AS revision FROM draft_revisions WHERE job_id = ?').get(pending.jobId) as { revision: number | null }).revision ?? 0) + 1, createdAt: new Date().toISOString(), lockedFields: draftInputs.lockedFields }
       try {
@@ -575,7 +604,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
           return { value: responseSchema.parse(JSON.parse(generated.text)), attempts: generated.attempts }
         } })
         authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
-        const repairSchema = z.object({ corrections: z.array(z.object({ section: z.enum(['education', 'experience', 'projects', 'skills', 'certificates']), index: z.number().int().nonnegative(), text: z.string().trim().min(1).max(3000), citations: z.array(z.object({ evidenceId: uuidSchema, revision: z.number().int().positive() }).strict()).min(1) }).strict()).max(200) }).strict()
+        const repairSchema = z.object({ corrections: z.array(z.object({ section: z.enum(['education', 'experience', 'projects', 'skills', 'certificates']), index: z.number().int().nonnegative(), text: z.string().trim().min(1).max(3000), citations: z.array(z.object({ evidenceId: uuidSchema, revision: z.number().int().positive() }).strict()).min(1) }).strict()).max(1) }).strict()
         let report = checkDraftFacts(result.draft)
         let repairAttempts = 0
         for (let cycle = 0; cycle < 2 && !report.passed; cycle++) {
@@ -599,8 +628,80 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
           result.draft.attempts += repair.attempts
           report = checkDraftFacts(result.draft)
         }
-        const totalAttempts = result.attempts + repairAttempts
-        const checkedDraft = draftRevisionSchema.parse({ ...result.draft, status: report.passed ? 'unverified' : 'blocked', checkReport: report, progress: report.passed ? `${result.draft.progress} Deterministic factual checks passed; citations do not establish semantic truth. Human review remains required.` : `Draft saved for its ${result.draft.pageTarget}-page target; blocked by ${report.findings.length} deterministic factual finding(s). Edit the draft or correct its cited evidence, then check again.` })
+        let coverageRepairAttempts = 0
+        if (report.passed) {
+          const opportunities = supportedCoverageTerms(analysis.analysis, result.draft)
+          if (opportunities.length) {
+            const opportunity = opportunities[0]
+            const eligible = opportunity.eligible[0]
+            const priorItem = result.draft.content[eligible.section][eligible.index]
+            const priorText = 'text' in priorItem ? priorItem.text : priorItem.name
+            authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
+            const coverageRepair = await dispatcher.generate({ runId: pending.runId, jobId: pending.jobId, model: geminiModelSchema.parse(pending.source.model.name), consentId: pending.consentId!, responseSchema: repairSchema, prompt: `Supported-keyword coverage repair (single exact item). Add only the explicitly supported term to this authored text. Preserve all existing wording, responsibility, scope, ownership, skill level, certainty, and citations exactly; do not change any other item. Return zero or one correction, only for the supplied section/index.\n${JSON.stringify({ opportunity: { qualification: opportunity.qualification, matchedAs: opportunity.matchedAs, section: eligible.section, index: eligible.index, evidenceId: eligible.evidenceId, revision: eligible.revision }, text: priorText, evidence: safeItems.find(source => source.id === eligible.evidenceId)?.text })}` })
+            authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
+            coverageRepairAttempts = coverageRepair.attempts
+            const response = repairSchema.parse(JSON.parse(coverageRepair.text))
+            for (const correction of response.corrections) {
+              if (correction.section !== eligible.section || correction.index !== eligible.index) continue
+              const section = [...result.draft.content[eligible.section]], prior = section[eligible.index]
+              const expectedCitation = { evidenceId: eligible.evidenceId, revision: eligible.revision }
+              if (!prior || correction.citations.length !== 1 || correction.citations[0].evidenceId !== expectedCitation.evidenceId || correction.citations[0].revision !== expectedCitation.revision) continue
+              const priorText = 'text' in prior ? prior.text : prior.name
+              const term = escapeCoverageTerm(opportunity.matchedAs)
+              const withoutTerm = correction.text.replace(new RegExp(`(?:^|\\s)${term}(?=$|\\s)`, 'iu'), ' ').replace(/\s+/g, ' ').trim()
+              if (withoutTerm !== priorText.replace(/\s+/g, ' ').trim()) continue
+              section[eligible.index] = 'text' in prior ? { ...prior, text: pending.bundle.restoreIdentifiers(correction.text) } : { ...prior, name: pending.bundle.restoreIdentifiers(correction.text) }
+              result.draft.content = { ...result.draft.content, [eligible.section]: section }
+            }
+            result.draft.attempts += coverageRepair.attempts
+            report = checkDraftFacts(result.draft)
+          }
+        }
+        const coverage = { ...qualificationCoverage(analysis.runId ?? analysis.jobId, analysis.analysis, result.draft), repairAttempts: coverageRepairAttempts }
+        const finalSemanticPairs = (['education', 'experience', 'projects', 'skills', 'certificates'] as const).flatMap(section => result.draft.content[section].map((item, index) => {
+          const citations = item.citations
+          const citedSources = citations.flatMap(citation => {
+            const frozen = result.draft.evidence.find(evidence => evidence.evidenceId === citation.evidenceId && evidence.revision === citation.revision)
+            const source = safeItems.find(candidate => candidate.id === citation.evidenceId && candidate.revision === citation.revision)
+            return frozen && source ? [source.text] : []
+          })
+          return { section, itemPath: `${section}[${index}]`, rewritten: minimizeRestoredText('text' in item ? item.text : item.name), evidence: citedSources }
+        }))
+        const findingOrigin = { originDraftId: result.draft.id, originDraftRevision: result.draft.revision, originEvidenceRevisionHash: report.evidenceRevisionHash, historical: false }
+        const semanticFindings: ReturnType<typeof factualCheckReportSchema.parse>['findings'] = []
+        let semanticAttempts = 0
+        if (pending.faithfulnessCheck) {
+          const semanticSchema = z.object({ results: z.array(z.object({ itemPath: z.string().min(1), supported: z.boolean(), explanation: z.string().trim().min(1).max(500) }).strict()).max(200) }).strict()
+          if (pending.bundle.containsRestoredIdentifier(finalSemanticPairs)) {
+            semanticFindings.push({ code: 'semantic-unsupported', itemPath: 'faithfulness', ...findingOrigin, message: 'The optional comparison was withheld because a rewritten pair contained a restored identifier or contact detail.', correction: 'Remove the sensitive text and start a fresh authorized review. No semantic request was sent.' })
+          } else {
+            const attemptsBeforeReview = (db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id = ?').get(pending.runId) as { count: number }).count
+            try {
+              authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
+              const review = await dispatcher.generate({ runId: pending.runId, jobId: pending.jobId, model: geminiModelSchema.parse(pending.source.model.name), consentId: pending.consentId!, responseSchema: semanticSchema, prompt: `Compare all rewritten/source pairs in this single structured batch. Report each exact itemPath once. Mark unsupported only when the rewrite adds or strengthens factual meaning beyond its cited source. This is a second opinion, not proof. Do not rewrite content or request more data.\n${JSON.stringify({ pairs: finalSemanticPairs })}` })
+              authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
+              semanticAttempts += review.attempts
+              const parsed = semanticSchema.parse(JSON.parse(review.text))
+              const expectedPaths = finalSemanticPairs.map(pair => pair.itemPath)
+              if (parsed.results.length !== expectedPaths.length || new Set(parsed.results.map(item => item.itemPath)).size !== expectedPaths.length || expectedPaths.some(path => !parsed.results.some(item => item.itemPath === path))) throw new Error('Faithfulness review returned incomplete or duplicate item paths.')
+              for (const finding of parsed.results.filter(item => !item.supported)) {
+                const pair = finalSemanticPairs.find(item => item.itemPath === finding.itemPath)!
+                const index = Number(/\[(\d+)\]/.exec(finding.itemPath)?.[1] ?? -1)
+                semanticFindings.push({ code: 'semantic-unsupported', itemPath: finding.itemPath, evidenceId: result.draft.content[pair.section][index]?.citations[0]?.evidenceId, ...findingOrigin, message: `Second-opinion faithfulness check: ${finding.explanation}`, correction: 'Correct or remove this wording, then obtain a new authorized faithfulness check. This result is not proof and does not replace human review.' })
+              }
+            } catch (error) {
+              if (error instanceof AnalysisError && error.code === 'CANCELLED') throw error
+              const attemptsAfterReview = (db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id = ?').get(pending.runId) as { count: number }).count
+              semanticAttempts = attemptsAfterReview - attemptsBeforeReview
+              const reason = error instanceof AnalysisError ? error.code.toLowerCase() : 'malformed structured output'
+              semanticFindings.push({ code: 'semantic-unsupported', itemPath: 'faithfulness', ...findingOrigin, message: `Optional faithfulness review did not complete (${reason}); generated wording was retained but remains blocked.`, correction: 'Retry with a fresh authorized run when the shared request/time budget permits. This check is a second opinion, not proof.' })
+            }
+          }
+        }
+        const findings = [...report.findings, ...semanticFindings]
+        const totalAttempts = result.attempts + repairAttempts + coverageRepairAttempts + semanticAttempts
+        const mergedReport = factualCheckReportSchema.parse({ ...report, passed: findings.length === 0, findings })
+        const checkedDraft = draftRevisionSchema.parse({ ...result.draft, status: findings.length ? 'blocked' : 'unverified', checkReport: mergedReport, coverage, attempts: totalAttempts, progress: findings.length ? `Draft saved for its ${result.draft.pageTarget}-page target; blocked by ${findings.length} unresolved finding(s). The optional semantic review is a second opinion, not proof.` : `${result.draft.progress} Automated checks passed; semantic comparison is a second opinion, not proof. Human review remains required.` })
         result.draft = checkedDraft
         const tx = db.transaction(() => { db.prepare('INSERT INTO draft_revisions (id,job_id,revision,data) VALUES (?,?,?,?)').run(result.draft.id, result.draft.jobId, result.draft.revision, JSON.stringify(result.draft)) })
         tx()
@@ -642,7 +743,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       const linkedEvidence = parsed.data.editIntent === 'new-fact' ? [...prior.evidence, ...citations.filter(citation => !prior.evidence.some(source => source.evidenceId === citation.evidenceId && source.revision === citation.revision)).map(citation => { const source = liveItems.find(item => item.id === citation.evidenceId)!; return { evidenceId: source.id, revision: source.revision, snapshot: source.snapshot } })] : prior.evidence
       const updatedContent = { ...prior.content, [parsed.data.section]: section.map((item, index) => index !== parsed.data.index ? item : 'text' in item ? { ...item, text: parsed.data.text, citations } : { ...item, name: parsed.data.text, citations }) }
       const next = draftRevisionSchema.parse({ ...prior, id: randomUUID(), revision: prior.revision + 1, status: 'unverified', approved: false, approval: undefined, checkReport: undefined, evidence: linkedEvidence, content: updatedContent, progress: 'Draft wording corrected locally. Recheck before human review.' })
-      let report = preserveGenerationFinding(checkDraftFacts(next), prior)
+      let report = preserveKnownFindings(checkDraftFacts(next), prior)
       const stale = currentSourceStatus(next)
       if (stale.length) report = factualCheckReportSchema.parse({ ...report, passed: false, findings: [...report.findings, ...stale.map(evidenceId => ({ code: 'stale-source' as const, itemPath: 'sources', evidenceId, message: 'A cited profile source changed or was deleted after this draft was created.', correction: 'Review and save current evidence, then create a draft using its current revision.' }))] })
       const checked = draftRevisionSchema.parse({ ...next, status: report.passed ? 'unverified' : 'blocked', checkReport: report, progress: report.findings.some(finding => finding.itemPath === 'generation') ? 'Correction saved, but the known generation failure remains unresolved. Only a new authorized generation that passes validation can resolve it.' : report.passed ? 'Correction passes deterministic checks; semantic truth still requires human review. Wording-only versus new-fact is user-declared and cannot be inferred perfectly.' : `Blocked by ${report.findings.length} factual finding(s). Use the correction guidance below.` })
@@ -664,7 +765,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       items.push(draftItem as never)
       const evidence = selected ? prior.evidence : [...prior.evidence, { evidenceId: current.id, revision: current.revision, snapshot: current.snapshot }]
       const next = draftRevisionSchema.parse({ ...prior, id: randomUUID(), revision: prior.revision + 1, status: 'blocked', approved: false, approval: undefined, checkReport: undefined, evidence, content: { ...prior.content, [parsed.data.section]: items }, progress: 'Locally authored, cited content was saved. Automated checks do not replace human review.' })
-      const report = preserveGenerationFinding(checkDraftFacts(next), prior)
+      const report = preserveKnownFindings(checkDraftFacts(next), prior)
       const saved = draftRevisionSchema.parse({ ...next, status: report.passed ? 'unverified' : 'blocked', checkReport: report, progress: report.findings.some(finding => finding.itemPath === 'generation') ? 'Locally authored wording was added, but the known generation failure remains unresolved. Only a new authorized generation that passes validation can resolve it.' : next.progress })
       db.prepare('INSERT INTO draft_revisions (id,job_id,revision,data) VALUES (?,?,?,?)').run(saved.id, saved.jobId, saved.revision, JSON.stringify(saved))
       return saved
@@ -674,7 +775,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       const row = db.prepare('SELECT data FROM draft_revisions WHERE job_id = ? ORDER BY revision DESC LIMIT 1').get(jobId) as { data: string } | undefined
       if (!row) return null
       const draft = draftRevisionSchema.parse(JSON.parse(row.data))
-      let report = preserveGenerationFinding(checkDraftFacts(draft), draft)
+      let report = preserveKnownFindings(checkDraftFacts(draft), draft)
       const stale = currentSourceStatus(draft)
       if (stale.length) report = factualCheckReportSchema.parse({ ...report, passed: false, findings: [...report.findings, ...stale.map(evidenceId => ({ code: 'stale-source' as const, itemPath: 'sources', evidenceId, message: 'A cited profile source changed or was deleted after this draft was created.', correction: 'Review the current source and regenerate or remove the affected wording.' }))] })
       const updated = draftRevisionSchema.parse({ ...draft, status: report.passed ? 'unverified' : 'blocked', checkReport: report, progress: report.passed ? 'Current factual checks passed; citations do not establish semantic truth. Human review remains required.' : `Blocked by ${report.findings.length} factual or source revision finding(s). Correct the draft and check again.` })
@@ -688,7 +789,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       const expectedEvidenceHash = createHash('sha256').update(JSON.stringify([...draft.evidence].sort((a, b) => a.evidenceId.localeCompare(b.evidenceId)))).digest('hex')
       const stale = currentSourceStatus(draft)
       if (!savedReport?.passed || savedReport.draftId !== draft.id || savedReport.draftRevision !== draft.revision || savedReport.evidenceRevisionHash !== expectedEvidenceHash || draft.status === 'blocked') return { ok: false, message: 'Recheck the current draft and cited source revisions before approval.' }
-      let report = preserveGenerationFinding(checkDraftFacts(draft), draft)
+      let report = preserveKnownFindings(checkDraftFacts(draft), draft)
       if (stale.length) report = factualCheckReportSchema.parse({ ...report, passed: false, findings: [...report.findings, ...stale.map(evidenceId => ({ code: 'stale-source' as const, itemPath: 'sources', evidenceId, message: 'A cited profile source changed or was deleted after this draft was created.', correction: 'Review the current source and regenerate or remove the affected wording.' }))] })
       if (!report.passed || report.draftId !== draft.id || report.draftRevision !== draft.revision || report.evidenceRevisionHash !== expectedEvidenceHash || stale.length) return { ok: false, message: 'Current factual checks and cited source revisions must pass before approval.' }
       const canonical = await this.getCanonicalDocument(jobId)
