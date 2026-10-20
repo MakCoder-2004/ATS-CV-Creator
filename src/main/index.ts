@@ -17,6 +17,7 @@ import { outboundConsentActionSchema, outboundConsentPreviewSchema } from '../sh
 import { analysisBudgetsSchema, analysisIdSchema, analysisResultSchema, analysisStartInputSchema, analysisUsageSchema } from '../shared/posting-analysis'
 import { addDraftItemInputSchema, draftCorrectionInputSchema, draftGenerationSchema, draftRevisionSchema } from '../shared/draft'
 import { factualCheckReportSchema } from '../shared/factual-report'
+import { regenerationProposalSchema, regenerationResultSchema, regenerationTargetSchema } from '../shared/regeneration'
 
 let window: BrowserWindow | undefined
 let workspace: ReturnType<typeof createWorkbench> | undefined
@@ -51,6 +52,7 @@ app.whenReady().then(() => {
   const scriptedAnalysis: AnalysisTransport | undefined = !app.isPackaged && ['1', 'retry', 'generation', 'factual', 'invalid', 'faithfulness'].includes(process.env.CV_TAILOR_SCRIPTED_ANALYSIS ?? '') ? { generate: async ({ prompt }) => {
     scriptedAttempts++
     if (prompt.startsWith('Factual repair cycle')) return JSON.stringify({ corrections: [] })
+    if (prompt.startsWith('Propose conservative replacement wording')) { const { items } = JSON.parse(prompt.slice(prompt.indexOf('{'))); return JSON.stringify({ items: items.map((item: { text: string }) => ({ text: item.text, rationale: 'Rephrased only within the currently cited evidence.' })) }) }
     if (process.env.CV_TAILOR_SCRIPTED_ANALYSIS === 'faithfulness' && prompt.startsWith('Compare all rewritten/source pairs')) {
       const { pairs } = JSON.parse(prompt.slice(prompt.indexOf('{')))
       return JSON.stringify({ results: pairs.map((pair: { itemPath: string }) => ({ itemPath: pair.itemPath, supported: false, explanation: 'Scripted smoke finding: wording needs human comparison with its source.' })) })
@@ -221,6 +223,9 @@ app.whenReady().then(() => {
   ipcMain.handle('analysis:start', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected consent token'); const input = analysisStartInputSchema.parse({ consentToken: args[0] }); return analysisResultSchema.parse(await workspace!.api.startAnalysis(input.consentToken)) })
   ipcMain.handle('analysis:get', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected job ID'); const result = await workspace!.api.getAnalysis(analysisIdSchema.parse(args[0])); return result === null ? null : analysisResultSchema.parse(result) })
   ipcMain.handle('draft:generate', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 2 || (args[1] !== 1 && args[1] !== 2)) throw new Error('Expected consent token and one- or two-page target'); return draftGenerationSchema.parse(await workspace!.api.generateDraft(analysisStartInputSchema.parse({ consentToken: args[0] }).consentToken, args[1])) })
+  ipcMain.handle('draft:regenerate', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 2) throw new Error('Expected consent token and regeneration target'); return regenerationResultSchema.parse(await workspace!.api.regenerateDraft(analysisStartInputSchema.parse({ consentToken: args[0] }).consentToken, regenerationTargetSchema.parse(args[1]))) })
+  ipcMain.handle('draft:regeneration:get', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected job ID'); const proposal = await workspace!.api.getRegenerationProposal(analysisIdSchema.parse(args[0])); return proposal === null ? null : regenerationProposalSchema.parse(proposal) })
+  ipcMain.handle('draft:regeneration:resolve', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 3 || !['accept','reject'].includes(args[2] as string)) throw new Error('Expected job ID, proposal ID and decision'); return await workspace!.api.resolveRegenerationProposal(analysisIdSchema.parse(args[0]), uuidSchema.parse(args[1]), args[2] as 'accept' | 'reject') })
   ipcMain.handle('draft:get', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected job ID'); const draft = await workspace!.api.getDraft(analysisIdSchema.parse(args[0])); return draft === null ? null : draftRevisionSchema.parse(draft) })
   ipcMain.handle('draft:check', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected job ID'); const report = await workspace!.api.checkDraft(analysisIdSchema.parse(args[0])); return report === null ? null : factualCheckReportSchema.parse(report) })
   ipcMain.handle('draft:approve', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected job ID'); return workspace!.api.approveDraft(analysisIdSchema.parse(args[0])) })

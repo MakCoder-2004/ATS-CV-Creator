@@ -10,6 +10,7 @@ import { analysisBudgetsSchema, analysisIdSchema, analysisResultSchema, analysis
 import { addDraftItemInputSchema, draftCorrectionInputSchema, draftGenerationSchema, draftRevisionSchema } from '../shared/draft'
 import { factualCheckReportSchema } from '../shared/factual-report'
 import { canonicalDocumentSchema, documentFitReportSchema } from '../shared/document'
+import { regenerationProposalSchema, regenerationResultSchema, regenerationTargetSchema } from '../shared/regeneration'
 
 const api: WorkbenchAPI = Object.freeze({
   async getSettings() {
@@ -104,6 +105,9 @@ const api: WorkbenchAPI = Object.freeze({
   async startAnalysis(consentToken: string): Promise<AnalysisResult> { return analysisResultSchema.parse(await ipcRenderer.invoke('analysis:start', uuidSchema.parse(consentToken))) },
   async getAnalysis(jobId: string) { const value = await ipcRenderer.invoke('analysis:get', analysisIdSchema.parse(jobId)); return value === null ? null : analysisResultSchema.parse(value) },
   async generateDraft(consentToken: string, pageTarget: 1 | 2 = 1) { if (pageTarget !== 1 && pageTarget !== 2) throw new Error('Choose a one- or two-page target.'); return draftGenerationSchema.parse(await ipcRenderer.invoke('draft:generate', uuidSchema.parse(consentToken), pageTarget)) },
+  async regenerateDraft(consentToken: string, target: Parameters<WorkbenchAPI['regenerateDraft']>[1]) { return regenerationResultSchema.parse(await ipcRenderer.invoke('draft:regenerate', uuidSchema.parse(consentToken), regenerationTargetSchema.parse(target))) },
+  async getRegenerationProposal(jobId: string) { const value = await ipcRenderer.invoke('draft:regeneration:get', analysisIdSchema.parse(jobId)); return value === null ? null : regenerationProposalSchema.parse(value) },
+  async resolveRegenerationProposal(jobId: string, proposalId: string, decision: 'accept' | 'reject') { if (decision !== 'accept' && decision !== 'reject') throw new Error('Choose accept or reject.'); return await ipcRenderer.invoke('draft:regeneration:resolve', analysisIdSchema.parse(jobId), uuidSchema.parse(proposalId), decision) },
   async getDraft(jobId: string) { const value = await ipcRenderer.invoke('draft:get', analysisIdSchema.parse(jobId)); return value === null ? null : draftRevisionSchema.parse(value) },
   async checkDraft(jobId: string) { const value = await ipcRenderer.invoke('draft:check', analysisIdSchema.parse(jobId)); return value === null ? null : factualCheckReportSchema.parse(value) },
   async approveDraft(jobId: string) { return await ipcRenderer.invoke('draft:approve', analysisIdSchema.parse(jobId)) },

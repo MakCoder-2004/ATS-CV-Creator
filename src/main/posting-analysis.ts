@@ -147,6 +147,7 @@ export function createAnalysisDispatcher(options: Options) {
         queue = work.then(() => undefined, () => undefined)
         try { const text = await work; if (cancelled.has(input.runId)) throw cancelledError(); return { text, attempts } }
         catch (error) {
+          if (controller.signal.aborted || cancelled.has(input.runId)) throw cancelledError()
           if (timedOut) throw new AnalysisError('TIMEOUT', 'Analysis time budget is exhausted.')
           if (error instanceof AnalysisError) throw error
           const failure = providerError(error, now)

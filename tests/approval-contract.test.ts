@@ -11,12 +11,17 @@ const directories: string[] = []
 const opened: Array<ReturnType<typeof createWorkbench>> = []
 afterEach(() => { for (const workspace of opened.splice(0)) workspace.close(); for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true }) })
 
-async function fixture() {
+async function fixture(regenerationTransport?: (signal: AbortSignal) => Promise<string>) {
   const directory = mkdtempSync(join(tmpdir(), 'approval-contract-')); directories.push(directory)
-  const transport: AnalysisTransport = { async generate({ prompt }) {
+  const transport: AnalysisTransport = { async generate({ prompt, signal }) {
     if (prompt.includes('Extract only explicit qualifications')) return JSON.stringify({ required: [], preferred: [], tools: [], responsibilities: [], keywords: [] })
     if (prompt.startsWith('Score these numbered')) { const { items } = JSON.parse(prompt.slice(prompt.indexOf('{'))); return JSON.stringify({ relevance: items.map((item: { index: number }) => ({ index: item.index, score: 1, rationale: 'Relevant saved evidence.' })) }) }
     if (prompt.startsWith('Factual repair cycle')) return JSON.stringify({ corrections: [] })
+    if (prompt.startsWith('Propose conservative replacement wording')) {
+      if (regenerationTransport) return regenerationTransport(signal)
+      const { items } = JSON.parse(prompt.slice(prompt.indexOf('{')))
+      return JSON.stringify({ items: items.map((item: { text: string }) => ({ text: item.text, rationale: 'Retains the cited source while emphasizing its relevance.' })) })
+    }
     const { selected } = JSON.parse(prompt.slice(prompt.indexOf('{')))
     return JSON.stringify({ education: [], experience: [], projects: [], skills: selected.filter((item: { category: string }) => item.category === 'skills').map((item: { index: number; text: string }) => ({ name: JSON.parse(item.text).name, evidence: [item.index], rationale: 'Saved skill.' })), certificates: [] })
   } }
@@ -42,6 +47,70 @@ async function measure(workspace: ReturnType<typeof createWorkbench>, jobId: str
   const documentHash = createHash('sha256').update(JSON.stringify(canonical)).digest('hex')
   return workspace.api.saveDocumentFitReport(jobId, { documentHash, targetPages: canonical.targetPages, actualPages: overflow ? canonical.targetPages + 1 : canonical.targetPages, extractedText: ['CV'], linkTargets: [], overflow, proposedCuts: overflow ? [{ entryId: 'skills-0', label: 'TypeScript', section: 'Skills' }] : [], measuredAt: new Date().toISOString() })
 }
+
+test('regeneration proposals require fresh consent, compare without mutation, reject cleanly, accept scoped edits, and reject stale bases', async () => {
+  const { workspace, jobId } = await fixture()
+  const extra = await workspace.api.saveSkill({ name: 'Rust', category: 'Programming' })
+  if (!extra.ok) throw new Error('Could not create unrelated evidence')
+  const withExtra = await workspace.api.addDraftItem({ jobId, section: 'skills', text: 'Rust', citation: { evidenceId: extra.value.skills.find(item => item.name === 'Rust')!.id, revision: 1 } })
+  if (!withExtra) throw new Error('Could not add unrelated draft wording')
+  expect(await workspace.api.checkDraft(jobId)).toMatchObject({ passed: true })
+  await measure(workspace, jobId)
+  expect(await workspace.api.approveDraft(jobId)).toMatchObject({ ok: true, draft: { approved: true } })
+  const initial = await workspace.api.getDraft(jobId)
+  if (!initial) throw new Error('Draft fixture unavailable')
+  const beforeText = initial.content.skills[0].name
+  const authorize = async () => {
+    const preview = await workspace.api.prepareOutboundConsent(jobId)
+    if (!preview.ok) throw new Error('Regeneration consent preview unavailable')
+    expect(await workspace.api.regenerateDraft(preview.token, { kind: 'paragraph', section: 'skills', index: 0 })).toMatchObject({ ok: false, message: expect.stringMatching(/authorize/i) })
+    expect(await workspace.api.acceptOutboundConsent(preview.token, true, true)).toMatchObject({ ok: true })
+    return preview.token
+  }
+  const token = await authorize()
+  const generated = await workspace.api.regenerateDraft(token, { kind: 'paragraph', section: 'skills', index: 0 })
+  expect(generated).toMatchObject({ ok: true, proposal: { target: { kind: 'paragraph', section: 'skills', index: 0 }, status: 'pending', before: [{ text: beforeText }], proposed: [{ text: 'TypeScript' }] } })
+  expect(await workspace.api.getDraft(jobId)).toMatchObject({ id: initial.id, revision: initial.revision, approved: initial.approved, content: initial.content })
+  expect(await workspace.api.regenerateDraft(token, { kind: 'paragraph', section: 'skills', index: 0 })).toMatchObject({ ok: false, message: expect.stringMatching(/fresh outgoing-data preview/i) })
+  const proposal = generated.proposal!
+  expect(await workspace.api.resolveRegenerationProposal(jobId, proposal.id, 'reject')).toMatchObject({ ok: true, proposal: { status: 'rejected' } })
+  expect(await workspace.api.getDraft(jobId)).toMatchObject({ id: initial.id, revision: initial.revision, content: initial.content })
+
+  const token2 = await authorize()
+  const second = await workspace.api.regenerateDraft(token2, { kind: 'section', section: 'skills' })
+  expect(second).toMatchObject({ ok: true, proposal: { target: { kind: 'section', section: 'skills' } } })
+  const local = await workspace.api.correctDraft({ jobId, section: 'skills', index: 0, text: 'Programming TypeScript' })
+  if (!local) throw new Error('Manual edit fixture failed')
+  const stale = await workspace.api.resolveRegenerationProposal(jobId, second.proposal!.id, 'accept')
+  expect(stale).toMatchObject({ ok: false, proposal: { status: 'stale' } })
+  expect((await workspace.api.getDraft(jobId))?.content.skills).toMatchObject([{ name: 'Programming TypeScript' }, { name: 'Rust' }])
+  const restored = await workspace.api.correctDraft({ jobId, section: 'skills', index: 0, text: 'TypeScript' })
+  if (!restored) throw new Error('Could not restore supported wording')
+
+  const token3 = await authorize()
+  const third = await workspace.api.regenerateDraft(token3, { kind: 'section', section: 'skills' })
+  const accepted = await workspace.api.resolveRegenerationProposal(jobId, third.proposal!.id, 'accept')
+  expect(accepted).toMatchObject({ ok: true, draft: { revision: restored.revision + 1, approved: false, approval: undefined, content: { skills: [{ name: 'TypeScript' }, { name: 'Rust' }] }, checkReport: { passed: true } } })
+  expect(await workspace.api.getDocumentFitReport(jobId)).toBeNull()
+})
+
+test('cancelling an in-flight authorized regeneration preserves the current draft and creates no proposal', async () => {
+  let announceStarted!: () => void
+  const started = new Promise<void>(resolve => { announceStarted = resolve })
+  const { workspace, jobId, draft } = await fixture(signal => new Promise<string>((_resolve, reject) => {
+    announceStarted()
+    signal.addEventListener('abort', () => reject(new Error('cancelled by user')), { once: true })
+  }))
+  const consent = await workspace.api.prepareOutboundConsent(jobId)
+  if (!consent.ok) throw new Error('Could not prepare regeneration consent')
+  await workspace.api.acceptOutboundConsent(consent.token, true, true)
+  const operation = workspace.api.regenerateDraft(consent.token, { kind: 'paragraph', section: 'skills', index: 0 })
+  await started
+  await workspace.api.cancelAnalysis(jobId)
+  expect(await operation).toMatchObject({ ok: false, message: expect.stringMatching(/cancel/i) })
+  expect(await workspace.api.getRegenerationProposal(jobId)).toBeNull()
+  expect(await workspace.api.getDraft(jobId)).toMatchObject({ id: draft.id, revision: draft.revision, content: draft.content })
+})
 
 test('new factual wording requires an explicitly saved cited source and keeps semantic novelty user-declared', async () => {
   const { workspace, jobId, skillId } = await fixture()
