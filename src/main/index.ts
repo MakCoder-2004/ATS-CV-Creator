@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'node:f
 import { basename, dirname, join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { renderDocumentHtml } from '../shared/document'
-import { pdfFilename } from '../shared/export'
+import { containsAllPdfContent, containsPdfTextInOrder, pdfFilename } from '../shared/export'
 import { z } from 'zod'
 import { createWorkbench } from './workbench'
 import type { AnalysisTransport } from './posting-analysis'
@@ -292,10 +292,10 @@ app.whenReady().then(() => {
       }
       await loadingTask.destroy()
       if (!parsed.numPages || parsed.numPages > canonical.targetPages || !extracted.length) throw new Error('The rendered PDF failed selectable-text or page-target checks.')
-      const orderedText = extracted.join(' ')
-      const requiredText = [canonical.identity.name, ...canonical.identity.contact, ...canonical.sections.flatMap(section => [section.name, ...section.entries.flatMap(entry => [entry.heading, ...(entry.organization ? [entry.organization] : []), ...(entry.dates ? [entry.dates] : []), entry.text, ...entry.links.map(link => link.label)])])]
-      let cursor = 0
-      for (const part of requiredText) { const found = orderedText.indexOf(part, cursor); if (found < 0) throw new Error('The rendered PDF content or reading order did not match the approved CV.'); cursor = found + part.length }
+      const requiredText = [canonical.identity.name, ...canonical.identity.contact, ...canonical.identity.links.map(link => link.label), ...canonical.sections.flatMap(section => [section.name, ...section.entries.flatMap(entry => [entry.heading, ...(entry.organization ? [entry.organization] : []), ...(entry.dates ? [entry.dates] : []), entry.text, ...entry.links.map(link => link.label)])])]
+      const missingContent = requiredText.flatMap((part, index) => containsAllPdfContent(extracted, [part]) ? [] : [index])
+      const sectionsInOrder = containsPdfTextInOrder(extracted, canonical.sections.map(section => section.name))
+      if (missingContent.length || !sectionsInOrder) throw new Error(`The rendered PDF content or section reading order did not match the approved CV (content checks: ${missingContent.length}, section order: ${sectionsInOrder ? 'passed' : 'failed'}).`)
       const requiredLinks = [...canonical.identity.links, ...canonical.sections.flatMap(section => section.entries.flatMap(entry => entry.links))].map(link => link.url)
       if (requiredLinks.some(url => !links.has(url))) throw new Error('A PDF hyperlink target did not survive local validation.')
       const latest = await workspace!.api.assertDraftExportable(jobId)
