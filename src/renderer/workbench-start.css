@@ -82,6 +82,9 @@
 .cv-workbench-start .source-entry strong { font-size: 11px; }
 .cv-workbench-start .source-entry span { color: #49566b; }
 .cv-workbench-start .source-more, .cv-workbench-start .source-unfilled { color: #687588; font: 11px/1.5 Arial, sans-serif; }
+.cv-workbench-start .draft-offline-review { grid-column: 1; position: static; max-height: 80vh; overflow: auto; padding: 22px; }
+.cv-workbench-start .draft-offline-review article { border-top: 1px solid var(--line); padding: 8px 0; }
+.cv-workbench-start .draft-offline-review small { color: var(--muted); overflow-wrap: anywhere; }
 .cv-workbench-start .inspector {
   position: sticky;
   top: 18px;

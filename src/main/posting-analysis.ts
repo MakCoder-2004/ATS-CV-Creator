@@ -1,10 +1,11 @@
 import type { GeminiModel } from '../shared/gemini-settings'
 import { defaultAnalysisBudgets, postingAnalysisSchema, type AnalysisBudgets, type PostingAnalysis } from '../shared/posting-analysis'
 import { pacificDay } from '../shared/pacific-day'
+import type { ZodTypeAny } from 'zod'
 export { postingAnalysisSchema }
 export type { PostingAnalysis }
 export interface AnalysisTransport {
-  generate(input: { model: GeminiModel; prompt: string; signal: AbortSignal; responseSchema: typeof postingAnalysisSchema }): Promise<string>
+  generate(input: { model: GeminiModel; prompt: string; signal: AbortSignal; responseSchema: ZodTypeAny }): Promise<string>
 }
 export interface AnalysisInput { runId: string; jobId: string; prompt: string; model: GeminiModel }
 export interface AnalysisUsage { runId: string; jobId: string; attempts: number; status: 'complete' | 'failed' | 'cancelled'; startedAt: number; finishedAt: number }
@@ -38,7 +39,7 @@ export function createAnalysisDispatcher(options: Options) {
   const now = options.now ?? Date.now, sleep = options.sleep ?? cancellableSleep
   let budgets: AnalysisBudgets = { ...defaultAnalysisBudgets, minimumSpacingMs: options.minimumSpacingMs ?? defaultAnalysisBudgets.minimumSpacingMs, rateLimitAttempts: options.rateLimitAttempts ?? defaultAnalysisBudgets.rateLimitAttempts, rateLimitWindowMs: options.rateLimitWindowMs ?? defaultAnalysisBudgets.rateLimitWindowMs, runLimit: options.maxAttempts ?? defaultAnalysisBudgets.runLimit, runTimeLimitMs: options.maxElapsedMs ?? defaultAnalysisBudgets.runTimeLimitMs, configuredDailyLimit: options.maxDailyAttempts ?? defaultAnalysisBudgets.configuredDailyLimit }
   const random = options.random ?? Math.random
-  const authorizations = new Map<string, string>(), cancelled = new Set<string>(), active = new Map<string, AbortController>(), attemptCounts = new Map<string, number>()
+  const authorizations = new Map<string, string>(), cancelled = new Set<string>(), active = new Map<string, AbortController>(), attemptCounts = new Map<string, number>(), runStartedAt = new Map<string, number>()
   const dispatched: number[] = [...(options.observedAttempts ?? [])]; let queue = Promise.resolve()
   // The caller binds this capability to a persisted, accepted consent record; a run ID alone is not authority.
   const authorize = (runId: string, consentId: string) => { if (runId && consentId) authorizations.set(runId, consentId) }
@@ -50,9 +51,10 @@ export function createAnalysisDispatcher(options: Options) {
     if (!input.consentId || authorizations.get(input.runId) !== input.consentId) throw new AnalysisError('PROVIDER', 'Analysis requires accepted outgoing-data consent.')
     if (cancelled.has(input.runId)) throw cancelledError()
     if (active.has(input.runId)) throw new AnalysisError('PROVIDER', 'An analysis with this run identity is already active.')
-    const startedAt = now(), runBudgets = { ...budgets }, controller = new AbortController(); active.set(input.runId, controller)
+    const startedAt = runStartedAt.get(input.runId) ?? now(); runStartedAt.set(input.runId, startedAt)
+    const runBudgets = { ...budgets }, controller = new AbortController(); active.set(input.runId, controller)
     let timedOut = false
-    const deadlineTimer = setTimeout(() => { timedOut = true; controller.abort() }, runBudgets.runTimeLimitMs)
+    const deadlineTimer = setTimeout(() => { timedOut = true; controller.abort() }, Math.max(0, runBudgets.runTimeLimitMs - (now() - startedAt)))
     const checkBudget = () => {
       if (cancelled.has(input.runId)) throw cancelledError()
       if (now() - startedAt >= runBudgets.runTimeLimitMs) throw new AnalysisError('TIMEOUT', 'Analysis time budget is exhausted.')
@@ -118,5 +120,42 @@ export function createAnalysisDispatcher(options: Options) {
       throw failure
     } finally { clearTimeout(deadlineTimer); usage.finishedAt = now(); if (active.get(input.runId) === controller) active.delete(input.runId) }
   }
-  return { authorize, cancel, analyze, getUsage, setBudgets }
+  async function generate(input: AnalysisInput & { consentId: string; responseSchema: ZodTypeAny }): Promise<{ text: string; attempts: number }> {
+    if (!authorizations.has(input.runId) || authorizations.get(input.runId) !== input.consentId) throw new AnalysisError('PROVIDER', 'Generation requires accepted outgoing-data consent.')
+    if (cancelled.has(input.runId)) throw cancelledError()
+    const startedAt = runStartedAt.get(input.runId) ?? now(); runStartedAt.set(input.runId, startedAt)
+    const runBudgets = { ...budgets }, controller = new AbortController()
+    active.set(input.runId, controller)
+    let attempts = 0, timedOut = false
+    const timer = setTimeout(() => { timedOut = true; controller.abort() }, Math.max(0, runBudgets.runTimeLimitMs - (now() - startedAt)))
+    try {
+      for (;;) {
+        if (controller.signal.aborted || cancelled.has(input.runId)) throw cancelledError()
+        if (now() - startedAt >= runBudgets.runTimeLimitMs) throw new AnalysisError('TIMEOUT', 'Analysis time budget is exhausted.')
+        if ((attemptCounts.get(input.runId) ?? 0) >= runBudgets.runLimit || getUsage() >= runBudgets.configuredDailyLimit) throw new AnalysisError('BUDGET', 'Configured local analysis budget is exhausted.')
+        const work = queue.then(async () => {
+          const previous = dispatched.at(-1), spacingWait = previous === undefined ? 0 : Math.max(0, runBudgets.minimumSpacingMs - (now() - previous))
+          const recent = dispatched.filter(timestamp => now() - timestamp < runBudgets.rateLimitWindowMs)
+          const rateWait = recent.length >= runBudgets.rateLimitAttempts ? Math.max(0, recent[0] + runBudgets.rateLimitWindowMs - now()) : 0
+          const wait = Math.max(spacingWait, rateWait)
+          if (wait) { options.onProgress?.(input.runId, input.jobId, 'Waiting for shared request pacing before the next attempt.', attempts); await sleep(Math.min(wait, Math.max(0, runBudgets.runTimeLimitMs - (now() - startedAt))), controller.signal) }
+          if (controller.signal.aborted) throw cancelledError()
+          const timestamp = now(); dispatched.push(timestamp); attempts++; attemptCounts.set(input.runId, (attemptCounts.get(input.runId) ?? 0) + 1); options.onAttempt?.(timestamp, input.runId)
+          options.onProgress?.(input.runId, input.jobId, `Sending source-linked generation request ${attempts} within the shared run budget.`, attempts)
+          return options.transport.generate({ model: input.model, prompt: input.prompt, signal: controller.signal, responseSchema: input.responseSchema })
+        })
+        queue = work.then(() => undefined, () => undefined)
+        try { const text = await work; if (cancelled.has(input.runId)) throw cancelledError(); return { text, attempts } }
+        catch (error) {
+          if (timedOut) throw new AnalysisError('TIMEOUT', 'Analysis time budget is exhausted.')
+          if (error instanceof AnalysisError) throw error
+          const failure = providerError(error, now)
+          if (!failure.retry) throw new AnalysisError(failure.kind, failure.kind === 'INVALID_KEY' ? 'Gemini rejected the API key. Check the saved key in Settings.' : failure.kind === 'OFFLINE' ? 'The network is unavailable. Check the connection, then start a new authorized run.' : 'Gemini could not complete generation.')
+          const delay = failure.delay ?? Math.min(30000, 1000 * (2 ** Math.max(0, attempts - 1))) * (0.75 + random() * 0.5)
+          await sleep(Math.min(delay, Math.max(0, runBudgets.runTimeLimitMs - (now() - startedAt))), controller.signal)
+        }
+      }
+    } finally { clearTimeout(timer); if (active.get(input.runId) === controller) active.delete(input.runId) }
+  }
+  return { authorize, cancel, analyze, generate, getUsage, setBudgets }
 }

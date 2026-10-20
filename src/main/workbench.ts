@@ -21,6 +21,8 @@ import { createHash } from 'node:crypto'
 import { z } from 'zod'
 import { analysisBudgetsSchema, analysisResultSchema, analysisUsageSchema, defaultAnalysisBudgets, postingAnalysisSchema, type AnalysisBudgets } from '../shared/posting-analysis'
 import { pacificDay } from '../shared/pacific-day'
+import { draftRevisionSchema, type DraftRevision } from '../shared/draft'
+import { runSourceLinkedGraph, type GenerationItem } from './source-linked-generation'
 
 export interface SecureStorage {
   isEncryptionAvailable(): boolean
@@ -65,7 +67,8 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
     CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, data TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS outbound_consents (id TEXT PRIMARY KEY, run_id TEXT NOT NULL UNIQUE, scope_hash TEXT NOT NULL, created_at TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE IF NOT EXISTS posting_analysis_cache (cache_key TEXT PRIMARY KEY, job_id TEXT NOT NULL, run_id TEXT NOT NULL, data TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS analysis_attempts (id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, attempted_at TEXT NOT NULL);`)
+    CREATE TABLE IF NOT EXISTS analysis_attempts (id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, attempted_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS draft_revisions (id TEXT PRIMARY KEY, job_id TEXT NOT NULL, revision INTEGER NOT NULL, data TEXT NOT NULL, UNIQUE(job_id, revision));`)
   db.prepare('INSERT OR IGNORE INTO schema_migrations (version) VALUES (1), (2), (4), (5)').run()
 
   const readProfile = (): ProfileSnapshot => {
@@ -486,6 +489,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       const cacheKey = analysisCacheKey(pending.source)
       const cached = db.prepare('SELECT data, run_id FROM posting_analysis_cache WHERE cache_key = ?').get(cacheKey) as { data: string; run_id: string } | undefined
       if (cached) {
+        dispatcher.authorize(pending.runId, pending.consentId)
         const value = analysisResultSchema.parse({ jobId: pending.jobId, runId: cached.run_id, status: 'complete', analysis: postingAnalysisSchema.parse(JSON.parse(cached.data)), progress: 'Loaded compatible saved analysis.', attempts: 0, cacheHit: true })
         currentAnalysis.set(pending.jobId, value)
         return value
@@ -514,6 +518,50 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       const value = analysisResultSchema.parse({ jobId: pending.jobId, runId: pending.runId, status: 'complete', analysis: result.analysis, progress: 'Posting analysis complete.', attempts: result.usage.attempts, cacheHit: false })
       currentAnalysis.set(pending.jobId, value)
       return value
+    },
+    async generateDraft(token: string) {
+      const pending = pendingOutbound.get(token)
+      if (!pending?.consentId) return { ok: false, message: 'Review and authorize this exact outgoing bundle before generation.' }
+      const analysis = await this.getAnalysis(pending.jobId)
+      if (!analysis || analysis.status !== 'complete' || !analysis.analysis) return { ok: false, message: 'Complete posting analysis before generating a draft.' }
+      const job = await this.openJob(pending.jobId), profile = readProfile(), experience = readExperience()
+      if (!job) return { ok: false, message: 'The saved job is unavailable.' }
+      const items: GenerationItem[] = [
+        ...profile.education.map(item => ({ id: item.id, revision: item.revision, category: 'education' as const, snapshot: item as unknown as Record<string, unknown>, text: [item.title, item.field, item.description].filter(Boolean).join('. '), chronology: item.endDate ?? item.startDate })),
+        ...experience.experience.flatMap(item => [{ id: item.id, revision: item.revision, category: 'experience' as const, snapshot: item as unknown as Record<string, unknown>, text: `${item.title}. ${item.description} ${(item.factualItems ?? []).map(f => f.text).join(' ')}`, chronology: item.endDate ?? item.startDate }, ...item.factualItems.map(f => ({ id: f.id, revision: f.revision, category: 'experience' as const, snapshot: f as unknown as Record<string, unknown>, text: f.text, chronology: item.endDate ?? item.startDate }))]),
+        ...experience.projects.map(item => ({ id: item.id, revision: item.revision, category: 'projects' as const, snapshot: item as unknown as Record<string, unknown>, text: `${item.name}. ${item.description} ${(item.factualItems ?? []).map(f => f.text).join(' ')}` })),
+        ...profile.skills.map(item => ({ id: item.id, revision: item.revision, category: 'skills' as const, snapshot: item as unknown as Record<string, unknown>, text: `${item.name} (${item.category})` })),
+        ...profile.certificates.map(item => ({ id: item.id, revision: item.revision, category: 'certificates' as const, snapshot: item as unknown as Record<string, unknown>, text: [item.title, item.description].filter(Boolean).join('. ') }))
+      ]
+      const approvedPayload = authorizeOutboundPayload(pending.runId, pending.bundle.outgoing) as any
+      const scrubbed = new Map<string, string>()
+      profile.education.forEach((item, i) => { const safe = approvedPayload.profile.education[i]; if (safe) scrubbed.set(item.id, JSON.stringify(safe)) })
+      experience.experience.forEach((item, i) => { const safe = approvedPayload.profile.experience[i]; if (safe) { scrubbed.set(item.id, JSON.stringify(safe)); item.factualItems.forEach((fact, n) => scrubbed.set(fact.id, safe.evidence[n] ?? '')) } })
+      experience.projects.forEach((item, i) => { const safe = approvedPayload.profile.projects[i]; if (safe) { scrubbed.set(item.id, JSON.stringify(safe)); item.factualItems.forEach((fact, n) => scrubbed.set(fact.id, safe.evidence[n] ?? '')); item.technologies.forEach((fact, n) => scrubbed.set(fact.id, safe.technologies[n] ?? '')) } })
+      profile.skills.forEach((item, i) => { const safe = approvedPayload.profile.skills[i]; if (safe) scrubbed.set(item.id, JSON.stringify(safe)) })
+      profile.certificates.forEach((item, i) => { const safe = approvedPayload.profile.certificates[i]; if (safe) scrubbed.set(item.id, JSON.stringify(safe)) })
+      const safeItems = items.map(item => ({ ...item, text: scrubbed.get(item.id) ?? '' })).filter(item => item.text)
+      activeAnalysisByJob.set(pending.jobId, pending.runId)
+      try {
+        const result = await runSourceLinkedGraph({ job: approvedPayload.job, analysis: analysis.analysis, items: safeItems, restoreText: pending.bundle.restoreIdentifiers, identity: { id: randomUUID(), jobId: pending.jobId, revision: ((db.prepare('SELECT MAX(revision) AS revision FROM draft_revisions WHERE job_id = ?').get(pending.jobId) as { revision: number | null }).revision ?? 0) + 1, createdAt: new Date().toISOString(), lockedFields: { fullName: profile.contact?.fullName ?? '', ...(profile.contact?.headline ? { headline: profile.contact.headline } : {}), experience: experience.experience.map(item => ({ evidenceId: item.id, title: item.title, organization: item.organization, ...(item.startDate ? { startDate: item.startDate } : {}), ...(item.endDate ? { endDate: item.endDate } : {}) })), education: profile.education.map(item => ({ evidenceId: item.id, title: item.title, ...(item.institution ? { institution: item.institution } : {}), ...(item.startDate ? { startDate: item.startDate } : {}), ...(item.endDate ? { endDate: item.endDate } : {}) })), projects: experience.projects.map(item => ({ evidenceId: item.id, name: item.name })), certificates: profile.certificates.map(item => ({ evidenceId: item.id, title: item.title, ...(item.issuer ? { issuer: item.issuer } : {}), ...(item.year ? { year: item.year } : {}) })) } }, call: async (prompt, responseSchema) => {
+          authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
+          const generated = await dispatcher.generate({ runId: pending.runId, jobId: pending.jobId, model: geminiModelSchema.parse(pending.source.model.name), prompt, consentId: pending.consentId!, responseSchema })
+          return { value: responseSchema.parse(JSON.parse(generated.text)), attempts: generated.attempts }
+        } })
+        const tx = db.transaction(() => { db.prepare('INSERT INTO draft_revisions (id,job_id,revision,data) VALUES (?,?,?,?)').run(result.draft.id, result.draft.jobId, result.draft.revision, JSON.stringify(result.draft)) })
+        tx()
+        if (activeAnalysisByJob.get(pending.jobId) === pending.runId) activeAnalysisByJob.delete(pending.jobId)
+        currentAnalysis.set(pending.jobId, analysisResultSchema.parse({ jobId: pending.jobId, runId: pending.runId, status: 'complete', analysis: analysis.analysis, progress: 'Posting analysis and source-linked draft complete.', attempts: analysis.attempts + result.attempts, cacheHit: analysis.cacheHit }))
+        return { ok: true, message: 'Draft saved locally. It is unverified and unapproved.', draft: result.draft }
+      } catch (error) {
+        if (activeAnalysisByJob.get(pending.jobId) === pending.runId) activeAnalysisByJob.delete(pending.jobId)
+        return { ok: false, message: error instanceof Error ? error.message : 'Draft generation failed. Existing work was retained.' }
+      }
+    },
+    async getDraft(jobId: string) {
+      if (!uuidSchema.safeParse(jobId).success) return null
+      const row = db.prepare('SELECT data FROM draft_revisions WHERE job_id = ? ORDER BY revision DESC LIMIT 1').get(jobId) as { data: string } | undefined
+      return row ? draftRevisionSchema.parse(JSON.parse(row.data)) : null
     },
     async getAnalysis(jobId: string) {
       if (!uuidSchema.safeParse(jobId).success) return null

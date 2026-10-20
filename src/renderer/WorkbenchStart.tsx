@@ -29,12 +29,19 @@ export function WorkbenchStart({ activeJob, jobCount, onNavigate }: { activeJob:
   const [consentError, setConsentError] = useState('')
   const [consentBusy, setConsentBusy] = useState(false)
   const [analysis, setAnalysis] = useState<Awaited<ReturnType<typeof window.workbench.getAnalysis>>>(null)
+  const [draft, setDraft] = useState<Awaited<ReturnType<typeof window.workbench.getDraft>>>(null)
+  const [draftBusy, setDraftBusy] = useState(false)
+  const [draftError, setDraftError] = useState('')
   const [usage, setUsage] = useState<Awaited<ReturnType<typeof window.workbench.getAnalysisUsage>> | null>(null)
   const pendingToken = useRef<string | null>(null)
   const selectedJob = useRef(activeJob?.id)
   selectedJob.current = activeJob?.id
   useEffect(() => {
-    setReview(null); setConsentAccepted(false); setTermsAcknowledged(false); setConsentError('')
+    setReview(null); setConsentAccepted(false); setTermsAcknowledged(false); setConsentError(''); setDraft(null); setDraftError('')
+    if (activeJob) {
+      void window.workbench.getDraft(activeJob.id).then(setDraft).catch(() => setDraftError('Saved draft could not be opened offline.'))
+      void window.workbench.getAnalysis(activeJob.id).then(value => { if (value) setAnalysis(value) }).catch(() => {})
+    } else { setAnalysis(null) }
     return () => {
       const token = pendingToken.current
       pendingToken.current = null
@@ -65,6 +72,17 @@ export function WorkbenchStart({ activeJob, jobCount, onNavigate }: { activeJob:
     try { setAnalysis(await window.workbench.startAnalysis(token)); setUsage(await window.workbench.getAnalysisUsage()) }
     catch (failure) { setConsentError(failure instanceof Error ? failure.message : 'Analysis could not start. Check Settings and try again.') }
     finally { setConsentBusy(false) }
+  }
+  async function generateDraft() {
+    const token = pendingToken.current
+    if (!token || !consentAccepted || draftBusy) return
+    setDraftBusy(true); setDraftError('')
+    try {
+      const result = await window.workbench.generateDraft(token)
+      if (result.ok && result.draft && selectedJob.current === result.draft.jobId) setDraft(result.draft)
+      else if (!result.ok) setDraftError(result.message)
+    } catch (failure) { setDraftError(failure instanceof Error ? failure.message : 'Draft generation failed.') }
+    finally { setDraftBusy(false) }
   }
   async function cancelOutgoing() {
     const token = pendingToken.current
@@ -140,6 +158,7 @@ export function WorkbenchStart({ activeJob, jobCount, onNavigate }: { activeJob:
         <p className="paper-caption">Original profile facts only. This is not a draft, export preview, or page-fit check.</p>
       </div>
     </section>
+    {draft && <section className="inspector draft-offline-review" aria-label="Saved source-linked draft"><h2>Saved draft · unverified and unapproved</h2><p>Available locally. Verification, approval, and export are not available yet.</p>{(['education', 'experience', 'projects', 'skills', 'certificates'] as const).map(section => <div key={section}><h3>{section[0].toUpperCase() + section.slice(1)}</h3>{draft.content[section].map((item, index) => <article key={`${section}-${index}`}><p>{'text' in item ? item.text : item.name}</p><small>Evidence revisions: {item.citations.map(citation => `${citation.evidenceId} · r${citation.revision}`).join(', ')}</small><p>{item.rationale}</p></article>)}</div>)}</section>}
     <aside className="inspector" aria-label="Workspace guide">
       <div className="inspector-heading"><h2>Prepare your workspace</h2><p>Two things anchor a tailored CV: what you have done and the role you are targeting.</p></div>
       {error ? <div className="inspector-error" role="alert"><p>{error}</p><button type="button" className="secondary-button" onClick={() => setAttempt(value => value + 1)}>Retry loading sources</button></div> : !sources ? <p className="inspector-loading" role="status">Reading your local profile…</p> : <ol className="prep-list">
@@ -159,11 +178,11 @@ export function WorkbenchStart({ activeJob, jobCount, onNavigate }: { activeJob:
           {!consentAccepted ? <>
             <label className="outbound-ack"><input type="checkbox" checked={termsAcknowledged} onChange={event => setTermsAcknowledged(event.target.checked)} />I understand the Gemini free-tier data-use terms and have reviewed this exact bundle.</label>
             <div className="outbound-actions"><button type="button" className="primary-button" disabled={!termsAcknowledged || consentBusy} onClick={() => void authorizeOutgoing()}>Authorize this run</button><button type="button" className="secondary-button" disabled={consentBusy} onClick={() => void cancelOutgoing()}>Cancel review</button></div>
-          </> : <><p role="status">Consent saved for this frozen bundle. Analysis requests are bounded and usage is a local observation, not provider quota.</p><button type="button" className="primary-button" disabled={consentBusy || analysis?.status === 'complete'} onClick={() => void startAnalysis()}>{consentBusy ? 'Analyzing…' : analysis?.status === 'complete' ? 'Analysis complete' : 'Analyze posting'}</button><button type="button" className="secondary-button" disabled={analysis?.status !== 'running'} onClick={() => void window.workbench.cancelAnalysis(activeJob.id).then(setAnalysis)}>Cancel analysis</button>{analysis?.status === 'running' && <p role="status">{analysis.progress} Dispatched attempts: {analysis.attempts}.</p>}{analysis?.status === 'failed' && <p className="inspector-error" role="alert">{analysis.error ?? analysis.progress} Check the connection or Settings, then explicitly start a new authorized run.</p>}{analysis?.status === 'cancelled' && <p role="status">{analysis.progress}</p>}{usage && <p>Pacific day {usage.pacificDay}: {usage.attempts} locally observed attempts; configured maximum {usage.runLimit} per run and {usage.minimumSpacingMs / 1000}s spacing. {usage.warning}</p>}{usage && usage.attempts + usage.runLimit > usage.configuredDailyLimit && <p role="alert">This run could reach the configured local daily attempt limit ({usage.configuredDailyLimit}); dispatch stops at that limit. It is not a provider quota estimate.</p>}{analysis?.analysis && <div aria-label="Posting analysis"><h4>Required qualifications</h4><ul>{analysis.analysis.required.map(item => <li key={item}>{item}</li>)}</ul><h4>Preferred qualifications</h4><ul>{analysis.analysis.preferred.map(item => <li key={item}>{item}</li>)}</ul><h4>Tools and responsibilities</h4><p>{[...analysis.analysis.tools, ...analysis.analysis.responsibilities].join(' · ')}</p><h4>Keywords</h4><p>{analysis.analysis.keywords.join(' · ')}</p></div>}<button type="button" className="secondary-button" disabled={consentBusy} onClick={() => void cancelOutgoing()}>Revoke this run</button></>}
+          </> : <><p role="status">Consent saved for this frozen bundle. Analysis requests are bounded and usage is a local observation, not provider quota.</p><button type="button" className="primary-button" disabled={consentBusy || analysis?.status === 'complete'} onClick={() => void startAnalysis()}>{consentBusy ? 'Analyzing…' : analysis?.status === 'complete' ? 'Analysis complete' : 'Analyze posting'}</button><button type="button" className="secondary-button" disabled={analysis?.status !== 'running'} onClick={() => void window.workbench.cancelAnalysis(activeJob.id).then(setAnalysis)}>Cancel analysis</button>{analysis?.status === 'running' && <p role="status">{analysis.progress} Dispatched attempts: {analysis.attempts}.</p>}{analysis?.status === 'failed' && <p className="inspector-error" role="alert">{analysis.error ?? analysis.progress} Check the connection or Settings, then explicitly start a new authorized run.</p>}{analysis?.status === 'cancelled' && <p role="status">{analysis.progress}</p>}{usage && <p>Pacific day {usage.pacificDay}: {usage.attempts} locally observed attempts; configured maximum {usage.runLimit} per run and {usage.minimumSpacingMs / 1000}s spacing. {usage.warning}</p>}{usage && usage.attempts + usage.runLimit > usage.configuredDailyLimit && <p role="alert">This run could reach the configured local daily attempt limit ({usage.configuredDailyLimit}); dispatch stops at that limit. It is not a provider quota estimate.</p>}{analysis?.analysis && <div aria-label="Posting analysis"><h4>Required qualifications</h4><ul>{analysis.analysis.required.map(item => <li key={item}>{item}</li>)}</ul><h4>Preferred qualifications</h4><ul>{analysis.analysis.preferred.map(item => <li key={item}>{item}</li>)}</ul><h4>Tools and responsibilities</h4><p>{[...analysis.analysis.tools, ...analysis.analysis.responsibilities].join(' · ')}</p><h4>Keywords</h4><p>{analysis.analysis.keywords.join(' · ')}</p></div>}{analysis?.status === 'complete' && <button type="button" className="primary-button" disabled={draftBusy || !!draft} onClick={() => void generateDraft()}>{draftBusy ? 'Generating source-linked draft…' : draft ? 'Draft saved locally' : 'Generate tailored draft'}</button>}{draftError && <p className="inspector-error" role="alert">{draftError}</p>}{draft && <section aria-label="Source-linked draft" className="draft-inspector"><h4>Draft · unverified and unapproved</h4><p>No verification, approval, or export is available yet.</p>{(['education', 'experience', 'projects', 'skills', 'certificates'] as const).map(section => <div key={section}><h5>{section[0].toUpperCase() + section.slice(1)}</h5>{draft.content[section].map((item, index) => <article key={`${section}-${index}`}><p>{'text' in item ? item.text : item.name}</p><small>Source revision{item.citations.length === 1 ? '' : 's'}: {item.citations.map(citation => `${citation.evidenceId} · r${citation.revision}`).join(', ')}</small><p className="future-note">{item.rationale}</p></article>)}</div>)}</section>}<button type="button" className="secondary-button" disabled={consentBusy} onClick={() => void cancelOutgoing()}>Revoke this run</button></>}
         </section>}
         {consentError && <p className="inspector-error" role="alert">{consentError}</p>}
       </div>}
-      <div className="inspector-future"><h3>Evidence &amp; coverage</h3><p>Once a draft exists, this space will show its sources and qualification gaps. No posting has been analyzed here.</p><p className="future-note">Drafting isn't available yet. Nothing is sent to Gemini from this page.</p></div>
+      <div className="inspector-future"><h3>Evidence &amp; coverage</h3><p>{draft ? 'This draft exposes its cited evidence and inclusion rationale. Automated verification is not implemented yet.' : 'A draft will expose paragraph and skill sources with inclusion rationale.'}</p><p className="future-note">Drafts remain unverified and unapproved. No export is available.</p></div>
     </aside>
   </div>
 }

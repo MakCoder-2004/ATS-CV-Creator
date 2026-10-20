@@ -13,6 +13,7 @@ import { jobRecordSchema, jobSaveInputSchema, jobSaveResultSchema } from '../sha
 import { registerProfileExchangeIpc } from './profile-exchange-ipc'
 import { outboundConsentActionSchema, outboundConsentPreviewSchema } from '../shared/outbound-consent-contract'
 import { analysisBudgetsSchema, analysisIdSchema, analysisResultSchema, analysisStartInputSchema, analysisUsageSchema } from '../shared/posting-analysis'
+import { draftGenerationSchema, draftRevisionSchema } from '../shared/draft'
 
 let window: BrowserWindow | undefined
 let workspace: ReturnType<typeof createWorkbench> | undefined
@@ -182,6 +183,8 @@ app.whenReady().then(() => {
   })
   ipcMain.handle('analysis:start', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected consent token'); const input = analysisStartInputSchema.parse({ consentToken: args[0] }); return analysisResultSchema.parse(await workspace!.api.startAnalysis(input.consentToken)) })
   ipcMain.handle('analysis:get', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected job ID'); const result = await workspace!.api.getAnalysis(analysisIdSchema.parse(args[0])); return result === null ? null : analysisResultSchema.parse(result) })
+  ipcMain.handle('draft:generate', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected consent token'); return draftGenerationSchema.parse(await workspace!.api.generateDraft(analysisStartInputSchema.parse({ consentToken: args[0] }).consentToken)) })
+  ipcMain.handle('draft:get', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected job ID'); const draft = await workspace!.api.getDraft(analysisIdSchema.parse(args[0])); return draft === null ? null : draftRevisionSchema.parse(draft) })
   ipcMain.handle('analysis:cancel', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected job ID'); return analysisResultSchema.parse(await workspace!.api.cancelAnalysis(analysisIdSchema.parse(args[0]))) })
   ipcMain.handle('analysis:usage', async (event, ...args: unknown[]) => { trusted(event); if (args.length) throw new Error('Unexpected arguments'); return analysisUsageSchema.parse(await workspace!.api.getAnalysisUsage()) })
   ipcMain.handle('analysis:budgets:set', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected analysis budgets'); return analysisUsageSchema.parse(await workspace!.api.setAnalysisBudgets(analysisBudgetsSchema.parse(args[0]))) })
