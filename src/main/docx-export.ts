@@ -1,4 +1,5 @@
 import { AlignmentType, Document, ExternalHyperlink, HeadingLevel, Packer, Paragraph, TextRun } from 'docx'
+import JSZip from 'jszip'
 import type { CanonicalDocument } from '../shared/document'
 
 /** Builds an editable, single-column Word document from the approved canonical version. */
@@ -18,4 +19,15 @@ export async function renderCanonicalDocx(document: CanonicalDocument): Promise<
   }
   const doc = new Document({ creator: 'CV Tailor', title: `${document.identity.name} - Tailored CV`, sections: [{ properties: { page: { size: { width: 11906, height: 16838 }, margin: { top: 794, right: 794, bottom: 794, left: 794 } } }, children: paragraphs }], styles: { default: { document: { run: { font: 'Arial', size: 22, color: '202838' }, paragraph: { spacing: { line: 276 } } }, title: { run: { font: 'Arial', size: 34, bold: true, color: '202838' }, paragraph: { alignment: AlignmentType.CENTER } }, heading1: { run: { font: 'Arial', size: 24, bold: true, color: '202838' } } } } })
   return Packer.toBuffer(doc)
+}
+
+export async function extractCanonicalDocx(buffer: Buffer): Promise<{ text: string[]; linkTargets: string[] }> {
+  const zip = await JSZip.loadAsync(buffer)
+  const xml = await zip.file('word/document.xml')?.async('string')
+  const relationshipsXml = await zip.file('word/_rels/document.xml.rels')?.async('string')
+  if (!xml || !relationshipsXml) throw new Error('DOCX is missing its document or relationship data.')
+  const decodeXml = (value: string) => value.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, '&')
+  const text = [...xml.matchAll(/<w:t(?: [^>]*)?>(.*?)<\/w:t>/g)].map(match => decodeXml(match[1]))
+  const linkTargets = [...relationshipsXml.matchAll(/<Relationship\b[^>]*Type="[^"]*\/hyperlink"[^>]*Target="([^"]+)"/g)].map(match => decodeXml(match[1]))
+  return { text, linkTargets }
 }

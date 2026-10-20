@@ -1,17 +1,18 @@
 import { test, expect, _electron as electron } from '@playwright/test'
-import { mkdtempSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { extractCanonicalDocx } from '../../src/main/docx-export'
 
 test('real Electron UI generates and exposes cited draft with a DEV-only scripted provider', async () => {
-  test.setTimeout(90000)
+  test.setTimeout(180000)
   const userData = mkdtempSync(join(tmpdir(), 'cv-tailor-generation-ui-'))
   let app: Awaited<ReturnType<typeof electron.launch>> | undefined
   try {
-    app = await electron.launch({ args: ['.'], timeout: 60000, env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData, CV_TAILOR_SCRIPTED_ANALYSIS: 'generation' } })
+    app = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], timeout: 60000, env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData, CV_TAILOR_SCRIPTED_ANALYSIS: 'generation' } })
     let page = await app.firstWindow()
-    await expect(page.locator('[data-ui-ready="true"]')).toBeVisible()
+    await expect(page.locator('[data-ui-ready="true"]')).toBeVisible({ timeout: 15000 })
     await page.getByRole('button', { name: 'My profile' }).click()
     await page.getByLabel('Full name').fill('Zoë Candidate')
     await page.getByLabel('Professional headline').fill('Systems Engineer')
@@ -126,21 +127,69 @@ test('real Electron UI generates and exposes cited draft with a DEV-only scripte
     expect(twoPageReport.actualPages).toBeLessThanOrEqual(2)
     expect(await page.evaluate(id => window.workbench.approveDraft(id), jobId)).toMatchObject({ ok: true, draft: { approved: true, approval: { targetPages: 2 } } })
     expect(await page.evaluate(id => window.workbench.assertDraftExportable(id), jobId)).toMatchObject({ ok: true })
+    await page.getByRole('button', { name: 'Measure actual A4 page fit' }).click()
+    await expect(page.getByRole('status').filter({ hasText: /Electron PDF:/ })).toContainText(/page/)
+    await page.getByRole('button', { name: 'Check current draft and sources' }).click()
+    await expect(page.getByRole('button', { name: 'Export editable DOCX' })).toBeVisible()
     await page.getByRole('button', { name: 'Use dark mode' }).click()
     await expect(page.getByRole('button', { name: 'Use dark mode' })).toHaveAttribute('aria-pressed', 'true')
     await expect(page.getByRole('article', { name: 'Unapproved canonical CV preview' })).toHaveCSS('background-color', 'rgb(255, 255, 255)')
     await expect(page.getByRole('article', { name: 'Unapproved canonical CV preview' })).toHaveCSS('font-family', 'Arial, sans-serif')
     expect(await page.evaluate(id => window.workbench.assertDraftExportable(id), jobId)).toMatchObject({ ok: true })
+
+    const docxPath = join(userData, 'Candidate - Northwind Labs - Fictional Systems Engineer.docx')
+    await app.evaluate(({ dialog }, filePath) => { dialog.showSaveDialog = async () => ({ canceled: false, filePath }); return true }, docxPath)
+    const exportButton = page.getByRole('button', { name: 'Export editable DOCX' })
+    await expect(exportButton).toBeVisible()
+    const attemptsBeforeExport = await page.evaluate(() => window.workbench.getAnalysisUsage().then(value => value.attempts))
+    await exportButton.click()
+    await expect(page.getByRole('region', { name: 'Source-linked draft' }).getByRole('alert')).toContainText('Word may reflow text differently')
+    expect(await page.evaluate(() => window.workbench.getAnalysisUsage().then(value => value.attempts))).toBe(attemptsBeforeExport)
+    expect(existsSync(docxPath)).toBe(true)
+    const parsedDocx = await extractCanonicalDocx(readFileSync(docxPath))
+    const pdfReport = await page.evaluate(id => window.workbench.getDocumentFitReport(id), jobId)
+    const canonicalDocument = await page.evaluate(id => window.workbench.getCanonicalDocument(id), jobId)
+    const normalized = (values: string[]) => values.join(' ').replace(/[\s\p{P}\p{S}]+/gu, '').normalize('NFKC').toLowerCase()
+    const pdfText = normalized(pdfReport!.extractedText), docxText = normalized(parsedDocx.text)
+    const canonicalStrings = [canonicalDocument!.identity.name, canonicalDocument!.identity.headline ?? '', ...canonicalDocument!.identity.contact, ...canonicalDocument!.identity.links.map(link => link.label), ...canonicalDocument!.sections.flatMap(section => [section.name, ...section.entries.flatMap(entry => [entry.heading, entry.organization ?? '', entry.dates ?? '', entry.text, ...entry.links.map(link => link.label)])])].filter(Boolean)
+    for (const value of canonicalStrings) { expect(docxText, `DOCX missing canonical content: ${value}`).toContain(normalized([value])); expect(pdfText, `PDF missing canonical content: ${value}`).toContain(normalized([value])) }
+    for (const term of ['Zoë Candidate', 'Senior Engineer', 'Local Systems', 'EXPERIENCE', 'SKILLS', 'CERTIFICATES']) { expect(pdfText).toContain(normalized([term])); expect(docxText).toContain(normalized([term])) }
+    const sectionOrder = ['education', 'experience', 'projects', 'skills', 'certificates']
+    const ordered = (value: string) => sectionOrder.map(name => value.indexOf(name))
+    expect(ordered(pdfText).every((at, index, all) => at >= 0 && (index === 0 || at > all[index - 1])), JSON.stringify({ order: ordered(pdfText), text: pdfText })).toBe(true)
+    expect(ordered(docxText).every((at, index, all) => at >= 0 && (index === 0 || at > all[index - 1]))).toBe(true)
+    const paragraphOrder = canonicalDocument!.sections.flatMap(section => section.entries.map(entry => entry.text)).filter(Boolean).map(value => normalized([value]))
+    for (const value of [pdfText, docxText]) { const positions = paragraphOrder.map(paragraph => value.indexOf(paragraph)); expect(positions.every((position, index) => position >= 0 && (index === 0 || position > positions[index - 1]))).toBe(true) }
+    expect(parsedDocx.linkTargets.sort()).toEqual([...pdfReport!.linkTargets].sort())
+    await writeFileSync(docxPath, 'pre-existing destination')
+    await exportButton.click()
+    await expect(page.getByRole('region', { name: 'Source-linked draft' }).getByRole('alert')).toContainText('Word may reflow text differently')
+    expect((await extractCanonicalDocx(readFileSync(docxPath))).text).toEqual(parsedDocx.text)
+    await app.evaluate(({ dialog }) => { dialog.showSaveDialog = async () => ({ canceled: true, filePath: '' }); return true })
+    const beforeCancel = readFileSync(docxPath)
+    await exportButton.click()
+    await expect(page.getByRole('region', { name: 'Source-linked draft' }).getByRole('alert')).toContainText('DOCX export cancelled')
+    expect(readFileSync(docxPath)).toEqual(beforeCancel)
+    const failurePath = join(userData, 'failure.docx')
+    mkdirSync(failurePath)
+    await app.evaluate(({ dialog }, destination) => { dialog.showSaveDialog = async () => ({ canceled: false, filePath: destination }); return true }, failurePath)
+    await exportButton.click()
+    await expect(page.getByRole('region', { name: 'Source-linked draft' }).getByRole('alert')).toContainText('Could not save the DOCX')
+    expect(readFileSync(docxPath)).toEqual(beforeCancel)
+
     await app.close()
-    app = await electron.launch({ args: ['.'], timeout: 60000, env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData, CV_TAILOR_SCRIPTED_ANALYSIS: 'generation' } })
+    app = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], timeout: 60000, env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData, CV_TAILOR_SCRIPTED_ANALYSIS: 'generation' } })
     page = await app.firstWindow()
     await expect(page.locator('[data-ui-ready="true"]')).toBeVisible()
     expect(await page.evaluate(id => window.workbench.getDraft(id).then(value => ({ approved: value?.approved, approval: value?.approval?.contentHash })), jobId)).toMatchObject({ approved: true, approval: expect.any(String) })
     expect(await page.evaluate(id => window.workbench.assertDraftExportable(id), jobId)).toMatchObject({ ok: true })
     await page.evaluate(async id => { const draft = await window.workbench.getDraft(id); if (!draft) throw new Error('Draft unavailable'); await window.workbench.correctDraft({ jobId: id, section: 'experience', index: 0, text: draft.content.experience[0].text }) }, jobId)
     expect(await page.evaluate(id => window.workbench.assertDraftExportable(id), jobId)).toMatchObject({ ok: false })
+    await app.evaluate(({ dialog }) => { (globalThis as typeof globalThis & { docxDialogRequested?: boolean }).docxDialogRequested = false; dialog.showSaveDialog = async () => { (globalThis as typeof globalThis & { docxDialogRequested?: boolean }).docxDialogRequested = true; return { canceled: false, filePath: 'must-not-be-requested.docx' } }; return true })
+    expect(await page.evaluate(id => window.workbench.exportDraftDocx(id), jobId)).toMatchObject({ ok: false, cancelled: false })
+    expect(await app.evaluate(() => (globalThis as typeof globalThis & { docxDialogRequested?: boolean }).docxDialogRequested)).toBe(false)
     await app.close()
-    app = await electron.launch({ args: ['.'], timeout: 60000, env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData, CV_TAILOR_SCRIPTED_ANALYSIS: 'generation' } })
+    app = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], timeout: 60000, env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData, CV_TAILOR_SCRIPTED_ANALYSIS: 'generation' } })
     page = await app.firstWindow()
     await expect(page.locator('[data-ui-ready="true"]')).toBeVisible()
     expect(await page.evaluate(id => window.workbench.getDocumentFitReport(id), jobId)).toBeNull()
