@@ -13,6 +13,7 @@ test('accepted frozen consent generates a batched source-linked draft that reope
   const dir = mkdtempSync(join(tmpdir(), 'source-linked-draft-')); dirs.push(dir)
   const requests: string[] = []
   let crossParentProjectCitation = false
+  let unsupportedClaim: 'responsibility' | 'number' | null = null
   const transport: AnalysisTransport = { async generate({ prompt }) {
     requests.push(prompt)
     if (prompt.includes('Extract only explicit qualifications')) return JSON.stringify({ required: ['TypeScript'], preferred: [], tools: ['TypeScript'], responsibilities: ['Build reliable services'], keywords: ['TypeScript'] })
@@ -21,7 +22,7 @@ test('accepted frozen consent generates a batched source-linked draft that reope
       return JSON.stringify({ relevance: items.map((item: { index: number }) => ({ index: item.index, score: 0.9, rationale: 'Directly supports the posting.' })) })
     }
     const { selected } = JSON.parse(prompt.slice(prompt.indexOf('{')))
-    const byCategory = (category: string) => selected.filter((item: { category: string }) => item.category === category).map((item: { index: number; category: string; text: string }) => ({ text: item.text, evidence: [item.index], rationale: 'Selected for direct relevance.' }))
+    const byCategory = (category: string) => selected.filter((item: { category: string }) => item.category === category).map((item: { index: number; category: string; text: string }) => ({ text: category === 'experience' && unsupportedClaim === 'responsibility' ? 'Led a global team and owned architecture.' : category === 'experience' && unsupportedClaim === 'number' ? 'Delivered 500 percent growth.' : item.text, evidence: [item.index], rationale: 'Selected for direct relevance.' }))
     const projects = selected.filter((item: { category: string }) => item.category === 'projects')
     const projectOutput = crossParentProjectCitation && projects.length > 1 ? [{ text: 'Combined project claims.', evidence: projects.slice(0, 2).map((item: { index: number }) => item.index), rationale: 'Test invalid cross-project association.' }] : byCategory('projects')
     return JSON.stringify({ education: byCategory('education'), experience: byCategory('experience'), projects: projectOutput, skills: selected.filter((item: { category: string }) => item.category === 'skills').map((item: { index: number; text: string }) => ({ name: JSON.parse(item.text).name, evidence: [item.index], rationale: 'Profile skill matches the posting.' })), certificates: byCategory('certificates') })
@@ -84,9 +85,25 @@ test('accepted frozen consent generates a batched source-linked draft that reope
   expect(originalDraft.content.projects[0].citations).toContainEqual({ evidenceId: projectA.value.projects[0].id, revision: 1 })
   expect(originalDraft.content.skills[0].citations).toContainEqual({ evidenceId: skill.value.skills[0].id, revision: 1 })
   expect(originalDraft.evidence.map(e => e.evidenceId)).toContain(role.value.experience[0].id)
+  const staleJob = await wb.api.saveJob({ title: 'Stale scope role', company: 'Scope Company', description: 'TypeScript engineering.' })
+  if (!staleJob.ok) throw Error('stale-scope job fixture')
+  const staleConsent = await wb.api.prepareOutboundConsent(staleJob.value.id)
+  if (!staleConsent.ok) throw Error('stale-scope consent fixture')
+  await wb.api.acceptOutboundConsent(staleConsent.token, true, true)
+  expect(await wb.api.startAnalysis(staleConsent.token)).toMatchObject({ status: 'complete' })
+  unsupportedClaim = 'responsibility'
+  expect(await wb.api.generateDraft(staleConsent.token)).toMatchObject({ ok: false, message: expect.stringMatching(/unsupported responsibility|scope/i) })
+  unsupportedClaim = null
+  const changedRole = await wb.api.saveExperience({ id: role.value.experience[0].id, kind: 'employment', title: 'Developer', organization: 'Secret Employer', startDate: '2021', endDate: '2023', description: 'Led a global team of 500 people.' })
+  expect(changedRole.ok).toBe(true)
+  const requestCountBeforeStaleGeneration = requests.length
+  expect(await wb.api.generateDraft(staleConsent.token)).toMatchObject({ ok: false, message: expect.stringMatching(/changed|scope|review/i) })
+  expect(requests).toHaveLength(requestCountBeforeStaleGeneration)
+
   wb.close(); opened.pop()
   wb = createWorkbench(dir, undefined, { async generate() { throw Error('offline') } }); opened.push(wb)
   const reopened = await wb.api.getDraft(job.value.id)
   expect(reopened).toEqual(originalDraft)
   expect(await wb.api.getDraft(secondJob.value.id)).toEqual(secondDraft.draft)
-})
+  expect(await wb.api.getAnalysis(job.value.id)).toMatchObject({ status: 'complete', progress: expect.stringContaining('Draft generated'), attempts: 3, runId: expect.any(String) })
+}, 20000)

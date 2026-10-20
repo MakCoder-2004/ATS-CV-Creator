@@ -141,7 +141,7 @@ test('compatible persisted posting analysis is readable offline after restart wi
   expect(generated.status).toBe('complete')
   wb.close(); opened.pop()
   const reopened = createWorkbench(dir, undefined, { async generate() { throw Error('offline') } }); opened.push(reopened)
-  expect(await reopened.api.getAnalysis(job.value.id)).toMatchObject({ jobId: job.value.id, runId: expect.any(String), status: 'complete', cacheHit: true, analysis: { required: ['TypeScript'] } })
+  expect(await reopened.api.getAnalysis(job.value.id)).toMatchObject({ jobId: job.value.id, runId: expect.any(String), status: 'complete', cacheHit: false, progress: 'Posting analysis complete.', analysis: { required: ['TypeScript'] } })
 })
 
 test('warns before a run when remaining configured daily attempts may be insufficient', async () => {

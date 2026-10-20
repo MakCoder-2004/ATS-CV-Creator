@@ -16,10 +16,21 @@ export interface ConsentSource {
   }
   model: { name: string; temperature?: number; topP?: number; maxOutputTokens?: number; thinkingLevel?: 'minimal' | 'low' | 'medium' | 'high' }
 }
+export interface OutboundPayload {
+  readonly job: { readonly title: string; readonly description: string }
+  readonly profile: {
+    readonly experience: readonly { readonly kind?: string; readonly title: string; readonly organization: string; readonly description: string; readonly evidence: readonly string[] }[]
+    readonly projects: readonly { readonly name: string; readonly description: string; readonly evidence: readonly string[]; readonly technologies: readonly string[] }[]
+    readonly skills: readonly { readonly name: string; readonly category?: string; readonly proficiency?: string; readonly years?: number }[]
+    readonly education: readonly { readonly title: string; readonly institution?: string; readonly field?: string; readonly description?: string }[]
+    readonly certificates: readonly { readonly title: string; readonly issuer?: string; readonly description?: string }[]
+  }
+  readonly model: { readonly name: string; readonly temperature?: number; readonly topP?: number; readonly maxOutputTokens?: number; readonly thinkingLevel?: 'minimal' | 'low' | 'medium' | 'high' }
+}
 export interface OutboundBundle {
   readonly id: string
   readonly scopeHash: string
-  readonly outgoing: Readonly<Record<string, any>>
+  readonly outgoing: Readonly<OutboundPayload>
   readonly preview: Readonly<{ warnings: readonly string[]; residualSensitivityNotice: string }>
   readonly restoreIdentifiers: (text: string) => string
   readonly containsRestoredIdentifier: (value: unknown) => boolean

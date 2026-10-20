@@ -1,6 +1,6 @@
 # CV Tailor
 
-Personal Windows Workbench for managing local profile evidence (contact details, skills, experience, projects, education, certificates, summary, languages and extras), saved job postings, appearance, and Gemini credential/model preferences. Evidence changes are validated, versioned, and stored locally. CV generation and document exports are **not implemented**. The approved browser-only prototype remains under `prototypes/cv-tailor-ui/` as design evidence, never part of the installed app.
+Personal Windows Workbench for managing local profile evidence (contact details, skills, experience, projects, education, certificates, summary, languages and extras), saved job postings, appearance, and Gemini credential/model preferences. Evidence changes are validated, versioned, and stored locally. A consent-bounded, source-linked draft can be generated, saved, and reopened offline; drafts remain unverified and unapproved. Automated factual verification, approval, and document exports are **not implemented**. The approved browser-only prototype remains under `prototypes/cv-tailor-ui/` as design evidence, never part of the installed app.
 
 ## Develop and verify
 

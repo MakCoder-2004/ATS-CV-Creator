@@ -4,6 +4,7 @@ import type { ExperienceSnapshot } from '../shared/experience'
 import type { JobRecord } from '../shared/jobs'
 import type { ProfileSnapshot } from '../shared/profile'
 import type { OutboundConsentPreview } from '../shared/outbound-consent-contract'
+import { DraftDocument, DraftEvidenceReview } from './DraftReview'
 import './workbench-start.css'
 
 type LocalSources = { profile: ProfileSnapshot; evidence: ExperienceSnapshot }
@@ -153,18 +154,20 @@ export function WorkbenchStart({ activeJob, jobCount, onNavigate }: { activeJob:
 
   return <div className="cv-workbench-start">
     <section className="document-area" aria-label="CV document">
-      <div className="document-toolbar"><div className="document-toolbar-title"><FileText size={17} aria-hidden="true" /><strong>Source outline</strong><span className="document-stage">No CV draft yet</span></div><span className="document-target">{activeJob ? `Target: ${activeJob.title} · ${activeJob.company}` : 'No job selected'}</span></div>
+      <div className="document-toolbar"><div className="document-toolbar-title"><FileText size={17} aria-hidden="true" /><strong>{draft ? 'Tailored CV draft' : 'Source outline'}</strong><span className="document-stage">{draft ? 'Unverified · not approved' : 'No CV draft yet'}</span></div><span className="document-target">{activeJob ? `Target: ${activeJob.title} · ${activeJob.company}` : 'No job selected'}</span></div>
       <div className="paper-wrap">
-        <div className="paper-context"><span>Layout reference</span><span>Five CV sections</span></div>
-        <article className="paper" aria-label="White Arial CV source outline, not a generated draft">
-          <header className="paper-header"><strong className={profile?.contact ? undefined : 'paper-placeholder'}>{profile?.contact?.fullName ?? 'Your name'}</strong><span className={profile?.contact?.headline ? undefined : 'paper-placeholder'}>{profile?.contact?.headline ?? 'Professional headline'}</span></header>
-          <div className="paper-rule" aria-hidden="true" />
-          {sections.map(section => <SourceSection key={section.title} {...section} />)}
-        </article>
-        <p className="paper-caption">Original profile facts only. This is not a draft, export preview, or page-fit check.</p>
+        <div className="paper-context"><span>{draft ? 'Tailored draft · local locked fields' : 'Layout reference'}</span><span>Five CV sections</span></div>
+        {draft ? <DraftDocument draft={draft} /> : <>
+          <article className="paper" aria-label="White Arial CV source outline, not a generated draft">
+            <header className="paper-header"><strong className={profile?.contact ? undefined : 'paper-placeholder'}>{profile?.contact?.fullName ?? 'Your name'}</strong><span className={profile?.contact?.headline ? undefined : 'paper-placeholder'}>{profile?.contact?.headline ?? 'Professional headline'}</span></header>
+            <div className="paper-rule" aria-hidden="true" />
+            {sections.map(section => <SourceSection key={section.title} {...section} />)}
+          </article>
+          <p className="paper-caption">Original profile facts only. This is not a draft, export preview, or page-fit check.</p>
+        </>}
       </div>
     </section>
-    {draft && <section className="inspector draft-offline-review" aria-label="Saved source-linked draft"><h2>Saved draft · unverified and unapproved</h2><p>Available locally. Verification, approval, and export are not available yet.</p>{(['education', 'experience', 'projects', 'skills', 'certificates'] as const).map(section => <div key={section}><h3>{section[0].toUpperCase() + section.slice(1)}</h3>{draft.content[section].map((item, index) => <article key={`${section}-${index}`}><p>{'text' in item ? item.text : item.name}</p><small>Evidence revisions: {item.citations.map(citation => `${citation.evidenceId} · r${citation.revision}`).join(', ')}</small><p>{item.rationale}</p></article>)}</div>)}</section>}
+    {draft && <DraftEvidenceReview draft={draft} />}
     <aside className="inspector" aria-label="Workspace guide">
       <div className="inspector-heading"><h2>Prepare your workspace</h2><p>Two things anchor a tailored CV: what you have done and the role you are targeting.</p></div>
       {error ? <div className="inspector-error" role="alert"><p>{error}</p><button type="button" className="secondary-button" onClick={() => setAttempt(value => value + 1)}>Retry loading sources</button></div> : !sources ? <p className="inspector-loading" role="status">Reading your local profile…</p> : <ol className="prep-list">

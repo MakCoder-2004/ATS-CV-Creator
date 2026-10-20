@@ -11,7 +11,7 @@ import { experienceInputSchema, experienceRecordSchema, experienceSnapshotSchema
 import { jobInputSchema, jobRecordSchema, jobSaveResultSchema } from '../shared/jobs'
 import type { JobRecord } from '../shared/jobs'
 import { profileExchangeSchema, type ProfileExchange } from '../shared/profile-exchange'
-import { prepareOutboundBundle, type ConsentSource, type EvidenceScopeRevision, type OutboundBundle } from '../shared/outbound-consent'
+import { prepareOutboundBundle, type ConsentSource, type EvidenceScopeRevision, type OutboundBundle, type OutboundPayload } from '../shared/outbound-consent'
 import { createOutboundConsentEngine } from './outbound-consent'
 import type { OutboundConsentAction, OutboundConsentPreview } from '../shared/outbound-consent-contract'
 import { outboundConsentActionSchema, outboundConsentPreviewSchema } from '../shared/outbound-consent-contract'
@@ -22,7 +22,8 @@ import { z } from 'zod'
 import { analysisBudgetsSchema, analysisResultSchema, analysisUsageSchema, defaultAnalysisBudgets, postingAnalysisSchema, type AnalysisBudgets } from '../shared/posting-analysis'
 import { pacificDay } from '../shared/pacific-day'
 import { draftRevisionSchema, type DraftRevision } from '../shared/draft'
-import { runSourceLinkedGraph, type GenerationItem } from './source-linked-generation'
+import { runSourceLinkedGraph } from './source-linked-generation'
+import { prepareDraftInputs } from './draft-inputs'
 
 export interface SecureStorage {
   isEncryptionAvailable(): boolean
@@ -67,6 +68,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
     CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, data TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS outbound_consents (id TEXT PRIMARY KEY, run_id TEXT NOT NULL UNIQUE, scope_hash TEXT NOT NULL, created_at TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE IF NOT EXISTS posting_analysis_cache (cache_key TEXT PRIMARY KEY, job_id TEXT NOT NULL, run_id TEXT NOT NULL, data TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS analysis_run_state (job_id TEXT PRIMARY KEY, run_id TEXT NOT NULL, data TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS analysis_attempts (id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, attempted_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS draft_revisions (id TEXT PRIMARY KEY, job_id TEXT NOT NULL, revision INTEGER NOT NULL, data TEXT NOT NULL, UNIQUE(job_id, revision));`)
   db.prepare('INSERT OR IGNORE INTO schema_migrations (version) VALUES (1), (2), (4), (5)').run()
@@ -155,6 +157,12 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
   const outboundEngine = createOutboundConsentEngine()
   const pendingOutbound = new Map<string, { jobId: string; source: ConsentSource; bundle: OutboundBundle; runId: string; consentId?: string }>()
   const currentAnalysis = new Map<string, ReturnType<typeof analysisResultSchema.parse>>()
+  const saveAnalysisState = (input: unknown) => {
+    const value = analysisResultSchema.parse(input)
+    currentAnalysis.set(value.jobId, value)
+    if (value.runId) db.prepare('INSERT INTO analysis_run_state (job_id, run_id, data) VALUES (?, ?, ?) ON CONFLICT(job_id) DO UPDATE SET run_id=excluded.run_id, data=excluded.data').run(value.jobId, value.runId, JSON.stringify(value))
+    return value
+  }
   const startedAnalysisTokens = new Set<string>()
   const analysisCacheKey = (source: ConsentSource) => createHash('sha256').update(JSON.stringify({ job: { title: source.job.title, company: source.job.company, description: source.job.description }, model: source.model.name, prompt: 'posting-analysis-v1', schema: JSON.stringify(z.toJSONSchema(postingAnalysisSchema)) })).digest('hex')
   const activeAnalysisByJob = new Map<string, string>()
@@ -168,7 +176,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
     if (!row || !secureStorage.decryptString || !secureStorageAvailable()) throw Object.assign(new Error('Gemini API key is unavailable.'), { status: 401 })
     const key = secureStorage.decryptString(Buffer.from(row.ciphertext, 'base64'))
     return createGeminiAnalysisTransport(key).generate(input)
-  } }, onAttempt: (timestamp, runId) => { previousAttempts.push(timestamp); db.prepare('INSERT INTO analysis_attempts (run_id, attempted_at) VALUES (?, ?)').run(runId, new Date(timestamp).toISOString()) }, onProgress: (runId, jobId, progress, attempts) => { currentAnalysis.set(jobId, analysisResultSchema.parse({ jobId, status: 'running', analysis: null, progress, attempts, cacheHit: false })) } })
+  } }, onAttempt: (timestamp, runId) => { previousAttempts.push(timestamp); db.prepare('INSERT INTO analysis_attempts (run_id, attempted_at) VALUES (?, ?)').run(runId, new Date(timestamp).toISOString()) }, onProgress: (runId, jobId, progress, attempts) => { const observed = (db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id = ?').get(runId) as { count: number }).count; saveAnalysisState({ jobId, runId, status: 'running', analysis: null, progress, attempts: observed || attempts, cacheHit: false }) } })
   const currentConsentSource = (jobId: string): ConsentSource | null => {
     const job = db.prepare('SELECT data FROM jobs WHERE id = ?').get(jobId) as { data: string } | undefined
     if (!job) return null
@@ -491,7 +499,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       if (cached) {
         dispatcher.authorize(pending.runId, pending.consentId)
         const value = analysisResultSchema.parse({ jobId: pending.jobId, runId: cached.run_id, status: 'complete', analysis: postingAnalysisSchema.parse(JSON.parse(cached.data)), progress: 'Loaded compatible saved analysis.', attempts: 0, cacheHit: true })
-        currentAnalysis.set(pending.jobId, value)
+        saveAnalysisState(value)
         return value
       }
       const credentials = db.prepare('SELECT ciphertext FROM encrypted_credentials WHERE key = ?').get('gemini-api-key')
@@ -509,33 +517,33 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
         if (activeAnalysisByJob.get(pending.jobId) === pending.runId) activeAnalysisByJob.delete(pending.jobId)
         const failure = error instanceof AnalysisError ? error : new AnalysisError('PROVIDER', 'Analysis could not complete. Check Settings and try again.')
         const status = failure.code === 'CANCELLED' ? 'cancelled' : 'failed'
-        const value = analysisResultSchema.parse({ jobId: pending.jobId, status, analysis: null, progress: failure.message, attempts: failure.usage?.attempts ?? 0, error: failure.message, cacheHit: false })
-        currentAnalysis.set(pending.jobId, value)
+        const value = analysisResultSchema.parse({ jobId: pending.jobId, runId: pending.runId, status, analysis: null, progress: failure.message, attempts: failure.usage?.attempts ?? 0, error: failure.message, cacheHit: false })
+        saveAnalysisState(value)
         return value
       }
       if (activeAnalysisByJob.get(pending.jobId) === pending.runId) activeAnalysisByJob.delete(pending.jobId)
       db.prepare('INSERT OR REPLACE INTO posting_analysis_cache (cache_key, job_id, run_id, data) VALUES (?, ?, ?, ?)').run(cacheKey, pending.jobId, pending.runId, JSON.stringify(result.analysis))
       const value = analysisResultSchema.parse({ jobId: pending.jobId, runId: pending.runId, status: 'complete', analysis: result.analysis, progress: 'Posting analysis complete.', attempts: result.usage.attempts, cacheHit: false })
-      currentAnalysis.set(pending.jobId, value)
+      saveAnalysisState(value)
       return value
     },
     async generateDraft(token: string, pageTarget: 1 | 2 = 1) {
       if (pageTarget !== 1 && pageTarget !== 2) return { ok: false, message: 'Choose a one- or two-page target.' }
       const pending = pendingOutbound.get(token)
       if (!pending?.consentId) return { ok: false, message: 'Review and authorize this exact outgoing bundle before generation.' }
+      const latestScope = currentConsentSource(pending.jobId)
+      if (!latestScope || prepareOutboundBundle(latestScope).scopeHash !== pending.bundle.scopeHash) return { ok: false, message: 'Your job, profile, or model settings changed after consent. Review the outgoing data again.' }
       const analysis = await this.getAnalysis(pending.jobId)
       if (!analysis || analysis.status !== 'complete' || !analysis.analysis) return { ok: false, message: 'Complete posting analysis before generating a draft.' }
       if (activeAnalysisByJob.has(pending.jobId)) return { ok: false, message: 'Generation is already active for this saved job.' }
-      const job = await this.openJob(pending.jobId), profile = readProfile(), experience = readExperience()
+      const job = await this.openJob(pending.jobId)
       if (!job) return { ok: false, message: 'The saved job is unavailable.' }
-      const items: GenerationItem[] = [
-        ...profile.education.map(item => ({ id: item.id, revision: item.revision, category: 'education' as const, snapshot: item as unknown as Record<string, unknown>, text: [item.title, item.field, item.description].filter(Boolean).join('. '), chronology: item.endDate ?? item.startDate })),
-        ...experience.experience.flatMap(item => [{ id: item.id, revision: item.revision, category: 'experience' as const, snapshot: item as unknown as Record<string, unknown>, text: `${item.title}. ${item.description} ${(item.factualItems ?? []).map(f => f.text).join(' ')}`, chronology: item.endDate ?? item.startDate, parentId: item.id }, ...item.factualItems.map(f => ({ id: f.id, revision: f.revision, category: 'experience' as const, snapshot: f as unknown as Record<string, unknown>, text: f.text, chronology: item.endDate ?? item.startDate, parentId: item.id }))]),
-        ...experience.projects.map(item => ({ id: item.id, revision: item.revision, category: 'projects' as const, snapshot: item as unknown as Record<string, unknown>, text: `${item.name}. ${item.description} ${(item.factualItems ?? []).map(f => f.text).join(' ')}`, parentId: item.id })),
-        ...profile.skills.map(item => ({ id: item.id, revision: item.revision, category: 'skills' as const, snapshot: item as unknown as Record<string, unknown>, text: `${item.name} (${item.category})` })),
-        ...profile.certificates.map(item => ({ id: item.id, revision: item.revision, category: 'certificates' as const, snapshot: item as unknown as Record<string, unknown>, text: [item.title, item.description].filter(Boolean).join('. ') }))
-      ]
-      const approvedPayload = authorizeOutboundPayload(pending.runId, pending.bundle.outgoing) as any
+      const latestScopeAfterAsync = currentConsentSource(pending.jobId)
+      if (!latestScopeAfterAsync || prepareOutboundBundle(latestScopeAfterAsync).scopeHash !== pending.bundle.scopeHash) return { ok: false, message: 'Your job, profile, or model settings changed after consent. Review the outgoing data again.' }
+      const profile = readProfile(), experience = readExperience()
+      const draftInputs = prepareDraftInputs(profile, experience)
+      const items = draftInputs.items
+      const approvedPayload = authorizeOutboundPayload<OutboundPayload>(pending.runId, pending.bundle.outgoing)
       const scrubbed = new Map<string, string>()
       profile.education.forEach((item, i) => { const safe = approvedPayload.profile.education[i]; if (safe) scrubbed.set(item.id, JSON.stringify(safe)) })
       experience.experience.forEach((item, i) => { const safe = approvedPayload.profile.experience[i]; if (safe) { scrubbed.set(item.id, JSON.stringify(safe)); item.factualItems.forEach((fact, n) => scrubbed.set(fact.id, safe.evidence[n] ?? '')) } })
@@ -545,22 +553,24 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       const safeItems = items.map(item => ({ ...item, text: scrubbed.get(item.id) ?? '' })).filter(item => item.text)
       activeAnalysisByJob.set(pending.jobId, pending.runId)
       try {
-        const result = await runSourceLinkedGraph({ job: approvedPayload.job, analysis: analysis.analysis, items: safeItems, pageTarget, restoreText: pending.bundle.restoreIdentifiers, identity: { id: randomUUID(), jobId: pending.jobId, revision: ((db.prepare('SELECT MAX(revision) AS revision FROM draft_revisions WHERE job_id = ?').get(pending.jobId) as { revision: number | null }).revision ?? 0) + 1, createdAt: new Date().toISOString(), lockedFields: { fullName: profile.contact?.fullName ?? '', ...(profile.contact?.headline ? { headline: profile.contact.headline } : {}), experience: experience.experience.map(item => ({ evidenceId: item.id, title: item.title, organization: item.organization, ...(item.startDate ? { startDate: item.startDate } : {}), ...(item.endDate ? { endDate: item.endDate } : {}) })), education: profile.education.map(item => ({ evidenceId: item.id, title: item.title, ...(item.institution ? { institution: item.institution } : {}), ...(item.startDate ? { startDate: item.startDate } : {}), ...(item.endDate ? { endDate: item.endDate } : {}) })), projects: experience.projects.map(item => ({ evidenceId: item.id, name: item.name })), certificates: profile.certificates.map(item => ({ evidenceId: item.id, title: item.title, ...(item.issuer ? { issuer: item.issuer } : {}), ...(item.year ? { year: item.year } : {}) })) } }, call: async (prompt, responseSchema) => {
+        const result = await runSourceLinkedGraph({ job: approvedPayload.job, analysis: analysis.analysis, items: safeItems, pageTarget, restoreText: pending.bundle.restoreIdentifiers, onProgress: progress => { const observed = (db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id = ?').get(pending.runId) as { count: number }).count; saveAnalysisState({ jobId: pending.jobId, runId: pending.runId, status: 'running', analysis: analysis.analysis, progress, attempts: observed, cacheHit: analysis.cacheHit }) }, identity: { id: randomUUID(), jobId: pending.jobId, revision: ((db.prepare('SELECT MAX(revision) AS revision FROM draft_revisions WHERE job_id = ?').get(pending.jobId) as { revision: number | null }).revision ?? 0) + 1, createdAt: new Date().toISOString(), lockedFields: draftInputs.lockedFields }, call: async (prompt, responseSchema) => {
           authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
           const generated = await dispatcher.generate({ runId: pending.runId, jobId: pending.jobId, model: geminiModelSchema.parse(pending.source.model.name), prompt, consentId: pending.consentId!, responseSchema })
+          authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
           return { value: responseSchema.parse(JSON.parse(generated.text)), attempts: generated.attempts }
         } })
+        authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
         const tx = db.transaction(() => { db.prepare('INSERT INTO draft_revisions (id,job_id,revision,data) VALUES (?,?,?,?)').run(result.draft.id, result.draft.jobId, result.draft.revision, JSON.stringify(result.draft)) })
         tx()
         if (activeAnalysisByJob.get(pending.jobId) === pending.runId) activeAnalysisByJob.delete(pending.jobId)
-        currentAnalysis.set(pending.jobId, analysisResultSchema.parse({ jobId: pending.jobId, runId: pending.runId, status: 'complete', analysis: analysis.analysis, progress: 'Posting analysis and source-linked draft complete.', attempts: analysis.attempts + result.attempts, cacheHit: analysis.cacheHit }))
+        saveAnalysisState({ jobId: pending.jobId, runId: pending.runId, status: 'complete', analysis: analysis.analysis, progress: result.draft.progress, attempts: analysis.attempts + result.attempts, cacheHit: analysis.cacheHit })
         return { ok: true, message: 'Draft saved locally. It is unverified and unapproved.', draft: result.draft }
       } catch (error) {
         if (activeAnalysisByJob.get(pending.jobId) === pending.runId) activeAnalysisByJob.delete(pending.jobId)
         const message = error instanceof Error ? error.message : 'Draft generation failed. Existing work was retained.'
-        const previous = currentAnalysis.get(pending.jobId)
         const cancelled = error instanceof AnalysisError && error.code === 'CANCELLED'
-        currentAnalysis.set(pending.jobId, analysisResultSchema.parse({ jobId: pending.jobId, runId: pending.runId, status: cancelled ? 'cancelled' : 'failed', analysis: analysis.analysis, progress: message, attempts: analysis.attempts + (previous?.attempts ?? 0), error: message, cacheHit: analysis.cacheHit }))
+        const observedAttempts = (db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id = ?').get(pending.runId) as { count: number }).count
+        saveAnalysisState({ jobId: pending.jobId, runId: pending.runId, status: cancelled ? 'cancelled' : 'failed', analysis: analysis.analysis, progress: message, attempts: observedAttempts, error: message, cacheHit: analysis.cacheHit })
         return { ok: false, message }
       }
     },
@@ -575,6 +585,8 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       if (!uuidSchema.safeParse(jobId).success) return null
       const value = currentAnalysis.get(jobId)
       if (value) return analysisResultSchema.parse(value)
+      const savedState = db.prepare('SELECT data FROM analysis_run_state WHERE job_id = ?').get(jobId) as { data: string } | undefined
+      if (savedState) { const restored = analysisResultSchema.parse(JSON.parse(savedState.data)); currentAnalysis.set(jobId, restored); return restored }
       const source = currentConsentSource(jobId)
       if (!source) return null
       const cached = db.prepare('SELECT data, run_id FROM posting_analysis_cache WHERE cache_key = ? AND job_id = ?').get(analysisCacheKey(source), jobId) as { data: string; run_id: string } | undefined
@@ -588,8 +600,8 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       const previous = currentAnalysis.get(jobId)
       if (!activeRunId && previous) return analysisResultSchema.parse(previous)
       if (activeRunId) dispatcher.cancel(activeRunId)
-      const value = analysisResultSchema.parse({ jobId, status: 'cancelled', analysis: null, progress: 'Analysis cancelled. No further requests will be sent.', attempts: previous?.attempts ?? 0, cacheHit: false })
-      currentAnalysis.set(jobId, value)
+      const value = analysisResultSchema.parse({ jobId, ...(activeRunId ? { runId: activeRunId } : {}), status: 'cancelled', analysis: null, progress: 'Analysis cancelled. No further requests will be sent.', attempts: previous?.attempts ?? 0, cacheHit: false })
+      saveAnalysisState(value)
       return value
     },
     async getAnalysisUsage() {
@@ -619,7 +631,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       const active = activeAnalysisByJob.get(pending.jobId) === pending.runId
       if (active) dispatcher.cancel(pending.runId)
       const prior = currentAnalysis.get(pending.jobId)
-      if (active || !prior) currentAnalysis.set(pending.jobId, analysisResultSchema.parse({ jobId: pending.jobId, status: 'cancelled', analysis: null, progress: 'Run cancelled. Further dispatches are stopped.', attempts: prior?.attempts ?? 0, cacheHit: false }))
+      if (active || !prior) saveAnalysisState({ jobId: pending.jobId, runId: pending.runId, status: 'cancelled', analysis: null, progress: 'Run cancelled. Further dispatches are stopped.', attempts: prior?.attempts ?? 0, cacheHit: false })
       pendingOutbound.delete(token)
       return outboundConsentActionSchema.parse({ ok: true, runId: pending.runId, message: 'Consent cancelled for this run. No further provider request will be dispatched.' })
     }

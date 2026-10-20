@@ -16,6 +16,24 @@ const wordCount = (text: string) => {
   } catch { /* plain text source */ }
   return content.trim().split(/\s+/).filter(Boolean).length
 }
+function sourceText(item: GenerationItem): string {
+  try {
+    const value: unknown = JSON.parse(item.text)
+    const collect = (entry: unknown): string[] => Array.isArray(entry) ? entry.flatMap(collect) : entry && typeof entry === 'object' ? Object.entries(entry).filter(([key]) => !/^(id|revision)$/i.test(key)).flatMap(([, child]) => collect(child)) : typeof entry === 'string' ? [entry] : []
+    return collect(value).join(' ')
+  } catch { return item.text }
+}
+const scopeInflationClaims = /\b(led|managed|owned|directed|founded|architected)\b/gi
+const numericClaims = /\b\d+(?:[,.]\d+)?%?\b/g
+function assertConservativeClaims(text: string, cited: GenerationItem[]) {
+  const sources = cited.map(sourceText).join(' ')
+  const sourceClaims = new Set((sources.match(scopeInflationClaims) ?? []).map(claim => claim.toLocaleLowerCase()))
+  const inflated = (text.match(scopeInflationClaims) ?? []).find(claim => !sourceClaims.has(claim.toLocaleLowerCase()))
+  if (inflated) throw new Error(`Generated wording introduces unsupported responsibility or scope (${inflated}).`)
+  const sourceNumbers = new Set(sources.match(numericClaims) ?? [])
+  const unsupportedNumber = (text.match(numericClaims) ?? []).find(value => !sourceNumbers.has(value))
+  if (unsupportedNumber) throw new Error(`Generated wording introduces an unsupported number or metric (${unsupportedNumber}).`)
+}
 function selectWithinPageBudget(items: GenerationItem[], relevance: Array<{ index: number; score: number; rationale: string }>, target: 1 | 2) {
   const limit = WORD_BUDGETS[target]
   const selected: Array<{ index: number; score: number; rationale: string }> = []
@@ -31,10 +49,11 @@ function selectWithinPageBudget(items: GenerationItem[], relevance: Array<{ inde
   }
   return selected.sort((a, b) => a.index - b.index)
 }
-export async function runSourceLinkedGraph(input: { job: unknown; analysis: unknown; items: GenerationItem[]; pageTarget?: 1 | 2; call(prompt: string, schema: z.ZodTypeAny): Promise<{ value: unknown; attempts: number }>; identity: { id: string; jobId: string; revision: number; createdAt: string; lockedFields: { fullName: string; headline?: string; experience: Array<{ evidenceId: string; title: string; organization: string; startDate?: string; endDate?: string }>; education: Array<{ evidenceId: string; title: string; institution?: string; startDate?: string; endDate?: string }>; projects: Array<{ evidenceId: string; name: string }>; certificates: Array<{ evidenceId: string; title: string; issuer?: string; year?: number }> } }; restoreText?: (text: string) => string }): Promise<{ draft: DraftRevision; attempts: number }> {
+export async function runSourceLinkedGraph(input: { job: unknown; analysis: unknown; items: GenerationItem[]; pageTarget?: 1 | 2; call(prompt: string, schema: z.ZodTypeAny): Promise<{ value: unknown; attempts: number }>; onProgress?: (progress: string) => void; identity: { id: string; jobId: string; revision: number; createdAt: string; lockedFields: { fullName: string; headline?: string; experience: Array<{ evidenceId: string; title: string; organization: string; startDate?: string; endDate?: string }>; education: Array<{ evidenceId: string; title: string; institution?: string; startDate?: string; endDate?: string }>; projects: Array<{ evidenceId: string; name: string }>; certificates: Array<{ evidenceId: string; title: string; issuer?: string; year?: number }> } }; restoreText?: (text: string) => string }): Promise<{ draft: DraftRevision; attempts: number }> {
   const State = Annotation.Root({ scored: Annotation<z.infer<typeof scoredSchema> | undefined>(), tailored: Annotation<z.infer<typeof tailoredSchema> | undefined>(), attempts: Annotation<number>({ reducer: (a, b) => a + b, default: () => 0 }) })
   const graph = new StateGraph(State)
     .addNode('batch_score', async () => {
+      input.onProgress?.('Scoring eligible evidence against the parsed job.')
       const response = await input.call(`Score these numbered eligible evidence items for relevance to the parsed job. Return one score and an inclusion rationale per item. Do not infer qualifications.\n${JSON.stringify({ job: input.job, analysis: input.analysis, items: input.items.map((item, index) => ({ index, category: item.category, text: item.text })) })}`, scoredSchema)
       const scored = scoredSchema.parse(response.value)
       const indices = scored.relevance.map(item => item.index)
@@ -42,6 +61,7 @@ export async function runSourceLinkedGraph(input: { job: unknown; analysis: unkn
       return { scored, attempts: response.attempts }
     })
     .addNode('tailor', async state => {
+      input.onProgress?.('Tailoring selected evidence within the page budget.')
       const order = selectWithinPageBudget(input.items, state.scored?.relevance ?? [], input.pageTarget ?? 1)
       if (!order.length) throw new Error('No authorized profile evidence fits the selected page budget.')
       const selected = order.map(x => ({ ...input.items[x.index], index: x.index, rationale: x.rationale })).filter(x => x.id)
@@ -67,6 +87,7 @@ export async function runSourceLinkedGraph(input: { job: unknown; analysis: unkn
   }).map(entry => {
     const cited = itemFor(entry.evidence, category)
     if ((category === 'experience' || category === 'projects') && new Set(cited.map(item => item.parentId ?? item.id)).size > 1) throw new Error('A generated paragraph cannot combine evidence from different experience or project parents.')
+    assertConservativeClaims(entry.text, cited)
     return { text: input.restoreText?.(entry.text) ?? entry.text, citations: cited.map(item => ({ evidenceId: item.id, revision: item.revision })), rationale: entry.rationale }
   })
   const content = draftContentSchema.parse({
