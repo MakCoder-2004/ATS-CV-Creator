@@ -1,5 +1,5 @@
 import { test, expect, _electron as electron } from '@playwright/test'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -130,6 +130,7 @@ test('real Electron UI generates and exposes cited draft with a DEV-only scripte
     await page.getByRole('button', { name: 'Measure actual A4 page fit' }).click()
     await expect(page.getByRole('status').filter({ hasText: /Electron PDF:/ })).toContainText(/page/)
     await page.getByRole('button', { name: 'Check current draft and sources' }).click()
+    await expect(page.getByRole('navigation', { name: 'Tailoring phases' }).locator('[aria-current="step"]')).toHaveText(/Export/)
     await expect(page.getByRole('button', { name: 'Export editable DOCX' })).toBeVisible()
     await page.getByRole('button', { name: 'Use dark mode' }).click()
     await expect(page.getByRole('button', { name: 'Use dark mode' })).toHaveAttribute('aria-pressed', 'true')
@@ -158,10 +159,36 @@ test('real Electron UI generates and exposes cited draft with a DEV-only scripte
     const ordered = (value: string) => sectionOrder.map(name => value.indexOf(name))
     expect(ordered(pdfText).every((at, index, all) => at >= 0 && (index === 0 || at > all[index - 1])), JSON.stringify({ order: ordered(pdfText), text: pdfText })).toBe(true)
     expect(ordered(docxText).every((at, index, all) => at >= 0 && (index === 0 || at > all[index - 1]))).toBe(true)
-    const paragraphOrder = canonicalDocument!.sections.flatMap(section => section.entries.map(entry => entry.text)).filter(Boolean).map(value => normalized([value]))
-    for (const value of [pdfText, docxText]) { const positions = paragraphOrder.map(paragraph => value.indexOf(paragraph)); expect(positions.every((position, index) => position >= 0 && (index === 0 || position > positions[index - 1]))).toBe(true) }
-    expect(parsedDocx.linkTargets.sort()).toEqual([...pdfReport!.linkTargets].sort())
-    await writeFileSync(docxPath, 'pre-existing destination')
+    for (const value of [pdfText, docxText]) {
+      let cursor = 0
+      for (const section of canonicalDocument!.sections) {
+        let position = value.indexOf(normalized([section.name]), cursor)
+        expect(position, `Missing/out-of-order section ${section.name}`).toBeGreaterThanOrEqual(cursor)
+        cursor = position + normalized([section.name]).length
+        for (const entry of section.entries) {
+          const fields = [entry.heading, entry.dates ?? '', entry.organization ?? '', entry.text, ...entry.links.map(link => link.label)].filter(Boolean)
+          for (const field of fields) {
+            position = value.indexOf(normalized([field]), cursor)
+            expect(position, `Missing/out-of-order field ${field} in ${section.name}`).toBeGreaterThanOrEqual(cursor)
+            cursor = position + normalized([field]).length
+          }
+        }
+      }
+    }
+    const canonicalLinks = [
+      ...canonicalDocument!.identity.links,
+      ...canonicalDocument!.sections.flatMap(section => section.entries.flatMap(entry => entry.links))
+    ].map(link => `${link.label}\u0000${link.url}`).sort()
+    expect(parsedDocx.links.map(link => `${link.label}\u0000${link.url}`).sort()).toEqual(canonicalLinks)
+    expect(pdfReport!.links.map(link => `${link.label}\u0000${link.url}`).sort()).toEqual(canonicalLinks)
+    expect(pdfReport!.linkTargets.sort()).toEqual(canonicalLinks.map(link => link.split('\u0000')[1]).sort())
+    const existingContent = Buffer.from('pre-existing destination')
+    writeFileSync(docxPath, existingContent)
+    await app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }); return true })
+    await exportButton.click()
+    await expect(page.getByRole('region', { name: 'Source-linked draft' }).getByRole('alert')).toContainText('existing file was not changed')
+    expect(readFileSync(docxPath)).toEqual(existingContent)
+    await app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 0, checkboxChecked: false }); return true })
     await exportButton.click()
     await expect(page.getByRole('region', { name: 'Source-linked draft' }).getByRole('alert')).toContainText('Word may reflow text differently')
     expect((await extractCanonicalDocx(readFileSync(docxPath))).text).toEqual(parsedDocx.text)
@@ -170,12 +197,17 @@ test('real Electron UI generates and exposes cited draft with a DEV-only scripte
     await exportButton.click()
     await expect(page.getByRole('region', { name: 'Source-linked draft' }).getByRole('alert')).toContainText('DOCX export cancelled')
     expect(readFileSync(docxPath)).toEqual(beforeCancel)
-    const failurePath = join(userData, 'failure.docx')
-    mkdirSync(failurePath)
+    const failurePath = join(userData, 'missing-folder', 'failure.docx')
     await app.evaluate(({ dialog }, destination) => { dialog.showSaveDialog = async () => ({ canceled: false, filePath: destination }); return true }, failurePath)
     await exportButton.click()
     await expect(page.getByRole('region', { name: 'Source-linked draft' }).getByRole('alert')).toContainText('Could not save the DOCX')
     expect(readFileSync(docxPath)).toEqual(beforeCancel)
+    const noExtensionPath = join(userData, 'candidate-without-extension')
+    await app.evaluate(({ dialog }, destination) => { dialog.showSaveDialog = async () => ({ canceled: false, filePath: destination }); return true }, noExtensionPath)
+    await exportButton.click()
+    await expect(page.getByRole('region', { name: 'Source-linked draft' }).getByRole('alert')).toContainText('ending in .docx')
+    expect(existsSync(noExtensionPath)).toBe(false)
+    expect(existsSync(`${noExtensionPath}.docx`)).toBe(false)
 
     await app.close()
     app = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], timeout: 60000, env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData, CV_TAILOR_SCRIPTED_ANALYSIS: 'generation' } })
@@ -183,7 +215,19 @@ test('real Electron UI generates and exposes cited draft with a DEV-only scripte
     await expect(page.locator('[data-ui-ready="true"]')).toBeVisible()
     expect(await page.evaluate(id => window.workbench.getDraft(id).then(value => ({ approved: value?.approved, approval: value?.approval?.contentHash })), jobId)).toMatchObject({ approved: true, approval: expect.any(String) })
     expect(await page.evaluate(id => window.workbench.assertDraftExportable(id), jobId)).toMatchObject({ ok: true })
-    await page.evaluate(async id => { const draft = await window.workbench.getDraft(id); if (!draft) throw new Error('Draft unavailable'); await window.workbench.correctDraft({ jobId: id, section: 'experience', index: 0, text: draft.content.experience[0].text }) }, jobId)
+    const staleDestination = join(userData, 'stale-dialog.docx')
+    await app.evaluate(({ dialog }, destination) => {
+      const globals = globalThis as typeof globalThis & { docxDialogReady?: boolean; resolveDocxDialog?: () => void }
+      globals.docxDialogReady = false
+      dialog.showSaveDialog = async () => await new Promise(resolve => { globals.docxDialogReady = true; globals.resolveDocxDialog = () => resolve({ canceled: false, filePath: destination }) })
+      return true
+    }, staleDestination)
+    const pendingExport = page.evaluate(id => window.workbench.exportDraftDocx(id), jobId)
+    await expect.poll(() => app!.evaluate(() => (globalThis as typeof globalThis & { docxDialogReady?: boolean }).docxDialogReady)).toBe(true)
+    await page.evaluate(async id => { const draft = await window.workbench.getDraft(id); if (!draft) throw new Error('Draft unavailable'); await window.workbench.correctDraft({ jobId: id, section: 'experience', index: 0, text: `${draft.content.experience[0].text} Updated while save dialog is open.` }) }, jobId)
+    await app.evaluate(() => { (globalThis as typeof globalThis & { resolveDocxDialog?: () => void }).resolveDocxDialog?.(); return true })
+    expect(await pendingExport).toMatchObject({ ok: false, cancelled: false, message: expect.stringContaining('changed while choosing') })
+    expect(existsSync(staleDestination)).toBe(false)
     expect(await page.evaluate(id => window.workbench.assertDraftExportable(id), jobId)).toMatchObject({ ok: false })
     await app.evaluate(({ dialog }) => { (globalThis as typeof globalThis & { docxDialogRequested?: boolean }).docxDialogRequested = false; dialog.showSaveDialog = async () => { (globalThis as typeof globalThis & { docxDialogRequested?: boolean }).docxDialogRequested = true; return { canceled: false, filePath: 'must-not-be-requested.docx' } }; return true })
     expect(await page.evaluate(id => window.workbench.exportDraftDocx(id), jobId)).toMatchObject({ ok: false, cancelled: false })

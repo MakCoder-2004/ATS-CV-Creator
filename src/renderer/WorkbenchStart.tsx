@@ -208,7 +208,7 @@ export function WorkbenchStart({ activeJob, onNavigate }: { activeJob: JobRecord
     { label: 'Education', count: outgoing.profile.education.length, unit: 'record' },
     { label: 'Certificates', count: outgoing.profile.certificates.length, unit: 'record' }
   ].filter(item => item.count > 0) : []
-  const activePhase: 1 | 2 | 3 | 4 = newRun && review ? consentAccepted ? 3 : 2 : draft ? 4 : consentAccepted ? 3 : review ? 2 : 1
+  const activePhase: 1 | 2 | 3 | 4 | 5 = newRun && review ? consentAccepted ? 3 : 2 : draft?.approved ? 5 : draft ? 4 : consentAccepted ? 3 : review ? 2 : 1
   return <WorkbenchStageLayout
     activeJob={activeJob} onNavigate={page => onNavigate(page)} error={error} retry={() => setAttempt(value => value + 1)} activePhase={activePhase}
     review={review} consentAccepted={consentAccepted} termsAcknowledged={termsAcknowledged} setTermsAcknowledged={setTermsAcknowledged} consentError={consentError} consentBusy={consentBusy}

@@ -1,7 +1,7 @@
 import { expect, test } from 'vitest'
 import JSZip from 'jszip'
 import { canonicalDocumentSchema } from '../src/shared/document'
-import { renderCanonicalDocx } from '../src/main/docx-export'
+import { extractCanonicalDocx, renderCanonicalDocx } from '../src/main/docx-export'
 
 const canonical = canonicalDocumentSchema.parse({ version: 1, draftId: '11111111-1111-4111-8111-111111111111', jobId: '22222222-2222-4222-8222-222222222222', revision: 7, targetPages: 1, identity: { name: 'Zoë 李', headline: 'Senior Engineer', contact: ['zoe@example.test'], links: [{ label: 'Portfolio', url: 'https://example.test/portfolio' }] }, sections: [
   { name: 'Education', entries: [{ id: 'edu-1', heading: 'B.Sc. Computer Science', organization: 'Université de Montréal', dates: '09/2018 – 06/2022', text: 'Graduated with honors.', links: [{ label: 'Thesis', url: 'https://example.test/thesis' }] }] },
@@ -23,6 +23,8 @@ test('writes an editable single-column DOCX with ordered text, Unicode and live 
   expect(text.indexOf('SKILLS')).toBeLessThan(text.indexOf('CERTIFICATES'))
   expect(relationships).toContain('https://example.test/portfolio')
   expect(relationships).toContain('https://example.test/thesis')
+  const parsed = await extractCanonicalDocx(await renderCanonicalDocx(canonical))
+  expect(parsed.links).toEqual([{ label: 'Portfolio', url: 'https://example.test/portfolio' }, { label: 'Thesis', url: 'https://example.test/thesis' }])
   expect(xml).not.toMatch(/<w:tbl\b/)
   expect(xml).toContain('<w:hyperlink')
   expect(xml).toContain('<w:sectPr')

@@ -21,13 +21,22 @@ export async function renderCanonicalDocx(document: CanonicalDocument): Promise<
   return Packer.toBuffer(doc)
 }
 
-export async function extractCanonicalDocx(buffer: Buffer): Promise<{ text: string[]; linkTargets: string[] }> {
+export async function extractCanonicalDocx(buffer: Buffer): Promise<{ text: string[]; links: { label: string; url: string }[]; linkTargets: string[] }> {
   const zip = await JSZip.loadAsync(buffer)
   const xml = await zip.file('word/document.xml')?.async('string')
   const relationshipsXml = await zip.file('word/_rels/document.xml.rels')?.async('string')
   if (!xml || !relationshipsXml) throw new Error('DOCX is missing its document or relationship data.')
   const decodeXml = (value: string) => value.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, '&')
   const text = [...xml.matchAll(/<w:t(?: [^>]*)?>(.*?)<\/w:t>/g)].map(match => decodeXml(match[1]))
-  const linkTargets = [...relationshipsXml.matchAll(/<Relationship\b[^>]*Type="[^"]*\/hyperlink"[^>]*Target="([^"]+)"/g)].map(match => decodeXml(match[1]))
-  return { text, linkTargets }
+  const relationships = new Map<string, string>()
+  for (const match of relationshipsXml.matchAll(/<Relationship\b([^>]*)\/>/g)) {
+    const attributes = Object.fromEntries([...match[1].matchAll(/([\w:]+)="([^"]*)"/g)].map(attribute => [attribute[1], decodeXml(attribute[2])]))
+    if (attributes.Type?.endsWith('/hyperlink') && attributes.Id && attributes.Target) relationships.set(attributes.Id, attributes.Target)
+  }
+  const links = [...xml.matchAll(/<w:hyperlink\b([^>]*)>([\s\S]*?)<\/w:hyperlink>/g)].flatMap(match => {
+    const id = /r:id="([^"]+)"/.exec(match[1])?.[1], url = id ? relationships.get(id) : undefined
+    const label = [...match[2].matchAll(/<w:t(?: [^>]*)?>(.*?)<\/w:t>/g)].map(textMatch => decodeXml(textMatch[1])).join('')
+    return url && label ? [{ label, url }] : []
+  })
+  return { text, links, linkTargets: links.map(link => link.url) }
 }

@@ -1,8 +1,8 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain, safeStorage, shell } from 'electron'
 import type { ZodError } from 'zod'
 import { fileURLToPath } from 'node:url'
-import { mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
-import { basename, dirname, join } from 'node:path'
+import { linkSync, lstatSync, mkdirSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
+import { basename, dirname, extname, join } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import { renderDocumentHtml } from '../shared/document'
 import { renderCanonicalDocx } from './docx-export'
@@ -239,12 +239,33 @@ app.whenReady().then(() => {
     const safeName = [safePart(document.identity.name), safePart(job?.company ?? ''), safePart(job?.title ?? '')].filter(Boolean).join(' - ') || 'Tailored CV'
     const { canceled, filePath } = await dialog.showSaveDialog(window!, { title: 'Save editable CV', defaultPath: `${safeName}.docx`, buttonLabel: 'Save DOCX', filters: [{ name: 'Word document', extensions: ['docx'] }] })
     if (canceled || !filePath) return { ok: false, cancelled: true, message: 'DOCX export cancelled.' }
-    const target = filePath.toLowerCase().endsWith('.docx') ? filePath : `${filePath}.docx`
+    const target = filePath
+    if (extname(target).toLowerCase() !== '.docx') return { ok: false, cancelled: false, message: 'Choose a destination ending in .docx. No file was written.' }
+    const beforeDialogDocument = JSON.stringify(document)
+    const guardedAfterDialog = await workspace!.api.assertDraftExportable(jobId)
+    if (!guardedAfterDialog.ok || !guardedAfterDialog.document || JSON.stringify(guardedAfterDialog.document) !== beforeDialogDocument) return { ok: false, cancelled: false, message: 'The approved document changed while choosing a destination. Review and approve it again before export.' }
+    let priorFile: ReturnType<typeof lstatSync> | undefined
+    try { priorFile = lstatSync(target); if (!priorFile.isFile()) return { ok: false, cancelled: false, message: 'The selected destination is not a regular file.' } }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return { ok: false, cancelled: false, message: `Could not inspect the destination: ${error instanceof Error ? error.message : 'unknown file error'}` } }
+    if (priorFile) {
+      const confirmation = await dialog.showMessageBox(window!, { type: 'warning', title: 'Replace existing DOCX?', message: 'A file already exists at this destination.', detail: 'Replace it with the currently approved CV?', buttons: ['Replace file', 'Cancel'], defaultId: 1, cancelId: 1, noLink: true })
+      if (confirmation.response !== 0) return { ok: false, cancelled: true, message: 'DOCX export cancelled. The existing file was not changed.' }
+    }
     const temporary = join(dirname(target), `.${basename(target)}.${randomUUID()}.tmp`)
     try {
       const bytes = await renderCanonicalDocx(document)
+      const current = await workspace!.api.assertDraftExportable(jobId)
+      if (!current.ok || !current.document || JSON.stringify(current.document) !== beforeDialogDocument) return { ok: false, cancelled: false, message: 'The approved document changed before it could be saved. Review and approve it again.' }
       writeFileSync(temporary, bytes, { flag: 'wx' })
-      renameSync(temporary, target)
+      if (priorFile) {
+        const latest = lstatSync(target)
+        if (!latest.isFile() || latest.dev !== priorFile.dev || latest.ino !== priorFile.ino || latest.size !== priorFile.size || latest.mtimeMs !== priorFile.mtimeMs) throw new Error('The destination changed after overwrite confirmation. It was left untouched; choose it again to review the new file.')
+        renameSync(temporary, target)
+      } else {
+        // Hard-link creation is atomic and fails rather than clobbering a file created after the dialog.
+        linkSync(temporary, target)
+        unlinkSync(temporary)
+      }
       return { ok: true, cancelled: false, message: 'Editable DOCX saved. Word may reflow text differently; identical pagination is not guaranteed.', path: target }
     } catch (error) {
       try { rmSync(temporary, { force: true }) } catch { /* Preserve the original export error. */ }
@@ -263,19 +284,28 @@ app.whenReady().then(() => {
       const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs')
       const loadingTask = pdfjs.getDocument({ data: new Uint8Array(pdf), useSystemFonts: true })
       const parsedPdf = await loadingTask.promise
-      const extractedText: string[] = [], linkTargets = new Set<string>()
+      const extractedText: string[] = [], linkTargets = new Set<string>(), links = new Map<string, { label: string; url: string }>()
       for (let pageNumber = 1; pageNumber <= parsedPdf.numPages; pageNumber++) {
         const page = await parsedPdf.getPage(pageNumber)
         const textContent = await page.getTextContent()
-        extractedText.push(...textContent.items.flatMap(item => 'str' in item && item.str.trim() ? [item.str.trim()] : []))
+        const textItems = textContent.items.filter((item): item is typeof item & { str: string; transform: number[]; width: number; height: number } => 'str' in item && typeof item.str === 'string')
+        extractedText.push(...textItems.flatMap(item => item.str.trim() ? [item.str.trim()] : []))
         const annotations = await page.getAnnotations({ intent: 'display' })
-        for (const annotation of annotations) if (annotation.subtype === 'Link' && annotation.url) linkTargets.add(annotation.url)
+        for (const annotation of annotations) if (annotation.subtype === 'Link' && annotation.url) {
+          linkTargets.add(annotation.url)
+          const [x0, y0, x1, y1] = annotation.rect
+          const label = textItems.filter(item => {
+            const left = item.transform[4], baseline = item.transform[5], right = left + item.width, top = baseline + item.height
+            return right > x0 && left < x1 && top > y0 && baseline < y1
+          }).map(item => item.str.trim()).filter(Boolean).join(' ').trim()
+          if (label) links.set(`${label}\u0000${annotation.url}`, { label, url: annotation.url })
+        }
       }
       const actualPages = parsedPdf.numPages
       await loadingTask.destroy()
       if (!actualPages || !extractedText.length) throw new Error('Electron PDF has no measurable pages or extractable selectable text.')
       const entries = document.sections.flatMap(section => section.entries.map(entry => ({ entryId: entry.id, label: entry.heading, section: section.name })))
-      const report = await workspace!.api.saveDocumentFitReport(jobId, { documentHash: createHash('sha256').update(JSON.stringify(document)).digest('hex'), targetPages: document.targetPages, actualPages, extractedText, linkTargets: [...linkTargets], overflow: actualPages > document.targetPages, proposedCuts: actualPages > document.targetPages ? entries.slice(1).reverse() : [], measuredAt: new Date().toISOString() })
+      const report = await workspace!.api.saveDocumentFitReport(jobId, { documentHash: createHash('sha256').update(JSON.stringify(document)).digest('hex'), targetPages: document.targetPages, actualPages, extractedText, linkTargets: [...linkTargets], links: [...links.values()], overflow: actualPages > document.targetPages, proposedCuts: actualPages > document.targetPages ? entries.slice(1).reverse() : [], measuredAt: new Date().toISOString() })
       return report
     } finally { pdfWindow.destroy() }
   })

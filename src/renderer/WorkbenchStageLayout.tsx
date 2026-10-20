@@ -101,7 +101,7 @@ export function WorkbenchStageLayout(props: Props) {
   const { activeJob, onNavigate, error, retry, activePhase, review, consentAccepted, termsAcknowledged, setTermsAcknowledged, consentError, consentBusy, analysis, draft, canonical, fitReport, fitBusy, acceptedCuts, setAcceptedCuts, draftBusy, draftError, pageTarget, setPageTarget, usage, addSection, setAddSection, addEvidence, setAddEvidence, sources, outgoingProfileCounts, inspectOutgoing, cancelOutgoing, authorizeOutgoing, startAnalysis, generateDraft, cancelAnalysis, measurePageFit, applyPageCuts, addDraftItem, correctDraft, checkDraftNow, approveCurrentDraft, exportDocx, docxBusy } = props
   const outgoing = review?.outgoing as unknown as OutboundPayload | undefined
   const headings = ['Job posting', 'Outgoing data', 'Generate', 'Review your tailored CV', 'Export']
-  const descriptions = ['Select the job posting this CV should address.', 'Review this bundle before authorizing.', 'Analyze the posting and create a source-linked draft.', draft?.approved ? 'This draft is approved.' : 'Review the wording and supporting evidence.', 'Export is not available in this version.']
+  const descriptions = ['Select the job posting this CV should address.', 'Review this bundle before authorizing.', 'Analyze the posting and create a source-linked draft.', draft?.approved ? 'This exact CV has been approved.' : 'Review the wording, supporting evidence, and page fit.', 'Save the approved CV as an editable Word document. Word may reflow the layout; identical pagination is not promised.']
 
   return <div className="cv-workbench-start">
     <header className="cv-workbench-heading">

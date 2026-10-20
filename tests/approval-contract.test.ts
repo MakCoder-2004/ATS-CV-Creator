@@ -40,7 +40,7 @@ async function measure(workspace: ReturnType<typeof createWorkbench>, jobId: str
   const canonical = await workspace.api.getCanonicalDocument(jobId)
   if (!canonical) throw new Error('Canonical document unavailable')
   const documentHash = createHash('sha256').update(JSON.stringify(canonical)).digest('hex')
-  return workspace.api.saveDocumentFitReport(jobId, { documentHash, targetPages: canonical.targetPages, actualPages: overflow ? canonical.targetPages + 1 : canonical.targetPages, extractedText: ['CV'], linkTargets: [], overflow, proposedCuts: overflow ? [{ entryId: 'skills-0', label: 'TypeScript', section: 'Skills' }] : [], measuredAt: new Date().toISOString() })
+  return workspace.api.saveDocumentFitReport(jobId, { documentHash, targetPages: canonical.targetPages, actualPages: overflow ? canonical.targetPages + 1 : canonical.targetPages, extractedText: ['CV'], linkTargets: [], links: [], overflow, proposedCuts: overflow ? [{ entryId: 'skills-0', label: 'TypeScript', section: 'Skills' }] : [], measuredAt: new Date().toISOString() })
 }
 
 test('new factual wording requires an explicitly saved cited source and keeps semantic novelty user-declared', async () => {
