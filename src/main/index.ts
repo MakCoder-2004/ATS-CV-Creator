@@ -12,7 +12,7 @@ import { experienceSaveInputSchema, experienceSnapshotSchema, experienceMutation
 import { jobRecordSchema, jobSaveInputSchema, jobSaveResultSchema } from '../shared/jobs'
 import { registerProfileExchangeIpc } from './profile-exchange-ipc'
 import { outboundConsentActionSchema, outboundConsentPreviewSchema } from '../shared/outbound-consent-contract'
-import { analysisIdSchema, analysisResultSchema, analysisStartInputSchema, analysisUsageSchema } from '../shared/posting-analysis'
+import { analysisBudgetsSchema, analysisIdSchema, analysisResultSchema, analysisStartInputSchema, analysisUsageSchema } from '../shared/posting-analysis'
 
 let window: BrowserWindow | undefined
 let workspace: ReturnType<typeof createWorkbench> | undefined
@@ -43,7 +43,12 @@ if (!app.isPackaged && process.env.CV_TAILOR_TEST_USER_DATA_DIR) {
   app.setPath('userData', process.env.CV_TAILOR_TEST_USER_DATA_DIR)
 }
 app.whenReady().then(() => {
-  const scriptedAnalysis: AnalysisTransport | undefined = !app.isPackaged && process.env.CV_TAILOR_SCRIPTED_ANALYSIS === '1' ? { generate: async () => JSON.stringify({ required: ['TypeScript'], preferred: [], tools: ['TypeScript'], responsibilities: ['Build reliable services'], keywords: ['TypeScript'] }) } : undefined
+  let scriptedAttempts = 0
+  const scriptedAnalysis: AnalysisTransport | undefined = !app.isPackaged && ['1', 'retry'].includes(process.env.CV_TAILOR_SCRIPTED_ANALYSIS ?? '') ? { generate: async () => {
+    scriptedAttempts++
+    if (process.env.CV_TAILOR_SCRIPTED_ANALYSIS === 'retry' && scriptedAttempts === 1) throw { status: 429, retryAfter: 3 }
+    return JSON.stringify({ required: ['TypeScript'], preferred: [], tools: ['TypeScript'], responsibilities: ['Build reliable services'], keywords: ['TypeScript'] })
+  } } : undefined
   workspace = createWorkbench(app.getPath('userData'), safeStorage, scriptedAnalysis)
   ipcMain.handle('settings:get', (event, ...args: unknown[]) => {
     trusted(event)
@@ -179,6 +184,7 @@ app.whenReady().then(() => {
   ipcMain.handle('analysis:get', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected job ID'); const result = await workspace!.api.getAnalysis(analysisIdSchema.parse(args[0])); return result === null ? null : analysisResultSchema.parse(result) })
   ipcMain.handle('analysis:cancel', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected job ID'); return analysisResultSchema.parse(await workspace!.api.cancelAnalysis(analysisIdSchema.parse(args[0]))) })
   ipcMain.handle('analysis:usage', async (event, ...args: unknown[]) => { trusted(event); if (args.length) throw new Error('Unexpected arguments'); return analysisUsageSchema.parse(await workspace!.api.getAnalysisUsage()) })
+  ipcMain.handle('analysis:budgets:set', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected analysis budgets'); return analysisUsageSchema.parse(await workspace!.api.setAnalysisBudgets(analysisBudgetsSchema.parse(args[0]))) })
   ipcMain.handle('jobs:open', async (event, ...args: unknown[]) => {
     trusted(event)
     if (args.length !== 1) throw new Error('Expected job ID')

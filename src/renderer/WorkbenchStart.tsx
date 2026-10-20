@@ -91,6 +91,19 @@ export function WorkbenchStart({ activeJob, jobCount, onNavigate }: { activeJob:
     finally { setConsentBusy(false) }
   }
   useEffect(() => {
+    if (!activeJob || analysis?.status !== 'running') return
+    let mounted = true
+    const poll = async () => {
+      try {
+        const latest = await window.workbench.getAnalysis(activeJob.id)
+        if (mounted && latest) { setAnalysis(latest); if (latest.status !== 'running') setUsage(await window.workbench.getAnalysisUsage()) }
+      } catch { /* The initiating request still reports its final state. */ }
+    }
+    const timer = window.setInterval(() => void poll(), 250)
+    void poll()
+    return () => { mounted = false; window.clearInterval(timer) }
+  }, [activeJob?.id, analysis?.status])
+  useEffect(() => {
     let mounted = true
     Promise.all([window.workbench.getProfile(), window.workbench.getExperience()])
       .then(([profile, evidence]) => { if (mounted) { setSources({ profile, evidence }); setError('') } })
@@ -146,7 +159,7 @@ export function WorkbenchStart({ activeJob, jobCount, onNavigate }: { activeJob:
           {!consentAccepted ? <>
             <label className="outbound-ack"><input type="checkbox" checked={termsAcknowledged} onChange={event => setTermsAcknowledged(event.target.checked)} />I understand the Gemini free-tier data-use terms and have reviewed this exact bundle.</label>
             <div className="outbound-actions"><button type="button" className="primary-button" disabled={!termsAcknowledged || consentBusy} onClick={() => void authorizeOutgoing()}>Authorize this run</button><button type="button" className="secondary-button" disabled={consentBusy} onClick={() => void cancelOutgoing()}>Cancel review</button></div>
-          </> : <><p role="status">Consent saved for this frozen bundle. Analysis requests are bounded and usage is a local observation, not provider quota.</p><button type="button" className="primary-button" disabled={consentBusy || analysis?.status === 'complete'} onClick={() => void startAnalysis()}>{consentBusy ? 'Analyzing…' : analysis?.status === 'complete' ? 'Analysis complete' : 'Analyze posting'}</button><button type="button" className="secondary-button" disabled={analysis?.status !== 'running'} onClick={() => void window.workbench.cancelAnalysis(activeJob.id).then(setAnalysis)}>Cancel analysis</button>{usage && <p>Pacific day {usage.pacificDay}: {usage.attempts} observed attempts; max {usage.runLimit} per run, {usage.minimumSpacingMs / 1000}s spacing. {usage.warning}</p>}{analysis?.analysis && <div aria-label="Posting analysis"><h4>Required qualifications</h4><ul>{analysis.analysis.required.map(item => <li key={item}>{item}</li>)}</ul><h4>Preferred qualifications</h4><ul>{analysis.analysis.preferred.map(item => <li key={item}>{item}</li>)}</ul><h4>Tools and responsibilities</h4><p>{[...analysis.analysis.tools, ...analysis.analysis.responsibilities].join(' · ')}</p><h4>Keywords</h4><p>{analysis.analysis.keywords.join(' · ')}</p></div>}<button type="button" className="secondary-button" disabled={consentBusy} onClick={() => void cancelOutgoing()}>Revoke this run</button></>}
+          </> : <><p role="status">Consent saved for this frozen bundle. Analysis requests are bounded and usage is a local observation, not provider quota.</p><button type="button" className="primary-button" disabled={consentBusy || analysis?.status === 'complete'} onClick={() => void startAnalysis()}>{consentBusy ? 'Analyzing…' : analysis?.status === 'complete' ? 'Analysis complete' : 'Analyze posting'}</button><button type="button" className="secondary-button" disabled={analysis?.status !== 'running'} onClick={() => void window.workbench.cancelAnalysis(activeJob.id).then(setAnalysis)}>Cancel analysis</button>{analysis?.status === 'running' && <p role="status">{analysis.progress} Dispatched attempts: {analysis.attempts}.</p>}{analysis?.status === 'failed' && <p className="inspector-error" role="alert">{analysis.error ?? analysis.progress} Check the connection or Settings, then explicitly start a new authorized run.</p>}{analysis?.status === 'cancelled' && <p role="status">{analysis.progress}</p>}{usage && <p>Pacific day {usage.pacificDay}: {usage.attempts} locally observed attempts; configured maximum {usage.runLimit} per run and {usage.minimumSpacingMs / 1000}s spacing. {usage.warning}</p>}{usage && usage.attempts + usage.runLimit > usage.configuredDailyLimit && <p role="alert">This run could reach the configured local daily attempt limit ({usage.configuredDailyLimit}); dispatch stops at that limit. It is not a provider quota estimate.</p>}{analysis?.analysis && <div aria-label="Posting analysis"><h4>Required qualifications</h4><ul>{analysis.analysis.required.map(item => <li key={item}>{item}</li>)}</ul><h4>Preferred qualifications</h4><ul>{analysis.analysis.preferred.map(item => <li key={item}>{item}</li>)}</ul><h4>Tools and responsibilities</h4><p>{[...analysis.analysis.tools, ...analysis.analysis.responsibilities].join(' · ')}</p><h4>Keywords</h4><p>{analysis.analysis.keywords.join(' · ')}</p></div>}<button type="button" className="secondary-button" disabled={consentBusy} onClick={() => void cancelOutgoing()}>Revoke this run</button></>}
         </section>}
         {consentError && <p className="inspector-error" role="alert">{consentError}</p>}
       </div>}

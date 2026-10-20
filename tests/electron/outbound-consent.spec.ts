@@ -41,7 +41,7 @@ test('user inspects minimized data, declines or explicitly authorizes only one r
     await expect(secondReview.getByRole('checkbox', { name: /I understand the Gemini free-tier data-use terms/ })).not.toBeChecked()
     await secondReview.getByRole('checkbox', { name: /I understand the Gemini free-tier data-use terms/ }).check()
     await secondReview.getByRole('button', { name: 'Authorize this run' }).click()
-    await expect(secondReview).toContainText('No provider request was sent')
+    await expect(secondReview).toContainText('Consent saved for this frozen bundle')
     await secondReview.getByRole('button', { name: 'Revoke this run' }).click()
     await expect(secondReview).toHaveCount(0)
     await page.getByRole('button', { name: 'Inspect outgoing data' }).click()

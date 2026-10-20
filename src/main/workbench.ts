@@ -15,10 +15,11 @@ import { prepareOutboundBundle, type ConsentSource, type EvidenceScopeRevision, 
 import { createOutboundConsentEngine } from './outbound-consent'
 import type { OutboundConsentAction, OutboundConsentPreview } from '../shared/outbound-consent-contract'
 import { outboundConsentActionSchema, outboundConsentPreviewSchema } from '../shared/outbound-consent-contract'
-import { createAnalysisDispatcher, type AnalysisTransport } from './posting-analysis'
+import { AnalysisError, createAnalysisDispatcher, type AnalysisTransport } from './posting-analysis'
 import { createGeminiAnalysisTransport } from './gemini-analysis-transport'
 import { createHash } from 'node:crypto'
-import { analysisResultSchema, analysisUsageSchema, postingAnalysisSchema } from '../shared/posting-analysis'
+import { z } from 'zod'
+import { analysisBudgetsSchema, analysisResultSchema, analysisUsageSchema, defaultAnalysisBudgets, postingAnalysisSchema, type AnalysisBudgets } from '../shared/posting-analysis'
 
 export interface SecureStorage {
   isEncryptionAvailable(): boolean
@@ -150,14 +151,18 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
   const outboundEngine = createOutboundConsentEngine()
   const pendingOutbound = new Map<string, { jobId: string; source: ConsentSource; bundle: OutboundBundle; runId: string; consentId?: string }>()
   const currentAnalysis = new Map<string, ReturnType<typeof analysisResultSchema.parse>>()
+  const activeAnalysisByJob = new Map<string, string>()
+  const readAnalysisBudgets = (): AnalysisBudgets => {
+    const row = db.prepare('SELECT value FROM settings WHERE key = ?').get('analysis-budgets') as { value: string } | undefined
+    try { return analysisBudgetsSchema.parse(row ? JSON.parse(row.value) : defaultAnalysisBudgets) } catch { return defaultAnalysisBudgets }
+  }
   const previousAttempts = (db.prepare('SELECT attempted_at FROM analysis_attempts').all() as { attempted_at: string }[]).map(row => Date.parse(row.attempted_at)).filter(Number.isFinite)
-  const dispatcher = createAnalysisDispatcher({ observedAttempts: previousAttempts, transport: scriptedTransport ?? { generate: async input => {
+  const dispatcher = createAnalysisDispatcher({ ...readAnalysisBudgets(), maxAttempts: readAnalysisBudgets().runLimit, maxElapsedMs: readAnalysisBudgets().runTimeLimitMs, maxDailyAttempts: readAnalysisBudgets().configuredDailyLimit, observedAttempts: previousAttempts, transport: scriptedTransport ?? { generate: async input => {
     const row = db.prepare('SELECT ciphertext FROM encrypted_credentials WHERE key = ?').get('gemini-api-key') as { ciphertext: string } | undefined
     if (!row || !secureStorage.decryptString || !secureStorageAvailable()) throw Object.assign(new Error('Gemini API key is unavailable.'), { status: 401 })
     const key = secureStorage.decryptString(Buffer.from(row.ciphertext, 'base64'))
     return createGeminiAnalysisTransport(key).generate(input)
-  } }, onAttempt: timestamp => { previousAttempts.push(timestamp); db.prepare('INSERT INTO analysis_attempts (run_id, attempted_at) VALUES (?, ?)').run(activeRun, new Date(timestamp).toISOString()) } })
-  let activeRun = ''
+  } }, onAttempt: (timestamp, runId) => { previousAttempts.push(timestamp); db.prepare('INSERT INTO analysis_attempts (run_id, attempted_at) VALUES (?, ?)').run(runId, new Date(timestamp).toISOString()) }, onProgress: (runId, jobId, progress, attempts) => { currentAnalysis.set(jobId, analysisResultSchema.parse({ jobId, status: 'running', analysis: null, progress, attempts, cacheHit: false })) } })
   const currentConsentSource = (jobId: string): ConsentSource | null => {
     const job = db.prepare('SELECT data FROM jobs WHERE id = ?').get(jobId) as { data: string } | undefined
     if (!job) return null
@@ -475,15 +480,31 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
     async startAnalysis(token: string) {
       const pending = pendingOutbound.get(token)
       if (!pending?.consentId) throw new Error('Review and authorize this exact outgoing bundle before analysis.')
-      const cacheKey = createHash('sha256').update(JSON.stringify({ job: pending.source.job.description, model: pending.source.model.name, prompt: 'posting-analysis-v1', schema: JSON.stringify(postingAnalysisSchema) })).digest('hex')
+      const cacheKey = createHash('sha256').update(JSON.stringify({ job: { title: pending.source.job.title, company: pending.source.job.company, description: pending.source.job.description }, model: pending.source.model.name, prompt: 'posting-analysis-v1', schema: JSON.stringify(z.toJSONSchema(postingAnalysisSchema)) })).digest('hex')
       const cached = db.prepare('SELECT data FROM posting_analysis_cache WHERE cache_key = ?').get(cacheKey) as { data: string } | undefined
-      if (cached) return analysisResultSchema.parse({ jobId: pending.jobId, status: 'complete', analysis: JSON.parse(cached.data), progress: 'Loaded compatible saved analysis.', attempts: 0, cacheHit: true })
+      if (cached) {
+        const value = analysisResultSchema.parse({ jobId: pending.jobId, status: 'complete', analysis: postingAnalysisSchema.parse(JSON.parse(cached.data)), progress: 'Loaded compatible saved analysis.', attempts: 0, cacheHit: true })
+        currentAnalysis.set(pending.jobId, value)
+        return value
+      }
       const credentials = db.prepare('SELECT ciphertext FROM encrypted_credentials WHERE key = ?').get('gemini-api-key')
       if (!scriptedTransport && !credentials) throw new Error('Save a Gemini API key in Settings before starting analysis.')
       const approvedPayload = authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
+      if (activeAnalysisByJob.has(pending.jobId)) throw new Error('An analysis for this job is already active. Cancel it before starting another run.')
       dispatcher.authorize(pending.runId, pending.consentId)
-      activeRun = pending.runId
-      const result = await dispatcher.analyze({ runId: pending.runId, jobId: pending.jobId, model: geminiModelSchema.parse(pending.source.model.name), prompt: `Extract only explicit qualifications from this authorized minimized posting. Do not infer missing requirements. Return JSON with required, preferred, tools, responsibilities, keywords.\n${JSON.stringify(approvedPayload)}`, consentId: pending.consentId })
+      activeAnalysisByJob.set(pending.jobId, pending.runId)
+      let result: Awaited<ReturnType<typeof dispatcher.analyze>>
+      try {
+        result = await dispatcher.analyze({ runId: pending.runId, jobId: pending.jobId, model: geminiModelSchema.parse(pending.source.model.name), prompt: `Extract only explicit qualifications from this authorized minimized posting. Do not infer missing requirements. Return JSON with required, preferred, tools, responsibilities, keywords.\n${JSON.stringify(approvedPayload)}`, consentId: pending.consentId })
+      } catch (error) {
+        if (activeAnalysisByJob.get(pending.jobId) === pending.runId) activeAnalysisByJob.delete(pending.jobId)
+        const failure = error instanceof AnalysisError ? error : new AnalysisError('PROVIDER', 'Analysis could not complete. Check Settings and try again.')
+        const status = failure.code === 'CANCELLED' ? 'cancelled' : 'failed'
+        const value = analysisResultSchema.parse({ jobId: pending.jobId, status, analysis: null, progress: failure.message, attempts: failure.usage?.attempts ?? 0, error: failure.message, cacheHit: false })
+        currentAnalysis.set(pending.jobId, value)
+        return value
+      }
+      if (activeAnalysisByJob.get(pending.jobId) === pending.runId) activeAnalysisByJob.delete(pending.jobId)
       db.prepare('INSERT OR REPLACE INTO posting_analysis_cache (cache_key, job_id, run_id, data) VALUES (?, ?, ?, ?)').run(cacheKey, pending.jobId, pending.runId, JSON.stringify(result.analysis))
       const value = analysisResultSchema.parse({ jobId: pending.jobId, status: 'complete', analysis: result.analysis, progress: 'Posting analysis complete.', attempts: result.usage.attempts, cacheHit: false })
       currentAnalysis.set(pending.jobId, value)
@@ -495,9 +516,11 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       return value ? analysisResultSchema.parse(value) : null
     },
     async cancelAnalysis(jobId: string) {
-      const pending = [...pendingOutbound.values()].find(item => item.jobId === jobId)
-      if (pending) dispatcher.cancel(pending.runId)
-      const value = analysisResultSchema.parse({ jobId, status: 'cancelled', analysis: null, progress: 'Analysis cancelled. No further requests will be sent.', attempts: 0, cacheHit: false })
+      const activeRunId = activeAnalysisByJob.get(jobId)
+      const previous = currentAnalysis.get(jobId)
+      if (!activeRunId && previous) return analysisResultSchema.parse(previous)
+      if (activeRunId) dispatcher.cancel(activeRunId)
+      const value = analysisResultSchema.parse({ jobId, status: 'cancelled', analysis: null, progress: 'Analysis cancelled. No further requests will be sent.', attempts: previous?.attempts ?? 0, cacheHit: false })
       currentAnalysis.set(jobId, value)
       return value
     },
@@ -505,7 +528,14 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       const pacificDay = (timestamp: number) => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Los_Angeles', year: 'numeric', month: '2-digit', day: '2-digit' }).format(timestamp)
       const day = pacificDay(Date.now())
       const attempts = previousAttempts.filter(timestamp => pacificDay(timestamp) === day).length
-      return analysisUsageSchema.parse({ pacificDay: day, attempts, configuredDailyLimit: 50, runLimit: 12, minimumSpacingMs: 5000, warning: 'Local observations only; requests from other clients or keys are not visible. Provider quotas vary and are not guaranteed.' })
+      const budgets = readAnalysisBudgets()
+      return analysisUsageSchema.parse({ ...budgets, pacificDay: day, attempts, warning: 'Local observations and configured app limits only; other clients or keys sharing the provider project are not visible. These are not provider quota guarantees.' })
+    },
+    async setAnalysisBudgets(value) {
+      const budgets = analysisBudgetsSchema.parse(value)
+      saveSetting('analysis-budgets', JSON.stringify(budgets))
+      dispatcher.setBudgets(budgets)
+      return this.getAnalysisUsage()
     },
     async cancelOutboundConsent(token: string): Promise<OutboundConsentAction> {
       const pending = pendingOutbound.get(token)
@@ -514,8 +544,12 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
         outboundEngine.revoke(pending.consentId)
         db.prepare('UPDATE outbound_consents SET revoked = 1 WHERE id = ?').run(pending.consentId)
       }
+      const active = activeAnalysisByJob.get(pending.jobId) === pending.runId
+      if (active) dispatcher.cancel(pending.runId)
+      const prior = currentAnalysis.get(pending.jobId)
+      if (active || !prior) currentAnalysis.set(pending.jobId, analysisResultSchema.parse({ jobId: pending.jobId, status: 'cancelled', analysis: null, progress: 'Run cancelled. Further dispatches are stopped.', attempts: prior?.attempts ?? 0, cacheHit: false }))
       pendingOutbound.delete(token)
-      return outboundConsentActionSchema.parse({ ok: true, runId: pending.runId, message: 'Consent cancelled for this run. No provider request was sent.' })
+      return outboundConsentActionSchema.parse({ ok: true, runId: pending.runId, message: 'Consent cancelled for this run. No further provider request will be dispatched.' })
     }
   }
   const authorizeOutboundPayload = <T>(runId: string, payload: T): T => {

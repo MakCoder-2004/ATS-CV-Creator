@@ -17,11 +17,12 @@ test('user previews and confirms a profile JSON replacement', async () => {
   let running: ElectronApplication | undefined
   try {
     running = await electron.launch({ args: ['.'], env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: join(userData, 'workspace') } })
-    await running.evaluate(({ dialog }, selectedPath) => {
-      dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selectedPath] })
-    }, importFile)
     const page = await running.firstWindow()
     await expect(page.locator('[data-ui-ready="true"]')).toBeVisible({ timeout: 15000 })
+    await running.evaluate(({ dialog }, selectedPath) => {
+      dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selectedPath] })
+      return true
+    }, importFile)
     await page.getByRole('button', { name: 'My profile' }).click()
     await page.evaluate(() => window.workbench.saveSkill({ name: 'Existing evidence', category: 'Technical' }))
     await page.getByRole('button', { name: 'Import profile JSON' }).click()
@@ -45,12 +46,13 @@ test('user previews and confirms a profile JSON replacement', async () => {
     await page.getByRole('button', { name: 'Confirm replacement' }).click()
     await expect(page.getByRole('status')).toContainText('Profile replaced from JSON')
     expect(await page.evaluate(() => window.workbench.getProfile())).toMatchObject({ contact: null, skills: [{ name: 'Imported evidence' }] })
-    await running.evaluate(({ dialog }) => { dialog.showOpenDialog = async () => ({ canceled: true, filePaths: [] }) })
+    await running.evaluate(({ dialog }) => { dialog.showOpenDialog = async () => ({ canceled: true, filePaths: [] }); return true })
     await page.getByRole('button', { name: 'Import profile JSON' }).click()
     await expect(page.getByRole('dialog', { name: 'Replace profile from JSON?' })).toHaveCount(0)
     expect(await page.evaluate(() => window.workbench.getProfile())).toMatchObject({ skills: [{ name: 'Imported evidence' }] })
     await running.evaluate(({ dialog }, selectedPath) => {
       dialog.showSaveDialog = async () => ({ canceled: false, filePath: selectedPath })
+      return true
     }, exportFile)
     page.once('dialog', nativeDialog => nativeDialog.accept())
     await page.getByRole('button', { name: 'Export profile JSON' }).click()
@@ -58,10 +60,10 @@ test('user previews and confirms a profile JSON replacement', async () => {
     expect(JSON.parse(readFileSync(exportFile, 'utf8'))).toMatchObject({ format: 'cv-tailor-profile', version: 1, profile: { skills: [{ name: 'Imported evidence' }] } })
     const corrupt = join(userData, 'corrupt.json')
     writeFileSync(corrupt, '{')
-    await running.evaluate(({ dialog }, selectedPath) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selectedPath] }) }, corrupt)
+    await running.evaluate(({ dialog }, selectedPath) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selectedPath] }); return true }, corrupt)
     await page.getByRole('button', { name: 'Import profile JSON' }).click()
     await expect(page.getByRole('alert')).toContainText('invalid or incompatible')
-    await running.evaluate(({ dialog }, directory) => { dialog.showSaveDialog = async () => ({ canceled: false, filePath: directory }) }, userData)
+    await running.evaluate(({ dialog }, directory) => { dialog.showSaveDialog = async () => ({ canceled: false, filePath: directory }); return true }, userData)
     page.once('dialog', nativeDialog => nativeDialog.accept())
     await page.getByRole('button', { name: 'Export profile JSON' }).click()
     await expect(page.getByRole('alert')).toContainText('could not complete')

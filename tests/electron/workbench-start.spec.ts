@@ -7,7 +7,7 @@ import { join } from 'node:path'
 test('CV workbench guides setup without implying a generated draft and tracks the chosen job', async () => {
   const userData = mkdtempSync(join(tmpdir(), 'cv-tailor-workbench-start-'))
   let app: ElectronApplication | undefined
-  const launch = async () => { app = await electron.launch({ args: ['.'], env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData, CV_TAILOR_SCRIPTED_ANALYSIS: '1' } }); return app }
+  const launch = async () => { app = await electron.launch({ args: ['.'], env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData, CV_TAILOR_SCRIPTED_ANALYSIS: 'retry' } }); return app }
   try {
     let page = await (await launch()).firstWindow()
     await expect(page.locator('[data-ui-ready="true"]')).toBeVisible()
@@ -47,7 +47,8 @@ test('CV workbench guides setup without implying a generated draft and tracks th
     await page.getByRole('checkbox', { name: /understand the Gemini free-tier/i }).check()
     await page.getByRole('button', { name: 'Authorize this run' }).click()
     await page.getByRole('button', { name: 'Analyze posting' }).click()
-    await expect(page.getByRole('heading', { name: 'Required qualifications' })).toBeVisible()
+    await expect(page.getByText(/Temporary provider failure\. Retrying after a bounded/)).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Required qualifications' })).toBeVisible({ timeout: 10000 })
     await expect(page.locator('.outbound-review').getByText('TypeScript', { exact: true }).last()).toBeVisible()
     await page.getByRole('button', { name: 'Use dark mode' }).click()
     await expect(page.getByRole('region', { name: 'CV document' }).locator('.paper')).toHaveCSS('background-color', 'rgb(255, 255, 255)')
