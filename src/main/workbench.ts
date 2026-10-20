@@ -711,6 +711,11 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
         const findings = [...report.findings, ...semanticFindings]
         const totalAttempts = result.attempts + repairAttempts + coverageRepairAttempts + semanticAttempts
         const mergedReport = factualCheckReportSchema.parse({ ...report, passed: findings.length === 0, findings })
+        if (dispatcher.isCancelled(pending.runId) || activeAnalysisByJob.get(pending.jobId) !== pending.runId) {
+          if (activeAnalysisByJob.get(pending.jobId) === pending.runId) activeAnalysisByJob.delete(pending.jobId)
+          saveAnalysisState({ jobId: pending.jobId, runId: pending.runId, status: 'cancelled', analysis: analysis.analysis, progress: 'Generation cancelled. A late response was discarded; no draft changes were saved.', attempts: (db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id = ?').get(pending.runId) as { count: number }).count, cacheHit: analysis.cacheHit })
+          return { ok: false, message: 'Generation was cancelled. Its late response was discarded; no draft changes were saved.' }
+        }
         const checkedDraft = draftRevisionSchema.parse({ ...result.draft, status: findings.length ? 'blocked' : 'unverified', checkReport: mergedReport, coverage, attempts: totalAttempts, progress: findings.length ? `Draft saved for its ${result.draft.pageTarget}-page target; blocked by ${findings.length} unresolved finding(s). The optional semantic review is a second opinion, not proof.` : `${result.draft.progress} Automated checks passed; semantic comparison is a second opinion, not proof. Human review remains required.` })
         result.draft = checkedDraft
         const tx = db.transaction(() => { db.prepare('INSERT INTO draft_revisions (id,job_id,revision,data) VALUES (?,?,?,?)').run(result.draft.id, result.draft.jobId, result.draft.revision, JSON.stringify(result.draft)) })

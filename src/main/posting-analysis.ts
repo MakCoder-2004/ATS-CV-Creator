@@ -157,5 +157,6 @@ export function createAnalysisDispatcher(options: Options) {
       }
     } finally { clearTimeout(timer); if (active.get(input.runId) === controller) active.delete(input.runId) }
   }
-  return { authorize, cancel, analyze, generate, getUsage, setBudgets }
+  const isCancelled = (runId: string) => cancelled.has(runId)
+  return { authorize, cancel, analyze, generate, getUsage, setBudgets, isCancelled }
 }
