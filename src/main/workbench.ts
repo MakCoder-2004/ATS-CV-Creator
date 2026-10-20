@@ -55,7 +55,13 @@ function reconcileNestedItems(items: NestedInput[], previous: NestedRecord[], ow
 
 /** One workspace per userData directory. Opening a workspace applies forward-only migrations. */
 function preserveKnownFindings(checked: ReturnType<typeof checkDraftFacts>, prior: DraftRevision) {
-  const known = prior.checkReport?.findings.filter(finding => finding.itemPath === 'generation' || finding.code === 'semantic-unsupported') ?? []
+  const known = prior.checkReport?.findings.filter(finding => finding.itemPath === 'generation' || finding.code === 'semantic-unsupported').map(finding => {
+    if (finding.code !== 'semantic-unsupported') return finding
+    const originDraftId = finding.originDraftId ?? prior.checkReport?.draftId ?? prior.id
+    const originDraftRevision = finding.originDraftRevision ?? prior.checkReport?.draftRevision ?? prior.revision
+    const originEvidenceRevisionHash = finding.originEvidenceRevisionHash ?? prior.checkReport?.evidenceRevisionHash
+    return { ...finding, originDraftId, originDraftRevision, ...(originEvidenceRevisionHash ? { originEvidenceRevisionHash } : {}), historical: originDraftId !== checked.draftId || originDraftRevision !== checked.draftRevision }
+  }) ?? []
   const findings = [...known, ...checked.findings.filter(finding => !known.some(item => item.code === finding.code && item.itemPath === finding.itemPath))]
   return factualCheckReportSchema.parse({ ...checked, passed: checked.passed && known.length === 0, findings })
 }
@@ -567,6 +573,19 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       profile.skills.forEach((item, i) => { const safe = approvedPayload.profile.skills[i]; if (safe) scrubbed.set(item.id, JSON.stringify(safe)) })
       profile.certificates.forEach((item, i) => { const safe = approvedPayload.profile.certificates[i]; if (safe) scrubbed.set(item.id, JSON.stringify(safe)) })
       const safeItems = items.map(item => ({ ...item, text: scrubbed.get(item.id) ?? '' })).filter(item => item.text)
+      const minimizedStringPairs: Array<[string, string]> = []
+      const collectStringPairs = (original: unknown, minimized: unknown) => {
+        if (typeof original === 'string' && typeof minimized === 'string' && original !== minimized) minimizedStringPairs.push([original, minimized])
+        else if (Array.isArray(original) && Array.isArray(minimized)) original.forEach((value, index) => collectStringPairs(value, minimized[index]))
+        else if (original && minimized && typeof original === 'object' && typeof minimized === 'object') for (const [key, value] of Object.entries(original)) collectStringPairs(value, (minimized as Record<string, unknown>)[key])
+      }
+      for (const item of items) {
+        const safe = scrubbed.get(item.id)
+        if (safe) try { collectStringPairs(item.snapshot, JSON.parse(safe)) } catch { /* non-JSON source text is already minimized independently */ }
+      }
+      const exactLocalDates = [...draftInputs.lockedFields.experience, ...draftInputs.lockedFields.education].flatMap(item => [item.startDate, item.endDate]).filter((value): value is string => Boolean(value))
+      for (const date of exactLocalDates) minimizedStringPairs.push([date, ''])
+      const minimizeRestoredText = (text: string) => minimizedStringPairs.reduce((value, [restored, minimized]) => value.replaceAll(restored, minimized), text)
       activeAnalysisByJob.set(pending.jobId, pending.runId)
       const failedDraftIdentity = { id: randomUUID(), jobId: pending.jobId, revision: ((db.prepare('SELECT MAX(revision) AS revision FROM draft_revisions WHERE job_id = ?').get(pending.jobId) as { revision: number | null }).revision ?? 0) + 1, createdAt: new Date().toISOString(), lockedFields: draftInputs.lockedFields }
       try {
@@ -601,33 +620,43 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
           result.draft.attempts += repair.attempts
           report = checkDraftFacts(result.draft)
         }
+        const finalSemanticPairs = (['education', 'experience', 'projects', 'skills', 'certificates'] as const).flatMap(section => result.draft.content[section].map((item, index) => {
+          const citations = item.citations
+          const citedSources = citations.flatMap(citation => {
+            const frozen = result.draft.evidence.find(evidence => evidence.evidenceId === citation.evidenceId && evidence.revision === citation.revision)
+            const source = safeItems.find(candidate => candidate.id === citation.evidenceId && candidate.revision === citation.revision)
+            return frozen && source ? [source.text] : []
+          })
+          return { section, itemPath: `${section}[${index}]`, rewritten: minimizeRestoredText('text' in item ? item.text : item.name), evidence: citedSources }
+        }))
+        const findingOrigin = { originDraftId: result.draft.id, originDraftRevision: result.draft.revision, originEvidenceRevisionHash: report.evidenceRevisionHash, historical: false }
         const semanticFindings: ReturnType<typeof factualCheckReportSchema.parse>['findings'] = []
         let semanticAttempts = 0
         if (pending.faithfulnessCheck) {
           const semanticSchema = z.object({ results: z.array(z.object({ itemPath: z.string().min(1), supported: z.boolean(), explanation: z.string().trim().min(1).max(500) }).strict()).max(200) }).strict()
-          if (pending.bundle.containsRestoredIdentifier(result.semanticPairs)) {
-            semanticFindings.push({ code: 'semantic-unsupported', itemPath: 'faithfulness', message: 'The optional comparison was withheld because a rewritten pair contained a restored identifier or contact detail.', correction: 'Remove the sensitive text and start a fresh authorized review. No semantic request was sent.' })
+          if (pending.bundle.containsRestoredIdentifier(finalSemanticPairs)) {
+            semanticFindings.push({ code: 'semantic-unsupported', itemPath: 'faithfulness', ...findingOrigin, message: 'The optional comparison was withheld because a rewritten pair contained a restored identifier or contact detail.', correction: 'Remove the sensitive text and start a fresh authorized review. No semantic request was sent.' })
           } else {
             const attemptsBeforeReview = (db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id = ?').get(pending.runId) as { count: number }).count
             try {
               authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
-              const review = await dispatcher.generate({ runId: pending.runId, jobId: pending.jobId, model: geminiModelSchema.parse(pending.source.model.name), consentId: pending.consentId!, responseSchema: semanticSchema, prompt: `Compare all rewritten/source pairs in this single structured batch. Report each exact itemPath once. Mark unsupported only when the rewrite adds or strengthens factual meaning beyond its cited source. This is a second opinion, not proof. Do not rewrite content or request more data.\n${JSON.stringify({ pairs: result.semanticPairs })}` })
+              const review = await dispatcher.generate({ runId: pending.runId, jobId: pending.jobId, model: geminiModelSchema.parse(pending.source.model.name), consentId: pending.consentId!, responseSchema: semanticSchema, prompt: `Compare all rewritten/source pairs in this single structured batch. Report each exact itemPath once. Mark unsupported only when the rewrite adds or strengthens factual meaning beyond its cited source. This is a second opinion, not proof. Do not rewrite content or request more data.\n${JSON.stringify({ pairs: finalSemanticPairs })}` })
               authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
               semanticAttempts += review.attempts
               const parsed = semanticSchema.parse(JSON.parse(review.text))
-              const expectedPaths = result.semanticPairs.map(pair => pair.itemPath)
+              const expectedPaths = finalSemanticPairs.map(pair => pair.itemPath)
               if (parsed.results.length !== expectedPaths.length || new Set(parsed.results.map(item => item.itemPath)).size !== expectedPaths.length || expectedPaths.some(path => !parsed.results.some(item => item.itemPath === path))) throw new Error('Faithfulness review returned incomplete or duplicate item paths.')
               for (const finding of parsed.results.filter(item => !item.supported)) {
-                const pair = result.semanticPairs.find(item => item.itemPath === finding.itemPath)!
+                const pair = finalSemanticPairs.find(item => item.itemPath === finding.itemPath)!
                 const index = Number(/\[(\d+)\]/.exec(finding.itemPath)?.[1] ?? -1)
-                semanticFindings.push({ code: 'semantic-unsupported', itemPath: finding.itemPath, evidenceId: result.draft.content[pair.section][index]?.citations[0]?.evidenceId, message: `Second-opinion faithfulness check: ${finding.explanation}`, correction: 'Correct or remove this wording, then obtain a new authorized faithfulness check. This result is not proof and does not replace human review.' })
+                semanticFindings.push({ code: 'semantic-unsupported', itemPath: finding.itemPath, evidenceId: result.draft.content[pair.section][index]?.citations[0]?.evidenceId, ...findingOrigin, message: `Second-opinion faithfulness check: ${finding.explanation}`, correction: 'Correct or remove this wording, then obtain a new authorized faithfulness check. This result is not proof and does not replace human review.' })
               }
             } catch (error) {
               if (error instanceof AnalysisError && error.code === 'CANCELLED') throw error
               const attemptsAfterReview = (db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id = ?').get(pending.runId) as { count: number }).count
               semanticAttempts = attemptsAfterReview - attemptsBeforeReview
               const reason = error instanceof AnalysisError ? error.code.toLowerCase() : 'malformed structured output'
-              semanticFindings.push({ code: 'semantic-unsupported', itemPath: 'faithfulness', message: `Optional faithfulness review did not complete (${reason}); generated wording was retained but remains blocked.`, correction: 'Retry with a fresh authorized run when the shared request/time budget permits. This check is a second opinion, not proof.' })
+              semanticFindings.push({ code: 'semantic-unsupported', itemPath: 'faithfulness', ...findingOrigin, message: `Optional faithfulness review did not complete (${reason}); generated wording was retained but remains blocked.`, correction: 'Retry with a fresh authorized run when the shared request/time budget permits. This check is a second opinion, not proof.' })
             }
           }
         }

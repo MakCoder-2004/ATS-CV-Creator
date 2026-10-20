@@ -5,6 +5,10 @@ export const factualFindingSchema = z.object({
   message: z.string(),
   itemPath: z.string(),
   evidenceId: z.string().optional(),
+  originDraftId: z.string().uuid().optional(),
+  originDraftRevision: z.number().int().positive().optional(),
+  originEvidenceRevisionHash: z.string().min(1).optional(),
+  historical: z.boolean().optional(),
   correction: z.string()
 }).strict()
 export const factualCheckReportSchema = z.object({
