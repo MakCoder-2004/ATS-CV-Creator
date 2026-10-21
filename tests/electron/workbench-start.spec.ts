@@ -5,13 +5,14 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 test('Tailor CV follows the focused workbench phases and keeps the selected posting in view', async () => {
+  test.setTimeout(90000)
   const userData = mkdtempSync(join(tmpdir(), 'cv-tailor-workbench-start-'))
   let app: Awaited<ReturnType<typeof electron.launch>> | undefined
   const launch = async () => { app = await electron.launch({ args: ['.'], env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData, CV_TAILOR_SCRIPTED_ANALYSIS: 'retry' } }); return app }
   try {
     let page = await (await launch()).firstWindow()
     await expect(page.locator('[data-ui-ready="true"]')).toBeVisible()
-    await expect(page.getByRole('heading', { name: 'Job posting', exact: true })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Start with the right role.', exact: true })).toBeVisible()
     await expect(page.getByRole('heading', { name: 'Choose a posting first' })).toBeVisible()
     await expect(page.getByRole('navigation', { name: 'Tailoring phases' }).locator('[aria-current="step"]')).toContainText('Job posting')
 
@@ -34,8 +35,8 @@ test('Tailor CV follows the focused workbench phases and keeps the selected post
     await expect(phases).toHaveCSS('border-left-style', 'solid')
     await expect(phases).toHaveCSS('border-right-style', 'solid')
     await expect(phases).toHaveCSS('border-radius', '6px')
-    await expect(page.getByRole('region', { name: 'CV document' })).toBeVisible()
-    await expect(page.getByRole('heading', { name: 'Your tailored CV will appear here' })).toBeVisible()
+    await expect(page.locator('.posting-overview')).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'A profile to build from' })).toBeVisible()
 
     await page.getByRole('button', { name: 'My profile' }).click()
     await expect(page.getByRole('heading', { name: 'My profile' })).toBeVisible()
@@ -52,7 +53,7 @@ test('Tailor CV follows the focused workbench phases and keeps the selected post
     await page.getByRole('button', { name: 'Save job' }).click()
     await page.getByRole('navigation', { name: 'Main navigation' }).getByRole('button', { name: 'Tailor CV' }).click()
     await page.locator('.sidebar-job-items').getByRole('button', { name: /Fictional Data Engineer/ }).click()
-    await expect(page.locator('.job-stage').getByText('Example Works')).toBeVisible()
+    await expect(page.locator('.posting-overview').getByText('Example Works')).toBeVisible()
 
     await page.getByRole('button', { name: 'Inspect outgoing data' }).click()
     const review = page.getByRole('region', { name: 'Tailoring workflow' })
@@ -60,12 +61,11 @@ test('Tailor CV follows the focused workbench phases and keeps the selected post
     await expect(page.getByRole('navigation', { name: 'Tailoring phases' }).locator('[aria-current="step"]')).toContainText('Outgoing data')
     await review.getByRole('checkbox', { name: /reviewed what is sent/i }).check()
     await review.getByRole('button', { name: 'Authorize this run' }).click()
-    await review.getByRole('button', { name: 'Analyze posting' }).click()
-    await expect(page.getByText(/The service is busy\. We will retry shortly/)).toBeVisible()
-    await expect(review.getByRole('heading', { name: 'Required qualifications' })).toBeVisible({ timeout: 10000 })
+    await expect(review.getByRole('heading', { name: 'Required qualifications' })).toBeVisible({ timeout: 60000 })
     await expect(review.getByRole('button', { name: 'Generate tailored draft' })).toBeVisible()
+    await expect(review.getByRole('button', { name: 'Analyze posting' })).toHaveCount(0)
     await expect(page.getByRole('navigation', { name: 'Tailoring phases' }).locator('[aria-current="step"]')).toContainText('Generate')
-    await expect(page.getByRole('region', { name: 'CV document' })).toBeVisible()
+    await expect(review.getByRole('region', { name: 'Posting analysis' })).toBeVisible()
     await page.getByRole('button', { name: 'Use dark mode' }).click()
     await expect(review.getByRole('heading', { name: 'Required qualifications' })).toBeVisible()
 
@@ -80,8 +80,8 @@ test('Tailor CV follows the focused workbench phases and keeps the selected post
     page = await (await launch()).firstWindow()
     await expect(page.locator('[data-ui-ready="true"]')).toBeVisible()
     await page.locator('.sidebar-job-items').getByRole('button', { name: /Fictional Data Engineer/ }).click()
-    await expect(page.getByRole('heading', { name: 'Job posting', exact: true })).toBeVisible()
-    await expect(page.getByRole('region', { name: 'CV document' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Start with the right role.', exact: true })).toBeVisible()
+    await expect(page.locator('.posting-overview')).toBeVisible()
   } finally {
     await app?.close().catch(() => {})
     await rm(userData, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 })

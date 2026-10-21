@@ -48,6 +48,14 @@ test('user approves and exports a selectable PDF, while cancellation and overwri
     await expect(page.getByRole('region', { name: 'CV document' }).getByText('Zoë Candidate')).toBeVisible({ timeout: 15000 })
     await page.getByRole('button', { name: 'Check page length' }).click()
     await expect(page.getByText(/Fits the selected target/i)).toBeVisible({ timeout: 45000 })
+    const skillReview = page.getByRole('region', { name: 'New skills to review' })
+    const pendingSkills = (await page.evaluate(id => window.workbench.getDraft(id), jobId))?.suggestedSkills?.filter(skill => skill.status === 'pending') ?? []
+    for (const skill of pendingSkills) await skillReview.getByRole('button', { name: `Remove ${skill.name}` }).click()
+    await page.getByRole('button', { name: 'Check page length' }).click()
+    await expect(page.getByText(/Fits the selected target/i)).toBeVisible({ timeout: 45000 })
+    await page.getByRole('checkbox', { name: 'I reviewed this CV and its wording.' }).check()
+    await page.getByRole('button', { name: 'Check CV for issues' }).click()
+    await expect(page.getByRole('button', { name: 'Approve CV' })).toBeEnabled()
     await page.getByRole('button', { name: 'Approve CV' }).click()
     await expect(page.getByRole('button', { name: 'Export approved PDF' })).toBeEnabled()
 
@@ -65,9 +73,7 @@ test('user approves and exports a selectable PDF, while cancellation and overwri
       return true
     }, output)
     await page.getByRole('button', { name: 'Export approved PDF' }).click()
-    await expect(page.getByRole('status').filter({ hasText: /Approved PDF saved|rendered PDF/i })).toBeVisible({ timeout: 20000 })
-    const exportStatus = await page.getByRole('status').last().innerText()
-    expect(exportStatus).toBe('Approved PDF saved and checked locally.')
+    await expect(page.getByRole('status').filter({ hasText: 'Approved PDF saved and checked locally.' })).toBeVisible({ timeout: 20000 })
     suggested = await app.evaluate(() => (globalThis as any).__suggestedPdfName)
     expect(suggested).toBe('Zoë Candidate - Example Co - Engineer.pdf')
     const bytes = readFileSync(output)

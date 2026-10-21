@@ -56,10 +56,10 @@ test('saved jobs follow the design-system list, support editing, and reopen for 
     const firstTailor = page.locator('.saved-job-row').filter({ hasText: 'Fictional Platform Engineer' }).getByRole('button', { name: 'Open posting' })
     await firstTailor.click()
     await expect(page.getByRole('heading', { name: 'Fictional Platform Engineer', exact: true })).toBeVisible()
-    await expect(page.locator('.job-stage').getByText('Northwind Research Group')).toBeVisible()
+    await expect(page.locator('.posting-overview').getByText('Northwind Research Group')).toBeVisible()
     await page.locator('.sidebar-job-items').getByRole('button', { name: /Fictional Product Analyst/ }).click()
     await expect(page.getByRole('heading', { name: 'Fictional Product Analyst', exact: true })).toBeVisible()
-    await expect(page.locator('.job-stage').getByText('Contoso Labs')).toBeVisible()
+    await expect(page.locator('.posting-overview').getByText('Contoso Labs')).toBeVisible()
 
     await page.getByRole('button', { name: 'Saved jobs', exact: true }).click()
     await page.getByRole('button', { name: 'Use dark mode' }).click()
@@ -82,8 +82,8 @@ test('saved jobs follow the design-system list, support editing, and reopen for 
     await reopenedPage.getByRole('button', { name: 'Cancel' }).click()
     await reopenedFirstRow.getByRole('button', { name: 'Open posting' }).click()
     await expect(reopenedPage.getByRole('heading', { name: 'Fictional Platform Engineer', exact: true })).toBeVisible()
-    await expect(reopenedPage.locator('.job-stage').getByText('Northwind Research Group')).toBeVisible()
-    await expect(reopenedPage.locator('.job-stage').getByText('Fictional Product Analyst')).toHaveCount(0)
+    await expect(reopenedPage.locator('.posting-overview').getByText('Northwind Research Group')).toBeVisible()
+    await expect(reopenedPage.locator('.posting-overview').getByText('Fictional Product Analyst')).toHaveCount(0)
     await reopened.close()
     running = undefined
   } finally {
