@@ -52,13 +52,16 @@ test('visible CV creation reviews new skills, preserves profile evidence, and ex
     await expect(preview).toContainText('Example Systems')
     await expect(preview).toContainText('Python')
     await expect(preview).toContainText('spaCy')
-    await expect(preview.locator('h2')).toHaveText(['Experience', 'Projects', 'Skills'])
+    await expect(preview.locator('h2')).toHaveText(['Experience', 'Projects', 'Technical Skills'])
     await expect(preview).not.toContainText('Professional summary')
     await expect(preview).not.toContainText('Certificates')
     await expect(preview).toHaveClass(/paper--letter/)
+    await expect(preview).toHaveCSS('font-family', 'Lato, Arial, sans-serif')
     await expect.poll(() => page.evaluate(id => window.workbench.getDocumentFitReport(id).then(report => report?.actualPages ?? 0), jobId), { timeout: 45000 }).toBeGreaterThan(0)
     const draftBeforeDecisions = await page.evaluate(id => window.workbench.getDraft(id), jobId)
-    expect(draftBeforeDecisions?.tailoring?.headline).toBe('AI/ML Engineer')
+    const generatedDraft = draftBeforeDecisions as (NonNullable<typeof draftBeforeDecisions> & { tailoring?: { headline?: string; summary?: string } }) | null
+    expect(generatedDraft?.tailoring?.headline).toBeUndefined()
+    expect(generatedDraft?.tailoring?.summary).toBeUndefined()
     expect(draftBeforeDecisions?.suggestedSkills?.length).toBeGreaterThan(0)
     const pending = draftBeforeDecisions!.suggestedSkills!.filter(skill => skill.status === 'pending')
     expect(pending.length).toBeGreaterThan(1)
@@ -124,7 +127,7 @@ test('visible CV creation reviews new skills, preserves profile evidence, and ex
     }, [pdfPath, docxPath])
     await page.getByRole('button', { name: 'Export approved PDF' }).click()
     await expect(page.getByRole('status').filter({ hasText: 'Approved PDF saved and checked locally.' })).toBeVisible({ timeout: 30000 })
-    await page.getByRole('button', { name: 'Export editable DOCX' }).click()
+    await page.getByRole('button', { name: 'Export editable Word document' }).click()
     await expect(page.getByRole('status').filter({ hasText: 'Editable DOCX saved' })).toBeVisible({ timeout: 30000 })
     expect(existsSync(pdfPath)).toBe(true)
     expect(existsSync(docxPath)).toBe(true)
@@ -132,12 +135,14 @@ test('visible CV creation reviews new skills, preserves profile evidence, and ex
     const pdf = await pdfjs.getDocument({ data: new Uint8Array(readFileSync(pdfPath)), useSystemFonts: true }).promise
     const pdfText = (await Promise.all(Array.from({ length: pdf.numPages }, async (_, index) => (await (await pdf.getPage(index + 1)).getTextContent()).items.flatMap(item => 'str' in item ? [item.str] : [])))).flat().join(' ')
     const docx = await extractCanonicalDocx(readFileSync(docxPath))
-    for (const text of ['Software Engineer', 'Built Python APIs and maintained reliable deployments.', 'Research assistant', 'RASA']) {
+    for (const text of ['Software Engineer', 'Built Python APIs and maintained reliable deployments.', 'Research assistant', 'RASA', 'Technical Skills']) {
       expect(pdfText).toContain(text)
       expect(docx.text.join(' ')).toContain(text)
     }
     expect(pdfText).not.toContain('Not in your profile')
     expect(docx.text.join(' ')).not.toContain('Not in your profile')
+    expect(pdfText.indexOf('Example Systems')).toBeLessThan(pdfText.indexOf('Software Engineer'))
+    expect(docx.text.join(' ').indexOf('Example Systems')).toBeLessThan(docx.text.join(' ').indexOf('Software Engineer'))
     const foldedPdfText = pdfText.toLocaleLowerCase()
     expect(foldedPdfText).not.toContain('professional summary')
     expect(foldedPdfText).not.toContain('certificates')
