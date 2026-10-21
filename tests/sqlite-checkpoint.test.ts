@@ -47,4 +47,37 @@ describe('SQLite LangGraph checkpoints', () => {
       expect(tailorCalls).toBe(2)
     } finally { database.close() }
   })
+
+  it('revalidates a completed tailor checkpoint before constructing a draft without redispatching', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'cv-tailor-invalid-checkpoint-'))
+    directories.push(directory)
+    const path = join(directory, 'workbench.sqlite'), threadId = randomUUID()
+    let database = new Database(path), dispatched = 0
+    const ids = [randomUUID(), randomUUID()]
+    const base = {
+      job: { title: 'Engineer' }, analysis: {}, threadId,
+      items: ids.map((id, index) => ({ id, revision: 1, category: 'experience' as const, parentId: id, snapshot: { description: `Built system ${index}.` }, text: `Built system ${index}.` })),
+      identity: { id: randomUUID(), jobId: randomUUID(), revision: 1, createdAt: new Date(0).toISOString(), lockedFields: { fullName: 'Candidate', experience: ids.map((evidenceId, index) => ({ evidenceId, title: `Role ${index}`, organization: `Company ${index}` })), education: [], projects: [], certificates: [] } }
+    }
+    const call = async (prompt: string) => {
+      dispatched++
+      if (prompt.startsWith('Score these')) return { value: { relevance: ids.map((_, index) => ({ index, score: 1, rationale: 'Relevant.' })) }, attempts: 1 }
+      return { value: { education: [], projects: [], skills: [], experience: ids.map((_, index) => ({ text: `Built system ${index}.`, evidence: [index], rationale: 'Relevant.' })) }, attempts: 1 }
+    }
+    const initial = await runSourceLinkedGraph({ ...base, checkpointer: new SqliteCheckpointSaver(database), call })
+    expect(initial.draft.content.experience).toHaveLength(2)
+    expect(dispatched).toBe(2)
+    const row = database.prepare('SELECT checkpoint_id,checkpoint FROM langgraph_checkpoints WHERE thread_id=? ORDER BY created_at DESC,rowid DESC LIMIT 1').get(threadId) as { checkpoint_id: string; checkpoint: string } | undefined
+    expect(row).toBeDefined()
+    const checkpoint = JSON.parse(row!.checkpoint) as { channel_values: { tailored: { experience: Array<{ evidence: number[] }> } } }
+    checkpoint.channel_values.tailored.experience[0].evidence = [0, 1]
+    database.prepare('UPDATE langgraph_checkpoints SET checkpoint=? WHERE thread_id=? AND checkpoint_id=?').run(JSON.stringify(checkpoint), threadId, row!.checkpoint_id)
+    database.close()
+
+    database = new Database(path)
+    try {
+      await expect(runSourceLinkedGraph({ ...base, resume: true, checkpointer: new SqliteCheckpointSaver(database), call: async () => { dispatched++; throw new Error('must not redispatch a completed tailor node') } })).rejects.toThrow(/checkpoint.*content|checkpoint.*evidence|incompatible/i)
+      expect(dispatched).toBe(2)
+    } finally { database.close() }
+  })
 })

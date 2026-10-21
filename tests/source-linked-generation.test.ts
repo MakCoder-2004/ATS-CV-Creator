@@ -130,6 +130,19 @@ test('content generation retries repeated/overlong bullets and rejects cross-par
   await expect(runSourceLinkedGraph({ job: { title: 'Engineer' }, analysis: {}, items, identity: { id: randomUUID(), jobId: randomUUID(), revision: 1, createdAt: new Date().toISOString(), lockedFields: { fullName: 'Candidate', experience: [], education: [], projects: [], certificates: [] } }, call: async prompt => prompt.startsWith('Score these numbered') ? { value: { relevance: items.map((_, index) => ({ index, score: 1, rationale: 'Relevant.' })) }, attempts: 1 } : { value: { education: [], projects: [], skills: [], experience: [{ text: 'Built APIs.', evidence: [0, 1], rationale: 'Mixed roles.' }] }, attempts: 1 } })).rejects.toThrow()
 })
 
+test('an extra foreign parent entry triggers a bounded retry instead of disappearing during grouping', async () => {
+  const ids = [randomUUID(), randomUUID()], items = ids.map((id, index) => ({ id, revision: 1, category: 'experience' as const, parentId: id, snapshot: {}, text: `Role ${index} fact.` }))
+  let calls = 0
+  const result = await runSourceLinkedGraph({ job: {}, analysis: {}, items, identity: { id: randomUUID(), jobId: randomUUID(), revision: 1, createdAt: new Date().toISOString(), lockedFields: { fullName: 'Candidate', experience: ids.map((evidenceId, index) => ({ evidenceId, title: `Role ${index}`, organization: `Company ${index}` })), education: [], projects: [], certificates: [] } }, call: async prompt => {
+    if (prompt.startsWith('Score these numbered')) return { value: { relevance: items.map((_, index) => ({ index, score: 1, rationale: 'Relevant.' })) }, attempts: 1 }
+    calls++
+    const valid = ids.map((_, index) => ({ text: `Built system ${index}.`, evidence: [index], rationale: 'Supported.' }))
+    return { value: { education: [], projects: [], skills: [], experience: calls === 1 ? [...valid, { text: 'Cross-role claim.', evidence: [0, 1], rationale: 'Mixed parents.' }] : valid }, attempts: 1 }
+  } })
+  expect(calls).toBe(2)
+  expect(result.draft.content.experience).toHaveLength(2)
+})
+
 test('accepted frozen consent generates a batched source-linked draft that reopens offline with stable identity', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'source-linked-draft-')); dirs.push(dir)
   const requests: string[] = []
