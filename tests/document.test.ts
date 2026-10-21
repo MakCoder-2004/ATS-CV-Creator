@@ -1,11 +1,11 @@
 import { expect, test } from 'vitest'
-import { canonicalDocumentSchema, createCanonicalDocument, renderDocumentHtml } from '../src/shared/document'
+import { canonicalDocumentSchema, createCanonicalDocument, renderDocumentHtml, splitDocumentBullets } from '../src/shared/document'
 
-const document = canonicalDocumentSchema.parse({ version: 1, draftId: '11111111-1111-4111-8111-111111111111', jobId: '22222222-2222-4222-8222-222222222222', revision: 3, targetPages: 1, identity: { name: 'Zoë <Candidate>', headline: 'Engineer', contact: ['zoe@example.test'], links: [{ label: 'Portfolio', url: 'https://example.test/portfolio' }] }, sections: [{ name: 'Education', entries: [] }, { name: 'Experience', entries: [{ id: 'experience-0', heading: 'Engineer', organization: 'Example', dates: '2020 – Present', text: 'Built Unicode résumé tools.', links: [] }] }, { name: 'Projects', entries: [] }, { name: 'Skills', entries: [] }, { name: 'Certificates', entries: [] }], style: { fontFamily: 'Arial', bodyPt: 11, pageSize: 'A4', background: '#ffffff' } })
+const document = canonicalDocumentSchema.parse({ version: 1, draftId: '11111111-1111-4111-8111-111111111111', jobId: '22222222-2222-4222-8222-222222222222', revision: 3, targetPages: 1, identity: { name: 'Zoë <Candidate>', headline: 'Engineer', contact: ['zoe@example.test'], links: [{ label: 'Portfolio', url: 'https://example.test/portfolio' }] }, sections: [{ name: 'Experience', entries: [{ id: 'experience-0', heading: 'Engineer', organization: 'Example', dates: '2020 – Present', text: 'Built Unicode résumé tools.', bullets: ['Built Unicode résumé tools.'], links: [] }] }], style: { fontFamily: 'Arial', bodyPt: 11, pageSize: 'A4', background: '#ffffff' } })
 
 test('canonical preview uses the fixed five-section order and isolated escaped A4 Arial markup', () => {
   const html = renderDocumentHtml(document)
-  expect(document.sections.map(section => section.name)).toEqual(['Education', 'Experience', 'Projects', 'Skills', 'Certificates'])
+  expect(document.sections.map(section => section.name)).toEqual(['Experience'])
   expect(html).toContain('Zoë &lt;Candidate&gt;')
   expect(html).toContain('2020 – Present')
   expect(html).toContain('href="https://example.test/portfolio"')
@@ -29,14 +29,34 @@ test('canonical education and experience follow authoritative reverse chronology
       { evidenceId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', title: 'Newer degree', institution: 'B University', startDate: '2020-01' },
       { evidenceId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', title: 'Tied degree', institution: 'C University', startDate: '2020-01' }
     ], projects: [], certificates: [] },
+    tailoring: { headline: 'Target role', summary: { text: 'Evidence-based short summary.', citations: [citation], rationale: 'Relevant' } },
+    suggestedSkills: [
+      { id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd', name: 'Confirmed skill', postingTerm: 'Confirmed skill', sourceJobRevision: 1, status: 'confirmed' },
+      { id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee', name: 'Pending skill', postingTerm: 'Pending skill', sourceJobRevision: 1, status: 'pending' },
+      { id: 'ffffffff-ffff-4fff-8fff-ffffffffffff', name: 'Removed skill', postingTerm: 'Removed skill', sourceJobRevision: 1, status: 'removed' }
+    ],
     content: { education: [citation, { evidenceId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', revision: 1 }, { evidenceId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', revision: 1 }].map((source, index) => ({ text: `Education ${index}`, citations: [source], rationale: 'Relevant' })), experience: [citation, { evidenceId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', revision: 1 }, { evidenceId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', revision: 1 }].map((source, index) => ({ text: `Experience ${index}`, citations: [source], rationale: 'Relevant' })), projects: [], skills: [], certificates: [] }
   } as never
-  const result = createCanonicalDocument(draft, { contact: null, education: [], certificates: [], skills: [], summary: [], languages: [], extras: [] } as never, { experience: [], projects: [] } as never)
+  const result = createCanonicalDocument(draft, { contact: { fullName: 'Candidate', headline: 'Saved generic headline', links: [] }, education: [], certificates: [], skills: [], summary: [], languages: [], extras: [] } as never, { experience: [], projects: [] } as never)
   expect(result.sections[0].entries.map(entry => entry.heading)).toEqual(['Newer degree', 'Tied degree', 'Older degree'])
-  expect(result.sections[1].entries.map(entry => entry.heading)).toEqual(['Newer role', 'Tied role', 'Older role'])
+  expect(result.sections.find(section => section.name === 'Experience')?.entries.map(entry => entry.heading)).toEqual(['Newer role', 'Tied role', 'Older role'])
+  expect(result.identity.headline).toBe('Target role')
+  expect(result.identity.summary).toBe('Evidence-based short summary.')
+  expect(result.sections.map(section => section.name)).toEqual(['Education', 'Experience', 'Skills'])
+  expect(result.sections.find(section => section.name === 'Skills')?.entries.map(entry => entry.id)).toEqual(['suggested-skills-dddddddd-dddd-4ddd-8ddd-dddddddddddd'])
+  expect(renderDocumentHtml(result)).toContain('Evidence-based short summary.')
+})
+
+test('description segmentation preserves wording and the HTML renderer safely escapes user content', () => {
+  expect(splitDocumentBullets('• First item\n2. Second <item>')).toEqual(['First item', 'Second <item>'])
+  const html = renderDocumentHtml({ ...document, identity: { ...document.identity, summary: '<script>alert("x")</script>' } })
+  expect(html).toContain('&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;')
+  expect(html).not.toContain('<script>')
 })
 
 test('canonical preview rejects any added or reordered output section', () => {
-  const altered = { ...document, sections: [...document.sections].reverse() }
-  expect(canonicalDocumentSchema.safeParse(altered).success).toBe(false)
+  const reordered = { ...document, sections: [{ name: 'Projects', entries: [{ id: 'project-1', heading: 'Project', text: '', links: [] }] }, ...document.sections] }
+  const empty = { ...document, sections: [...document.sections, { name: 'Education', entries: [] }] }
+  expect(canonicalDocumentSchema.safeParse(reordered).success).toBe(false)
+  expect(canonicalDocumentSchema.safeParse(empty).success).toBe(false)
 })
