@@ -1,6 +1,6 @@
 import { AlignmentType, Document, ExternalHyperlink, HeadingLevel, Packer, Paragraph, TextRun } from 'docx'
 import JSZip from 'jszip'
-import type { CanonicalDocument, CanonicalDocumentEntry } from '../shared/document'
+import { documentSectionDisplayName, splitDocumentBullets, type CanonicalDocument, type CanonicalDocumentEntry } from '../shared/document'
 
 const hyperlinkParagraph = (links: CanonicalDocumentEntry['links']) => new Paragraph({ children: links.flatMap((link, index) => [...(index ? [new TextRun(' · ')] : []), new ExternalHyperlink({ link: link.url, children: [new TextRun({ text: link.label, style: 'Hyperlink' })] })]), spacing: { after: 60 } })
 
@@ -10,10 +10,13 @@ export async function renderCanonicalDocx(document: CanonicalDocument): Promise<
   if (document.identity.headline) paragraphs.push(new Paragraph({ text: document.identity.headline, alignment: AlignmentType.CENTER, spacing: { after: 40 }, keepNext: true }))
   if (document.identity.contact.length) paragraphs.push(new Paragraph({ text: document.identity.contact.join(' · '), alignment: AlignmentType.CENTER, spacing: { after: 40 }, keepNext: true }))
   if (document.identity.links.length) paragraphs.push(hyperlinkParagraph(document.identity.links))
-  if (document.identity.summary) paragraphs.push(new Paragraph({ text: document.identity.summary, spacing: { before: 100, after: 120 } }))
+  if (document.identity.summary) {
+    paragraphs.push(new Paragraph({ text: 'Professional summary', heading: HeadingLevel.HEADING_1, border: { bottom: { color: '333333', space: 3, style: 'single', size: 4 } }, spacing: { before: 120, after: 60 }, keepNext: true }))
+    paragraphs.push(new Paragraph({ text: document.identity.summary, spacing: { before: 40, after: 120 } }))
+  }
   for (const section of document.sections) {
     if (!section.entries.length) continue
-    paragraphs.push(new Paragraph({ text: section.name.toUpperCase(), heading: HeadingLevel.HEADING_1, border: { bottom: { color: '333333', space: 3, style: 'single', size: 4 } }, spacing: { before: 120, after: 60 }, keepNext: true }))
+    paragraphs.push(new Paragraph({ text: documentSectionDisplayName(section.name), heading: HeadingLevel.HEADING_1, border: { bottom: { color: '333333', space: 3, style: 'single', size: 4 } }, spacing: { before: 120, after: 60 }, keepNext: true }))
     if (section.name === 'Skills') {
       paragraphs.push(new Paragraph({ text: section.entries.map(entry => entry.heading).join(' · '), spacing: { after: 60 } }))
       continue
@@ -22,7 +25,7 @@ export async function renderCanonicalDocx(document: CanonicalDocument): Promise<
       paragraphs.push(new Paragraph({ children: [new TextRun({ text: entry.heading, bold: true }), ...(entry.dates ? [new TextRun({ text: `\t${entry.dates}` })] : [])], tabStops: [{ type: 'right', position: 9360 }], spacing: { after: 30 }, keepNext: Boolean(entry.organization || entry.technologies?.length || entry.text || entry.bullets?.length) }))
       if (entry.organization) paragraphs.push(new Paragraph({ text: entry.organization, spacing: { after: 30 }, keepNext: Boolean(entry.technologies?.length || entry.text || entry.bullets?.length) }))
       if (entry.technologies?.length) paragraphs.push(new Paragraph({ children: [new TextRun({ text: 'Technologies: ', bold: true }), new TextRun(entry.technologies.join(', '))], spacing: { after: 30 }, keepNext: Boolean(entry.text || entry.bullets?.length) }))
-      const bullets = entry.bullets?.length ? entry.bullets : entry.text ? [entry.text] : []
+      const bullets = entry.bullets?.length ? entry.bullets : splitDocumentBullets(entry.text)
       for (const bullet of bullets) paragraphs.push(new Paragraph({ text: bullet, bullet: { level: 0 }, indent: { left: 360, hanging: 180 }, spacing: { after: 30 } }))
       if (entry.links.length) paragraphs.push(hyperlinkParagraph(entry.links))
     }

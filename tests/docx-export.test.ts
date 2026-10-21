@@ -10,6 +10,12 @@ const canonical = canonicalDocumentSchema.parse({ version: 1, draftId: '11111111
   { name: 'Skills', entries: [{ id: 'skill-1', heading: 'TypeScript', text: '', links: [] }] }, { name: 'Certificates', entries: [{ id: 'cert-1', heading: 'Cloud certification', organization: 'Example Institute · 2024', text: '', links: [] }] }
 ], style: { fontFamily: 'Arial', bodyPt: 11, pageSize: 'A4', background: '#ffffff' } })
 
+test('legacy version-1 DOCX documents accept and omit empty sections', async () => {
+  const legacy = canonicalDocumentSchema.parse({ ...canonical, sections: [{ name: 'Education', entries: [] }] })
+  const parsed = await extractCanonicalDocx(await renderCanonicalDocx(legacy))
+  expect(parsed.text).not.toContain('Education')
+})
+
 test('writes an editable single-column DOCX with ordered text, Unicode and live hyperlinks', async () => {
   const zip = await JSZip.loadAsync(await renderCanonicalDocx(canonical))
   const xml = await zip.file('word/document.xml')!.async('string')
@@ -23,10 +29,13 @@ test('writes an editable single-column DOCX with ordered text, Unicode and live 
   expect(xml).not.toContain('<w:tbl')
   expect(text).toContain('Université de Montréal')
   expect(text).toContain('Built tools for résumé review with Unicode support.')
-  expect(text.indexOf('EDUCATION')).toBeLessThan(text.indexOf('EXPERIENCE'))
-  expect(text.indexOf('EXPERIENCE')).toBeLessThan(text.indexOf('PROJECTS'))
-  expect(text.indexOf('PROJECTS')).toBeLessThan(text.indexOf('SKILLS'))
-  expect(text.indexOf('SKILLS')).toBeLessThan(text.indexOf('CERTIFICATES'))
+  expect(text.indexOf('Professional summary')).toBeLessThan(text.indexOf('Evidence-based summary.'))
+  expect(text.indexOf('Evidence-based summary.')).toBeLessThan(text.indexOf('Education'))
+  expect(text.indexOf('Education')).toBeLessThan(text.indexOf('Experience'))
+  expect(text.indexOf('Experience')).toBeLessThan(text.indexOf('Projects'))
+  expect(text.indexOf('Projects')).toBeLessThan(text.indexOf('Technical skills'))
+  expect(text.indexOf('Technical skills')).toBeLessThan(text.indexOf('Certificates'))
+  expect(text.indexOf('Technologies:')).toBeLessThan(text.indexOf('TypeScript, React'))
   expect(relationships).toContain('https://example.test/portfolio')
   expect(relationships).toContain('https://example.test/thesis')
   const parsed = await extractCanonicalDocx(await renderCanonicalDocx(canonical))
