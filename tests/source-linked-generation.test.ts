@@ -40,6 +40,46 @@ test('cross-category model citations get one bounded correction request without 
   expect(calls).toHaveLength(3)
 })
 
+test('restores target wording and suggested tool names locally without exposing identifiers in generation requests', async () => {
+  const calls: string[] = []
+  const source = { id: randomUUID(), revision: 1, category: 'skills' as const, snapshot: { name: 'Google Cloud Platform', category: 'Cloud' }, text: '{"name":"[[EMPLOYER_1]] Cloud Platform","category":"Cloud"}' }
+  const result = await runSourceLinkedGraph({ job: { title: '[[EMPLOYER_1]] Cloud Engineer' }, analysis: { tools: ['[[EMPLOYER_1]] Cloud Platform', '[[EMPLOYER_1]] Kubernetes Engine'] }, items: [source], savedSkillNames: ['Google Cloud Platform'], sourceJobRevision: 'posting-v1', restoreText: text => text.replaceAll('[[EMPLOYER_1]]', 'Google'),
+    identity: { id: randomUUID(), jobId: randomUUID(), revision: 1, createdAt: new Date().toISOString(), lockedFields: { fullName: 'Candidate', experience: [], education: [], projects: [], certificates: [] } },
+    call: async prompt => {
+      calls.push(prompt)
+      return { attempts: 1, value: prompt.startsWith('Score these numbered') ? { relevance: [{ index: 0, score: 1, rationale: 'Relevant cloud skill' }] } : { headline: '[[EMPLOYER_1]] Cloud Engineer', summary: { text: 'Uses [[EMPLOYER_1]] Cloud Platform.', evidence: [0], rationale: 'Saved [[EMPLOYER_1]] Cloud Platform skill.' }, education: [], experience: [], projects: [], certificates: [], skills: [{ name: '[[EMPLOYER_1]] Cloud Platform', evidence: [0], rationale: 'Relevant [[EMPLOYER_1]] technology.' }] } }
+    }
+  })
+  expect(calls.join('\n')).not.toContain('Google')
+  expect(result.draft.tailoring).toMatchObject({ headline: 'Google Cloud Engineer', summary: { text: 'Uses Google Cloud Platform.', rationale: 'Saved Google Cloud Platform skill.' } })
+  expect(result.draft.content.skills[0]).toMatchObject({ name: 'Google Cloud Platform', rationale: 'Relevant Google technology.' })
+  expect(result.draft.suggestedSkills).toEqual([expect.objectContaining({ name: 'Google Kubernetes Engine', postingTerm: 'Google Kubernetes Engine', status: 'pending' })])
+})
+
+test('posting analysis restores a display copy while cached and generated provider data stays minimized', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'analysis-display-')); dirs.push(dir)
+  const requests: string[] = []
+  const transport: AnalysisTransport = { async generate({ prompt }) {
+    requests.push(prompt)
+    if (prompt.startsWith('Extract only explicit')) return JSON.stringify({ required: ['[[EMPLOYER_1]] Cloud Platform'], preferred: [], tools: ['[[EMPLOYER_1]] Cloud Platform'], responsibilities: [], keywords: [] })
+    if (prompt.startsWith('Score these numbered')) return JSON.stringify({ relevance: [{ index: 0, score: 1, rationale: 'Relevant skill' }] })
+    return JSON.stringify({ headline: '[[EMPLOYER_1]] Cloud Engineer', summary: { text: 'Uses [[EMPLOYER_1]] Cloud Platform.', evidence: [0], rationale: 'Saved cloud skill' }, education: [], experience: [], projects: [], certificates: [], skills: [{ name: '[[EMPLOYER_1]] Cloud Platform', evidence: [0], rationale: 'Saved skill' }] })
+  } }
+  const wb = createWorkbench(dir, undefined, transport); opened.push(wb)
+  await wb.api.setAnalysisBudgets({ ...analysisBudgetValues(await wb.api.getAnalysisUsage()), minimumSpacingMs: 0, rateLimitAttempts: 100, rateLimitWindowMs: 1000 })
+  await wb.api.saveContact({ fullName: 'Local Candidate' })
+  await wb.api.saveSkill({ name: 'Google Cloud Platform', category: 'Cloud' })
+  const job = await wb.api.saveJob({ title: 'Google Cloud Engineer', company: 'Google', description: 'Google Cloud Platform skills required.' })
+  if (!job.ok) throw new Error('Fixture job failed')
+  const authorize = async () => { const preview = await wb.api.prepareOutboundConsent(job.value.id); if (!preview.ok) throw new Error(preview.message); await wb.api.acceptOutboundConsent(preview.token, true, true); return preview.token }
+  const token = await authorize()
+  expect(await wb.api.startAnalysis(token)).toMatchObject({ analysis: { tools: ['[[EMPLOYER_1]] Cloud Platform'] }, displayAnalysis: { tools: ['Google Cloud Platform'] } })
+  expect(await wb.api.generateDraft(token)).toMatchObject({ ok: true, draft: { tailoring: { headline: 'Google Cloud Engineer' } } })
+  expect(await wb.api.startAnalysis(await authorize())).toMatchObject({ cacheHit: true, displayAnalysis: { tools: ['Google Cloud Platform'] } })
+  expect(requests).toHaveLength(3)
+  expect(requests.join('\n')).not.toContain('Google')
+})
+
 test('fresh generation rejects missing model-generated headline or summary', async () => {
   const items = [{ id: randomUUID(), revision: 1, category: 'experience' as const, snapshot: { description: 'Built services.' }, text: 'Built services.' }]
   await expect(runSourceLinkedGraph({ job: { title: 'Engineer' }, analysis: {}, items, identity: { id: randomUUID(), jobId: randomUUID(), revision: 1, createdAt: new Date().toISOString(), lockedFields: { fullName: 'Candidate', experience: [], education: [], projects: [], certificates: [] } }, call: async prompt => prompt.startsWith('Score these numbered') ? { value: { relevance: [{ index: 0, score: 1, rationale: 'Relevant.' }] }, attempts: 1 } : { value: { education: [], experience: [], projects: [], skills: [], certificates: [] }, attempts: 1 } })).rejects.toThrow()

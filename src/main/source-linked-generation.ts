@@ -36,6 +36,7 @@ function selectWithinPageBudget(items: GenerationItem[], relevance: Array<{ inde
   return selected.sort((a, b) => a.index - b.index)
 }
 export async function runSourceLinkedGraph(input: { job: unknown; analysis: unknown; items: GenerationItem[]; savedSkillNames?: string[]; pageTarget?: 1 | 2; sourceJobRevision?: string | number; call(prompt: string, schema: z.ZodTypeAny): Promise<{ value: unknown; attempts: number }>; onProgress?: (progress: string, step?: 'parse-posting' | 'score-evidence' | 'select-content' | 'tailor-paragraphs' | 'verify-claims' | 'check-document', completedSteps?: Array<'parse-posting' | 'score-evidence' | 'select-content' | 'tailor-paragraphs' | 'verify-claims' | 'check-document'>) => void; checkpointer?: BaseCheckpointSaver; threadId?: string; resume?: boolean; identity: { id: string; jobId: string; revision: number; createdAt: string; lockedFields: { fullName: string; headline?: string; experience: Array<{ evidenceId: string; title: string; organization: string; startDate?: string; endDate?: string }>; education: Array<{ evidenceId: string; title: string; institution?: string; startDate?: string; endDate?: string }>; projects: Array<{ evidenceId: string; name: string }>; certificates: Array<{ evidenceId: string; title: string; issuer?: string; year?: number }> } }; restoreText?: (text: string) => string }): Promise<{ draft: DraftRevision; attempts: number; semanticPairs: Array<{ section: keyof DraftRevision['content'] | 'summary'; itemPath: string; rewritten: string; evidence: string[] }> }> {
+  const restore = (text: string) => input.restoreText?.(text) ?? text
   const completedSteps: Array<'parse-posting' | 'score-evidence' | 'select-content' | 'tailor-paragraphs' | 'verify-claims' | 'check-document'> = ['parse-posting']
   const mark = (step: typeof completedSteps[number], progress: string) => { if (!completedSteps.includes(step)) completedSteps.push(step); input.onProgress?.(progress, step, [...completedSteps]) }
   const State = Annotation.Root({ scored: Annotation<z.infer<typeof scoredSchema> | undefined>(), tailored: Annotation<z.infer<typeof tailoredSchema> | undefined>(), attempts: Annotation<number>({ reducer: (a, b) => a + b, default: () => 0 }) })
@@ -91,16 +92,16 @@ export async function runSourceLinkedGraph(input: { job: unknown; analysis: unkn
     return Math.min(...a.evidence) - Math.min(...b.evidence)
   }).map(entry => {
     const cited = itemFor(entry.evidence, category)
-    return { text: input.restoreText?.(entry.text) ?? entry.text, citations: cited.map(item => ({ evidenceId: item.id, revision: item.revision })), rationale: entry.rationale }
+    return { text: restore(entry.text), citations: cited.map(item => ({ evidenceId: item.id, revision: item.revision })), rationale: restore(entry.rationale) }
   })
   // Summary may cite selected evidence from multiple categories.
   if (input.resume && (!result.tailored?.headline || !result.tailored.summary)) throw new LegacyNarrativeCheckpointError()
   const narrative = result.tailored!.summary
   const summaryCited = narrative.evidence.map(index => { const item = input.items[index]; if (!item || !selectedIndices.has(index)) throw new CitationValidationError('foreign-citation'); return item })
-  const tailoring = { headline: result.tailored!.headline, summary: { text: input.restoreText?.(narrative.text) ?? narrative.text, citations: summaryCited.map(item => ({ evidenceId: item.id, revision: item.revision })), rationale: narrative.rationale } }
+  const tailoring = { headline: restore(result.tailored!.headline), summary: { text: restore(narrative.text), citations: summaryCited.map(item => ({ evidenceId: item.id, revision: item.revision })), rationale: restore(narrative.rationale) } }
   const content = draftContentSchema.parse({
     education: buildParagraphs(result.tailored!.education, 'education'), experience: buildParagraphs(result.tailored!.experience, 'experience'), projects: buildParagraphs(result.tailored!.projects, 'projects'),
-    skills: result.tailored!.skills.map(entry => { const cited = itemFor(entry.evidence, 'skills'); return { name: entry.name, citations: cited.map(item => ({ evidenceId: item.id, revision: item.revision })), rationale: entry.rationale } }),
+    skills: result.tailored!.skills.map(entry => { const cited = itemFor(entry.evidence, 'skills'); return { name: restore(entry.name), citations: cited.map(item => ({ evidenceId: item.id, revision: item.revision })), rationale: restore(entry.rationale) } }),
     certificates: buildParagraphs(result.tailored!.certificates, 'certificates')
   })
   const evidenceIds = new Set([...Object.values(content).flatMap(section => section.flatMap(item => item.citations.map(c => c.evidenceId))), ...tailoring.summary.citations.map(citation => citation.evidenceId)])
@@ -116,10 +117,10 @@ export async function runSourceLinkedGraph(input: { job: unknown; analysis: unkn
       semanticPairs.push({ section, itemPath: `${section}[${draftIndex >= 0 ? draftIndex : index}]`, rewritten, evidence: cited.map(item => item.text) })
     })
   }
-  semanticPairs.push({ section: 'summary', itemPath: 'summary[0]', rewritten: tailoring.summary.text, evidence: summaryCited.map(item => item.text) })
+  semanticPairs.push({ section: 'summary', itemPath: 'summary[0]', rewritten: narrative.text, evidence: summaryCited.map(item => item.text) })
   const analysis = input.analysis as { tools?: unknown; keywords?: unknown }
   const key = (value: string) => value.normalize('NFKC').trim().toLocaleLowerCase()
-  const terms = [...new Set((Array.isArray(analysis?.tools) ? analysis.tools : []).filter((term): term is string => typeof term === 'string').map(term => term.trim()).filter(term => term.length > 0 && term.length <= 160).map(term => [key(term), term] as const).filter(([termKey], index, all) => all.findIndex(([candidate]) => candidate === termKey) === index).map(([, term]) => term))]
+  const terms = [...new Set((Array.isArray(analysis?.tools) ? analysis.tools : []).filter((term): term is string => typeof term === 'string').map(term => restore(term).trim()).filter(term => term.length > 0 && term.length <= 160).map(term => [key(term), term] as const).filter(([termKey], index, all) => all.findIndex(([candidate]) => candidate === termKey) === index).map(([, term]) => term))]
   const inventory = new Set((input.savedSkillNames ?? input.items.filter(item => item.category === 'skills').map(item => String(item.snapshot.name ?? ''))).map(key))
   const draftedSkills = new Set(content.skills.map(skill => key(skill.name)))
   const suggestedSkills = terms.filter(term => !inventory.has(key(term)) && !draftedSkills.has(key(term))).slice(0, 100).map(name => ({ id: randomUUID(), name, postingTerm: name, sourceJobRevision: input.sourceJobRevision ?? '' , status: 'pending' as const }))

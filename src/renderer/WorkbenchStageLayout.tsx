@@ -112,7 +112,8 @@ function EmptyDocument({ message }: { message: string }) {
 }
 
 export function WorkbenchStageLayout(props: Props) {
-  const { returnToReview, decideSuggestedSkill, correctDraftTailoring, activeJob, onNavigate, error, retry, activePhase, review, consentAccepted, termsAcknowledged, setTermsAcknowledged, consentError, consentBusy, analysis, recovery, recoveryBusy, resumeSavedGeneration, cancelSavedGeneration, draft, canonical, fitReport, fitBusy, acceptedCuts, setAcceptedCuts, draftBusy, draftError, pageTarget, setPageTarget, usage, addSection, setAddSection, addEvidence, setAddEvidence, sources, outgoingProfileCounts, inspectOutgoing, cancelOutgoing, authorizeOutgoing, startAnalysis, generateDraft, cancelAnalysis, measurePageFit, applyPageCuts, addDraftItem, correctDraft, checkDraftNow, approveCurrentDraft, onProposalAccepted, exportDocx, docxBusy } = props
+  const { returnToReview, decideSuggestedSkill, correctDraftTailoring, activeJob, onNavigate, error, retry, activePhase, review, consentAccepted, termsAcknowledged, setTermsAcknowledged, consentError, consentBusy, recovery, recoveryBusy, resumeSavedGeneration, cancelSavedGeneration, draft, canonical, fitReport, fitBusy, acceptedCuts, setAcceptedCuts, draftBusy, draftError, pageTarget, setPageTarget, usage, addSection, setAddSection, addEvidence, setAddEvidence, sources, outgoingProfileCounts, inspectOutgoing, cancelOutgoing, authorizeOutgoing, startAnalysis, generateDraft, cancelAnalysis, measurePageFit, applyPageCuts, addDraftItem, correctDraft, checkDraftNow, approveCurrentDraft, onProposalAccepted, exportDocx, docxBusy } = props
+  const analysis = props.analysis ? { ...props.analysis, analysis: props.analysis.displayAnalysis ?? props.analysis.analysis } : null
   const [exportMessage, setExportMessage] = useState('')
   const [exportBusy, setExportBusy] = useState(false)
   const [regenTarget, setRegenTarget] = useState<RegenerationTarget>({ kind: 'section', section: 'experience' })

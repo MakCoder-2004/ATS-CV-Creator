@@ -93,7 +93,8 @@
 .cv-workbench-start .paper-entry-select { border: 1px solid transparent; border-radius: 2px; padding: 4px; margin: 0 -4px; width: calc(100% + 8px); }
 .cv-workbench-start .paper-entry-select:hover, .cv-workbench-start .paper-entry-select.is-selected { border-color: var(--paper-accent); background: var(--paper-selected); }
 .cv-workbench-start .paper-entry-select:focus-visible { outline-color: var(--paper-accent); }
-.cv-workbench-start .paper-skills .draft-paper-entry { display: inline-block; margin-right: 8px; }
+.cv-workbench-start .paper-skills .draft-paper-entry { display: inline-flex; align-items: baseline; margin-right: 4px; }
+.cv-workbench-start .paper-skills .paper-entry-select { display: inline-flex; width: auto; margin: 0; padding: 4px 2px; }
 .cv-workbench-start .paper-skills .draft-paper-entry .draft-locked-facts { display: inline; }
 .cv-workbench-start .paper-skills .draft-locked-facts strong { font-weight: 400; }
 .cv-workbench-start .paper-skills .draft-paper-entry:not(:last-of-type)::after { content: ' · '; }

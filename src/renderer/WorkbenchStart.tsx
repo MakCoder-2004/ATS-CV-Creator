@@ -8,6 +8,7 @@ import './workbench-start.css'
 import './cv-flow.css'
 
 type LocalSources = WorkbenchSources
+const readableFailure = (failure: unknown, fallback: string) => failure instanceof Error ? failure.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, '') : fallback
 
 export function WorkbenchStart({ activeJob, onNavigate }: { activeJob: JobRecord | null; onNavigate: (page: 'Saved jobs') => void }) {
   const [sources, setSources] = useState<LocalSources | null>(null)
@@ -109,7 +110,7 @@ export function WorkbenchStart({ activeJob, onNavigate }: { activeJob: JobRecord
       setAnalysis(result); setUsage(await window.workbench.getAnalysisUsage())
     } catch (failure) {
       if (selectedJob.current !== jobId || pendingToken.current !== token) return
-      setAnalysis(null); setConsentError(failure instanceof Error ? failure.message : 'Analysis could not start. Check Settings and try again.')
+      setAnalysis(null); setConsentError(readableFailure(failure, 'Analysis could not start. Check Settings and try again.'))
     }
   }
   async function startAnalysis() {
