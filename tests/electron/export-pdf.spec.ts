@@ -47,9 +47,9 @@ test('user approves and exports a selectable PDF, while cancellation and overwri
     await expect(flow.getByRole('button', { name: 'Generate tailored draft' })).toBeVisible({ timeout: 15000 })
     await flow.getByRole('button', { name: 'Generate tailored draft' }).click()
     await expect(page.getByRole('region', { name: 'CV document' }).getByText('Zoë Candidate')).toBeVisible({ timeout: 15000 })
-    await page.getByRole('button', { name: 'Measure actual A4 page fit' }).click()
+    await page.getByRole('button', { name: 'Check page length' }).click()
     await expect(page.getByText(/Fits the selected target/i)).toBeVisible({ timeout: 45000 })
-    await page.getByRole('button', { name: 'Review and approve whole document' }).click()
+    await page.getByRole('button', { name: 'Approve CV' }).click()
     await expect(page.getByRole('button', { name: 'Export approved PDF' })).toBeEnabled()
 
     // A cancelled native destination selection never opens a PDF renderer or reports success.

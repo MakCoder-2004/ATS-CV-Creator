@@ -225,7 +225,8 @@ nav button:hover, nav button[aria-current=page] { background: var(--raised); col
 .secondary-button:disabled { cursor: not-allowed; opacity: .55; }
 .primary-button { background: var(--blue); color: white; border-color: var(--blue); }
 .secondary-button { background: var(--surface); color: var(--ink); }
-.primary-button:hover { filter: brightness(1.08); }
+.primary-button:hover:not(:disabled) { filter: brightness(1.08); }
+.primary-button:disabled { cursor: not-allowed; opacity: .55; filter: none; }
 .secondary-button:hover { background: var(--raised); }
 .contact-summary h3, .skill-copy h3 { font-size: 15px; font-weight: 700; }
 .contact-summary > p { color: var(--muted); margin-top: 3px; }

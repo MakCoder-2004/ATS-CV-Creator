@@ -127,7 +127,7 @@ export function WorkbenchStart({ activeJob, onNavigate }: { activeJob: JobRecord
       if (typeof text !== 'string') return
       const updated = await window.workbench.addDraftItem({ jobId: activeJob.id, section: addSection, text, citation: { evidenceId: selected.evidenceId, revision: selected.revision } })
       if (!updated) { setDraftError('That evidence is not a current selected source for this section. Refresh the draft before trying again.'); return }
-      setDraft(updated); setDraftError('')
+      setDraft(updated); setCanonical(await window.workbench.getCanonicalDocument(activeJob.id)); setFitReport(null); setDraftError('Wording saved. Check your CV and page length again before approval.')
     } catch { setDraftError('Local correction could not be saved. Try again.') } finally { setDraftBusy(false) }
   }
 
@@ -135,7 +135,7 @@ export function WorkbenchStart({ activeJob, onNavigate }: { activeJob: JobRecord
     if (!activeJob) return
     const report = await window.workbench.checkDraft(activeJob.id)
     setDraft(await window.workbench.getDraft(activeJob.id))
-    setDraftError(report?.passed ? 'Current factual checks passed. Human review is still required.' : `Review blocked: ${report?.findings.length ?? 0} unresolved finding(s).`)
+    setDraftError(report?.passed ? 'Automated checks found no blocking issues. Review the wording and its sources before approving.' : `${report?.findings.length ?? 0} issue${report?.findings.length === 1 ? '' : 's'} need attention. Open the review notes below to make changes.`)
   }
   async function exportDocx() {
     if (!activeJob || docxBusy) return
@@ -151,15 +151,17 @@ export function WorkbenchStart({ activeJob, onNavigate }: { activeJob: JobRecord
     if (!activeJob) return
     const result = await window.workbench.approveDraft(activeJob.id)
     if (result.draft) setDraft(result.draft)
-    setDraftError(result.message)
+    setDraftError(result.ok ? 'Your CV is approved. You can save it now.' : result.message)
   }
   async function correctDraft(section: 'education' | 'experience' | 'projects' | 'skills' | 'certificates', index: number, text: string, editIntent: 'wording-only' | 'new-fact' = 'wording-only') {
-    if (!activeJob || !draft) return
+    if (!activeJob || !draft) return false
     setDraftBusy(true)
     try {
       const corrected = await window.workbench.correctDraft({ jobId: activeJob.id, section, index, text, editIntent, ...(editIntent === 'new-fact' ? { evidence: draft.content[section][index]?.citations } : {}) })
-      if (corrected && selectedJob.current === activeJob.id) setDraft(corrected)
-    } catch { setDraftError('Correction could not be saved. The original blocked draft was retained.') }
+      if (!corrected || selectedJob.current !== activeJob.id) return false
+      setDraft(corrected); setCanonical(await window.workbench.getCanonicalDocument(activeJob.id)); setFitReport(null); setDraftError('Wording saved. Check your CV and page length again before approval.')
+      return true
+    } catch { setDraftError('Wording could not be saved. Your original CV is unchanged.'); return false }
     finally { setDraftBusy(false) }
   }
   async function measurePageFit() {
