@@ -23,7 +23,7 @@ import { z } from 'zod'
 import { analysisBudgetsSchema, analysisResultSchema, analysisUsageSchema, defaultAnalysisBudgets, generationRecoverySchema, postingAnalysisSchema, displayPostingAnalysisSchema, type AnalysisBudgets, type AnalysisResult, type RecoveryChoice } from '../shared/posting-analysis'
 import { pacificDay } from '../shared/pacific-day'
 import { addDraftItemInputSchema, draftCorrectionInputSchema, draftRevisionSchema, suggestedSkillDecisionSchema, draftTailoringCorrectionSchema, type DraftRevision } from '../shared/draft'
-import { draftRecordValueSchema, mutateDraftRecordInputSchema, type MutateDraftRecordInput } from '../shared/draft-records'
+import { mutateDraftRecordInputSchema, type MutateDraftRecordInput } from '../shared/draft-records'
 import { CitationValidationError, IncompatibleGenerationCheckpointError, runSourceLinkedGraph } from './source-linked-generation'
 import { prepareDraftInputs } from './draft-inputs'
 import { checkDraftFacts } from './factual-verification'
@@ -238,15 +238,18 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
   }
   const currentSourceStatus = (draft: DraftRevision) => {
     const currentById = new Map(profileRecords(readProfile(), readExperience()).map(record => [record.id, record.revision]))
-    const citedIds = new Set(Object.values(draft.content).flatMap(items => items.flatMap(item => item.citations.map(citation => citation.evidenceId))))
-    return [...citedIds].filter(id => !draft.evidence.some(e => e.evidenceId === id && currentById.get(id) === e.revision))
+    const cited = Object.values(draft.content).flatMap(items => items.flatMap(item => item.citations))
+    return [...new Set(cited.filter(citation => {
+      const frozen = draft.evidence.find(entry => entry.evidenceId === citation.evidenceId && entry.revision === citation.revision)
+      return frozen?.provenance !== 'manual' && (!frozen || currentById.get(citation.evidenceId) !== citation.revision)
+    }).map(citation => citation.evidenceId))]
   }
   type DraftProfileMutation = { section: 'education' | 'experience' | 'projects' | 'skills'; operation: 'add' | 'update' | 'remove'; record: ProfileEntry | SkillRecord | ExperienceRecord | ProjectRecord; prior?: ProfileEntry | SkillRecord | ExperienceRecord | ProjectRecord }
-  const stageDraftProfileMutation = (section: DraftProfileMutation['section'], operation: DraftProfileMutation['operation'], id: string | undefined, input: unknown): DraftProfileMutation | undefined => {
+  const stageDraftProfileMutation = (section: DraftProfileMutation['section'], operation: DraftProfileMutation['operation'], id: string | undefined, expectedRevision: number | undefined, input: unknown): DraftProfileMutation | undefined => {
     const experience = readExperience(), profile = readProfile()
     const existing = id ? profileRecords(profile, experience).find(record => record.id === id) : undefined
-    if (operation !== 'add' && !existing) return undefined
-    if (operation === 'update' && (!existing || (section === 'education' && !('section' in existing && existing.section === 'education')) || (section === 'skills' && !('category' in existing && 'name' in existing)) || (section === 'experience' && !('kind' in existing)) || (section === 'projects' && !('technologies' in existing)))) return undefined
+    const typeMatches = existing && ((section === 'education' && 'section' in existing && existing.section === 'education') || (section === 'skills' && 'category' in existing && 'name' in existing) || (section === 'experience' && 'kind' in existing) || (section === 'projects' && 'technologies' in existing && 'name' in existing))
+    if (operation !== 'add' && (!existing || existing.revision !== expectedRevision || !typeMatches)) return undefined
     if (operation === 'remove' && existing) return { section, operation, record: { ...existing, revision: existing.revision + 1 } as DraftProfileMutation['record'], prior: existing as DraftProfileMutation['record'] }
     const rid = operation === 'update' ? id! : randomUUID()
     if (section === 'education') {
@@ -999,25 +1002,38 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       const row = db.prepare('SELECT data FROM draft_revisions WHERE job_id = ? ORDER BY revision DESC LIMIT 1').get(request.jobId) as { data: string } | undefined
       if (!row) return { ok: false, message: 'There is no current draft to edit.' }
       const prior = draftRevisionSchema.parse(JSON.parse(row.data))
-      if (prior.id !== request.draftId || prior.revision !== request.sourceRevision) return { ok: false, message: `This draft changed (current r${prior.revision}, requested r${request.sourceRevision}). Reopen the current CV and try again.` }
+      if (prior.id !== request.draftId || prior.revision !== request.sourceRevision) return { ok: false, message: 'This draft changed. Reopen the current CV and try again.' }
       const items = [...prior.content[request.section]]
       if (request.operation !== 'add' && (request.index === undefined || !items[request.index])) return { ok: false, message: 'That CV record is no longer available.' }
-      const supplied = request.operation === 'remove' ? undefined : draftRecordValueSchema.safeParse(request.value)
+      const supplied = request.operation === 'remove' ? undefined : request.section === 'education' ? profileEntryInputSchema.safeParse(request.value) : request.section === 'experience' ? experienceInputSchema.safeParse(request.value) : request.section === 'projects' ? projectInputSchema.safeParse(request.value) : skillInputSchema.safeParse(request.value)
       if (supplied && !supplied.success) return { ok: false, message: 'Check the record fields.', fieldErrors: Object.fromEntries(supplied.error.issues.map(issue => [issue.path.join('.') || '_', issue.message])) }
-      if (supplied?.success && 'section' in supplied.data && supplied.data.section !== request.section) return { ok: false, message: 'Record type does not match the selected section.' }
+      if (request.section === 'education' && supplied?.success && (!('section' in supplied.data) || supplied.data.section !== 'education')) return { ok: false, message: 'Choose an education record.', fieldErrors: { section: 'This must be an education record.' } }
       const removeIndexes = new Set<number>(request.index === undefined ? [] : [request.index])
       if (request.operation !== 'add' && (request.section === 'experience' || request.section === 'projects')) {
         const item = items[request.index!]!, citations = item.citations.map(citation => citation.evidenceId)
         const parent = prior.lockedFields[request.section].find(value => ('sourceIds' in value ? value.sourceIds : undefined)?.some(id => citations.includes(id)) || citations.includes(value.evidenceId))
         if (parent) items.forEach((other, index) => { if (other.citations.some(citation => (parent.sourceIds ?? [parent.evidenceId]).includes(citation.evidenceId))) removeIndexes.add(index) })
       }
-      const evidence = [...prior.evidence], locks = { ...prior.lockedFields }
+      const evidence = [...prior.evidence], locks = { ...prior.lockedFields, experience: prior.lockedFields.experience.map(lock => ({ ...lock, sourceIds: lock.sourceIds ? [...lock.sourceIds] : undefined })), projects: prior.lockedFields.projects.map(lock => ({ ...lock, sourceIds: lock.sourceIds ? [...lock.sourceIds] : undefined })), education: prior.lockedFields.education.map(lock => ({ ...lock })), certificates: prior.lockedFields.certificates.map(lock => ({ ...lock })) }
       const citationIds = request.index === undefined ? [] : items[request.index]!.citations.map(citation => citation.evidenceId)
       const citedProfileId = citationIds.find(id => prior.evidence.find(entry => entry.evidenceId === id)?.provenance !== 'manual')
       const ownerLock = request.section === 'experience' || request.section === 'projects' ? prior.lockedFields[request.section].find(lock => (lock.sourceIds ?? [lock.evidenceId]).some(id => citationIds.includes(id))) : undefined
       const sourceId = ownerLock?.evidenceId ?? citedProfileId
-      const sourcePlan = request.scope === 'profile' ? stageDraftProfileMutation(request.section, request.operation, sourceId, supplied?.success ? supplied.data : undefined) : undefined
-      if (request.scope === 'profile' && !sourcePlan) return { ok: false, message: 'The profile record is no longer available or its type does not match this section.' }
+      const sourceIsManual = citationIds.some(id => prior.evidence.find(entry => entry.evidenceId === id)?.provenance === 'manual')
+      const profileSourceId = sourceIsManual ? undefined : sourceId
+      const frozenSource = profileSourceId ? prior.evidence.find(entry => entry.evidenceId === profileSourceId) : undefined
+      const localSource = sourceIsManual && request.operation === 'update' && sourceId ? prior.evidence.find(entry => entry.evidenceId === sourceId && entry.provenance === 'manual') : undefined
+      const stagedOperation = request.operation === 'update' && sourceIsManual ? 'add' : request.operation
+      let sourcePlan: DraftProfileMutation | undefined
+      const profileInput = stagedOperation === 'add' && supplied?.success && request.section === 'experience'
+        ? (() => { const value = supplied.data as import('../shared/experience').ExperienceInput; return { ...value, factualItems: (value.factualItems ?? []).map(({ text }) => ({ text })) } })()
+        : stagedOperation === 'add' && supplied?.success && request.section === 'projects'
+          ? (() => { const value = supplied.data as import('../shared/experience').ProjectInput; return { ...value, factualItems: (value.factualItems ?? []).map(({ text }) => ({ text })), technologies: (value.technologies ?? []).map(({ text }) => ({ text })) } })()
+          : supplied?.success ? supplied.data : undefined
+      try { if (request.scope === 'profile' && !(request.operation === 'remove' && !sourceId)) sourcePlan = stageDraftProfileMutation(request.section, stagedOperation, profileSourceId, frozenSource?.revision, profileInput) }
+      catch { return { ok: false, message: 'A nested record identifier is invalid or belongs to another record.' } }
+      if (request.scope === 'profile' && request.operation !== 'remove' && !sourcePlan) return { ok: false, message: 'The profile record changed or its fields do not match this section. Reopen the current CV and retry.' }
+      if (request.scope === 'profile' && request.operation === 'remove' && profileSourceId && !sourcePlan) return { ok: false, message: 'The profile record changed or was deleted. Reopen the current CV before removing it.' }
       let sectionLocks = request.section === 'skills' ? [] : [...prior.lockedFields[request.section]]
       if (request.operation === 'update' && request.section !== 'skills') sectionLocks = sectionLocks.filter(value => !citationIds.includes(value.evidenceId) && !('sourceIds' in value && value.sourceIds?.some(id => citationIds.includes(id))))
       if (request.operation === 'remove') {
@@ -1028,7 +1044,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
         if (request.section !== 'skills') (locks[request.section] as Array<{ evidenceId: string; sourceIds?: string[] }>).splice(0, sectionLocks.length, ...sectionLocks.filter(value => !removedIds.has(value.evidenceId) && !('sourceIds' in value && value.sourceIds?.some(id => removedIds.has(id)))))
       } else {
         const value = supplied!.data
-        const evidenceId = sourcePlan?.record.id ?? randomUUID(), evidenceRevision = sourcePlan?.record.revision ?? 1, citation = { evidenceId, revision: evidenceRevision }
+        const evidenceId = sourcePlan?.record.id ?? localSource?.evidenceId ?? randomUUID(), evidenceRevision = sourcePlan?.record.revision ?? (localSource ? localSource.revision + 1 : 1), citation = { evidenceId, revision: evidenceRevision }
         let snapshot: Record<string, unknown>, draftItem: { text: string; citations: typeof citation[]; rationale: string } | { name: string; citations: typeof citation[]; rationale: string }
         if (request.section === 'education') {
           const v = value as import('../shared/profile').ProfileEntryInput
@@ -1037,12 +1053,22 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
           sectionLocks.push({ evidenceId, title: v.title, ...(v.institution ? { institution: v.institution } : {}), ...(v.startDate ? { startDate: v.startDate } : {}), ...(v.endDate ? { endDate: v.endDate } : {}) })
         } else if (request.section === 'experience') {
           const v = value as import('../shared/experience').ExperienceInput
-          snapshot = { ...v, id: evidenceId, revision: 1, factualItems: (v.factualItems ?? []).map((fact, index) => ({ ...fact, id: randomUUID(), revision: 1 })) }
+          const oldFacts = localSource?.snapshot && typeof localSource.snapshot === 'object' && 'factualItems' in localSource.snapshot ? (localSource.snapshot as { factualItems: NestedRecord[] }).factualItems : []
+          let factualItems: NestedRecord[]
+          try { factualItems = localSource ? reconcileNestedItems(v.factualItems ?? [], oldFacts, 'CV-only experience') : (v.factualItems ?? []).map(fact => ({ id: randomUUID(), revision: 1, text: fact.text })) }
+          catch { return { ok: false, message: 'A factual item identifier does not belong to this CV record.' } }
+          snapshot = { ...v, id: evidenceId, revision: evidenceRevision, factualItems }
           draftItem = { text: v.description, citations: [citation], rationale: 'User-authored record; manually declared for this CV.' }
           sectionLocks.push({ evidenceId, title: v.title, organization: v.organization, ...(v.startDate ? { startDate: v.startDate } : {}), ...(v.endDate ? { endDate: v.endDate } : {}) })
         } else if (request.section === 'projects') {
           const v = value as import('../shared/experience').ProjectInput
-          snapshot = { ...v, id: evidenceId, revision: 1, factualItems: (v.factualItems ?? []).map(fact => ({ ...fact, id: randomUUID(), revision: 1 })), technologies: (v.technologies ?? []).map(fact => ({ ...fact, id: randomUUID(), revision: 1 })) }
+          const oldSnapshot = localSource?.snapshot && typeof localSource.snapshot === 'object' ? localSource.snapshot as { factualItems?: NestedRecord[]; technologies?: NestedRecord[] } : {}
+          let factualItems: NestedRecord[], technologies: NestedRecord[]
+          try {
+            factualItems = localSource ? reconcileNestedItems(v.factualItems ?? [], oldSnapshot.factualItems ?? [], 'CV-only project') : (v.factualItems ?? []).map(fact => ({ id: randomUUID(), revision: 1, text: fact.text }))
+            technologies = localSource ? reconcileNestedItems(v.technologies ?? [], oldSnapshot.technologies ?? [], 'CV-only project') : (v.technologies ?? []).map(fact => ({ id: randomUUID(), revision: 1, text: fact.text }))
+          } catch { return { ok: false, message: 'A factual item identifier does not belong to this CV record.' } }
+          snapshot = { ...v, id: evidenceId, revision: evidenceRevision, factualItems, technologies }
           draftItem = { text: v.description, citations: [citation], rationale: 'User-authored record; manually declared for this CV.' }
           sectionLocks.push({ evidenceId, name: v.name })
         } else {
@@ -1051,6 +1077,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
           draftItem = { name: v.name, citations: [citation], rationale: 'User-authored record; manually declared for this CV.' }
         }
         if (sourcePlan) snapshot = sourcePlan.record as unknown as Record<string, unknown>
+        if (sourcePlan?.operation === 'update' || localSource) evidence.splice(0, evidence.length, ...evidence.filter(entry => entry.evidenceId !== evidenceId))
         evidence.push({ evidenceId, revision: evidenceRevision, snapshot, provenance: sourcePlan ? 'profile' : 'manual' })
         if (request.operation === 'add') items.push(draftItem as never)
         else {
@@ -1061,14 +1088,21 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
         }
       }
       if (request.section !== 'skills') (locks[request.section] as unknown[]).splice(0, sectionLocks.length, ...sectionLocks)
-      const next = draftRevisionSchema.parse({ ...prior, id: randomUUID(), revision: prior.revision + 1, createdAt: new Date().toISOString(), content: { ...prior.content, [request.section]: items }, evidence, lockedFields: locks, approved: false, approval: undefined, checkReport: undefined, coverage: undefined, status: 'blocked', progress: 'Manual CV record saved locally. Recheck the draft and review factual findings before approval.' })
+      const content = { ...prior.content, [request.section]: items } as DraftRevision['content']
+      const updatedEvidenceId = sourcePlan?.record.id ?? localSource?.evidenceId
+      const updatedEvidenceRevision = sourcePlan?.record.revision ?? (localSource ? localSource.revision + 1 : undefined)
+      if (updatedEvidenceId && updatedEvidenceRevision && (sourcePlan?.operation === 'update' || localSource)) for (const section of ['education', 'experience', 'projects', 'skills', 'certificates'] as const) {
+        content[section] = content[section].map(item => ({ ...item, citations: item.citations.map(citation => citation.evidenceId === updatedEvidenceId ? { ...citation, revision: updatedEvidenceRevision } : citation) })) as never
+      }
+      const next = draftRevisionSchema.parse({ ...prior, id: randomUUID(), revision: prior.revision + 1, createdAt: new Date().toISOString(), content, evidence, lockedFields: locks, approved: false, approval: undefined, checkReport: undefined, coverage: undefined, status: 'blocked', progress: 'Manual CV record saved locally. Recheck the draft and review factual findings before approval.' })
       let report = preserveKnownFindings(checkDraftFacts(next), prior)
       const stale = currentSourceStatus(next).filter(id => !(sourcePlan && id === sourcePlan.record.id))
       if (stale.length) report = factualCheckReportSchema.parse({ ...report, passed: false, findings: [...report.findings, ...stale.map(evidenceId => ({ code: 'stale-source' as const, itemPath: 'sources', evidenceId, message: 'A cited profile source changed or was deleted after this draft was created.', correction: 'Review current evidence and create a draft from its current revision.' }))] })
       const saved = draftRevisionSchema.parse({ ...next, status: report.passed ? 'unverified' : 'blocked', checkReport: report })
       const tx = db.transaction(() => { const latest = db.prepare('SELECT id FROM draft_revisions WHERE job_id = ? ORDER BY revision DESC LIMIT 1').get(request.jobId) as { id: string } | undefined; if (latest?.id !== request.draftId) throw new Error('STALE_DRAFT'); if (sourcePlan) commitDraftProfileMutation(sourcePlan); db.prepare('INSERT INTO draft_revisions (id,job_id,revision,data) VALUES (?,?,?,?)').run(saved.id, saved.jobId, saved.revision, JSON.stringify(saved)); db.prepare('DELETE FROM document_fit_reports WHERE job_id = ?').run(saved.jobId) })
       try { tx() } catch (error) { return { ok: false, message: error instanceof Error && error.message === 'STALE_DRAFT' ? 'This draft changed while saving. Reopen the current CV.' : 'The record could not be saved.' } }
-      return { ok: true, message: sourcePlan ? `Record saved to this CV and profile. Profile history was recorded.${request.operation === 'remove' ? ' This deletion affects your profile and may make other drafts stale.' : ''}` : 'Record saved to this CV only. Your profile was not changed.', draft: saved, ...(sourcePlan && request.operation === 'remove' ? { profileDeleteWarning: true } : {}) }
+      const message = sourcePlan ? `Record saved to this CV and profile. Profile history was recorded.${request.operation === 'remove' ? ' This deletion affects your profile and may make other drafts stale.' : ''}` : request.scope === 'profile' && request.operation === 'remove' ? 'This was a CV-only record; it was removed from this CV. No saved profile record existed to delete.' : 'Record saved to this CV only. Your profile was not changed.'
+      return { ok: true, message, draft: saved, ...(sourcePlan && request.operation === 'remove' ? { profileDeleteWarning: true } : {}) }
     },
     async correctDraft(input: { jobId: string; section: 'education' | 'experience' | 'projects' | 'skills' | 'certificates'; index: number; text: string }) {
       const parsed = draftCorrectionInputSchema.safeParse(input)
@@ -1081,7 +1115,15 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       if (!target) return null
       const citations = parsed.data.editIntent === 'new-fact' ? parsed.data.evidence! : target.citations
       const liveItems = prepareDraftInputs(readProfile(), readExperience()).items
-      if (citations.some(citation => !liveItems.some(source => source.id === citation.evidenceId && source.revision === citation.revision && source.category === parsed.data.section) || (parsed.data.editIntent !== 'new-fact' && !prior.evidence.some(source => source.evidenceId === citation.evidenceId && source.revision === citation.revision)))) return null
+      const ownsManualEvidence = (citation: { evidenceId: string; revision: number }) => {
+        const source = prior.evidence.find(entry => entry.evidenceId === citation.evidenceId && entry.revision === citation.revision && entry.provenance === 'manual')
+        if (!source) return false
+        if (parsed.data.section === 'skills') return Boolean(source.snapshot && typeof source.snapshot === 'object' && 'name' in source.snapshot && 'category' in source.snapshot)
+        return prior.lockedFields[parsed.data.section].some(parent => (('sourceIds' in parent ? parent.sourceIds : undefined) ?? [parent.evidenceId]).includes(citation.evidenceId))
+      }
+      if (citations.some(citation => parsed.data.editIntent === 'new-fact'
+        ? !liveItems.some(source => source.id === citation.evidenceId && source.revision === citation.revision && source.category === parsed.data.section)
+        : !prior.evidence.some(source => source.evidenceId === citation.evidenceId && source.revision === citation.revision) || (ownsManualEvidence(citation) ? false : !liveItems.some(source => source.id === citation.evidenceId && source.revision === citation.revision && source.category === parsed.data.section)))) return null
       const linkedEvidence = parsed.data.editIntent === 'new-fact' ? [...prior.evidence, ...citations.filter(citation => !prior.evidence.some(source => source.evidenceId === citation.evidenceId && source.revision === citation.revision)).map(citation => { const source = liveItems.find(item => item.id === citation.evidenceId)!; return { evidenceId: source.id, revision: source.revision, snapshot: source.snapshot } })] : prior.evidence
       const updatedContent = { ...prior.content, [parsed.data.section]: section.map((item, index) => index !== parsed.data.index ? item : 'text' in item ? { ...item, text: parsed.data.text, citations } : { ...item, name: parsed.data.text, citations }) }
       const next = draftRevisionSchema.parse({ ...prior, id: randomUUID(), revision: prior.revision + 1, status: 'unverified', approved: false, approval: undefined, checkReport: undefined, evidence: linkedEvidence, content: updatedContent, progress: 'Draft wording corrected locally. Recheck before human review.' })
@@ -1090,6 +1132,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       if (stale.length) report = factualCheckReportSchema.parse({ ...report, passed: false, findings: [...report.findings, ...stale.map(evidenceId => ({ code: 'stale-source' as const, itemPath: 'sources', evidenceId, message: 'A cited profile source changed or was deleted after this draft was created.', correction: 'Review and save current evidence, then create a draft using its current revision.' }))] })
       const checked = draftRevisionSchema.parse({ ...next, status: report.passed ? 'unverified' : 'blocked', checkReport: report, progress: report.findings.some(finding => finding.itemPath === 'generation') ? 'Correction saved, but the known generation failure remains unresolved. Only a new authorized generation that passes validation can resolve it.' : report.passed ? 'Correction passes deterministic checks; semantic truth still requires human review. Wording-only versus new-fact is user-declared and cannot be inferred perfectly.' : `Blocked by ${report.findings.length} factual finding(s). Use the correction guidance below.` })
       db.prepare('INSERT INTO draft_revisions (id,job_id,revision,data) VALUES (?,?,?,?)').run(checked.id, checked.jobId, checked.revision, JSON.stringify(checked))
+      db.prepare('DELETE FROM document_fit_reports WHERE job_id = ?').run(checked.jobId)
       return checked
     },
     async addDraftItem(input: { jobId: string; section: 'education' | 'experience' | 'projects' | 'skills' | 'certificates'; text: string; citation: { evidenceId: string; revision: number } }) {
@@ -1110,6 +1153,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       const report = preserveKnownFindings(checkDraftFacts(next), prior)
       const saved = draftRevisionSchema.parse({ ...next, status: report.passed ? 'unverified' : 'blocked', checkReport: report, progress: report.findings.some(finding => finding.itemPath === 'generation') ? 'Locally authored wording was added, but the known generation failure remains unresolved. Only a new authorized generation that passes validation can resolve it.' : next.progress })
       db.prepare('INSERT INTO draft_revisions (id,job_id,revision,data) VALUES (?,?,?,?)').run(saved.id, saved.jobId, saved.revision, JSON.stringify(saved))
+      db.prepare('DELETE FROM document_fit_reports WHERE job_id = ?').run(saved.jobId)
       return saved
     },
     async checkDraft(jobId: string) {
