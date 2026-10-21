@@ -204,22 +204,6 @@ export function WorkbenchStart({ activeJob, onNavigate }: { activeJob: JobRecord
     } catch { if (selectedJob.current === jobId) setDraftError('Your skill decision could not be saved. Try again.') }
     finally { if (selectedJob.current === jobId) setDraftBusy(false) }
   }
-  async function correctDraftTailoring(field: 'headline' | 'summary', text: string) {
-    if (!activeJob || !draft || draftBusy) return false
-    const jobId = activeJob.id
-    setDraftBusy(true); setDraftError('')
-    try {
-      const result = await window.workbench.correctDraftTailoring({ jobId, draftId: draft.id, field, text })
-      if (selectedJob.current !== jobId) return false
-      if (!result.ok || !result.draft) { setDraftError(result.message); return false }
-      const document = await window.workbench.getCanonicalDocument(jobId)
-      if (selectedJob.current !== jobId) return false
-      setDraft(result.draft); setCanonical(document); setFitReport(null); setReviewApprovedDraft(true)
-      setDraftError('Wording saved. Check your CV and page length again before approval.')
-      return true
-    } catch { if (selectedJob.current === jobId) setDraftError('Wording could not be saved. Your original CV is unchanged.'); return false }
-    finally { if (selectedJob.current === jobId) setDraftBusy(false) }
-  }
   async function correctDraft(section: 'education' | 'experience' | 'projects' | 'skills' | 'certificates', index: number, text: string, editIntent: 'wording-only' | 'new-fact' = 'wording-only') {
     if (!activeJob || !draft) return false
     setDraftBusy(true)
@@ -313,7 +297,7 @@ export function WorkbenchStart({ activeJob, onNavigate }: { activeJob: JobRecord
     analysis={displayedAnalysis} recovery={recovery} recoveryBusy={recoveryBusy} resumeSavedGeneration={resumeSavedGeneration} cancelSavedGeneration={cancelSavedGeneration} draft={draft} canonical={canonical} fitReport={fitReport} fitBusy={fitBusy} acceptedCuts={acceptedCuts} setAcceptedCuts={setAcceptedCuts} draftBusy={draftBusy} draftError={draftError}
     pageTarget={pageTarget} setPageTarget={setPageTarget} usage={usage} addSection={addSection} setAddSection={setAddSection} addEvidence={addEvidence} setAddEvidence={setAddEvidence} sources={sources} outgoingProfileCounts={outgoingProfileCounts}
     inspectOutgoing={inspectOutgoing} cancelOutgoing={cancelOutgoing} authorizeOutgoing={authorizeOutgoing} startAnalysis={startAnalysis} generateDraft={generateDraft} cancelAnalysis={async () => { if (activeJob) setAnalysis(await window.workbench.cancelAnalysis(activeJob.id)) }}
-    returnToReview={() => setReviewApprovedDraft(true)} decideSuggestedSkill={decideSuggestedSkill} correctDraftTailoring={correctDraftTailoring}
+    returnToReview={() => setReviewApprovedDraft(true)} decideSuggestedSkill={decideSuggestedSkill}
     measurePageFit={measurePageFit} applyPageCuts={applyPageCuts} addDraftItem={addDraftItem} correctDraft={correctDraft} checkDraftNow={checkDraftNow} approveCurrentDraft={approveCurrentDraft} exportDocx={exportDocx} docxBusy={docxBusy}
     onProposalAccepted={(next, document, fit) => { setDraft(next); setCanonical(document); setFitReport(fit); setAcceptedCuts([]) }}
   />
