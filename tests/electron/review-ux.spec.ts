@@ -27,7 +27,6 @@ test('review centers the CV and reveals only the selected wording and human-read
     const flow = page.getByRole('region', { name: 'Tailoring workflow' })
     await flow.getByRole('checkbox', { name: /reviewed what is sent/i }).check()
     await flow.getByRole('button', { name: 'Authorize this run' }).click()
-    await flow.getByRole('button', { name: 'Analyze posting' }).click()
     await flow.getByRole('button', { name: 'Generate tailored draft' }).click()
     const paper = page.getByRole('article', { name: 'Draft CV preview' })
     await expect(paper).toBeVisible({ timeout: 20000 })

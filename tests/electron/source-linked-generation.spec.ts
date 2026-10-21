@@ -50,7 +50,6 @@ test('real Electron UI generates and exposes cited draft with a DEV-only scripte
     const review = page.getByRole('region', { name: 'Tailoring workflow' })
     await review.getByRole('checkbox', { name: /reviewed what is sent/ }).check()
     await review.getByRole('button', { name: 'Authorize this run' }).click()
-    await review.getByRole('button', { name: 'Analyze posting' }).click()
     await expect(review.getByRole('button', { name: 'Generate tailored draft' })).toBeVisible({ timeout: 60000 })
     await review.getByRole('button', { name: 'Generate tailored draft' }).click()
     await expect(review.getByRole('region', { name: 'CV review' })).toContainText('Finish reviewing', { timeout: 60000 })
@@ -70,7 +69,7 @@ test('real Electron UI generates and exposes cited draft with a DEV-only scripte
     await expect(coverage).toContainText('Cloud architecture — not found in your saved facts')
     await expect(coverage).toContainText('Automated checks can miss mistakes')
     const preview = page.getByRole('article', { name: 'Draft CV preview' })
-    await expect(preview.locator('h2')).toHaveText(['Education', 'Experience', 'Projects', 'Skills', 'Certificates'])
+    await expect(preview.locator('h2')).toHaveText(['Professional summary', 'Experience', 'Technical skills'])
     await expect(review.getByRole('button', { name: 'Approve CV' })).toBeDisabled()
     await page.getByRole('navigation', { name: 'Main navigation' }).getByRole('button', { name: 'Settings' }).click()
     await page.getByRole('textbox', { name: 'OpenRouter model ID' }).fill('openai/gpt-4o-mini')
@@ -88,8 +87,9 @@ test('real Electron UI generates and exposes cited draft with a DEV-only scripte
     expect(report?.actualPages).toBeGreaterThan(0)
     expect(report?.extractedText.join(' ')).toContain('Zoë Candidate')
     expect(report?.linkTargets).toContain('https://example.test/cv')
-    const extractedOrder = ['Education', 'Experience', 'Projects', 'Skills', 'Certificates'].map(name => report!.extractedText.findIndex(text => text.includes(name.toUpperCase())))
+    const extractedOrder = ['PROFESSIONAL SUMMARY', 'EXPERIENCE', 'SKILLS'].map(name => report!.extractedText.findIndex(text => text.includes(name)))
     expect(extractedOrder.every((position, index) => position >= 0 && (index === 0 || position > extractedOrder[index - 1])), JSON.stringify({ extractedOrder, extractedText: report?.extractedText })).toBe(true)
+    expect(report?.extractedText.join(' ')).not.toMatch(/\b(EDUCATION|PROJECTS|CERTIFICATES)\b/)
     expect(report?.targetPages).toBe(1)
     expect(report?.overflow).toBe(true)
     expect(report?.proposedCuts.length).toBeGreaterThan(0)
@@ -127,7 +127,7 @@ test('real Electron UI generates and exposes cited draft with a DEV-only scripte
     await page.getByRole('button', { name: 'Check page length' }).click()
     await expect(page.getByRole('status').filter({ hasText: /Your CV uses/ })).toContainText(/page/)
     await page.getByRole('button', { name: 'Check CV for issues' }).click()
-    await expect(page.getByRole('navigation', { name: 'Tailoring phases' }).locator('[aria-current="step"]')).toHaveText(/Save CV/)
+    await expect(page.getByRole('navigation', { name: 'Tailoring phases' }).locator('[aria-current="step"]')).toHaveText(/Export/)
     await expect(page.getByRole('button', { name: 'Export editable DOCX' })).toBeVisible()
     await page.getByRole('button', { name: 'Use dark mode' }).click()
     await expect(page.getByRole('button', { name: 'Use dark mode' })).toHaveAttribute('aria-pressed', 'true')
@@ -151,8 +151,9 @@ test('real Electron UI generates and exposes cited draft with a DEV-only scripte
     const pdfText = normalized(pdfReport!.extractedText), docxText = normalized(parsedDocx.text)
     const canonicalStrings = [canonicalDocument!.identity.name, canonicalDocument!.identity.headline ?? '', ...canonicalDocument!.identity.contact, ...canonicalDocument!.identity.links.map(link => link.label), ...canonicalDocument!.sections.flatMap(section => [section.name, ...section.entries.flatMap(entry => [entry.heading, entry.organization ?? '', entry.dates ?? '', entry.text, ...entry.links.map(link => link.label)])])].filter(Boolean)
     for (const value of canonicalStrings) { expect(docxText, `DOCX missing canonical content: ${value}`).toContain(normalized([value])); expect(pdfText, `PDF missing canonical content: ${value}`).toContain(normalized([value])) }
-    for (const term of ['Zoë Candidate', 'Senior Engineer', 'Local Systems', 'EXPERIENCE', 'SKILLS', 'CERTIFICATES']) { expect(pdfText).toContain(normalized([term])); expect(docxText).toContain(normalized([term])) }
-    const sectionOrder = ['education', 'experience', 'projects', 'skills', 'certificates']
+    for (const term of ['Zoë Candidate', 'Senior Engineer', 'Local Systems', 'PROFESSIONAL SUMMARY', 'EXPERIENCE', 'SKILLS']) { expect(pdfText).toContain(normalized([term])); expect(docxText).toContain(normalized([term])) }
+    for (const value of [pdfText, docxText]) expect(value).not.toMatch(/education|projects|certificates/)
+    const sectionOrder = ['professionalsummary', 'experience', 'skills']
     const ordered = (value: string) => sectionOrder.map(name => value.indexOf(name))
     expect(ordered(pdfText).every((at, index, all) => at >= 0 && (index === 0 || at > all[index - 1])), JSON.stringify({ order: ordered(pdfText), text: pdfText })).toBe(true)
     expect(ordered(docxText).every((at, index, all) => at >= 0 && (index === 0 || at > all[index - 1]))).toBe(true)

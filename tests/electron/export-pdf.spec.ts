@@ -43,7 +43,6 @@ test('user approves and exports a selectable PDF, while cancellation and overwri
     const flow = page.getByRole('region', { name: 'Tailoring workflow' })
     await flow.getByRole('checkbox', { name: /reviewed what is sent/i }).check()
     await flow.getByRole('button', { name: 'Authorize this run' }).click()
-    await flow.getByRole('button', { name: 'Analyze posting' }).click()
     await expect(flow.getByRole('button', { name: 'Generate tailored draft' })).toBeVisible({ timeout: 15000 })
     await flow.getByRole('button', { name: 'Generate tailored draft' }).click()
     await expect(page.getByRole('region', { name: 'CV document' }).getByText('Zoë Candidate')).toBeVisible({ timeout: 15000 })
@@ -87,8 +86,9 @@ test('user approves and exports a selectable PDF, while cancellation and overwri
     expect(joined).toContain('Zoë Candidate')
     expect(joined).toContain('CaféScript')
     const folded = joined.toLocaleLowerCase()
-    expect(folded.indexOf('education')).toBeLessThan(folded.indexOf('experience'))
-    expect(folded.indexOf('experience')).toBeLessThan(folded.indexOf('projects'))
+    expect(folded).not.toMatch(/\beducation\b/)
+    expect(folded.indexOf('professional summary')).toBeLessThan(folded.indexOf('experience'))
+    expect(folded).not.toMatch(/\bprojects\b/)
     const orderedExperience = ['Platform Engineer', '01/2023 – 06/2024', 'Northstar Systems', 'Built dependable service infrastructure.', 'Software Engineer', '01/2020 – 12/2022', 'Harbor Technologies', 'Led a careful platform migration.']
     let orderCursor = 0
     for (const part of orderedExperience) { const found = joined.indexOf(part, orderCursor); expect(found, `expected extracted text in canonical order: ${part}`).toBeGreaterThanOrEqual(0); orderCursor = found + part.length }

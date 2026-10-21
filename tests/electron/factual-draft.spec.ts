@@ -31,7 +31,6 @@ test('visible failed-draft findings can be corrected and rechecked without losin
     const review = page.getByRole('region', { name: 'Tailoring workflow' })
     await review.getByRole('checkbox', { name: /reviewed what is sent/ }).check()
     await review.getByRole('button', { name: 'Authorize this run' }).click()
-    await review.getByRole('button', { name: 'Analyze posting' }).click()
     await review.getByRole('button', { name: 'Generate tailored draft' }).click()
     const draft = review.getByRole('region', { name: 'CV review' })
     await expect(draft).toContainText('Changes needed', { timeout: 60000 })

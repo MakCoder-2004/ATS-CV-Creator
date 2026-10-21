@@ -26,7 +26,6 @@ test('visible faithfulness report blocks a draft without requiring an OpenRouter
     const review = page.getByRole('region', { name: 'Tailoring workflow' })
     await review.getByRole('checkbox', { name: /reviewed what is sent/ }).check()
     await review.getByRole('button', { name: 'Authorize this run' }).click()
-    await review.getByRole('button', { name: 'Analyze posting' }).click()
     await expect(review.getByRole('button', { name: 'Generate tailored draft' })).toBeVisible({ timeout: 60000 })
     await review.getByRole('button', { name: 'Generate tailored draft' }).click()
     const draft = review.getByRole('region', { name: 'CV review' })
