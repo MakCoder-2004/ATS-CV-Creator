@@ -7,6 +7,7 @@ const scoredSchema = z.object({ relevance: z.array(z.object({ index: z.number().
 const tailoredSchema = z.object({ education: z.array(z.object({ text: z.string().trim().min(1).max(3000), evidence: z.array(z.number().int().nonnegative()).min(1), rationale: z.string().trim().min(1).max(500) }).strict()), experience: z.array(z.object({ text: z.string().trim().min(1).max(3000), evidence: z.array(z.number().int().nonnegative()).min(1), rationale: z.string().trim().min(1).max(500) }).strict()), projects: z.array(z.object({ text: z.string().trim().min(1).max(3000), evidence: z.array(z.number().int().nonnegative()).min(1), rationale: z.string().trim().min(1).max(500) }).strict()), skills: z.array(z.object({ name: z.string().trim().min(1).max(160), evidence: z.array(z.number().int().nonnegative()).min(1), rationale: z.string().trim().min(1).max(500) }).strict()) })
 
 export class CitationValidationError extends Error { constructor(readonly finding: 'foreign-citation' | 'missing-citation') { super(finding) } }
+export class IncompatibleGenerationCheckpointError extends Error { constructor() { super('The saved generation checkpoint contains incompatible draft content. No provider request was sent; review outgoing data and start a fresh authorized generation.') } }
 
 export type GenerationItem = { id: string; revision: number; category: 'education' | 'experience' | 'projects' | 'skills' | 'certificates'; snapshot: Record<string, unknown>; text: string; chronology?: string; parentId?: string }
 const WORD_BUDGETS = { 1: { education: 105, experience: 300, projects: 135, skills: 100, certificates: 55 }, 2: { education: 190, experience: 570, projects: 260, skills: 180, certificates: 100 } } as const
@@ -23,11 +24,35 @@ function parentGroups(items: GenerationItem[], selected: Array<{ index: number }
   return [...groups.values()]
 }
 function mergeParentEntries(entries: Array<{ text: string; evidence: number[]; rationale: string }>, groups: number[][]) {
-  return groups.flatMap(group => {
+  let valid = true
+  for (const entry of entries) if (!groups.some(group => entry.evidence.length > 0 && entry.evidence.every(index => group.includes(index)))) valid = false
+  const merged = groups.flatMap(group => {
     const matching = entries.filter(entry => entry.evidence.length > 0 && entry.evidence.every(index => group.includes(index)))
     if (!matching.length) return []
     return [{ text: [...new Set(matching.flatMap(entry => splitBullets(entry.text)))].join('\n'), evidence: [...new Set(matching.flatMap(entry => entry.evidence))], rationale: matching.map(entry => entry.rationale).join(' ').slice(0, 500) }]
   })
+  return { entries: merged, valid }
+}
+function createTailoredValidator(input: { items: GenerationItem[]; identity: { lockedFields: { experience: Array<{ evidenceId: string; title: string; organization: string }>; projects: Array<{ evidenceId: string; name: string }> } }; target: 1 | 2; restore: (text: string) => string }, selected: Array<GenerationItem & { index: number; rationale: string }>) {
+  const categories = ['education', 'experience', 'projects', 'skills'] as const
+  const allowed = Object.fromEntries(categories.map(category => [category, selected.filter(item => item.category === category).map(item => item.index)])) as Record<typeof categories[number], number[]>
+  const roleGroups = parentGroups(input.items, selected, 'experience'), projectGroups = parentGroups(input.items, selected, 'projects')
+  const parentFor = (category: 'experience' | 'projects', group: number[]) => {
+    const id = input.items[group[0]]?.parentId ?? input.items[group[0]]?.id
+    if (category === 'experience') { const parent = input.identity.lockedFields.experience.find(item => item.evidenceId === id); return parent ? { title: parent.title, organization: parent.organization } : undefined }
+    const parent = input.identity.lockedFields.projects.find(item => item.evidenceId === id)
+    return parent ? { title: parent.name, organization: '' } : undefined
+  }
+  const validate = (value: z.infer<typeof tailoredSchema>) => {
+    const roleEntries = mergeParentEntries(value.experience, roleGroups), projectEntries = mergeParentEntries(value.projects, projectGroups)
+    const normalized = { ...value, experience: roleEntries.entries, projects: projectEntries.entries }
+    const rawAllowed = categories.every(category => value[category].every(entry => entry.evidence.every(index => allowed[category].includes(index)))) && roleEntries.valid && projectEntries.valid
+    const groupedParents = roleGroups.every((group, index) => { const entry = normalized.experience[index]; return !!entry && entry.evidence.every(evidenceIndex => group.includes(evidenceIndex)) }) && projectGroups.every((group, index) => { const entry = normalized.projects[index]; return !!entry && entry.evidence.every(evidenceIndex => group.includes(evidenceIndex)) }) && normalized.experience.length === roleGroups.length && normalized.projects.length === projectGroups.length
+    const repeatsHeading = (bullet: string, heading: ReturnType<typeof parentFor>) => [heading?.title, heading?.organization].filter((label): label is string => Boolean(label)).some(label => { const prefix = bullet.slice(0, label.length); return prefix.toLocaleLowerCase() === label.toLocaleLowerCase() && (bullet.length === label.length || !/[\p{L}\p{N}]/u.test(bullet[label.length])) })
+    const format = (['experience', 'projects'] as const).every(category => normalized[category].every((entry, index) => { const bullets = splitBullets(entry.text), restoredBullets = splitBullets(input.restore(entry.text)), cap = BULLET_LIMITS[input.target][category], group = (category === 'experience' ? roleGroups : projectGroups)[index], heading = parentFor(category, group); return bullets.length > 0 && bullets.length <= cap && restoredBullets.length === bullets.length && bullets.every(bullet => bullet.length <= 300 && !repeatsHeading(bullet, heading)) && restoredBullets.every(bullet => bullet.length <= 300 && !repeatsHeading(bullet, heading)) }))
+    return { value: normalized, valid: rawAllowed && groupedParents && format }
+  }
+  return { allowed, roleGroups, projectGroups, validate }
 }
 const wordCount = (text: string) => {
   let content = text
@@ -53,7 +78,7 @@ function selectWithinPageBudget(items: GenerationItem[], relevance: Array<{ inde
   }
   return selected.sort((a, b) => a.index - b.index)
 }
-export async function runSourceLinkedGraph(input: { job: unknown; analysis: unknown; items: GenerationItem[]; savedSkillNames?: string[]; pageTarget?: 1 | 2; sourceJobRevision?: string | number; call(prompt: string, schema: z.ZodTypeAny): Promise<{ value: unknown; attempts: number }>; onProgress?: (progress: string, step?: 'parse-posting' | 'score-evidence' | 'select-content' | 'tailor-paragraphs' | 'verify-claims' | 'check-document', completedSteps?: Array<'parse-posting' | 'score-evidence' | 'select-content' | 'tailor-paragraphs' | 'verify-claims' | 'check-document'>) => void; checkpointer?: BaseCheckpointSaver; threadId?: string; resume?: boolean; identity: { id: string; jobId: string; revision: number; createdAt: string; lockedFields: { fullName: string; headline?: string; experience: Array<{ evidenceId: string; title: string; organization: string; startDate?: string; endDate?: string }>; education: Array<{ evidenceId: string; title: string; institution?: string; startDate?: string; endDate?: string }>; projects: Array<{ evidenceId: string; name: string }>; certificates: Array<{ evidenceId: string; title: string; issuer?: string; year?: number }> } }; restoreText?: (text: string) => string }): Promise<{ draft: DraftRevision; attempts: number; semanticPairs: Array<{ section: keyof DraftRevision['content'] | 'summary'; itemPath: string; rewritten: string; evidence: string[] }> }> {
+export async function runSourceLinkedGraph(input: { job: unknown; analysis: unknown; items: GenerationItem[]; savedSkillNames?: string[]; pageTarget?: 1 | 2; sourceJobRevision?: string | number; call(prompt: string, schema: z.ZodTypeAny): Promise<{ value: unknown; attempts: number }>; onProgress?: (progress: string, step?: 'parse-posting' | 'score-evidence' | 'select-content' | 'tailor-paragraphs' | 'verify-claims' | 'check-document', completedSteps?: Array<'parse-posting' | 'score-evidence' | 'select-content' | 'tailor-paragraphs' | 'verify-claims' | 'check-document'>) => void; checkpointer?: BaseCheckpointSaver; threadId?: string; resume?: boolean; identity: { id: string; jobId: string; revision: number; createdAt: string; lockedFields: { fullName: string; headline?: string; experience: Array<{ evidenceId: string; title: string; organization: string; startDate?: string; endDate?: string }>; education: Array<{ evidenceId: string; title: string; institution?: string; startDate?: string; endDate?: string }>; projects: Array<{ evidenceId: string; name: string }>; certificates: Array<{ evidenceId: string; title: string; issuer?: string; year?: number }> } }; restoreText?: (text: string) => string }): Promise<{ draft: DraftRevision; attempts: number; semanticPairs: Array<{ section: keyof DraftRevision['content']; itemPath: string; rewritten: string; evidence: string[] }> }> {
   const restore = (text: string) => input.restoreText?.(text) ?? text
   const completedSteps: Array<'parse-posting' | 'score-evidence' | 'select-content' | 'tailor-paragraphs' | 'verify-claims' | 'check-document'> = ['parse-posting']
   const mark = (step: typeof completedSteps[number], progress: string) => { if (!completedSteps.includes(step)) completedSteps.push(step); input.onProgress?.(progress, step, [...completedSteps]) }
@@ -75,32 +100,21 @@ export async function runSourceLinkedGraph(input: { job: unknown; analysis: unkn
       if (!order.length) throw new Error('No authorized profile evidence fits the selected page budget.')
       const selected = order.map(x => ({ ...input.items[x.index], index: x.index, rationale: x.rationale })).filter(x => x.id)
       input.onProgress?.('Tailoring selected content to the job posting.', 'tailor-paragraphs', [...completedSteps])
-      const categories = ['education', 'experience', 'projects', 'skills'] as const
-      const allowed = Object.fromEntries(categories.map(category => [category, selected.filter(item => item.category === category).map(item => item.index)])) as Record<typeof categories[number], number[]>
-      const roleGroups = parentGroups(input.items, selected, 'experience'), projectGroups = parentGroups(input.items, selected, 'projects')
-      const parentFor = (category: 'experience' | 'projects', group: number[]) => {
-        const id = input.items[group[0]]?.parentId ?? input.items[group[0]]?.id
-        if (category === 'experience') { const parent = input.identity.lockedFields.experience.find(item => item.evidenceId === id); return parent ? { title: parent.title, organization: parent.organization } : undefined }
-        const parent = input.identity.lockedFields.projects.find(item => item.evidenceId === id)
-        return parent ? { title: parent.name, organization: '' } : undefined
-      }
+      const validator = createTailoredValidator({ items: input.items, identity: input.identity, target: input.pageTarget ?? 1, restore }, selected)
+      const { allowed, roleGroups, projectGroups } = validator
       const prompt = `Write concise, content-only CV wording from selected evidence. Return education and skill items as concise entries. Return exactly one experience item per experienceGroups entry and exactly one project item per projectGroups entry, in the given order. Each role/project text is newline-separated bullets; at most ${BULLET_LIMITS[input.pageTarget ?? 1].experience} role bullets and ${BULLET_LIMITS[input.pageTarget ?? 1].projects} project bullets, each <=300 characters. Do not repeat the supplied historical title or employer at the beginning of a bullet; those are rendered separately. Cite only evidence indexes belonging to that exact parent group. Other sections cite only indexes from their own category. Preserve factual meaning, ownership, scope and certainty; do not infer or add facts. Omit certificates and all introductory headline/summary prose. Return JSON matching the requested schema only.\n${JSON.stringify({ job: input.job, analysis: input.analysis, allowedEvidenceBySection: allowed, experienceGroups: roleGroups.map((indexes, index) => ({ group: index, indexes, sources: indexes.map(sourceIndex => ({ index: sourceIndex, text: input.items[sourceIndex].text })) })), projectGroups: projectGroups.map((indexes, index) => ({ group: index, indexes, sources: indexes.map(sourceIndex => ({ index: sourceIndex, text: input.items[sourceIndex].text })) })), selected: selected.map(({ index, category, text }) => ({ index, category, text })) })}`
-      const grouped = (value: z.infer<typeof tailoredSchema>) => ({ ...value, experience: mergeParentEntries(value.experience, roleGroups), projects: mergeParentEntries(value.projects, projectGroups) })
-      const validCitations = (value: z.infer<typeof tailoredSchema>) => categories.every(category => value[category].every(entry => entry.evidence.every(index => allowed[category].includes(index)))) && roleGroups.every((group, index) => { const entry = value.experience[index]; return !!entry && entry.evidence.every(evidenceIndex => group.includes(evidenceIndex)) }) && projectGroups.every((group, index) => { const entry = value.projects[index]; return !!entry && entry.evidence.every(evidenceIndex => group.includes(evidenceIndex)) }) && value.experience.length === roleGroups.length && value.projects.length === projectGroups.length
-      const repeatsHeading = (bullet: string, heading: ReturnType<typeof parentFor>) => [heading?.title, heading?.organization].filter((label): label is string => Boolean(label)).some(label => { const prefix = bullet.slice(0, label.length); return prefix.toLocaleLowerCase() === label.toLocaleLowerCase() && (bullet.length === label.length || !/[\p{L}\p{N}]/u.test(bullet[label.length])) })
-      const validFormat = (value: z.infer<typeof tailoredSchema>) => (['experience', 'projects'] as const).every(category => value[category].every((entry, index) => { const bullets = splitBullets(entry.text), restoredBullets = splitBullets(restore(entry.text)), cap = BULLET_LIMITS[input.pageTarget ?? 1][category], group = (category === 'experience' ? roleGroups : projectGroups)[index], heading = parentFor(category, group); return bullets.length > 0 && bullets.length <= cap && restoredBullets.length === bullets.length && bullets.every(bullet => bullet.length <= 300 && !repeatsHeading(bullet, heading)) && restoredBullets.every(bullet => bullet.length <= 300 && !repeatsHeading(bullet, heading)) }))
-      const valid = (value: z.infer<typeof tailoredSchema>) => validCitations(value) && validFormat(value)
       const request = async (extra: string) => input.call(`${prompt}${extra}`, tailoredSchema)
       let response = await request('')
-      let tailored = grouped(tailoredSchema.parse(response.value))
+      let validation = validator.validate(tailoredSchema.parse(response.value))
       let attempts = response.attempts
-      if (!valid(tailored)) {
+      if (!validation.valid) {
         input.onProgress?.('Retrying draft wording with parent-specific citations and concise bullet limits.')
         response = await request('\nCorrection: return exactly one item per supplied parent, cite only its listed indexes, use no repeated title/employer prefix, and obey every bullet count and length limit. Do not truncate or omit unsupported facts silently.')
-        tailored = grouped(tailoredSchema.parse(response.value))
+        validation = validator.validate(tailoredSchema.parse(response.value))
         attempts += response.attempts
       }
-      if (!valid(tailored)) throw new CitationValidationError(validCitations(tailored) ? 'missing-citation' : 'foreign-citation')
+      if (!validation.valid) throw new CitationValidationError('foreign-citation')
+      const tailored = validation.value
       mark('tailor-paragraphs', 'Tailored content generated.')
       return { tailored, attempts }
     })
@@ -109,6 +123,14 @@ export async function runSourceLinkedGraph(input: { job: unknown; analysis: unkn
   const result = await compiled.invoke(input.resume ? null : {}, input.threadId ? { configurable: { thread_id: input.threadId } } : undefined)
   const selected = selectWithinPageBudget(input.items, result.scored?.relevance ?? [], input.pageTarget ?? 1)
   if (!selected.length) throw new Error('No eligible profile evidence was selected for this posting.')
+  const selectedItems = selected.map(item => ({ ...input.items[item.index], index: item.index, rationale: item.rationale }))
+  const validator = createTailoredValidator({ items: input.items, identity: input.identity, target: input.pageTarget ?? 1, restore }, selectedItems)
+  let tailored: z.infer<typeof tailoredSchema>
+  try { tailored = tailoredSchema.parse(result.tailored) }
+  catch { if (input.resume) throw new IncompatibleGenerationCheckpointError(); throw new CitationValidationError('missing-citation') }
+  const checkpointValidation = validator.validate(tailored)
+  if (!checkpointValidation.valid) { if (input.resume) throw new IncompatibleGenerationCheckpointError(); throw new CitationValidationError('foreign-citation') }
+  tailored = checkpointValidation.value
   const selectedIndices = new Set(selected.map(x => x.index))
   const itemFor = (indices: number[], category: GenerationItem['category']) => indices.map(index => {
     const item = input.items[index]
@@ -125,16 +147,16 @@ export async function runSourceLinkedGraph(input: { job: unknown; analysis: unkn
     const cited = itemFor(entry.evidence, category)
     return { text: restore(entry.text), citations: cited.map(item => ({ evidenceId: item.id, revision: item.revision })), rationale: restore(entry.rationale) }
   })
-  // Older saved graph checkpoints may still contain narrative keys; they are deliberately ignored.
+  // Legacy top-level narrative fields are stripped by the schema; restored content is revalidated above.
   const content = draftContentSchema.parse({
-    education: buildParagraphs(result.tailored!.education, 'education'), experience: buildParagraphs(result.tailored!.experience, 'experience'), projects: buildParagraphs(result.tailored!.projects, 'projects'),
-    skills: result.tailored!.skills.map(entry => { const cited = itemFor(entry.evidence, 'skills'); return { name: restore(entry.name), citations: cited.map(item => ({ evidenceId: item.id, revision: item.revision })), rationale: restore(entry.rationale) } }), certificates: []
+    education: buildParagraphs(tailored.education, 'education'), experience: buildParagraphs(tailored.experience, 'experience'), projects: buildParagraphs(tailored.projects, 'projects'),
+    skills: tailored.skills.map(entry => { const cited = itemFor(entry.evidence, 'skills'); return { name: restore(entry.name), citations: cited.map(item => ({ evidenceId: item.id, revision: item.revision })), rationale: restore(entry.rationale) } }), certificates: []
   })
   const evidenceIds = new Set(Object.values(content).flatMap(section => section.flatMap(item => item.citations.map(c => c.evidenceId))))
   const evidence = input.items.filter(item => evidenceIds.has(item.id)).map(item => ({ evidenceId: item.id, revision: item.revision, snapshot: item.snapshot }))
   const semanticPairs: Array<{ section: keyof DraftRevision['content']; itemPath: string; rewritten: string; evidence: string[] }> = []
   for (const section of ['education', 'experience', 'projects', 'skills'] as const) {
-    const generated = result.tailored![section]
+    const generated = tailored[section]
     generated.forEach((entry, index) => {
       const rewritten = 'text' in entry ? entry.text : entry.name
       const cited = itemFor(entry.evidence, section)

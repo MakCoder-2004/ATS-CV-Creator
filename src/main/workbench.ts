@@ -23,7 +23,7 @@ import { z } from 'zod'
 import { analysisBudgetsSchema, analysisResultSchema, analysisUsageSchema, defaultAnalysisBudgets, generationRecoverySchema, postingAnalysisSchema, displayPostingAnalysisSchema, type AnalysisBudgets, type AnalysisResult, type RecoveryChoice } from '../shared/posting-analysis'
 import { pacificDay } from '../shared/pacific-day'
 import { addDraftItemInputSchema, draftCorrectionInputSchema, draftRevisionSchema, suggestedSkillDecisionSchema, draftTailoringCorrectionSchema, type DraftRevision } from '../shared/draft'
-import { CitationValidationError, runSourceLinkedGraph } from './source-linked-generation'
+import { CitationValidationError, IncompatibleGenerationCheckpointError, runSourceLinkedGraph } from './source-linked-generation'
 import { prepareDraftInputs } from './draft-inputs'
 import { checkDraftFacts } from './factual-verification'
 import { factualCheckReportSchema } from '../shared/factual-report'
@@ -773,6 +773,12 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
         const cancelled = error instanceof AnalysisError && error.code === 'CANCELLED'
         const observedAttempts = (db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id = ?').get(pending.runId) as { count: number }).count
         const message = cancelled ? 'Draft generation was cancelled. No generated wording was retained.' : 'The generated response could not be safely validated. No model wording was retained; author a correction in the blocked draft or retry.'
+        if (error instanceof IncompatibleGenerationCheckpointError) {
+          db.prepare("UPDATE generation_recovery SET status='cancelled',updated_at=? WHERE run_id=?").run(new Date().toISOString(), pending.runId)
+          const priorProgress = currentAnalysis.get(pending.jobId)
+          saveAnalysisState({ jobId: pending.jobId, runId: pending.runId, status: 'failed', analysis: analysis.analysis, progress: error.message, attempts: observedAttempts, error: error.message, cacheHit: analysis.cacheHit, ...(priorProgress?.runId === pending.runId ? { generationStep: priorProgress.generationStep, completedSteps: priorProgress.completedSteps } : {}) })
+          return { ok: false, message: error.message }
+        }
         const validationFailure = error instanceof SyntaxError || error instanceof z.ZodError || error instanceof CitationValidationError
         if (validationFailure) {
           const failed = draftRevisionSchema.parse({ ...failedDraftIdentity, pageTarget, status: 'blocked', approved: false, content: { education: [], experience: [], projects: [], skills: [], certificates: [] }, evidence: safeItems.map(item => ({ evidenceId: item.id, revision: item.revision, snapshot: item.snapshot })), progress: 'Generation failed validation; model output was discarded. This empty draft is editable only by adding locally authored content and remains blocked pending factual checks.', attempts: observedAttempts })
