@@ -25,3 +25,77 @@ test('installed app opens and writes SQLite across reopen', async () => {
     await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 })
   }
 })
+
+test('installed app compiles a generated draft with its bundled LaTeX toolchain', async () => {
+  test.setTimeout(120000)
+  const directory = mkdtempSync(join(tmpdir(), 'cv-tailor-installed-latex-'))
+  let dev: Awaited<ReturnType<typeof electron.launch>> | undefined
+  let installed: Awaited<ReturnType<typeof electron.launch>> | undefined
+  try {
+    // Create a real workspace through the public API. The scripted provider makes this fixture offline and deterministic.
+    dev = await electron.launch({
+      args: ['.', '--disable-gpu'],
+      timeout: 60000,
+      env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: directory, CV_TAILOR_SCRIPTED_ANALYSIS: 'generation' },
+    })
+    let page = await dev.firstWindow()
+    await expect(page.locator('[data-ui-ready="true"]')).toBeVisible({ timeout: 20000 })
+    const setup = await page.evaluate(async () => {
+      const contact = await window.workbench.saveContact({ fullName: 'Zoë Candidate', headline: 'Staff Engineer', email: 'zoe@example.test', links: [{ label: 'Portfolio', url: 'https://example.test/portfolio' }] })
+      const skill = await window.workbench.saveSkill({ name: 'CaféScript', category: 'Programming' })
+      const role = await window.workbench.saveExperience({ kind: 'employment', title: 'Platform Engineer', organization: 'Northstar Systems', startDate: '2023-01', endDate: '2024-06', description: 'Built dependable service infrastructure.', factualItems: [] })
+      const job = await window.workbench.saveJob({ title: 'Engineer', company: 'Example Co', description: 'Build software with CaféScript.' })
+      if (!contact.ok || !skill.ok || !role.ok || !job.ok) throw new Error('Could not create installed LaTeX fixture.')
+      const consent = await window.workbench.prepareOutboundConsent(job.value.id)
+      if (!consent.ok) throw new Error(consent.message)
+      const accepted = await window.workbench.acceptOutboundConsent(consent.token, true, true)
+      if (!accepted.ok) throw new Error(accepted.message)
+      const analysis = await window.workbench.startAnalysis(consent.token)
+      if (!analysis.ok) throw new Error('Scripted analysis failed.')
+      const generation = await window.workbench.generateDraft(consent.token)
+      if (!generation.ok) throw new Error(generation.message)
+      return { jobId: job.value.id }
+    })
+    await dev.close()
+    dev = undefined
+
+    // Reopen exactly that workspace with the genuinely installed executable. PDF compilation now exercises its packaged LaTeX assets.
+    installed = await electron.launch({ executablePath, args: [`--user-data-dir=${directory}`], timeout: 60000 })
+    page = await installed.firstWindow()
+    await expect(page.locator('[data-ui-ready="true"]')).toBeVisible({ timeout: 30000 })
+    await expect(page.getByRole('region', { name: 'CV document' }).getByText('Zoë Candidate')).toBeVisible({ timeout: 20000 })
+    const canonical = await page.evaluate(id => window.workbench.getCanonicalDocument(id), setup.jobId)
+    expect(canonical?.style).toMatchObject({ fontFamily: 'Lato', pageSize: 'Letter' })
+    expect(canonical?.identity).not.toHaveProperty('headline')
+    expect(canonical?.identity).not.toHaveProperty('summary')
+
+    // This public preload call invokes the installed app's bundled LaTeX compiler, not the dev process.
+    const pdf = await page.evaluate(id => window.workbench.getDocumentPdf(id), setup.jobId)
+    const bytes = Buffer.from(pdf.pdfBase64, 'base64')
+    expect(bytes.subarray(0, 5).toString()).toBe('%PDF-')
+    const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs')
+    const loadingTask = pdfjs.getDocument({ data: new Uint8Array(bytes), useSystemFonts: true })
+    const loaded = await loadingTask.promise
+    expect(loaded.numPages).toBe(1)
+    const pdfPage = await loaded.getPage(1)
+    expect(pdfPage.view[2] - pdfPage.view[0]).toBeCloseTo(612, 0)
+    expect(pdfPage.view[3] - pdfPage.view[1]).toBeCloseTo(792, 0)
+    const items = (await pdfPage.getTextContent()).items
+    const text = items.flatMap(item => 'str' in item ? [item.str] : []).join(' ')
+    expect(text).toContain('Zoë Candidate')
+    expect(text).toContain('Technical Skills')
+    expect(text).toContain('CaféScript')
+    expect(text).toContain('Platform Engineer')
+    expect(text).not.toMatch(/professional summary|staff engineer/i)
+    const links = await pdfPage.getAnnotations({ intent: 'display' })
+    expect(links.flatMap(item => item.subtype === 'Link' && item.url ? [item.url] : [])).toContain('https://example.test/portfolio')
+    await loadingTask.destroy()
+
+    await page.getByRole('button', { name: 'Check page length' }).click()
+    await expect(page.getByText(/Fits the selected target/i)).toBeVisible({ timeout: 45000 })
+  } finally {
+    await dev?.close().catch(() => {})
+    await installed?.close().catch(() => {})
+    await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 })
+  }
+})
