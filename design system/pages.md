@@ -18,6 +18,10 @@ The production shell is the implemented four-page navigation: **Tailor CV**, **S
 - Empty/blocked states explain the next available step without abandoning the document/workbench framing. Never indicate approval, evidence grounding, privacy filtering, export completion or generation completion until the real operation succeeds.
 - Responsive: keep the document first in reading order. Collapse to document then inspector and workflow controls; workflow stage navigation may scroll horizontally within its own region. Controls remain reachable without hover.
 
+### Throwaway CV-flow exploration (this prototype branch only)
+
+`prototypes/cv-tailor-ui/CV-FLOW-PREVIEW.md` defines an unapproved, fixture-only exploration of the five exact phases Job posting, Outgoing data, Generate, Review evidence and Export. It retains the approved Variant A workbench shell while comparing three document arrangements. Proposed document exceptions: summary and target headline above the standard sections, body text scaled toward an 11pt equivalent at full A4 width, and in-draft skill-review annotations that disappear from the clean export preview. Progress, checks and export are explicitly simulated. These exceptions authorize exploration only, not changes to the production contract or a claim of ATS validation.
+
 ## Saved jobs — prototype page target
 
 **Target reference:** the approved Workbench's Saved jobs management page in `prototypes/cv-tailor-ui/src/App.tsx` and related management component. Match its page-specific organization, not the production Saved jobs split editor/list redesign. Retain the production shared shell and real persistence, errors and validation.
