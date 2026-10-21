@@ -56,6 +56,7 @@ test('imports PDF proposals through review, atomically applies supported profile
     await review.getByLabel('Full name').fill('Ada Byron Lovelace')
     await review.getByRole('button', { name: 'Apply accepted details' }).click()
     await expect(page.getByRole('status')).toContainText('added to your profile')
+    expect((await page.evaluate(() => window.workbench.getAnalysisUsage())).attempts).toBe(0)
     expect(await page.evaluate(() => window.workbench.getProfile())).toMatchObject({ contact: { fullName: 'Ada Byron Lovelace', revision: 1 }, skills: [{ name: 'Python', revision: 1 }], education: [{ title: 'BSc Computer Science', institution: 'Example University', description: 'GPA 3.7' }], certificates: [{ title: 'Safety Fundamentals', issuer: 'Example Institute', year: 2022 }], summary: [{ description: expect.stringContaining('Curious engineer') }], languages: [{ title: 'Arabic' }, { title: 'English' }] })
     expect(await page.evaluate(() => window.workbench.getExperience())).toMatchObject({ experience: [{ title: 'Engineer', organization: 'Example Labs', factualItems: [{ text: 'Built a data pipeline' }] }], projects: [{ name: 'Atlas', technologies: [{ text: 'Flask' }, { text: 'React' }], factualItems: [{ text: 'Built a recommendation service' }] }] })
     await app.evaluate(({ dialog }, target) => { dialog.showSaveDialog = async () => ({ canceled: false, filePath: target }); return true }, profileJson)
@@ -106,6 +107,30 @@ test('profile changes during local review invalidate apply instead of overwritin
     const result = await page.evaluate(async ({ token, proposals }) => window.workbench.applyProfilePdfImport(token, proposals), { token: preview.token, proposals: preview.proposals })
     expect(result).toMatchObject({ ok: false, message: expect.stringContaining('profile changed') })
     expect(await page.evaluate(() => window.workbench.getProfile())).toMatchObject({ contact: null, skills: [{ name: 'Newer fact' }] })
+    await running.close(); running = undefined
+  } finally { await running?.close(); await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }) }
+})
+
+test('rejects malformed and scanned-like PDFs locally without sending requests or changing profile', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'cv-tailor-pdf-invalid-')), userData = join(root, 'workspace')
+  const malformed = join(root, 'malformed.pdf'), scanned = join(root, 'scanned.pdf')
+  writeFileSync(malformed, '%PDF-1.4\\nnot a valid PDF object graph')
+  writeFileSync(scanned, makePdf(['']))
+  let running: ElectronApplication | undefined, selected = malformed
+  try {
+    running = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData } })
+    const page = await running.firstWindow()
+    await expect(page.locator('[data-ui-ready="true"]')).toBeVisible({ timeout: 15000 })
+    await running.evaluate(({ dialog }, selectedPath) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selectedPath] }); return true }, selected)
+    await page.getByRole('button', { name: 'My profile' }).click()
+    await page.getByRole('button', { name: 'Upload CV' }).click()
+    await expect(page.getByRole('alert')).toContainText('could not be read')
+    selected = scanned
+    await running.evaluate(({ dialog }, selectedPath) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selectedPath] }); return true }, selected)
+    await page.getByRole('button', { name: 'Upload CV' }).click()
+    await expect(page.getByRole('alert')).toContainText('no usable selectable text')
+    expect(await page.evaluate(() => window.workbench.getProfile())).toMatchObject({ contact: null, skills: [] })
+    expect((await page.evaluate(() => window.workbench.getAnalysisUsage())).attempts).toBe(0)
     await running.close(); running = undefined
   } finally { await running?.close(); await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }) }
 })
