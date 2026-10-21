@@ -1,0 +1,752 @@
+{
+  "schemaVersion": 1,
+  "distribution": {
+    "name": "TinyTeX-1",
+    "release": "v2026.10",
+    "texLiveYear": "2026",
+    "assetUrl": "https://github.com/rstudio/tinytex-releases/releases/download/v2026.10/TinyTeX-1-windows-v2026.10.exe",
+    "assetSha256": "36c329c644683d981a668419d13c8804696e2816ae4d287ad755788fee231a31",
+    "assetSizeBytes": 73701889
+  },
+  "engine": {
+    "relativePath": "bin/windows/pdflatex.exe",
+    "family": "pdfTeX",
+    "version": "pdfTeX 3.141592653-2.6-1.40.29 (TeX Live 2026)",
+    "executableSha256": "4b582d0be712b74ae5090aba2d7338f185082f6446cbee7b26115e8ab6e21184"
+  },
+  "packageManager": {
+    "relativePath": "bin/windows/tlmgr.bat",
+    "repository": "https://mirror.ctan.org/systems/texlive/tlnet",
+    "version": "tlmgr revision 80658 (2026-10-16 12:08:14 +0200)"
+  },
+  "requiredPackages": [
+    "babel-english",
+    "enumitem",
+    "fancyhdr",
+    "fontawesome5",
+    "fontaxes",
+    "hyphen-english",
+    "lato",
+    "marvosym",
+    "preprint",
+    "titlesec"
+  ],
+  "licenses": {
+    "requiredFiles": [
+      "LICENSE.TL",
+      "LICENSE.CTAN"
+    ],
+    "additionalNoticeFiles": [
+      "resources/latex-licenses/TinyTeX-GPL-2.txt",
+      "resources/latex-licenses/README.md",
+      "resources/latex-licenses/NOTICE.txt",
+      "resources/latex-licenses/LPPL-1.3c.txt",
+      "resources/latex-licenses/OFL-1.1.txt",
+      "resources/latex-licenses/MIT.txt"
+    ]
+  },
+  "packages": [
+    {
+      "name": "amscls",
+      "revision": 77682,
+      "catalogueVersion": "2.20.6",
+      "catalogueLicense": "lppl1.3c"
+    },
+    {
+      "name": "amsfonts",
+      "revision": 77682,
+      "catalogueVersion": "3.04",
+      "catalogueLicense": "ofl"
+    },
+    {
+      "name": "amsmath",
+      "revision": 79234,
+      "catalogueLicense": "lppl1.3c"
+    },
+    {
+      "name": "atbegshi",
+      "revision": 79461,
+      "catalogueVersion": "1.19",
+      "catalogueLicense": "lppl1.3"
+    },
+    {
+      "name": "atveryend",
+      "revision": 79461,
+      "catalogueVersion": "1.12",
+      "catalogueLicense": "lppl1.3c"
+    },
+    {
+      "name": "auxhook",
+      "revision": 79461,
+      "catalogueVersion": "1.6",
+      "catalogueLicense": "lppl1.3"
+    },
+    {
+      "name": "babel",
+      "revision": 80401,
+      "catalogueVersion": "26.13",
+      "catalogueLicense": "lppl1.3"
+    },
+    {
+      "name": "babel-english",
+      "revision": 77682,
+      "catalogueVersion": "3.3r",
+      "catalogueLicense": "lppl1.3"
+    },
+    {
+      "name": "bibtex",
+      "revision": 77830,
+      "catalogueVersion": "0.99e",
+      "catalogueLicense": "knuth"
+    },
+    {
+      "name": "bibtex.windows",
+      "revision": 77973
+    },
+    {
+      "name": "bigintcalc",
+      "revision": 79461,
+      "catalogueVersion": "1.5",
+      "catalogueLicense": "lppl1.3"
+    },
+    {
+      "name": "bitset",
+      "revision": 79461,
+      "catalogueVersion": "1.3",
+      "catalogueLicense": "lppl1.3"
+    },
+    {
+      "name": "bookmark",
+      "revision": 79461,
+      "catalogueVersion": "1.32",
+      "catalogueLicense": "lppl1.3c"
+    },
+    {
+      "name": "booktabs",
+      "revision": 77682,
+      "catalogueVersion": "1.61803398",
+      "catalogueLicense": "lppl1.3c"
+    },
+    {
+      "name": "cm",
+      "revision": 57963,
+      "catalogueLicense": "knuth"
+    },
+    {
+      "name": "dehyph",
+      "revision": 48599,
+      "catalogueLicense": "lppl1"
+    },
+    {
+      "name": "dvipdfmx",
+      "revision": 78409,
+      "catalogueLicense": "gpl"
+    },
+    {
+      "name": "dvipdfmx.windows",
+      "revision": 78413
+    },
+    {
+      "name": "dvips",
+      "revision": 77830,
+      "catalogueLicense": "other-free"
+    },
+    {
+      "name": "dvips.windows",
+      "revision": 77973
+    },
+    {
+      "name": "ec",
+      "revision": 25033,
+      "catalogueVersion": "1.0",
+      "catalogueLicense": "other-free"
+    },
+    {
+      "name": "enumitem",
+      "revision": 79618,
+      "catalogueVersion": "3.11",
+      "catalogueLicense": "mit"
+    },
+    {
+      "name": "epstopdf",
+      "revision": 71782,
+      "catalogueVersion": "2.36",
+      "catalogueLicense": "other-free"
+    },
+    {
+      "name": "epstopdf-pkg",
+      "revision": 79461,
+      "catalogueVersion": "2.11",
+      "catalogueLicense": "lppl1.3"
+    },
+    {
+      "name": "epstopdf.windows",
+      "revision": 65891
+    },
+    {
+      "name": "etex",
+      "revision": 77830,
+      "catalogueLicense": "knuth"
+    },
+    {
+      "name": "etexcmds",
+      "revision": 79461,
+      "catalogueVersion": "1.7",
+      "catalogueLicense": "lppl1.3"
+    },
+    {
+      "name": "etoolbox",
+      "revision": 77682,
+      "catalogueVersion": "2.5m",
+      "catalogueLicense": "lppl1.3c"
+    },
+    {
+      "name": "euenc",
+      "revision": 19795,
+      "catalogueVersion": "0.1h",
+      "catalogueLicense": "lppl1.3"
+    },
+    {
+      "name": "extractbb",
+      "revision": 77855,
+      "catalogueVersion": "1.1.0",
+      "catalogueLicense": "other-free cc-by-sa-4"
+    },
+    {
+      "name": "extractbb.windows",
+      "revision": 77872
+    },
+    {
+      "name": "fancyhdr",
+      "revision": 78348,
+      "catalogueVersion": "5.2",
+      "catalogueLicense": "lppl1.3"
+    },
+    {
+      "name": "fancyvrb",
+      "revision": 79962,
+      "catalogueVersion": "4.7",
+      "catalogueLicense": "lppl1.3"
+    },
+    {
+      "name": "filehook",
+      "revision": 77682,
+      "catalogueVersion": "0.8b",
+      "catalogueLicense": "lppl1.3c"
+    },
+    {
+      "name": "firstaid",
+      "revision": 79234,
+      "catalogueLicense": "lppl1.3c"
+    },
+    {
+      "name": "float",
+      "revision": 79618,
+      "catalogueVersion": "1.3d",
+      "catalogueLicense": "lppl1"
+    },
+    {
+      "name": "fontawesome5",
+      "revision": 77682,
+      "catalogueVersion": "5.15.4",
+      "catalogueLicense": "ofl lppl1.3c"
+    },
+    {
+      "name": "fontaxes",
+      "revision": 77682,
+      "catalogueVersion": "2.0.2",
+      "catalogueLicense": "lppl1.3c"
+    },
+    {
+      "name": "fontspec",
+      "revision": 79934,
+      "catalogueVersion": "2.9h",
+      "catalogueLicense": "lppl1.3c"
+    },
+    {
+      "name": "framed",
+      "revision": 77682,
+      "catalogueVersion": "0.96",
+      "catalogueLicense": "other-free"
+    },
+    {
+      "name": "geometry",
+      "revision": 78315,
+      "catalogueVersion": "6.0",
+      "catalogueLicense": "lppl1.3c"
+    },
+    {
+      "name": "gettitlestring",
+      "revision": 79461,
+      "catalogueVersion": "1.6",
+      "catalogueLicense": "lppl1.3"
+    },
+    {
+      "name": "glyphlist",
+      "revision": 54074
+    },
+    {
+      "name": "graphics",
+      "revision": 79234,
+      "catalogueLicense": "lppl1.3c"
+    },
+    {
+      "name": "graphics-cfg",
+      "revision": 41448,
+      "catalogueLicense": "pd"
+    },
+    {
+      "name": "graphics-def",
+      "revision": 76719,
+      "catalogueLicense": "lppl1.3c"
+    },
+    {
+      "name": "helvetic",
+      "revision": 77161,
+      "catalogueLicense": "gpl"
+    },
+    {
+      "name": "hycolor",
+      "revision": 79461,
+      "catalogueVersion": "1.10",
+      "catalogueLicense": "lppl1.3"
+    },
+    {
+      "name": "hyperref",
+      "revision": 80357,
+      "catalogueVersion": "7.01r",
+      "catalogueLicense": "lppl1.3"
+    },
+    {
+      "name": "hyph-utf8",
+      "revision": 79618,
+      "catalogueLicense": "mit"
+    },
+    {
+      "name": "hyphen-base",
+      "revision": 78076
+    },
+    {
+      "name": "hyphen-english",
+      "revision": 78069
+    },
+    {
+      "name": "iftex",
+      "revision": 77682,
+      "catalogueVersion": "1.0g",
+      "catalogueLicense": "lppl1.3c"
+    },
+    {
+      "name": "inconsolata",
+      "revision": 79618,
+      "catalogueVersion": "1.121",
+      "catalogueLicense": "ofl apache2 lppl1.3"
+    },
+    {
+      "name": "infwarerr",
+      "revision": 79461,
+      "catalogueVersion": "1.5",
+      "catalogueLicense": "lppl1.3"
+    },
+    {
+      "name": "intcalc",
+      "revision": 79461,
+      "catalogueVersion": "1.3",
+      "catalogueLicense": "lppl1.3"
+    },
+    {
+      "name": "knuth-lib",
+      "revision": 57963,
+      "catalogueLicense": "knuth"
+    },
+    {
+      "name": "kpathsea",
+      "revision": 79498,
+      "catalogueLicense": "lgpl2.1"
+    },
+    {
+      "name": "kpathsea.windows",
+      "revision": 77973
+    },
+    {
+      "name": "kvdefinekeys",
+      "revision": 79461,
+      "catalogueVersion": "1.6",
+      "catalogueLicense": "lppl1.3c"
+    },
+    {
+      "name": "kvoptions",
+      "revision": 79461,
+      "catalogueVersion": "3.15",
+      "catalogueLicense": "lppl1.3"
+    },
+    {
+      "name": "kvsetkeys",
+      "revision": 79461,
+      "catalogueVersion": "1.19",
+      "catalogueLicense": "lppl1.3"
+    },
+    {
+      "name": "l3kernel",
+      "revision": 80334,
+      "catalogueLicense": "lppl1.3c"
+    },
+    {
+      "name": "l3packages",
+      "revision": 76637,
+      "catalogueLicense": "lppl1.3c"
+    },
+    {
+      "name": "latex",
+      "revision": 79618,
+      "catalogueLicense": "lppl1.3c"
+    },
+    {
+      "name": "latex-bin",
+      "revision": 80015
+    },
+    {
+      "name": "latex-bin.windows",
+      "revision": 75604
+    },
+    {
+      "name": "latex-fonts",
+      "revision": 79618,
+      "catalogueLicense": "lppl1.2"
+    },
+    {
+      "name": "latexconfig",
+      "revision": 68923
+    },
+    {
+      "name": "latexmk",
+      "revision": 78335,
+      "catalogueVersion": "4.88",
+      "catalogueLicense": "gpl2"
+    },
+    {
+      "name": "latexmk.windows",
+      "revision": 65891
+    },
+    {
+      "name": "lato",
+      "revision": 79618,
+      "catalogueVersion": "3.3",
+      "catalogueLicense": "ofl lppl1.3c"
+    },
+    {
+      "name": "letltxmacro",
+      "revision": 79461,
+      "catalogueVersion": "1.6",
+      "catalogueLicense": "lppl1.3"
+    },
+    {
+      "name": "lm",
+      "revision": 77682,
+      "catalogueVersion": "2.005",
+      "catalogueLicense": "gfl"
+    },
+    {
+      "name": "lm-math",
+      "revision": 67718,
+      "catalogueVersion": "1.959",
+      "catalogueLicense": "gfl"
+    },
+    {
+      "name": "ltxcmds",
+      "revision": 79461,
+      "catalogueVersion": "1.26",
+      "catalogueLicense": "lppl1.3c"
+    },
+    {
+      "name": "lua-alt-getopt",
+      "revision": 78415,
+      "catalogueVersion": "0.7.0",
+      "catalogueLicense": "mit"
+    },
+    {
+      "name": "lua-uni-algos",
+      "revision": 76195,
+      "catalogueVersion": "0.5",
+      "catalogueLicense": "lppl1.3"
+    },
+    {
+      "name": "luahbtex",
+      "revision": 77830
+    },
+    {
+      "name": "luahbtex.windows",
+      "revision": 78020
+    },
+    {
+      "name": "lualatex-math",
+      "revision": 77682,
+      "catalogueVersion": "1.12",
+      "catalogueLicense": "lppl1.3c"
+    },
+    {
+      "name": "lualibs",
+      "revision": 78415,
+      "catalogueVersion": "2.76",
+      "catalogueLicense": "gpl2"
+    },
+    {
+      "name": "luaotfload",
+      "revision": 74324,
+      "catalogueVersion": "3.29",
+      "catalogueLicense": "gpl2"
+    },
+    {
+      "name": "luaotfload.windows",
+      "revision": 65891
+    },
+    {
+      "name": "luatex",
+      "revision": 78218,
+      "catalogueLicense": "gpl2+"
+    },
+    {
+      "name": "luatex.windows",
+      "revision": 78020
+    },
+    {
+      "name": "marvosym",
+      "revision": 79618,
+      "catalogueVersion": "2.2a",
+      "catalogueLicense": "ofl"
+    },
+    {
+      "name": "mdwtools",
+      "revision": 15878,
+      "catalogueVersion": "1.05.4",
+      "catalogueLicense": "gpl"
+    },
+    {
+      "name": "metafont",
+      "revision": 77830,
+      "catalogueVersion": "2.71828182",
+      "catalogueLicense": "knuth"
+    },
+    {
+      "name": "metafont.windows",
+      "revision": 77973
+    },
+    {
+      "name": "mfware",
+      "revision": 77830,
+      "catalogueLicense": "pd"
+    },
+    {
+      "name": "mfware.windows",
+      "revision": 77973
+    },
+    {
+      "name": "modes",
+      "revision": 77365,
+      "catalogueVersion": "4.4",
+      "catalogueLicense": "pd"
+    },
+    {
+      "name": "natbib",
+      "revision": 79618,
+      "catalogueVersion": "8.31b",
+      "catalogueLicense": "lppl1"
+    },
+    {
+      "name": "pdfescape",
+      "revision": 79461,
+      "catalogueVersion": "1.15",
+      "catalogueLicense": "lppl1.3"
+    },
+    {
+      "name": "pdftex",
+      "revision": 79618,
+      "catalogueLicense": "gpl"
+    },
+    {
+      "name": "pdftex.windows",
+      "revision": 78097
+    },
+    {
+      "name": "pdftexcmds",
+      "revision": 79461,
+      "catalogueVersion": "0.33",
+      "catalogueLicense": "lppl1.3c"
+    },
+    {
+      "name": "plain",
+      "revision": 75712,
+      "catalogueVersion": "3.1415926535",
+      "catalogueLicense": "knuth"
+    },
+    {
+      "name": "preprint",
+      "revision": 30447,
+      "catalogueVersion": "2011",
+      "catalogueLicense": "collection"
+    },
+    {
+      "name": "psnfss",
+      "revision": 79618,
+      "catalogueVersion": "9.3",
+      "catalogueLicense": "lppl1.2"
+    },
+    {
+      "name": "refcount",
+      "revision": 79461,
+      "catalogueVersion": "3.6",
+      "catalogueLicense": "lppl1.3"
+    },
+    {
+      "name": "rerunfilecheck",
+      "revision": 79461,
+      "catalogueVersion": "1.11",
+      "catalogueLicense": "lppl1.3c"
+    },
+    {
+      "name": "scheme-infraonly",
+      "revision": 54191
+    },
+    {
+      "name": "stringenc",
+      "revision": 79461,
+      "catalogueVersion": "1.12",
+      "catalogueLicense": "lppl1.3"
+    },
+    {
+      "name": "symbol",
+      "revision": 77161,
+      "catalogueLicense": "gpl"
+    },
+    {
+      "name": "tex",
+      "revision": 77830,
+      "catalogueVersion": "3.141592653",
+      "catalogueLicense": "knuth"
+    },
+    {
+      "name": "tex-ini-files",
+      "revision": 78524,
+      "catalogueLicense": "pd"
+    },
+    {
+      "name": "tex.windows",
+      "revision": 77973
+    },
+    {
+      "name": "texlive-scripts",
+      "revision": 80452
+    },
+    {
+      "name": "texlive-scripts-extra",
+      "revision": 78162
+    },
+    {
+      "name": "texlive-scripts-extra.windows",
+      "revision": 77973
+    },
+    {
+      "name": "texlive-scripts.windows",
+      "revision": 77973
+    },
+    {
+      "name": "texlive.infra",
+      "revision": 80683
+    },
+    {
+      "name": "texlive.infra.windows",
+      "revision": 77973
+    },
+    {
+      "name": "times",
+      "revision": 77161,
+      "catalogueLicense": "gpl"
+    },
+    {
+      "name": "tipa",
+      "revision": 79618,
+      "catalogueVersion": "1.3",
+      "catalogueLicense": "lppl1.2"
+    },
+    {
+      "name": "titlesec",
+      "revision": 77682,
+      "catalogueVersion": "2.17",
+      "catalogueLicense": "mit"
+    },
+    {
+      "name": "tlgs.windows",
+      "revision": 80216,
+      "catalogueLicense": "collection"
+    },
+    {
+      "name": "tlperl.windows",
+      "revision": 77975
+    },
+    {
+      "name": "tools",
+      "revision": 79234,
+      "catalogueLicense": "lppl1.3c"
+    },
+    {
+      "name": "unicode-data",
+      "revision": 80380,
+      "catalogueVersion": "1.21",
+      "catalogueLicense": "lppl1.3c other-free"
+    },
+    {
+      "name": "unicode-math",
+      "revision": 78251,
+      "catalogueVersion": "0.8r",
+      "catalogueLicense": "lppl1.3c"
+    },
+    {
+      "name": "uniquecounter",
+      "revision": 79461,
+      "catalogueVersion": "1.4",
+      "catalogueLicense": "lppl1.3"
+    },
+    {
+      "name": "url",
+      "revision": 77682,
+      "catalogueVersion": "3.4",
+      "catalogueLicense": "lppl"
+    },
+    {
+      "name": "xcolor",
+      "revision": 77682,
+      "catalogueVersion": "3.02",
+      "catalogueLicense": "lppl1.3c"
+    },
+    {
+      "name": "xetex",
+      "revision": 80015,
+      "catalogueLicense": "x11"
+    },
+    {
+      "name": "xetex.windows",
+      "revision": 77973
+    },
+    {
+      "name": "xetexconfig",
+      "revision": 45845
+    },
+    {
+      "name": "xkeyval",
+      "revision": 77682,
+      "catalogueVersion": "2.10",
+      "catalogueLicense": "lppl1.3"
+    },
+    {
+      "name": "xunicode",
+      "revision": 77682,
+      "catalogueVersion": "0.981",
+      "catalogueLicense": "lppl1.3"
+    },
+    {
+      "name": "zapfding",
+      "revision": 77161,
+      "catalogueLicense": "gpl"
+    }
+  ]
+}

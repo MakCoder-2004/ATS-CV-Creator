@@ -1,0 +1,146 @@
+Third-party compiler and package inventory
+==========================================
+
+TinyTeX distribution: TinyTeX-1 v2026.10 (TeX Live 2026)
+Engine: pdfTeX 3.141592653-2.6-1.40.29 (TeX Live 2026)
+Source asset: https://github.com/rstudio/tinytex-releases/releases/download/v2026.10/TinyTeX-1-windows-v2026.10.exe
+Asset SHA-256: 36c329c644683d981a668419d13c8804696e2816ae4d287ad755788fee231a31
+
+The bundled toolchain contains the following installed TeX Live package records. License labels and package versions are upstream TeX Catalogue metadata, not a substitute for each package’s own license/copyright text. See README.md and retain LICENSE.TL / LICENSE.CTAN from the toolchain root.
+
+Package | Revision | Catalogue version | Catalogue license
+--------|----------|------------------|------------------
+amscls | 77682 | 2.20.6 | lppl1.3c
+amsfonts | 77682 | 3.04 | ofl
+amsmath | 79234 | — | lppl1.3c
+atbegshi | 79461 | 1.19 | lppl1.3
+atveryend | 79461 | 1.12 | lppl1.3c
+auxhook | 79461 | 1.6 | lppl1.3
+babel | 80401 | 26.13 | lppl1.3
+babel-english | 77682 | 3.3r | lppl1.3
+bibtex | 77830 | 0.99e | knuth
+bibtex.windows | 77973 | — | (not listed)
+bigintcalc | 79461 | 1.5 | lppl1.3
+bitset | 79461 | 1.3 | lppl1.3
+bookmark | 79461 | 1.32 | lppl1.3c
+booktabs | 77682 | 1.61803398 | lppl1.3c
+cm | 57963 | — | knuth
+dehyph | 48599 | — | lppl1
+dvipdfmx | 78409 | — | gpl
+dvipdfmx.windows | 78413 | — | (not listed)
+dvips | 77830 | — | other-free
+dvips.windows | 77973 | — | (not listed)
+ec | 25033 | 1.0 | other-free
+enumitem | 79618 | 3.11 | mit
+epstopdf | 71782 | 2.36 | other-free
+epstopdf-pkg | 79461 | 2.11 | lppl1.3
+epstopdf.windows | 65891 | — | (not listed)
+etex | 77830 | — | knuth
+etexcmds | 79461 | 1.7 | lppl1.3
+etoolbox | 77682 | 2.5m | lppl1.3c
+euenc | 19795 | 0.1h | lppl1.3
+extractbb | 77855 | 1.1.0 | other-free cc-by-sa-4
+extractbb.windows | 77872 | — | (not listed)
+fancyhdr | 78348 | 5.2 | lppl1.3
+fancyvrb | 79962 | 4.7 | lppl1.3
+filehook | 77682 | 0.8b | lppl1.3c
+firstaid | 79234 | — | lppl1.3c
+float | 79618 | 1.3d | lppl1
+fontawesome5 | 77682 | 5.15.4 | ofl lppl1.3c
+fontaxes | 77682 | 2.0.2 | lppl1.3c
+fontspec | 79934 | 2.9h | lppl1.3c
+framed | 77682 | 0.96 | other-free
+geometry | 78315 | 6.0 | lppl1.3c
+gettitlestring | 79461 | 1.6 | lppl1.3
+glyphlist | 54074 | — | (not listed)
+graphics | 79234 | — | lppl1.3c
+graphics-cfg | 41448 | — | pd
+graphics-def | 76719 | — | lppl1.3c
+helvetic | 77161 | — | gpl
+hycolor | 79461 | 1.10 | lppl1.3
+hyperref | 80357 | 7.01r | lppl1.3
+hyph-utf8 | 79618 | — | mit
+hyphen-base | 78076 | — | (not listed)
+hyphen-english | 78069 | — | (not listed)
+iftex | 77682 | 1.0g | lppl1.3c
+inconsolata | 79618 | 1.121 | ofl apache2 lppl1.3
+infwarerr | 79461 | 1.5 | lppl1.3
+intcalc | 79461 | 1.3 | lppl1.3
+knuth-lib | 57963 | — | knuth
+kpathsea | 79498 | — | lgpl2.1
+kpathsea.windows | 77973 | — | (not listed)
+kvdefinekeys | 79461 | 1.6 | lppl1.3c
+kvoptions | 79461 | 3.15 | lppl1.3
+kvsetkeys | 79461 | 1.19 | lppl1.3
+l3kernel | 80334 | — | lppl1.3c
+l3packages | 76637 | — | lppl1.3c
+latex | 79618 | — | lppl1.3c
+latex-bin | 80015 | — | (not listed)
+latex-bin.windows | 75604 | — | (not listed)
+latex-fonts | 79618 | — | lppl1.2
+latexconfig | 68923 | — | (not listed)
+latexmk | 78335 | 4.88 | gpl2
+latexmk.windows | 65891 | — | (not listed)
+lato | 79618 | 3.3 | ofl lppl1.3c
+letltxmacro | 79461 | 1.6 | lppl1.3
+lm | 77682 | 2.005 | gfl
+lm-math | 67718 | 1.959 | gfl
+ltxcmds | 79461 | 1.26 | lppl1.3c
+lua-alt-getopt | 78415 | 0.7.0 | mit
+lua-uni-algos | 76195 | 0.5 | lppl1.3
+luahbtex | 77830 | — | (not listed)
+luahbtex.windows | 78020 | — | (not listed)
+lualatex-math | 77682 | 1.12 | lppl1.3c
+lualibs | 78415 | 2.76 | gpl2
+luaotfload | 74324 | 3.29 | gpl2
+luaotfload.windows | 65891 | — | (not listed)
+luatex | 78218 | — | gpl2+
+luatex.windows | 78020 | — | (not listed)
+marvosym | 79618 | 2.2a | ofl
+mdwtools | 15878 | 1.05.4 | gpl
+metafont | 77830 | 2.71828182 | knuth
+metafont.windows | 77973 | — | (not listed)
+mfware | 77830 | — | pd
+mfware.windows | 77973 | — | (not listed)
+modes | 77365 | 4.4 | pd
+natbib | 79618 | 8.31b | lppl1
+pdfescape | 79461 | 1.15 | lppl1.3
+pdftex | 79618 | — | gpl
+pdftex.windows | 78097 | — | (not listed)
+pdftexcmds | 79461 | 0.33 | lppl1.3c
+plain | 75712 | 3.1415926535 | knuth
+preprint | 30447 | 2011 | collection
+psnfss | 79618 | 9.3 | lppl1.2
+refcount | 79461 | 3.6 | lppl1.3
+rerunfilecheck | 79461 | 1.11 | lppl1.3c
+scheme-infraonly | 54191 | — | (not listed)
+stringenc | 79461 | 1.12 | lppl1.3
+symbol | 77161 | — | gpl
+tex | 77830 | 3.141592653 | knuth
+tex-ini-files | 78524 | — | pd
+tex.windows | 77973 | — | (not listed)
+texlive-scripts | 80452 | — | (not listed)
+texlive-scripts-extra | 78162 | — | (not listed)
+texlive-scripts-extra.windows | 77973 | — | (not listed)
+texlive-scripts.windows | 77973 | — | (not listed)
+texlive.infra | 80683 | — | (not listed)
+texlive.infra.windows | 77973 | — | (not listed)
+times | 77161 | — | gpl
+tipa | 79618 | 1.3 | lppl1.2
+titlesec | 77682 | 2.17 | mit
+tlgs.windows | 80216 | — | collection
+tlperl.windows | 77975 | — | (not listed)
+tools | 79234 | — | lppl1.3c
+unicode-data | 80380 | 1.21 | lppl1.3c other-free
+unicode-math | 78251 | 0.8r | lppl1.3c
+uniquecounter | 79461 | 1.4 | lppl1.3
+url | 77682 | 3.4 | lppl
+xcolor | 77682 | 3.02 | lppl1.3c
+xetex | 80015 | — | x11
+xetex.windows | 77973 | — | (not listed)
+xetexconfig | 45845 | — | (not listed)
+xkeyval | 77682 | 2.10 | lppl1.3
+xunicode | 77682 | 0.981 | lppl1.3
+zapfding | 77161 | — | gpl
+
+TinyTeX upstream code is distributed under GPL-2; see TinyTeX-GPL-2.txt. Other accompanying license texts are identified in README.md.
