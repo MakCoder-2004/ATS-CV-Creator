@@ -16,7 +16,7 @@ Scope: [issue #25](https://github.com/MakCoder-2004/ATS-CV-Creator/issues/25), v
 ## Verification observed
 
 - TypeScript typecheck and production Electron build passed.
-- **113 unit/contract tests passed across 26 files**, including strict output validation, summary citations/quantities, confirmed-skill provenance, proposal decisions/reopen, source changes, accepted cuts, consent/cache scopes, checkpoint recovery, backup/restore and document/export parity. These were run under the Electron ABI against the shared native database dependency during integration.
+- **113 unit/contract tests passed across 26 files**, including strict output validation, summary citations/quantities, confirmed-skill provenance, proposal decisions/reopen, source changes, accepted cuts, consent/cache scopes, checkpoint recovery, backup/restore and document/export parity. These were run under the Electron ABI during integration and passed again with the normal `npm test` Node rebuild after merging to main.
 - **20 Electron tests passed, 1 installed-app test skipped** in the complete serial Playwright run. Visible paths cover authorization/analysis pause, new skill decisions, narrative editing, fresh acknowledgment, approval invalidation, measured page fit, actual PDF/DOCX export, overwrite/cancel/failure handling, reopening and existing profile/settings/recovery/backup workflows.
 - Additional real Electron visual checks used a fictional profile on this Windows machine. Widths 375, 520, 760, 980, 1024 and 1440px had no page-level horizontal overflow. The selected stage is revealed within its locally scrollable strip. Narrow paper expands around content rather than clipping it; controls remain below the document. Light/dark app modes preserve white CV paper.
 - A one-page PDF was actually exported, checked for selectable text and canonical reading order, and rendered for visual inspection against the supplied template. DOCX content, links, bullet structure and paragraph order were inspected through its generated ZIP/XML.
@@ -31,6 +31,12 @@ These use a DEV-only scripted transport and fictional source data, not live mode
 - [Document-first review and skill decisions](cv-flow/review.png)
 - [Narrow dark workspace](cv-flow/mobile.png)
 - [Rendered, actually exported PDF](cv-flow/exported-pdf.png)
+
+## Packaging verification
+
+`release/CV-Tailor-Setup-0.1.1.exe` was built from main using physical dependencies. The first post-Node-test package exposed a native ABI mismatch: SQLite was built for Node ABI 137 while Electron requires ABI 140. This was reproduced with a direct native query, not attributed to the renderer. The Windows distribution script now forces `rebuild:electron`, runs `verify:electron-sqlite`, builds the installer, and verifies the packaged binding itself. Both checks passed after the fix.
+
+The actual packaged v0.1.1 executable was opened with isolated temporary user data. Its exact five stages and new skill-review bridge were present; a profile write and appearance choice persisted through native SQLite and offline reopen. This was explicitly an **unpacked packaged-app smoke test**, not an installer installation test. The existing installed application and user data were not replaced.
 
 ## Limits and release distinction
 

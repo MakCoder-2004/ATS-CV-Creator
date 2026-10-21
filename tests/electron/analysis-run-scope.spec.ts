@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 test('analysis that cannot start reports the error without claiming the run is in progress', async () => {
+  test.setTimeout(90000) // A cold Windows Electron launch can exceed the default 30-second test budget.
   const userData = mkdtempSync(join(tmpdir(), 'cv-tailor-analysis-error-ui-'))
   const app = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData, CV_TAILOR_SCRIPTED_ANALYSIS: '' } })
   try {
