@@ -15,7 +15,7 @@ import { openRouterModelSchema } from '../shared/openrouter-settings'
 // Keep this explicit: credentials are never serialized; all workspace persistence tables, including
 // migrations and LangGraph checkpoints, are represented in the versioned format.
 const tables = [
-  'schema_migrations', 'settings', 'profile_contact', 'profile_skills', 'profile_entries', 'evidence_revisions',
+  'schema_migrations', 'settings', 'profile_contact', 'profile_skills', 'profile_entries', 'evidence_revisions', 'profile_import_provenance',
   'profile_experience', 'profile_projects', 'jobs', 'outbound_consents', 'posting_analysis_cache',
   'analysis_run_state', 'analysis_attempts', 'provider_attempt_outcomes', 'generation_recovery',
   'generation_recovery_extensions', 'draft_revisions', 'regeneration_proposals', 'document_fit_reports',
@@ -62,6 +62,10 @@ export function createWorkspaceBackupEngine(db: Database.Database): WorkspaceBac
     for (const row of rows.profile_entries?.rows ?? []) { const data = parseJson('profile_entries', row.data as string); assertValid(profileEntrySchema, data, 'profile_entries'); if ((data as { id: string }).id !== row.id || (data as { revision: number }).revision !== row.revision || (data as { section: string }).section !== row.section) fail('profile_entries') }
     for (const [table, schema] of [['profile_experience', experienceRecordSchema], ['profile_projects', projectRecordSchema]] as const) for (const row of rows[table]?.rows ?? []) { const data = parseJson(table, row.data as string); assertValid(schema, data, table); if ((data as { id: string }).id !== row.id || (data as { revision: number }).revision !== row.revision) fail(table) }
     for (const row of rows.evidence_revisions?.rows ?? []) { assertValid(evidenceRevisionSchema, { id: row.id, revision: row.revision, action: row.action, snapshot: parseJson('evidence_revisions', row.snapshot as string), createdAt: row.created_at }, 'evidence_revisions') }
+    const revisions = new Set((rows.evidence_revisions?.rows ?? []).map(row => `${row.id}:${row.revision}`))
+    for (const row of rows.profile_import_provenance?.rows ?? []) {
+      if (!uuidSchema.safeParse(row.owner_id).success || !Number.isInteger(row.owner_revision) || Number(row.owner_revision) < 1 || typeof row.field !== 'string' || !row.field || !/^[a-f0-9]{64}$/.test(String(row.source_hash)) || !Number.isInteger(row.page) || Number(row.page) < 1 || typeof row.passage !== 'string' || !row.passage || typeof row.created_at !== 'string' || !Number.isFinite(Date.parse(row.created_at)) || !revisions.has(`${row.owner_id}:${row.owner_revision}`)) fail('profile_import_provenance')
+    }
     for (const row of rows.jobs?.rows ?? []) { const data = parseJson('jobs', row.data as string); assertValid(jobRecordSchema, data, 'jobs'); if ((data as { id: string }).id !== row.id || (data as { createdAt: string }).createdAt !== row.created_at || (data as { updatedAt: string }).updatedAt !== row.updated_at) fail('jobs') }
     for (const row of rows.draft_revisions?.rows ?? []) { const data = parseJson('draft_revisions', row.data as string); assertValid(draftRevisionSchema, data, 'draft_revisions'); if ((data as { id: string }).id !== row.id || (data as { jobId: string }).jobId !== row.job_id || (data as { revision: number }).revision !== row.revision) fail('draft_revisions') }
     for (const row of rows.regeneration_proposals?.rows ?? []) { const data = parseJson('regeneration_proposals', row.data as string); assertValid(regenerationProposalSchema, data, 'regeneration_proposals'); if ((data as { id: string }).id !== row.id || (data as { jobId: string }).jobId !== row.job_id || (data as { status: string }).status !== row.status) fail('regeneration_proposals') }
@@ -97,7 +101,15 @@ export function createWorkspaceBackupEngine(db: Database.Database): WorkspaceBac
     try { parsed = JSON.parse(text) } catch { throw new Error('Backup is invalid or incompatible.') }
     const result = workspaceBackupSchema.safeParse(parsed)
     if (!result.success) throw new Error('Backup is invalid or incompatible.')
-    const backup = result.data
+    let backup = result.data
+    // Version-1 backups created before CV import have no provenance relation; upgrade the candidate
+    // in memory and its migration ledger before validation/restore, leaving the file untouched.
+    if (!backup.tables.profile_import_provenance && db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='profile_import_provenance'").get()) {
+      const upgraded = structuredClone(backup) as typeof backup
+      upgraded.tables.profile_import_provenance = { schema: tableSchema('profile_import_provenance'), rows: [] }
+      if (upgraded.tables.schema_migrations) upgraded.tables.schema_migrations.rows.push({ version: 6 })
+      backup = upgraded
+    }
     const expected = actualTables().sort()
     const names = Object.keys(backup.tables).sort()
     if (names.length !== expected.length || names.some((name, i) => name !== expected[i])) throw new Error('Backup is invalid or incompatible with this workspace schema.')
