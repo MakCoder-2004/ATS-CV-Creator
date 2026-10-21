@@ -9,6 +9,7 @@
 - For asynchronous operations, show progress and announce meaningful state through an appropriate live region. Completion is reported only after success; errors are specific and offer a retry/recovery path. Avoid vague “Something went wrong.”
 - Empty states explain what is absent and provide the next useful action. Loading and initialization states indicate that the workspace is opening. Saved local data, privacy and export claims must remain factually accurate.
 - Confirm destructive or hard-to-reverse actions; do not add confirmations to reversible low-risk actions.
+- Profile CV upload review is source-backed and grouped in a full-width list within the existing My profile structure. Keep proposal review/correction/selection distinct from explicit application; never apply implicitly. Any AI analysis is a separate optional action with its own clear, run-specific consent and outgoing-text review; upload and deterministic parsing must not silently invoke AI.
 
 ## Keyboard and assistive technology
 
