@@ -14,7 +14,7 @@ test('user approves and exports a selectable PDF, while cancellation and overwri
     const page = await app.firstWindow()
     await expect(page.locator('[data-ui-ready="true"]')).toBeVisible({ timeout: 20000 })
     const saved = await page.evaluate(async () => {
-      const contact = await window.workbench.saveContact({ fullName: 'Zoë Candidate', headline: 'Engineer', email: 'zoe@example.test', links: [{ label: 'Portfolio', url: 'https://example.test/portfolio' }] })
+      const contact = await window.workbench.saveContact({ fullName: 'Zoë Candidate', headline: 'Staff Engineer', email: 'zoe@example.test', links: [{ label: 'Portfolio', url: 'https://example.test/portfolio' }] })
       const skill = await window.workbench.saveSkill({ name: 'CaféScript', category: 'Programming' })
       const newer = await window.workbench.saveExperience({ kind: 'employment', title: 'Platform Engineer', organization: 'Northstar Systems', startDate: '2023-01', endDate: '2024-06', description: 'Built dependable service infrastructure.', factualItems: [] })
       const older = await window.workbench.saveExperience({ kind: 'employment', title: 'Software Engineer', organization: 'Harbor Technologies', startDate: '2020-01', endDate: '2022-12', description: 'Led a careful platform migration.', factualItems: [] })
@@ -58,6 +58,8 @@ test('user approves and exports a selectable PDF, while cancellation and overwri
     await expect(page.getByRole('button', { name: 'Approve CV' })).toBeEnabled()
     await page.getByRole('button', { name: 'Approve CV' }).click()
     await expect(page.getByRole('button', { name: 'Export approved PDF' })).toBeEnabled()
+    const compiledPreview = page.getByRole('region', { name: 'Compiled PDF preview' })
+    await expect(compiledPreview.locator('canvas[data-pdf-page="1"]')).toBeVisible({ timeout: 30000 })
 
     // A cancelled native destination selection never opens a PDF renderer or reports success.
     await page.getByRole('button', { name: 'Export approved PDF' }).click()
@@ -91,11 +93,17 @@ test('user approves and exports a selectable PDF, while cancellation and overwri
     const joined = pdfText.join(' ')
     expect(joined).toContain('Zoë Candidate')
     expect(joined).toContain('CaféScript')
+    expect(joined).toContain('Technical Skills')
     const folded = joined.toLocaleLowerCase()
     expect(folded).not.toMatch(/\beducation\b/)
-    expect(folded.indexOf('professional summary')).toBeLessThan(folded.indexOf('experience'))
+    expect(folded).not.toContain('professional summary')
+    expect(folded).not.toContain('staff engineer')
     expect(folded).not.toMatch(/\bprojects\b/)
-    const orderedExperience = ['Platform Engineer', '01/2023 – 06/2024', 'Northstar Systems', 'Built dependable service infrastructure.', 'Software Engineer', '01/2020 – 12/2022', 'Harbor Technologies', 'Led a careful platform migration.']
+    expect(folded).not.toMatch(/\bcertificates\b/)
+    const firstPage = await loaded.getPage(1)
+    expect(firstPage.view[2] - firstPage.view[0]).toBeCloseTo(612, 0)
+    expect(firstPage.view[3] - firstPage.view[1]).toBeCloseTo(792, 0)
+    const orderedExperience = ['Northstar Systems', 'Platform Engineer', '01/2023 – 06/2024', 'Built dependable service infrastructure.', 'Harbor Technologies', 'Software Engineer', '01/2020 – 12/2022', 'Led a careful platform migration.']
     let orderCursor = 0
     for (const part of orderedExperience) { const found = joined.indexOf(part, orderCursor); expect(found, `expected extracted text in canonical order: ${part}`).toBeGreaterThanOrEqual(0); orderCursor = found + part.length }
     expect(targets).toContain('https://example.test/portfolio')
