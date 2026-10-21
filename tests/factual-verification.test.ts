@@ -4,12 +4,22 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { checkDraftFacts } from '../src/main/factual-verification'
+import type { DraftRevision } from '../src/shared/draft'
 import { createWorkbench } from '../src/main/workbench'
 import type { AnalysisTransport } from '../src/main/posting-analysis'
 import { analysisBudgetValues } from '../src/shared/posting-analysis'
 
 const dirs: string[] = [], opened: Array<ReturnType<typeof createWorkbench>> = []
 afterEach(() => { for (const item of opened.splice(0)) item.close(); for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
+
+test('technical record identifiers never authorize a numerical CV claim', () => {
+  const sourceId = '9aaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+  const snapshot = { id: sourceId, revision: 1, kind: 'employment', title: 'Engineer', organization: 'Example', description: 'Built services.' }
+  const draft: DraftRevision = { id: randomUUID(), jobId: randomUUID(), revision: 1, pageTarget: 1, status: 'unverified', approved: false, createdAt: new Date().toISOString(), progress: '', attempts: 0, lockedFields: { fullName: 'Candidate', experience: [{ evidenceId: sourceId, title: 'Engineer', organization: 'Example' }], education: [], projects: [], certificates: [] }, content: { education: [], experience: [{ text: 'Created 9 dependable services.', citations: [{ evidenceId: sourceId, revision: 1 }], rationale: 'User source.' }], projects: [], skills: [], certificates: [] }, evidence: [{ evidenceId: sourceId, revision: 1, snapshot, provenance: 'manual' }] }
+  expect(checkDraftFacts(draft)).toMatchObject({ passed: false, findings: [expect.objectContaining({ code: 'unsupported-number' })] })
+  snapshot.description = 'Created 9 dependable services.'
+  expect(checkDraftFacts(draft)).toMatchObject({ passed: true, findings: [] })
+})
 
 test('legacy summary and headline are ignored by factual checks for the current content-only CV', () => {
   const draft = { id: randomUUID(), jobId: randomUUID(), revision: 1, pageTarget: 1 as const, status: 'unverified' as const, approved: false, createdAt: new Date().toISOString(), progress: 'Ready', attempts: 0, lockedFields: { fullName: 'Candidate', experience: [], education: [], projects: [], certificates: [] }, content: { education: [], experience: [], projects: [], skills: [], certificates: [] }, evidence: [], tailoring: { headline: 'Ignored title', summary: { text: 'Revenue grew 900 percent.', citations: [{ evidenceId: randomUUID(), revision: 99 }], rationale: 'Legacy field' } } } as never

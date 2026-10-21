@@ -12,6 +12,11 @@ import type { ExperienceSnapshot } from '../shared/experience'
 import type { ProfileSnapshot } from '../shared/profile'
 import { DraftDocument } from './DraftReview'
 import { PdfPreview } from './PdfPreview'
+import { ReviewActionBar } from './ReviewActionBar'
+import { ReviewContextPanel } from './ReviewContextPanel'
+import { JobMatchReview } from './JobMatchReview'
+import { DraftRecordEditor, type RecordEditorTarget } from './DraftRecordEditor'
+import { listDraftRecords, type MutateDraftRecordInput, type MutateDraftRecordResult } from '../shared/draft-records'
 import { SelectedReview } from './SelectedReview'
 import { describeSource, readableText } from './review-copy'
 
@@ -20,6 +25,7 @@ type Phase = 1 | 2 | 3 | 4 | 5
 type Section = 'education' | 'experience' | 'projects' | 'skills' | 'certificates'
 
 type Props = {
+  mutateRecord: (input: Omit<MutateDraftRecordInput, 'jobId'>) => Promise<MutateDraftRecordResult>
   returnToReview: () => void
   decideSuggestedSkill: (id: string, decision: 'pending' | 'confirmed' | 'removed') => Promise<void>
   activeJob: JobRecord | null
@@ -114,6 +120,19 @@ function EmptyDocument({ message }: { message: string }) {
 export function WorkbenchStageLayout(props: Props) {
   const { returnToReview, decideSuggestedSkill, activeJob, onNavigate, error, retry, activePhase, review, consentAccepted, termsAcknowledged, setTermsAcknowledged, consentError, consentBusy, recovery, recoveryBusy, resumeSavedGeneration, cancelSavedGeneration, draft, canonical, fitReport, fitBusy, acceptedCuts, setAcceptedCuts, draftBusy, draftError, pageTarget, setPageTarget, usage, addSection, setAddSection, addEvidence, setAddEvidence, sources, outgoingProfileCounts, inspectOutgoing, cancelOutgoing, authorizeOutgoing, startAnalysis, generateDraft, cancelAnalysis, measurePageFit, applyPageCuts, addDraftItem, correctDraft, checkDraftNow, approveCurrentDraft, onProposalAccepted, exportDocx, docxBusy } = props
   const analysis = props.analysis ? { ...props.analysis, analysis: props.analysis.displayAnalysis ?? props.analysis.analysis } : null
+  const [recordEditor, setRecordEditor] = useState<RecordEditorTarget | null>(null)
+  function editRecord(section: MutateDraftRecordInput['section'], operation: 'add' | 'update' | 'remove', index?: number) {
+    if (!draft) return
+    const records = operation === 'add' ? [] : listDraftRecords(draft)
+    let record = records.find(record => record.section === section && record.index === index)
+    if (!record && index !== undefined && (section === 'experience' || section === 'projects')) {
+      const citations = draft.content[section][index]?.citations ?? []
+      const owner = draft.lockedFields[section].find(parent => citations.some(citation => (parent.sourceIds ?? [parent.evidenceId]).includes(citation.evidenceId)))
+      record = records.find(record => record.section === section && record.sourceId === owner?.evidenceId)
+    }
+    if (operation !== 'add' && !record) return
+    setRecordEditor({ section, operation, record, draftId: draft.id, revision: draft.revision })
+  }
   const [exportMessage, setExportMessage] = useState('')
   const [exportBusy, setExportBusy] = useState(false)
   const [regenTarget, setRegenTarget] = useState<RegenerationTarget>({ kind: 'section', section: 'experience' })
@@ -129,6 +148,10 @@ export function WorkbenchStageLayout(props: Props) {
   useEffect(() => { setReviewAcknowledged(false) }, [draft?.id])
   useEffect(() => { setSpecialSelection(null) }, [activeJob?.id])
   const [sectionToolsOpen, setSectionToolsOpen] = useState(false)
+  const [inspectorOpen, setInspectorOpen] = useState(() => window.innerWidth >= 1200)
+  const [contextView, setContextView] = useState<'sources' | 'skills' | 'notes' | 'match'>('sources')
+  const [detailsReveal, setDetailsReveal] = useState(0)
+  function openDetails(target: 'sources' | 'skills' | 'notes' = 'sources') { setContextView(target); setInspectorOpen(true); setDetailsReveal(value => value + 1) }
   const reviewHeadingRef = useRef<HTMLHeadingElement>(null)
   async function prepareRegeneration(target?: RegenerationTarget) {
     if (!activeJob || !draft) return
@@ -192,10 +215,10 @@ export function WorkbenchStageLayout(props: Props) {
   }) ?? []
   const reviewHasError = /could not|failed|blocked|unavailable|stale|too long|issues? need attention|invalid|not approved|cannot|can't|error|choose a destination|no file was written/i.test(draftError)
   const outgoing = review?.outgoing as unknown as OutboundPayload | undefined
-  const headings = ['Start with the right role.', 'Your data, before it leaves.', draftBusy ? 'Your CV is taking shape.' : 'Understand the role. Then tailor your CV.', 'Your experience. A clearer story.', 'Ready for your next application.']
-  const descriptions = ['The posting sets the target. Your profile supplies the facts.', 'See what will be shared before you choose to continue.', 'Qualifications and keywords guide the wording—not invented experience.', 'Read the draft, check its sources, and confirm any new skills.', 'A clean document, without review highlights or added-skill notices.']
+  const headings = ['Start with the right role.', 'Your data, before it leaves.', draftBusy ? 'Your CV is taking shape.' : 'Understand the role. Then tailor your CV.', 'Review your CV', 'Ready for your next application.']
+  const descriptions = ['The posting sets the target. Your profile supplies the facts.', 'See what will be shared before you choose to continue.', 'Qualifications and keywords guide the wording—not invented experience.', 'Make it yours. Review the wording, check the fit, then approve.', 'A clean document, without review highlights or added-skill notices.']
 
-  return <div className="cv-workbench-start">
+  return <div className={`cv-workbench-start${activePhase === 4 ? ' cv-review-mode' : ''}`}>
     <header className="cv-workbench-heading">
       {activeJob && <div className="workbench-job-context"><span className="company-monogram" aria-hidden="true">{activeJob.company.slice(0, 1).toUpperCase()}</span><div><strong>{activeJob.title}</strong><span>{activeJob.company}</span></div></div>}
       <div><h1>{headings[activePhase - 1]}</h1>{descriptions[activePhase - 1] && <p>{descriptions[activePhase - 1]}</p>}</div>
@@ -243,16 +266,22 @@ export function WorkbenchStageLayout(props: Props) {
       </ReviewBody>; })()}
     </section>}
 
-    {activePhase >= 4 && draft && <section className="workbench-columns" aria-label="Tailoring workflow">
+    {activePhase >= 4 && draft && <section className={activePhase === 4 ? 'review-stage' : undefined} aria-label="Tailoring workflow"><section aria-label={activePhase === 4 ? 'CV review' : undefined}>
+      {activePhase === 4 && <ReviewActionBar feedback={reviewHasError ? draftError : ''} draft={draft} fit={fitReport} fitBusy={fitBusy} busy={draftBusy || regenBusy} acknowledged={reviewAcknowledged} setAcknowledged={setReviewAcknowledged} onCheck={checkDraftNow} onMeasure={measurePageFit} onApprove={approveCurrentDraft} onOpenDetails={openDetails} acceptedCuts={acceptedCuts} setAcceptedCuts={setAcceptedCuts} onApplyCuts={applyPageCuts} />}
+      <div className={`workbench-columns${activePhase === 4 ? ` review-columns${inspectorOpen ? '' : ' review-columns--focused'}` : ''}`}>
       <section className="document-area" aria-label="CV document">
-        <div className="document-toolbar"><div className="document-toolbar-title"><FileText size={17} aria-hidden="true" /><strong>Tailored CV</strong><span className="document-stage">{draft.approved ? 'Approved' : pendingSkills ? 'Skills to review' : draft.status === 'blocked' ? 'Needs changes' : 'Ready to review'}</span>{activePhase === 4 && <span className="review-hint">Select wording to see its sources</span>}</div><span className="page-target-control">{draft.pageTarget}-page target</span></div>
-        <div className="paper-wrap">{activePhase === 5 && activeJob && canonical ? <PdfPreview key={activeJob.id} jobId={activeJob.id} canonical={canonical} /> : canonical ? <><p className="review-layout-note">Review layout · spacing and pagination may differ from the compiled PDF.</p><DraftDocument document={canonical} approved={draft.approved} suggestedSkills={draft.suggestedSkills} selectedId={activePhase === 4 ? selectedId : undefined} onSelectEntry={activePhase === 4 ? id => { const match = /^(education|experience|projects|skills|certificates)-(\d+)$/.exec(id); if (match) { setSelectedItem({ section: match[1] as Section, index: Number(match[2]) }); setSpecialSelection(null) } else { setSpecialSelection(id) }; setEditing(false); if (window.innerWidth <= 900) window.requestAnimationFrame(() => reviewHeadingRef.current?.focus()) } : undefined} /></> : <p className="document-loading" role="status">Loading tailored CV…</p>}</div>
-        <section className="page-fit-controls" aria-label="Actual PDF page fit"><p>Check that this CV fits the page length you chose.</p><button type="button" className="secondary-button" disabled={fitBusy} onClick={() => void measurePageFit()}>{fitBusy ? 'Measuring…' : 'Check page length'}</button>{fitReport && <div role="status">Your CV uses {fitReport.actualPages} of {fitReport.targetPages} page{fitReport.targetPages === 1 ? '' : 's'}. {fitReport.overflow ? 'It is too long. Choose which suggested content to remove before approval.' : 'Fits the selected target.'}{fitReport.overflow && fitReport.proposedCuts.map(cut => <label key={cut.entryId}><input type="checkbox" checked={acceptedCuts.includes(cut.entryId)} onChange={event => setAcceptedCuts(value => event.target.checked ? [...value, cut.entryId] : value.filter(id => id !== cut.entryId))} />Proposed cut: {cut.section} — {cut.label}</label>)}{fitReport.overflow && <button type="button" className="primary-button" disabled={!acceptedCuts.length} onClick={() => void applyPageCuts()}>Apply selected cuts</button>}</div>}</section>
+        <div className="document-toolbar"><div className="document-toolbar-title"><FileText size={17} aria-hidden="true" /><strong>Tailored CV</strong><span className="document-stage">{draft.approved && draft.checkReport?.passed && fitReport && !fitReport.overflow ? 'Approved' : pendingSkills ? 'Skills to review' : draft.status === 'blocked' ? 'Needs changes' : 'Ready to review'}</span>{activePhase === 4 && <span className="review-hint">Select wording to see its sources</span>}</div><span className="page-target-control">{draft.pageTarget}-page target</span></div>
+        <div className="paper-wrap">{activePhase === 5 && activeJob && canonical ? <PdfPreview key={activeJob.id} jobId={activeJob.id} canonical={canonical} /> : canonical ? <><p className="review-layout-note">Review layout · spacing and pagination may differ from the compiled PDF.</p><DraftDocument document={canonical} approved={draft.approved} suggestedSkills={draft.suggestedSkills} recordBusy={draftBusy || fitBusy || regenBusy} onAddRecord={activePhase === 4 ? section => editRecord(section, 'add') : undefined} selectedId={activePhase === 4 ? selectedId : undefined} onSelectEntry={activePhase === 4 ? id => { const match = /^(education|experience|projects|skills|certificates)-(\d+)$/.exec(id); if (match) { setSelectedItem({ section: match[1] as Section, index: Number(match[2]) }); setSpecialSelection(null) } else { setSpecialSelection(id) }; setEditing(false); openDetails(); window.requestAnimationFrame(() => reviewHeadingRef.current?.focus({ preventScroll: true })) } : undefined} /></> : <p className="document-loading" role="status">Loading tailored CV…</p>}</div>
+        {activePhase === 5 && <section className="page-fit-controls" aria-label="Actual PDF page fit"><p>Check that this CV fits the page length you chose.</p><button type="button" className="secondary-button" disabled={fitBusy} onClick={() => void measurePageFit()}>{fitBusy ? 'Measuring…' : 'Check page length'}</button>{fitReport && <div role="status">Your CV uses {fitReport.actualPages} of {fitReport.targetPages} page{fitReport.targetPages === 1 ? '' : 's'}. {fitReport.overflow ? 'It is too long. Choose which suggested content to remove before approval.' : 'Fits the selected target.'}{fitReport.overflow && fitReport.proposedCuts.map(cut => <label key={cut.entryId}><input type="checkbox" checked={acceptedCuts.includes(cut.entryId)} onChange={event => setAcceptedCuts(value => event.target.checked ? [...value, cut.entryId] : value.filter(id => id !== cut.entryId))} />Proposed cut: {cut.section} — {cut.label}</label>)}{fitReport.overflow && <button type="button" className="primary-button" disabled={!acceptedCuts.length} onClick={() => void applyPageCuts()}>Apply selected cuts</button>}</div>}</section>}
       </section>
-      <aside className="inspector" aria-label="Run review">
-        {activePhase === 4 && <SuggestedSkillReview draft={draft} busy={draftBusy || regenBusy} onDecision={async (id, decision) => { await decideSuggestedSkill(id, decision); setSpecialSelection(null) }} />}
-        {activePhase === 4 && (specialSelection ? <TailoringInspector key={`${draft.id}-${specialSelection}`} selection={specialSelection} draft={draft} headingRef={reviewHeadingRef} onReturn={() => { if (selectedId) document.getElementById(`cv-review-${selectedId}`)?.focus() }} /> : <SelectedReview selection={activeSelection} item={selectedDraftItem} entry={selectedEntry} sources={selectedSources} draft={draft} headingRef={reviewHeadingRef} onReturnToDocument={() => { if (selectedId) document.getElementById(`cv-review-${selectedId}`)?.focus() }} editing={editing} setEditing={setEditing} onSave={(section, index, text) => correctDraft(section, index, text)} onImprove={(section, index) => { setSectionToolsOpen(true); void prepareRegeneration({ kind: 'paragraph', section, index }) }} busy={draftBusy || regenBusy} />)}
-        <section className="draft-inspector" aria-label="CV review"><h2>{activePhase === 5 ? 'Ready to export' : draft.status === 'blocked' && reviewFindings.length ? 'Changes needed' : 'Finish reviewing'}</h2><p>{activePhase === 5 ? 'You approved this CV. Choose PDF or an editable Word document.' : 'Check the wording, new skills and page length, then approve your CV.'}</p>
+      <aside className={`inspector${activePhase === 4 ? ' review-context' : ''}`} aria-label="Run review">
+        <ReviewContextPanel view={contextView} reveal={detailsReveal} embedded={activePhase === 5} open={activePhase === 4 && inspectorOpen} onOpenChange={setInspectorOpen}>
+        {activePhase === 4 && <nav className="review-detail-nav" aria-label="Review detail categories"><button type="button" aria-pressed={contextView === 'sources'} onClick={() => setContextView('sources')}>Sources</button><button type="button" aria-pressed={contextView === 'skills'} onClick={() => setContextView('skills')}>New skills{pendingSkills ? ` (${pendingSkills})` : ''}</button><button type="button" aria-pressed={contextView === 'match'} onClick={() => setContextView('match')}>Job match</button><button type="button" aria-pressed={contextView === 'notes'} onClick={() => setContextView('notes')}>Checks & options{reviewFindings.length ? ` (${reviewFindings.length})` : ''}</button></nav>}
+        <div hidden={contextView !== 'skills' || activePhase !== 4}>
+        {activePhase === 4 && <SuggestedSkillReview draft={draft} busy={draftBusy || regenBusy} onDecision={async (id, decision) => { await decideSuggestedSkill(id, decision); setSpecialSelection(null) }} />}{!draft.suggestedSkills?.length && <p className="review-panel-empty">No new skills need a decision. You can still add or edit skills in your CV.</p>}</div>
+        <div hidden={contextView !== 'sources'}>{activePhase === 4 && (specialSelection ? <TailoringInspector key={`${draft.id}-${specialSelection}`} selection={specialSelection} draft={draft} headingRef={reviewHeadingRef} onReturn={() => { if (window.innerWidth < 1200) setInspectorOpen(false); if (selectedId) window.requestAnimationFrame(() => document.getElementById(`cv-review-${selectedId}`)?.focus()) }} /> : <SelectedReview selection={activeSelection} item={selectedDraftItem} entry={selectedEntry} sources={selectedSources} draft={draft} headingRef={reviewHeadingRef} onReturnToDocument={() => { if (window.innerWidth < 1200) setInspectorOpen(false); if (selectedId) window.requestAnimationFrame(() => document.getElementById(`cv-review-${selectedId}`)?.focus()) }} editing={editing} setEditing={setEditing} onEditRecord={(section, index) => { if (section !== 'certificates') editRecord(section, 'update', index) }} onRemoveRecord={(section, index) => { if (section !== 'certificates') editRecord(section, 'remove', index) }} onSave={(section, index, text) => correctDraft(section, index, text)} onImprove={(section, index) => { setSectionToolsOpen(true); setContextView('notes'); void prepareRegeneration({ kind: 'paragraph', section, index }) }} busy={draftBusy || regenBusy} />)}</div>
+        {activePhase === 4 && <div hidden={contextView !== 'match'}><JobMatchReview draft={draft} sources={sources} /></div>}
+        <div hidden={activePhase === 4 && contextView !== 'notes'}><section className="draft-inspector" aria-label={activePhase === 4 ? 'Review notes' : 'CV review'}><h2>{activePhase === 5 ? 'Ready to export' : draft.status === 'blocked' && reviewFindings.length ? 'Changes needed' : 'Finish reviewing'}</h2><p>{activePhase === 5 ? 'You approved this CV. Choose PDF or an editable Word document.' : 'Check the wording, new skills and page length, then approve your CV.'}</p>
           {activePhase === 5 && <><p>The compiled PDF is the authoritative export preview. Word documents remain editable and may reflow.</p><button className="secondary-button" type="button" onClick={returnToReview}>Back to review</button></>}
           {activePhase === 4 && <>
           <button type="button" className="secondary-button section-improve-toggle" aria-expanded={sectionToolsOpen} disabled={regenBusy} onClick={() => setSectionToolsOpen(open => !open)}>{sectionToolsOpen ? 'Hide section options' : 'Improve a whole section'}</button>
@@ -266,15 +295,26 @@ export function WorkbenchStageLayout(props: Props) {
           {reviewFindings.map((finding, index) => { if (finding.itemPath === 'generation') return null; const match = /^(education|experience|projects|skills|certificates)\[(\d+)\]/.exec(finding.itemPath); if (!match) return <p role="alert" key={`${finding.code}-${index}`}>{finding.message} {finding.correction}</p>; const section = match[1] as Section; const itemIndex = Number(match[2]); const entry = draft.content[section][itemIndex]; const current = entry ? ('text' in entry ? entry.text : entry.name) : ''; return <form key={`${finding.code}-${index}`} role="alert" onSubmit={event => { event.preventDefault(); const value = new FormData(event.currentTarget).get('correction'); if (typeof value === 'string') void correctDraft(section, itemIndex, value) }}><p>{finding.message} {finding.correction}</p><label>Correct {section} draft wording<textarea name="correction" defaultValue={readableText(current)} /></label><button type="submit" disabled={draftBusy}>Save wording and recheck</button></form>})}</details>}
           {draftError && <p className={`review-feedback${reviewHasError ? ' is-error' : ''}`} role={reviewHasError ? 'alert' : 'status'}>{draftError}</p>}
           <p className="review-limitation">Checks can miss mistakes. You make the final decision after reading your CV.</p>
-          {!draft.approved && <p className="review-next-step">{pendingSkills ? `Confirm or remove ${pendingSkills} new skill${pendingSkills === 1 ? '' : 's'} before approval.` : !draft.checkReport?.passed ? 'Next: check your CV for issues.' : !fitReport ? 'Next: check the page length beneath your CV.' : fitReport.overflow ? 'Your CV is too long. Review the suggested cuts beneath the page.' : 'When the wording looks right, approve this CV.'}</p>}
-          <label className="review-acknowledgment"><input type="checkbox" checked={reviewAcknowledged} onChange={event => setReviewAcknowledged(event.target.checked)} />I reviewed this CV and its wording.</label>
-          <div className="review-controls"><button type="button" className="secondary-button" disabled={draftBusy} onClick={() => void checkDraftNow()}>Check CV for issues</button><button type="button" className="primary-button" disabled={draftBusy || fitBusy || !fitReport || fitReport.overflow || !draft.checkReport?.passed || pendingSkills > 0 || !reviewAcknowledged} onClick={() => void approveCurrentDraft()}>{draft.approved ? 'Continue to export' : 'Approve CV'}</button></div></>}{activePhase === 5 && draft.approved && <div className="export-actions"><button type="button" className="primary-button" disabled={exportBusy || docxBusy || !fitReport || fitReport.overflow} onClick={async () => { if (!activeJob) return; setExportBusy(true); setExportMessage(''); try { setExportMessage((await window.workbench.exportApprovedPdf(activeJob.id)).message) } catch { setExportMessage('PDF export failed. Check the destination and try again.') } finally { setExportBusy(false) } }}>{exportBusy ? 'Exporting…' : 'Export approved PDF'}</button><button type="button" className="secondary-button" disabled={exportBusy || docxBusy || !fitReport || fitReport.overflow} onClick={() => void exportDocx()}>{docxBusy ? 'Preparing editable Word…' : 'Export editable Word document'}</button><p role="status" aria-live="polite">{exportMessage || 'Files are checked locally; no ATS service or model request is used. Word may reflow differently from PDF.'}</p></div>}
+          {!draft.approved && <p className="review-next-step">{pendingSkills ? `Confirm or remove ${pendingSkills} new skill${pendingSkills === 1 ? '' : 's'} before approval.` : !draft.checkReport?.passed ? 'Next: check your CV for issues.' : !fitReport ? 'Next: choose Check page length in the review bar.' : fitReport.overflow ? 'Your CV is too long. Open the page-fit suggestions above the document.' : 'When the wording looks right, approve this CV.'}</p>}
+          </>}{activePhase === 5 && draft.approved && <div className="export-actions"><button type="button" className="primary-button" disabled={exportBusy || docxBusy || !fitReport || fitReport.overflow} onClick={async () => { if (!activeJob) return; setExportBusy(true); setExportMessage(''); try { setExportMessage((await window.workbench.exportApprovedPdf(activeJob.id)).message) } catch { setExportMessage('PDF export failed. Check the destination and try again.') } finally { setExportBusy(false) } }}>{exportBusy ? 'Exporting…' : 'Export approved PDF'}</button><button type="button" className="secondary-button" disabled={exportBusy || docxBusy || !fitReport || fitReport.overflow} onClick={() => void exportDocx()}>{docxBusy ? 'Preparing editable Word…' : 'Export editable Word document'}</button><p role="status" aria-live="polite">{exportMessage || 'Files are checked locally; no ATS service or model request is used. Word may reflow differently from PDF.'}</p></div>}
 
           {activePhase === 5 && draftError && <p className={`review-feedback${reviewHasError ? ' is-error' : ''}`} role={reviewHasError ? 'alert' : 'status'}>{draftError}</p>}
           <button type="button" className="secondary-button new-run-button" disabled={consentBusy || draftBusy} onClick={() => void inspectOutgoing()}>{consentBusy ? 'Preparing…' : 'Create another CV'}</button>
           {consentError && <p className="inspector-error" role="alert">{consentError}</p>}
-        </section>
+        </section></div>
+        </ReviewContextPanel>
       </aside>
-    </section>}
+      </div>
+    </section></section>}
+    {recordEditor && activeJob && <DraftRecordEditor key={`${recordEditor.draftId}-${recordEditor.section}-${recordEditor.operation}-${recordEditor.record?.index ?? 'new'}`} target={recordEditor} onClose={() => setRecordEditor(null)} onSave={async (scope, value) => {
+      const result = await props.mutateRecord({ draftId: recordEditor.draftId, sourceRevision: recordEditor.revision, section: recordEditor.section, operation: recordEditor.operation, scope, ...(recordEditor.record ? { index: recordEditor.record.index } : {}), ...(value === undefined ? {} : { value }) })
+      if (result.ok && result.draft) {
+        const length = result.draft.content[recordEditor.section].length
+        const index = result.recordIndex ?? Math.min(recordEditor.record?.index ?? 0, length - 1)
+        setSelectedItem(length ? { section: recordEditor.section, index } : null); setSpecialSelection(null); setEditing(false); setContextView('sources')
+        if (window.innerWidth < 1200) setInspectorOpen(false)
+      }
+      return result
+    }} />}
   </div>
 }

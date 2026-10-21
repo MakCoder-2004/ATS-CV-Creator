@@ -7,7 +7,7 @@ const escape = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 const contains = (text: string, term: string) => new RegExp(`(?:^|[^\\p{L}\\p{N}])${escape(term)}(?:$|[^\\p{L}\\p{N}])`, 'iu').test(text)
 const sections = ['education', 'experience', 'projects', 'skills', 'certificates'] as const
 
-type ConceptGroup = { label: string; alternatives: string[]; degreeFields?: boolean }
+type ConceptGroup = { label: string; alternatives: string[]; degreeFields?: boolean; allFields?: string[][] }
 const degreePattern = /\b(?:bachelor(?:['’]s)?|b\.?\s*s\.?c?)\b/iu
 const degreeAliases = ['bachelor', 'bachelor’s', "bachelor's", 'bs', 'b.s', 'bsc', 'b.sc', 'bachelor of science']
 const fieldAliases = {
@@ -16,7 +16,22 @@ const fieldAliases = {
   'artificial intelligence': ['artificial intelligence', 'ai'],
   'data science': ['data science'],
 } as const
+const conceptAliases: Record<string, string[]> = {
+  'machine learning': ['ml', 'machine-learning', 'scikit-learn', 'sklearn'],
+  APIs: ['API', 'APIs', 'REST API', 'RESTful APIs', 'FastAPI', 'application programming interface'],
+  databases: ['database', 'databases', 'SQL', 'PostgreSQL', 'MySQL', 'MongoDB', 'SQLite'],
+  'data processing pipelines': ['data processing pipeline', 'data processing pipelines', 'data pipelines', 'ETL'],
+  'software integration': ['software integration', 'system integration', 'systems integration', 'integrated APIs'],
+  'generative AI': ['generative AI', 'GenAI'],
+  'prompt engineering': ['prompt engineering'],
+}
 const concepts: Array<{ label: string; pattern: RegExp }> = [
+  { label: 'APIs', pattern: /\bapis?\b|\bapplication programming interfaces?\b/iu },
+  { label: 'databases', pattern: /\bdatabases?\b/iu },
+  { label: 'data processing pipelines', pattern: /\bdata(?: processing)? pipelines?\b/iu },
+  { label: 'software integration', pattern: /\b(?:software|systems?) integration\b/iu },
+  { label: 'generative AI', pattern: /\bgenerative ai\b|\bgenai\b/iu },
+  { label: 'prompt engineering', pattern: /\bprompt engineering\b/iu },
   { label: 'machine learning', pattern: /\bmachine[ -]learning\b|\bml\b/iu },
   { label: 'large language models', pattern: /\blarge language models?\b|\bllms?\b/iu },
   { label: 'retrieval-augmented generation', pattern: /\bretrieval[ -]augmented generation\b|\brag\b/iu },
@@ -31,15 +46,17 @@ function snapshotText(snapshot: unknown): string {
   if (!snapshot || typeof snapshot !== 'object') return ''
   return Object.entries(snapshot).filter(([key]) => !/^(id|revision|createdAt|updatedAt)$/i.test(key)).map(([, value]) => snapshotText(value)).join(' ')
 }
-function requirementGroups(qualification: string): { groups: ConceptGroup[]; unknown: string[] } {
+function requirementGroups(qualification: string, namedSkills: string[]): { groups: ConceptGroup[]; unknown: string[] } {
   const groups: ConceptGroup[] = []
   const text = qualification.toLocaleLowerCase()
   const requiresDegree = /\bdegree\b/iu.test(text) || degreePattern.test(text)
   const fields = Object.entries(fieldAliases).filter(([, aliases]) => aliases.some(alias => contains(text, alias))).map(([label]) => label)
-  if (requiresDegree && fields.length) groups.push({ label: `bachelor degree in one of: ${fields.join(', ')}`, alternatives: fields.flatMap(field => fieldAliases[field as keyof typeof fieldAliases]), degreeFields: true })
+  if (requiresDegree && fields.length) groups.push({ label: `bachelor degree in one of: ${fields.join(', ')}`, alternatives: fields.flatMap(field => fieldAliases[field as keyof typeof fieldAliases]), degreeFields: true, ...(/\band\b/iu.test(text) && !/\bor\b/iu.test(text) ? { allFields: fields.map(field => [...fieldAliases[field as keyof typeof fieldAliases]]) } : {}) })
   else if (requiresDegree) groups.push({ label: 'bachelor degree', alternatives: degreeAliases })
   else if (fields.length) groups.push({ label: fields.join(' or '), alternatives: fields.flatMap(field => fieldAliases[field as keyof typeof fieldAliases]) })
-  for (const concept of concepts) if (concept.pattern.test(qualification)) groups.push({ label: concept.label, alternatives: [concept.label, ...(concept.label === 'machine learning' ? ['ml'] : concept.label === 'large language models' ? ['llm', 'llms', 'large language model'] : concept.label === 'retrieval-augmented generation' ? ['rag', 'retrieval augmented generation'] : concept.label === 'deployment' ? ['deploy', 'deployed', 'deployment'] : [])] })
+  for (const concept of concepts) if (concept.pattern.test(qualification)) groups.push({ label: concept.label, alternatives: [concept.label, ...(conceptAliases[concept.label] ?? []), ...(concept.label === 'machine learning' ? [] : concept.label === 'large language models' ? ['llm', 'llms', 'large language model'] : concept.label === 'retrieval-augmented generation' ? ['rag', 'retrieval augmented generation'] : concept.label === 'deployment' ? ['deploy', 'deployed', 'deployment'] : [])] })
+  for (const [term, alternatives] of Object.entries(aliases)) if (contains(qualification, term) || alternatives.some(alias => contains(qualification, alias))) groups.push({ label: term, alternatives: [term, ...alternatives] })
+  for (const skill of namedSkills) if (contains(qualification, skill) && !groups.some(group => group.alternatives.some(alias => alias.toLocaleLowerCase() === skill.toLocaleLowerCase()))) groups.push({ label: skill, alternatives: [skill] })
   const recognized = new Set(groups.flatMap(group => [group.label, ...group.alternatives]).flatMap(normalizedWords))
   const fieldTokens = new Set<string>(Object.values(fieldAliases).flatMap(aliases => aliases.flatMap(normalizedWords)))
   const degreeTokens = new Set<string>(degreeAliases.flatMap(normalizedWords))
@@ -67,10 +84,23 @@ function isFutureDate(value: unknown, isEnd: boolean): boolean {
   const day = isEnd ? new Date(Date.UTC(year, month, 0)).getUTCDate() : 1
   return Date.UTC(year, month - 1, day) > Date.now()
 }
+function positiveContains(text: string, term: string): boolean {
+  const pattern = new RegExp(`(?:^|[^\\p{L}\\p{N}])${escape(term)}(?=$|[^\\p{L}\\p{N}])`, 'giu')
+  return [...text.matchAll(pattern)].some(match => {
+    const preceding = text.slice(Math.max(0, match.index! - 100), match.index).split(/[.!?;\n]/).pop() ?? ''
+    return !/\b(?:no|not|without|never|lack|lacking)\b(?:\s+[\p{L}-]+){0,5}\s*$/iu.test(preceding)
+  })
+}
 function sourceMatchesGroup(text: string, group: ConceptGroup, snapshot: unknown): boolean {
-  if (group.degreeFields) return isEducation(snapshot) && degreePattern.test(text) && group.alternatives.some(alias => contains(text, alias))
-  if (group.label === 'bachelor degree') return isEducation(snapshot) && degreePattern.test(text)
-  return group.alternatives.some(alias => contains(text, alias))
+  if (group.degreeFields || group.label === 'bachelor degree') {
+    if (!isEducation(snapshot)) return false
+    const record = snapshot as Record<string, unknown>
+    const metadata = [record.title, record.field].filter(value => typeof value === 'string').join(' ')
+    if (!degreeAliases.some(alias => positiveContains(metadata, alias))) return false
+    if (!group.degreeFields) return true
+    return group.allFields ? group.allFields.every(aliases => aliases.some(alias => positiveContains(metadata, alias))) : group.alternatives.some(alias => positiveContains(metadata, alias))
+  }
+  return group.alternatives.some(alias => positiveContains(text, alias))
 }
 function hasFutureEducationDate(snapshot: unknown): boolean {
   if (!isEducation(snapshot)) return false
@@ -79,21 +109,23 @@ function hasFutureEducationDate(snapshot: unknown): boolean {
 }
 function unverifiedTenure(qualification: string): string | undefined {
   const match = /\b(?:\d+\s*(?:-|–|to)\s*\d+|\d+\+?)\s+years?(?:\s+(?:of\s+)?experience)?\b/iu.exec(qualification)
-  return match?.[0].replace(/\\s+/g, ' ')
+  return match?.[0].replace(/\s+/g, ' ')
 }
 function assessQualifications(analysis: PostingAnalysis, draft: DraftRevision, fullProfileEvidence?: QualificationAssessmentEvidence[]): QualificationAssessment[] {
   const currentById = new Map<string, QualificationAssessmentEvidence>()
   for (const source of fullProfileEvidence ?? []) if (!currentById.has(source.evidenceId) || currentById.get(source.evidenceId)!.revision < source.revision) currentById.set(source.evidenceId, source)
-  const fallbackById = new Map<string, QualificationAssessmentEvidence>()
-  for (const item of draft.evidence) if (!currentById.has(item.evidenceId) && (!fallbackById.has(item.evidenceId) || fallbackById.get(item.evidenceId)!.revision < item.revision)) fallbackById.set(item.evidenceId, { evidenceId: item.evidenceId, revision: item.revision, snapshot: item.snapshot })
-  const all = new Map([...fallbackById, ...currentById].map(([id, source]) => [`${id}:${source.revision}`, source]))
   const cited = new Set(Object.values(draft.content).flatMap(items => items.flatMap(item => item.citations.map(citation => `${citation.evidenceId}:${citation.revision}`))))
+  const fallbackById = new Map<string, QualificationAssessmentEvidence>()
+  for (const item of draft.evidence) if (item.provenance === 'manual' && cited.has(`${item.evidenceId}:${item.revision}`) && !currentById.has(item.evidenceId)) fallbackById.set(item.evidenceId, item)
+  const all = new Map([...fallbackById, ...currentById].map(([id, source]) => [`${id}:${source.revision}`, source]))
+  const orderedSources = [...all.values()].sort((a, b) => Number(hasFutureEducationDate(a.snapshot)) - Number(hasFutureEducationDate(b.snapshot)) || Number(cited.has(`${b.evidenceId}:${b.revision}`)) - Number(cited.has(`${a.evidenceId}:${a.revision}`)) || a.evidenceId.localeCompare(b.evidenceId))
+  const namedSkills = orderedSources.flatMap(source => { const value = source.snapshot as Record<string, unknown> | null; return value && typeof value.name === 'string' && typeof value.category === 'string' ? [value.name] : [] }).sort((a, b) => a.localeCompare(b))
   return ([['required', analysis.required], ['preferred', analysis.preferred]] as const).flatMap(([kind, qualifications]) => qualifications.map(qualification => {
-    const { groups, unknown } = requirementGroups(qualification)
+    const { groups, unknown } = requirementGroups(qualification, namedSkills)
     const matched = new Set<string>()
     const evidence = new Map<string, { evidenceId: string; revision: number }>()
     const incompleteEducation = new Set<string>()
-    for (const source of all.values()) {
+    for (const source of orderedSources) {
       const text = snapshotText(source.snapshot)
       for (const group of groups) if (!matched.has(group.label) && sourceMatchesGroup(text, group, source.snapshot)) {
         matched.add(group.label)
@@ -103,7 +135,10 @@ function assessQualifications(analysis: PostingAnalysis, draft: DraftRevision, f
     }
     const remainingGroups = groups.filter(group => !matched.has(group.label)).map(group => group.label)
     const tenure = unverifiedTenure(qualification)
-    const unresolved = [...unknown, ...(tenure ? [tenure] : []), ...(incompleteEducation.size ? ['degree completion'] : [])]
+    const deploymentContext = groups.filter(group => ['machine learning', 'large language models', 'retrieval-augmented generation', 'production', 'deployment'].includes(group.label))
+    const needsSharedContext = deploymentContext.some(group => ['production', 'deployment'].includes(group.label)) && deploymentContext.some(group => !['production', 'deployment'].includes(group.label))
+    const sharedContext = !needsSharedContext || [...all.values()].some(source => deploymentContext.every(group => sourceMatchesGroup(snapshotText(source.snapshot), group, source.snapshot)))
+    const unresolved = [...unknown, ...(tenure ? [tenure] : []), ...(incompleteEducation.size ? ['degree completion'] : []), ...(!sharedContext ? ['production/deployment in the same technical context'] : [])]
     const matchedConcepts = [...matched]
     const remainingConcepts = [...remainingGroups, ...unresolved]
     const complete = groups.length > 0 && remainingGroups.length === 0 && unresolved.length === 0

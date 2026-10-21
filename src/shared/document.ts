@@ -115,9 +115,10 @@ export function createCanonicalDocument(draft: DraftRevision, profile: ProfileSn
       existing.entry.links = [...new Map([...existing.entry.links, ...current.entry.links].map(link => [link.url, link])).values()]
       return grouped
     }, []).map(({ entry }) => entry)
+  const recordedSkillNames = new Set(draft.content.skills.map(skill => skill.name.normalize('NFKC').trim().toLocaleLowerCase()))
   const skills: CanonicalDocumentEntry[] = [
     ...draft.content.skills.map((skill, index) => { const snapshot = draft.evidence?.find(source => skill.citations.some(citation => citation.evidenceId === source.evidenceId))?.snapshot as { category?: string } | undefined; return { id: `skills-${index}`, heading: skill.name, skillGroup: skillGroupFor(skill.name, snapshot?.category ?? profile.skills.find(source => skill.citations.some(citation => citation.evidenceId === source.id))?.category), text: '', links: [] } }),
-    ...(draft.suggestedSkills ?? []).filter(skill => skill.status === 'confirmed').map(skill => ({ id: `suggested-skills-${skill.id}`, heading: skill.name, skillGroup: skillGroupFor(skill.name), text: '', links: [] }))
+    ...(draft.suggestedSkills ?? []).filter(skill => skill.status === 'confirmed' && !recordedSkillNames.has(skill.name.normalize('NFKC').trim().toLocaleLowerCase())).map(skill => ({ id: `suggested-skills-${skill.id}`, heading: skill.name, skillGroup: skillGroupFor(skill.name), text: '', links: [] }))
   ]
   const contact = profile.contact
   const sections = [{ name: 'Education' as const, entries: paragraphEntries('education') }, { name: 'Experience' as const, entries: paragraphEntries('experience') }, { name: 'Projects' as const, entries: paragraphEntries('projects') }, { name: 'Skills' as const, entries: skills }].filter(section => section.entries.length)

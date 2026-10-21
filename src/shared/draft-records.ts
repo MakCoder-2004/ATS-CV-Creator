@@ -16,7 +16,7 @@ export const mutateDraftRecordInputSchema = z.object({
 })
 export type MutateDraftRecordInput = z.infer<typeof mutateDraftRecordInputSchema>
 export type DraftRecordValue = z.infer<typeof draftRecordValueSchema>
-export type MutateDraftRecordResult = { ok: boolean; message: string; draft?: DraftRevision; fieldErrors?: Record<string, string>; profileDeleteWarning?: boolean }
+export type MutateDraftRecordResult = { ok: boolean; message: string; draft?: DraftRevision; recordIndex?: number; fieldErrors?: Record<string, string>; profileDeleteWarning?: boolean }
 export interface DraftRecordDescriptor { section: MutateDraftRecordInput['section']; index: number; sourceId?: string; sourceRevision?: number; value: DraftRecordValue }
 
 /** Prefill from frozen evidence and current CV prose; generated parents resolve child citations via frozen ownership locks. */
@@ -34,7 +34,7 @@ export function listDraftRecords(draft: DraftRevision): DraftRecordDescriptor[] 
         ? itemCitations.find(citation => citation.evidenceId === parentId) ?? { evidenceId: parentId, revision: draft.evidence.find(source => source.evidenceId === parentId)?.revision ?? 1 }
         : itemCitations[0]
       const source = sourceCitation && draft.evidence.find(entry => entry.evidenceId === sourceCitation.evidenceId && entry.revision === sourceCitation.revision)
-      const snapshot = (source?.snapshot ?? (parentId ? draft.evidence.find(entry => entry.evidenceId === parentId)?.snapshot : undefined)) as Record<string, unknown> | undefined
+      const snapshot = (source?.snapshot ?? (parentId ? draft.evidence.find(entry => entry.evidenceId === parentId)?.snapshot : undefined) ?? (lock ? { ...lock, ...(section === 'experience' ? { kind: 'employment' } : {}) } : undefined)) as Record<string, unknown> | undefined
       if (!snapshot) return
       const grouped = parentId && (section === 'experience' || section === 'projects')
         ? records.filter(candidate => candidate.citations.some(citation => (lock!.sourceIds ?? [lock!.evidenceId]).includes(citation.evidenceId)))

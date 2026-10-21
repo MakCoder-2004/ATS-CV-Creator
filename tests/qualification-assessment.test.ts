@@ -74,8 +74,9 @@ test('a superseded source revision cannot satisfy current profile assessment', (
   expect(result.assessments?.[0]).toMatchObject({ status: 'not-evidenced', evidence: [], inDraft: false })
 })
 
-test('uses draft-local cited evidence when no full profile evidence is supplied and ignores uncited suggested skills', () => {
+test('uses explicitly manual cited evidence and ignores uncited suggested skills', () => {
   const { analysis, draft } = fixture()
+  draft.evidence = draft.evidence.map(source => ({ ...source, provenance: 'manual' }))
   const result = qualificationCoverage(randomUUID(), analysis, draft, [])
   const assessments = result.assessments ?? []
   expect(assessments.find(item => item.qualification === 'Machine learning experience')).toMatchObject({ status: 'supported', inDraft: true })

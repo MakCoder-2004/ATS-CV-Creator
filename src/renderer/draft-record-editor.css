@@ -1,0 +1,56 @@
+.draft-record-dialog { position: fixed; width: min(680px, calc(100% - 32px)); max-width: none; max-height: calc(100dvh - 48px); margin: auto; padding: 0; overflow: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink); }
+.draft-record-dialog::backdrop { background: color-mix(in srgb, var(--ink) 55%, transparent); }
+.record-dialog-heading { position: sticky; top: 0; z-index: 2; display: flex; align-items: start; justify-content: space-between; gap: 16px; padding: 20px 24px; border-bottom: 1px solid var(--line); background: var(--surface); }
+.record-dialog-heading h2 { margin: 0; font: 700 20px/1.4 'Sora Variable', sans-serif; letter-spacing: -.03em; }
+.record-dialog-heading p { margin: 8px 0 0; color: var(--muted); font-size: 13px; }
+.record-dialog-heading button { display: grid; place-items: center; width: 44px; height: 44px; flex-shrink: 0; }
+.record-editor-form { display: grid; gap: 20px; padding: 24px 24px 0; }
+.record-form-grid { display: grid; align-items: start; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.record-wide-field { grid-column: 1 / -1; }
+.record-editor-form :is(label, fieldset) { min-width: 0; }
+.record-editor-form .record-field { display: grid; gap: 8px; min-width: 0; }
+.record-editor-form label { display: grid; gap: 8px; font-size: 13px; font-weight: 650; }
+.record-editor-form :is(input:not([type=checkbox], [type=radio]), textarea, select) { width: 100%; min-height: 44px; padding: 12px; border: 1px solid var(--control-border); border-radius: 6px; color: var(--ink); background: var(--surface); font: inherit; font-weight: 450; }
+.record-editor-form textarea { resize: vertical; line-height: 1.55; }
+.record-editor-form :is(input, textarea, select)[aria-invalid=true] { border-color: var(--error); }
+.record-editor-form .record-field-hint { color: var(--muted); font-size: 12px; font-weight: 450; line-height: 1.6; }
+.record-editor-form .record-field-error { color: var(--error); font-size: 13px; font-weight: 450; line-height: 1.55; overflow-wrap: anywhere; }
+.record-editor-form fieldset { padding: 0; margin: 0; border: 0; }
+.record-editor-form legend { padding: 0; margin-bottom: 12px; font-size: 14px; font-weight: 700; }
+.record-editor-form .record-save-scope { padding: 16px; border: 1px solid var(--line); border-radius: 8px; background: var(--canvas); }
+.record-save-scope label { display: flex; align-items: start; gap: 12px; min-height: 44px; cursor: pointer; }
+.record-save-scope label + label { margin-top: 16px; }
+.record-save-scope input, .record-declaration input { width: 20px; height: 20px; margin: 0; accent-color: var(--blue); flex-shrink: 0; }
+.record-save-scope label > span { display: grid; gap: 4px; }
+.record-save-scope label > span > span { color: var(--muted); font-weight: 450; line-height: 1.55; }
+.record-scope-warning { padding: 12px 16px; border-left: 3px solid var(--warning); color: var(--warning-ink); background: var(--warning-surface); font-size: 13px; line-height: 1.6; }
+.record-editor-form .record-declaration { display: flex; align-items: start; gap: 12px; min-height: 44px; font-weight: 450; line-height: 1.6; }
+.record-editor-form details summary { min-height: 44px; padding: 12px 0; color: var(--link); font-size: 13px; cursor: pointer; }
+.record-editor-form details label { margin-top: 12px; }
+.record-links { display: grid; gap: 16px; }
+.record-link-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); align-items: start; gap: 12px; }
+.record-link-row > button { grid-column: 2; justify-self: end; }
+.record-links > button { display: inline-flex; align-items: center; gap: 8px; justify-self: start; }
+.record-dialog-actions { position: sticky; bottom: 0; z-index: 1; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 12px; margin-inline: -24px; padding: 16px 24px; border-top: 1px solid var(--line); background: var(--surface); }
+.record-dialog-actions button { min-height: 44px; }
+.record-dialog-actions .record-remove-button { color: var(--error); border-color: var(--error); }
+.draft-record-dialog :is(button, input, textarea, select, summary) { scroll-margin-block: 104px; }
+.record-removal-name { font-size: 15px; line-height: 1.6; overflow-wrap: anywhere; }
+.cv-workbench-start .selected-record-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+.cv-workbench-start .record-remove-link { color: var(--error); }
+.cv-workbench-start .paper-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--paper-rule, #8795a5); margin-bottom: 8px; }
+.cv-workbench-start .paper-section-heading > h2 { flex: 1; border: 0; margin-bottom: 0; }
+.cv-workbench-start .paper-add-record { display: inline-flex; align-items: center; justify-content: center; gap: 4px; flex-shrink: 0; min-height: 44px; padding: 4px; border: 0; border-radius: 4px; background: transparent; color: var(--paper-accent); font: 650 12px/1.5 'Manrope Variable', sans-serif; cursor: pointer; }
+.cv-workbench-start .paper-add-record:hover { background: var(--paper-selected); }
+.cv-workbench-start .paper-add-record:focus-visible, .cv-workbench-start .paper-heading-select:focus-visible { outline-color: var(--paper-accent); }
+.cv-workbench-start .paper-heading-select { display: inline; border: 0; border-radius: 2px; padding: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.cv-workbench-start .paper-heading-select:hover { text-decoration: underline; text-underline-offset: 4px; }
+.cv-workbench-start .paper-section-empty { margin: 12px 0; color: var(--paper-muted); font-size: 13px; }
+@media (max-width: 520px) {
+  .record-form-grid, .record-link-row { grid-template-columns: minmax(0, 1fr); }
+  .record-link-row > button { grid-column: auto; }
+  .record-dialog-heading { padding: 16px; }
+  .record-editor-form { padding: 16px 16px 0; }
+  .record-dialog-actions { padding: 16px; margin-inline: -16px; }
+  .record-dialog-actions > button { flex: 1; }
+}

@@ -37,8 +37,11 @@ export function GenerationProgress({ analysis, measuring, onCancel, cancelling }
 }
 
 export function SuggestedSkillReview({ draft, busy, onDecision }: { draft: DraftRevision; busy: boolean; onDecision: (id: string, decision: 'pending' | 'confirmed' | 'removed') => Promise<void> }) {
-  const suggestions = draft.suggestedSkills ?? []
-  if (!suggestions.length) return null
+  const allSuggestions = draft.suggestedSkills ?? []
+  if (!allSuggestions.length) return null
+  const recorded = new Set(draft.content.skills.map(skill => skill.name.normalize('NFKC').trim().toLocaleLowerCase()))
+  const suggestions = allSuggestions.filter(skill => !(skill.status === 'confirmed' && recorded.has(skill.name.normalize('NFKC').trim().toLocaleLowerCase())))
+  if (!suggestions.length) return <section className="suggested-skill-review" aria-label="New skills to review"><h2>New skills reviewed</h2><p>Your manually added skills appear directly in your CV. No further confirmation is needed for those records.</p></section>
   const pending = suggestions.filter(skill => skill.status === 'pending').length
   return <section className="suggested-skill-review" aria-label="New skills to review">
     <header><div><span>Your decision</span><h2>{pending ? `${pending} new skill${pending === 1 ? '' : 's'} to review` : 'New skills reviewed'}</h2></div><span className="skill-review-count">{pending || <Check aria-hidden="true" />}</span></header>

@@ -84,7 +84,8 @@ Use a 4px base grid and these permitted steps: `4, 8, 12, 16, 20, 24, 28, 32, 40
 
 ## Responsive behavior
 
-- 1200px: profile section navigation wraps from 9 columns to 3.
+- Review evidence refinement: use a 24px title in the compact heading, a 20px document/context gap, and a 304px optional context column. The review paper retains its 612px maximum width and uses a fixed readable 14.667px body rather than shrinking type with the column; use 32px paper padding on wide windows, 24px at 760px and 20px/16px below 520px. The sticky review bar uses 16px/20px padding, 12px internal gaps and an 8px viewport inset; its measured height determines focus scroll margins. Review dialogs are at most 680px wide, use 24px form padding and 16px field gaps, and constrain height to viewport minus 48px. Context dialogs below 1200px are at most 560px wide. These are review-only app controls; the compiled template's typography, spacing and page geometry do not change.
+- 1200px: profile section navigation wraps from 9 columns to 3; review details switch between an optional side column and a requested dialog.
 - 1000px: Saved jobs columns stack; Settings become single-column at 980px.
 - 760px: global desktop sidebar/header changes to compact top shell, nav becomes 4 columns, content horizontal padding becomes 16px; global header and desktop-only job rail/footer are hidden only where current implementation specifies.
 - 520px: nav becomes 2 columns, profile forms and two-column field groups stack, profile toolbar and list actions wrap/stack.

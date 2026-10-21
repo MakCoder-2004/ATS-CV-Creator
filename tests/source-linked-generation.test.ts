@@ -322,8 +322,10 @@ test('accepted frozen consent generates a batched source-linked draft that reope
   wb = createWorkbench(dir, undefined, { async generate() { throw Error('offline') } }); opened.push(wb)
   const reopened = await wb.api.getDraft(job.value.id)
   if (!reopened) throw new Error('reopened draft fixture')
-  expect(reopened).toEqual(originalDraft)
-  expect(await wb.api.getDraft(secondJob.value.id)).toEqual(secondDraft.draft)
+  // Profile comparison is live advisory data; the frozen CV and evidence must remain unchanged.
+  const frozen = (value: typeof originalDraft) => { const copy = structuredClone(value); if (copy.coverage) delete copy.coverage.assessments; return copy }
+  expect(frozen(reopened)).toEqual(frozen(originalDraft))
+  expect(frozen((await wb.api.getDraft(secondJob.value.id))!)).toEqual(frozen(secondDraft.draft!))
   expect(await wb.api.getAnalysis(job.value.id)).toMatchObject({ status: 'complete', progress: expect.stringContaining('Draft generated'), attempts: 4, runId: expect.any(String), generationStep: 'check-document', completedSteps: ['parse-posting', 'score-evidence', 'select-content', 'tailor-paragraphs', 'verify-claims', 'check-document'] })
   const obsoleteNarrative = await wb.api.correctDraftTailoring({ jobId: job.value.id, draftId: reopened.id, field: 'summary', text: 'Revenue grew 500 percent.' })
   expect(obsoleteNarrative).toMatchObject({ ok: false })

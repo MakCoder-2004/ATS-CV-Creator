@@ -1,3 +1,4 @@
+import { openReviewDetails } from './review-helpers'
 import { test, expect, _electron as electron } from '@playwright/test'
 import { mkdtempSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
@@ -34,6 +35,7 @@ test('user can add locally authored content to the visible empty failed draft', 
     await review.getByRole('button', { name: 'Generate tailored draft' }).click()
     const draft = review.getByRole('region', { name: 'CV review' })
     await expect(draft).toContainText('Changes needed', { timeout: 60000 })
+    await openReviewDetails(page, 'notes')
     await draft.locator('details.review-findings summary').click()
     await expect(draft).toContainText("We couldn't use the suggested wording")
     await draft.getByLabel('Correction evidence').selectOption({ index: 1 })

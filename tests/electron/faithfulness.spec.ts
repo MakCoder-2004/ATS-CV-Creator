@@ -1,3 +1,4 @@
+import { openReviewDetails } from './review-helpers'
 import { test, expect, _electron as electron } from '@playwright/test'
 import { mkdtempSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
@@ -30,9 +31,10 @@ test('visible faithfulness report blocks a draft without requiring an OpenRouter
     await review.getByRole('button', { name: 'Generate tailored draft' }).click()
     const draft = review.getByRole('region', { name: 'CV review' })
     await expect(draft).toContainText('Changes needed', { timeout: 60000 })
+    await openReviewDetails(page, 'notes')
     await draft.locator('details.review-findings summary').click()
     await expect(draft).toContainText('Second-opinion faithfulness check')
-    await expect(review.getByRole('region', { name: 'Selected wording and sources' })).toContainText('Automated checks can miss mistakes')
+    await expect(draft).toContainText('Checks can miss mistakes')
     expect(await page.evaluate(() => window.workbench.getSettings().then(value => value.openRouter.credential.configured))).toBe(false)
   } finally {
     await app.close()

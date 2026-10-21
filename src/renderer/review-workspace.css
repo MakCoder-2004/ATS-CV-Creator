@@ -1,0 +1,97 @@
+/* Review-specific refinement of Variant A: document, contextual details, persistent review actions. */
+.cv-review-mode .cv-workbench-heading { grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 24px; padding-block: 16px; }
+.cv-review-mode .cv-workbench-heading > div:last-child { grid-column: 1; grid-row: 1; }
+.cv-review-mode .cv-workbench-heading h1 { font-size: 24px; }
+.cv-review-mode .cv-workbench-heading > div:last-child p { margin-top: 8px; font-size: 13px; }
+.cv-review-mode .workbench-job-context { grid-column: 2; max-width: 320px; }
+.cv-review-mode .company-monogram { width: 40px; height: 40px; }
+.cv-review-mode .tailoring-phase-nav { margin-bottom: 16px; }
+.cv-review-mode .tailoring-phase-nav li { min-height: 44px; }
+.review-stage { --review-bar-height: 200px; }
+.review-stage :is(button, input, textarea, select, summary, [tabindex]) { scroll-margin-block: var(--review-bar-height) 24px; }
+.cv-review-mode .review-action-bar { position: sticky; top: 8px; z-index: 5; display: grid; gap: 12px; padding: 16px 20px; margin-bottom: 20px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.review-bar-overview, .review-bar-actions { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px 20px; }
+.review-bar-overview > div { min-width: 0; flex: 1; }
+.review-bar-overview h2 { display: flex; align-items: center; gap: 8px; margin: 0; font: 700 16px/1.5 'Sora Variable', sans-serif; }
+.review-bar-overview h2 svg { color: var(--link); }
+.review-bar-overview p { margin-top: 4px; color: var(--muted); font-size: 13px; }
+.review-bar-overview > button { display: inline-flex; align-items: center; gap: 8px; }
+.review-checklist, .review-command-buttons { display: flex; flex-wrap: wrap; gap: 12px; }
+.review-checklist { align-items: center; }
+.review-command-buttons { align-items: stretch; }
+.review-check-status { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
+.review-check-status.is-complete { color: var(--success); }
+.review-check-status svg { flex-shrink: 0; }
+.review-skill-link { display: inline-flex; padding: 0; border: 0; background: transparent; cursor: pointer; text-decoration: underline; text-underline-offset: 4px; }
+.review-skill-link .review-check-status { color: var(--warning); }
+.review-command-buttons button, .review-bar-overview button { min-height: 44px; }
+.review-action-bar .review-acknowledgment { display: flex; align-items: center; gap: 12px; min-height: 40px; font-size: 13px; cursor: pointer; }
+.review-action-bar .review-acknowledgment input { width: 20px; height: 20px; margin: 0; accent-color: var(--blue); flex-shrink: 0; }
+.review-page-suggestions { border-top: 1px solid var(--line); padding-top: 8px; }
+.review-page-suggestions summary { min-height: 40px; padding: 8px 0; color: var(--link); cursor: pointer; }
+.review-page-suggestions p { margin-bottom: 12px; color: var(--muted); font-size: 13px; }
+.review-page-suggestions label { display: flex; align-items: start; gap: 12px; margin-bottom: 12px; }
+.cv-review-mode .review-columns { grid-template-columns: minmax(0, 1fr) 304px; gap: 20px; }
+.cv-review-mode .review-columns--focused { grid-template-columns: minmax(0, 1fr); }
+.cv-review-mode .review-columns--focused > .review-context { display: contents; }
+.cv-review-mode .review-context { position: sticky; top: var(--review-bar-height); }
+.cv-review-mode .paper-wrap { padding: 20px 16px; }
+.cv-review-mode .paper { font-size: 14.667px; padding: 32px; }
+.cv-review-mode .review-layout-note { line-height: 1.55; margin-bottom: 12px; }
+.review-context-dialog { position: static; width: 100%; max-width: none; margin: 0; padding: 0; border: 1px solid var(--line); border-radius: 8px; color: var(--ink); background: var(--surface); max-height: calc(100dvh - var(--review-bar-height, 200px) - 24px); overflow: auto; }
+.review-context-dialog::backdrop { background: color-mix(in srgb, var(--ink) 55%, transparent); }
+.review-context-heading { position: sticky; top: 0; z-index: 2; background: var(--surface); display: flex; align-items: start; justify-content: space-between; gap: 12px; padding: 16px; border-bottom: 1px solid var(--line); }
+.review-context-heading h2 { font: 700 15px/1.4 'Sora Variable', sans-serif; margin: 0; }
+.review-context-heading p { color: var(--muted); font-size: 12px; margin: 8px 0 0; }
+.review-context-heading button { flex-shrink: 0; width: 44px; min-height: 44px; display: grid; place-items: center; }
+.review-detail-nav { display: flex; flex-direction: row; align-items: stretch; padding: 0 12px; gap: 8px; border-bottom: 1px solid var(--line); }
+.review-detail-nav button { flex: 1; width: auto; justify-content: center; text-align: center; border-radius: 0; min-width: 0; min-height: 48px; padding: 8px 4px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--muted); font: inherit; font-size: 12px; cursor: pointer; }
+.review-detail-nav button[aria-pressed=true] { color: var(--link); border-bottom-color: var(--link); font-weight: 700; }
+.cv-review-mode .review-context-dialog :is(.review-inspector-panel, .suggested-skill-review, .draft-inspector) { padding: 16px; border: 0; border-radius: 0; }
+.cv-review-mode .review-context-dialog .review-inspector-panel > h2 { font-size: 14px; }
+.review-panel-empty { padding: 20px; color: var(--muted); line-height: 1.65; font-size: 13px; }
+.cv-review-mode .review-context-dialog :is(.suggested-skill-review, .draft-inspector, .review-inspector-panel) [hidden] { display: none; }
+@media (max-width: 1199px) {
+  .cv-review-mode .review-columns { grid-template-columns: minmax(0, 1fr); }
+  .cv-review-mode .review-context { display: contents; }
+  .review-context-dialog { position: fixed; inset: 0; width: min(560px, calc(100% - 32px)); max-height: calc(100dvh - 48px); margin: auto; }
+  .cv-review-mode .review-back-button { display: inline-flex; margin-top: 12px; }
+}
+@media (max-width: 760px) {
+  .cv-review-mode .cv-workbench-heading { display: flex; flex-direction: column; align-items: start; gap: 12px; }
+  .cv-review-mode .workbench-job-context { max-width: none; }
+  .cv-review-mode .workbench-job-context .company-monogram { display: none; }
+  .cv-review-mode .review-action-bar { padding: 12px; gap: 8px; }
+  .review-bar-overview { align-items: start; }
+  .review-bar-overview > button { min-height: 40px; }
+  .review-checklist { gap: 8px 16px; }
+  .review-command-buttons { width: 100%; gap: 8px; }
+  .review-command-buttons button { flex: 1; min-width: 0; padding-inline: 8px; font-size: 12px; }
+  .cv-review-mode .paper { padding: 24px; }
+}
+@media (max-width: 520px) {
+  .review-bar-overview > div { flex-basis: 100%; }
+  .review-bar-overview h2 { font-size: 14px; }
+  .review-bar-overview p { font-size: 12px; }
+  .review-bar-overview > button { border: 0; padding: 0; min-height: 40px; }
+  .review-bar-actions { gap: 8px; }
+  .review-check-status { font-size: 12px; }
+  .cv-review-mode .paper-wrap { padding: 12px; }
+  .cv-review-mode .paper { padding: 20px 16px; }
+}
+
+.review-issue-link, .review-details-link { display: inline-flex; align-items: center; gap: 8px; min-height: 40px; padding: 0; border: 0; background: transparent; color: var(--link); font: inherit; font-size: 12px; text-decoration: underline; text-underline-offset: 4px; cursor: pointer; }
+.cv-review-mode .review-columns > .review-context { position: sticky; top: var(--review-bar-height); }
+.cv-workbench-start .job-match-panel { margin: 0; padding: 16px; border: 0; }
+.job-match-panel h2 { font: 700 15px/1.5 'Sora Variable', sans-serif; }
+.qualification-assessment { padding: 16px 0; border-bottom: 1px solid var(--line); }
+.qualification-status { display: flex; align-items: start; gap: 8px; color: var(--muted); font-size: 12px; }
+.qualification-status svg { flex-shrink: 0; margin-top: 2px; }
+.qualification-assessment.is-supported .qualification-status { color: var(--success); }
+.qualification-assessment.is-partial .qualification-status { color: var(--warning); }
+.qualification-assessment .qualification-requirement { color: var(--ink); font-weight: 650; }
+.cv-workbench-start .qualification-sources { list-style: none; padding: 0; }
+.qualification-sources > li { padding: 8px 0 8px 12px; border-left: 2px solid var(--link); }
+.qualification-sources summary { min-height: 40px; color: var(--link); cursor: pointer; }
+.cv-workbench-start .qualification-placement { font-size: 12px; }
+@media (max-width: 1199px) { .cv-review-mode .review-columns > .review-context { position: static; } }

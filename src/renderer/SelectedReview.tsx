@@ -8,7 +8,7 @@ type DraftItem = DraftRevision['content'][Section][number]
 type Entry = CanonicalDocument['sections'][number]['entries'][number]
 type Source = { heading: string; detail: string }
 
-export function SelectedReview({ selection, item, entry, sources, draft, editing, setEditing, onSave, onImprove, onReturnToDocument, headingRef, busy }: {
+export function SelectedReview({ selection, item, entry, sources, draft, editing, setEditing, onSave, onImprove, onEditRecord, onRemoveRecord, onReturnToDocument, headingRef, busy }: {
   selection: { section: Section; index: number } | null
   item: DraftItem | null | undefined
   entry: Entry | undefined
@@ -18,11 +18,13 @@ export function SelectedReview({ selection, item, entry, sources, draft, editing
   setEditing: Dispatch<SetStateAction<boolean>>
   onSave: (section: Section, index: number, text: string) => Promise<boolean>
   onImprove: (section: Section, index: number) => void
+  onEditRecord: (section: Section, index: number) => void
+  onRemoveRecord: (section: Section, index: number) => void
   onReturnToDocument: () => void
   headingRef: RefObject<HTMLHeadingElement | null>
   busy: boolean
 }) {
-  const coverage = draft.coverage
+  const manual = item?.citations.some(citation => draft.evidence.find(source => source.evidenceId === citation.evidenceId && source.revision === citation.revision)?.provenance === 'manual')
   const selectedText = item ? ('text' in item ? readableText(item.text) : readableText(item.name)) : ''
   const displayedText = readableText(entry?.text) || selectedText
   const heading = entry?.heading || (selection ? `${selection.section[0].toUpperCase()}${selection.section.slice(1)}` : '')
@@ -42,11 +44,12 @@ export function SelectedReview({ selection, item, entry, sources, draft, editing
       <p className="selected-review-context">{selection.section[0].toUpperCase()}{selection.section.slice(1)}</p>
       <h3 aria-live="polite">{heading}</h3>
       {displayedText && displayedText !== heading && <blockquote>{displayedText}</blockquote>}
-      <h3>Supporting career facts</h3>
+      <div className="selected-record-actions"><button type="button" className="secondary-button" disabled={busy} onClick={() => onEditRecord(selection.section, selection.index)}>Edit record</button><button type="button" className="inline-action record-remove-link" disabled={busy} onClick={() => onRemoveRecord(selection.section, selection.index)}>Remove record</button></div>
+      <h3>{manual ? 'Your manual career facts' : 'Supporting career facts'}</h3>
+      {manual && <p>Added by you for this CV. This record is not saved in My profile.</p>}
       {sources.length ? <ul className="source-list">{sources.map((source, index) => <li key={`${item.citations[index]?.evidenceId}-${index}`}><strong>{source.heading}</strong>{source.detail && <details><summary>Read source wording</summary><p>{source.detail}</p></details>}</li>)}</ul> : <p>No saved source is linked. Check this wording before approval.</p>}
       {rationale && <p className="inclusion-note"><strong>Why it's here</strong><br />{rationale}</p>}
-      {!editing ? <div className="selected-review-actions"><button className="secondary-button" type="button" onClick={() => setEditing(true)}>Edit wording</button><button className="secondary-button" type="button" disabled={busy} onClick={() => onImprove(selection.section, selection.index)}>Suggest different wording</button></div> : <form className="selected-edit-form" onSubmit={saveWording}><label>Wording for this CV<textarea key={`${draft.id}-${selection.section}-${selection.index}`} name="wording" defaultValue={selectedText} required maxLength={3000} /></label><p>Only rephrase saved facts here. Add new facts to My profile first.</p><div><button className="secondary-button" type="button" onClick={() => setEditing(false)}>Cancel</button><button className="primary-button" type="submit" disabled={busy}>Save wording</button></div></form>}
+      {!editing ? <div className="selected-review-actions"><button className="secondary-button" type="button" onClick={() => setEditing(true)}>Edit wording</button><button className="secondary-button" type="button" disabled={busy} onClick={() => onImprove(selection.section, selection.index)}>Suggest different wording</button></div> : <form className="selected-edit-form" onSubmit={saveWording}><label>Wording for this CV<textarea key={`${draft.id}-${selection.section}-${selection.index}`} name="wording" defaultValue={selectedText} required maxLength={3000} /></label><p>Use this to rephrase existing facts. To change the record's facts or details, choose Edit record.</p><div><button className="secondary-button" type="button" onClick={() => setEditing(false)}>Cancel</button><button className="primary-button" type="submit" disabled={busy}>Save wording</button></div></form>}
     </div> : <p className="review-empty">Your CV is ready to review. Add saved career facts before approving it, or select wording on the page to inspect its sources.</p>}
-    <details className="coverage-disclosure"><summary>How your experience matches this job</summary><p>Automated checks can miss mistakes. Read each statement alongside its saved career facts.</p>{coverage ? <div><p>{coverage.supportedMatches.length} supported match{coverage.supportedMatches.length === 1 ? '' : 'es'} · {coverage.gaps.length} gap{coverage.gaps.length === 1 ? '' : 's'}. Gaps are suggestions, not approval blockers.</p>{coverage.supportedMatches.length > 0 && <><h3>Supported matches</h3><ul>{coverage.supportedMatches.map((match, index) => <li key={`${match.qualification}-${index}`}>{match.qualification} — supported by saved facts</li>)}</ul></>}{coverage.gaps.length > 0 && <><h3>Qualifications to consider</h3><ul>{coverage.gaps.map((gap, index) => <li key={`${gap.qualification}-${index}`}>{gap.qualification} — not found in your saved facts</li>)}</ul></>}</div> : <p>Job comparison will appear after your CV is created.</p>}</details>
   </section>
 }

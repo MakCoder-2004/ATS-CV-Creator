@@ -6,7 +6,7 @@ const normalized = (value: string) => value.normalize('NFKC').toLocaleLowerCase(
 function strings(value: unknown): string[] {
   if (typeof value === 'string') return [value]
   if (Array.isArray(value)) return value.flatMap(strings)
-  if (value && typeof value === 'object') return Object.values(value).flatMap(strings)
+  if (value && typeof value === 'object') return Object.entries(value).filter(([key]) => !/^(?:id|evidenceId|revision|sourceIds|createdAt|updatedAt)$/i.test(key)).flatMap(([, item]) => strings(item))
   return []
 }
 // Compare the complete numeric expression (value, currency/unit, and nearby qualifier), not a value elsewhere.

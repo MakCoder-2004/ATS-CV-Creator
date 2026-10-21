@@ -1,3 +1,4 @@
+import { openReviewDetails, closeReviewDetails } from './review-helpers'
 import { test, expect, _electron as electron, type ElectronApplication } from '@playwright/test'
 import { existsSync, mkdtempSync, readFileSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
@@ -70,6 +71,7 @@ test('visible CV creation reviews new skills, preserves profile evidence, and ex
     const pending = draftBeforeDecisions!.suggestedSkills!.filter(skill => skill.status === 'pending')
     expect(pending.length).toBeGreaterThan(1)
 
+    await openReviewDetails(page, 'skills')
     const suggestions = page.getByRole('region', { name: 'New skills to review' })
     await expect(suggestions).toBeVisible()
     for (const skill of pending) {
@@ -83,6 +85,7 @@ test('visible CV creation reviews new skills, preserves profile evidence, and ex
       await suggestions.getByRole('button', { name: `Remove ${skill.name}` }).click()
     }
     await expect(suggestions).not.toContainText('Not in your profile')
+    await closeReviewDetails(page)
     await expect(page.getByRole('button', { name: 'Approve CV' })).toBeDisabled()
     await expect(page.getByRole('button', { name: 'Export approved PDF' })).toHaveCount(0)
     expect(await page.evaluate(id => window.workbench.approveDraft(id), jobId)).toMatchObject({ ok: false })

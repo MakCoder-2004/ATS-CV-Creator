@@ -7,6 +7,7 @@ import { listDraftRecords, mutateDraftRecordInputSchema } from '../src/shared/dr
 import type { DraftRevision } from '../src/shared/draft'
 import { createWorkbench } from '../src/main/workbench'
 import type { AnalysisTransport } from '../src/main/posting-analysis'
+import { analysisBudgetValues } from '../src/shared/posting-analysis'
 
 const uuid = '00000000-0000-4000-8000-000000000001'
 const dirs: string[] = [], opened: Array<ReturnType<typeof createWorkbench>> = []
@@ -42,22 +43,23 @@ test('record list maps grouped legacy child citations to one editable parent', (
   ])
 })
 
-async function generatedWorkspace(withGroupedExperience = false) {
+async function generatedWorkspace(withGroupedExperience = false, childOnly = false, postingSkill = false) {
   const dir = mkdtempSync(join(tmpdir(), 'draft-record-scope-')); dirs.push(dir)
   const transport: AnalysisTransport = { async generate({ prompt }) {
-    if (prompt.includes('Extract only explicit qualifications')) return JSON.stringify({ required: [], preferred: [], tools: [], responsibilities: [], keywords: [] })
+    if (prompt.includes('Extract only explicit qualifications')) return JSON.stringify({ required: [], preferred: [], tools: postingSkill ? ['Docker'] : [], responsibilities: [], keywords: [] })
     if (prompt.startsWith('Score these numbered')) { const { items } = JSON.parse(prompt.slice(prompt.indexOf('{'))); return JSON.stringify({ relevance: items.map((item: { index: number }) => ({ index: item.index, score: 0.9, rationale: 'Relevant.' })) }) }
     const { selected } = JSON.parse(prompt.slice(prompt.indexOf('{')))
-    const byCategory = (category: string) => selected.filter((item: { category: string }) => item.category === category).map((item: { index: number; text: string }) => ({ text: item.text, evidence: [item.index], rationale: 'User source.' }))
+    const byCategory = (category: string) => selected.filter((item: { category: string; text: string }) => item.category === category && (!childOnly || category !== 'experience' || item.text === 'Documented APIs.')).map((item: { index: number; text: string }) => ({ text: item.text, evidence: [item.index], rationale: 'User source.' }))
     return JSON.stringify({ headline: 'Engineer', summary: { text: 'Engineer.', evidence: [0], rationale: 'Profile.' }, education: byCategory('education'), experience: byCategory('experience'), projects: byCategory('projects'), skills: selected.filter((item: { category: string }) => item.category === 'skills').map((item: { index: number; text: string }) => ({ name: JSON.parse(item.text).name, evidence: [item.index], rationale: 'Profile.' })), certificates: [] })
   } }
   const wb = createWorkbench(dir, undefined, transport); opened.push(wb)
+  await wb.api.setAnalysisBudgets({ ...analysisBudgetValues(await wb.api.getAnalysisUsage()), minimumSpacingMs: 0 })
   await wb.api.saveContact({ fullName: 'Candidate' })
   await wb.api.saveProfileEntry({ section: 'education', title: 'Degree', institution: 'School', description: 'Studied systems.' })
   await wb.api.saveExperience({ kind: 'employment', title: 'Engineer', organization: 'Org', description: 'Built services.', factualItems: withGroupedExperience ? [{ text: 'Documented APIs.' }, { text: 'Reviewed tests.' }] : [] })
   await wb.api.saveProject({ name: 'Tool', description: 'Built a tool.' })
   await wb.api.saveSkill({ name: 'TypeScript', category: 'Languages' })
-  const job = await wb.api.saveJob({ title: 'Engineer', company: 'Org', description: 'Build services.' })
+  const job = await wb.api.saveJob({ title: 'Engineer', company: 'Org', description: postingSkill ? 'Build services with Docker.' : 'Build services.' })
   if (!job.ok) throw Error('job setup')
   const consent = await wb.api.prepareOutboundConsent(job.value.id)
   if (!consent.ok) throw Error('consent setup')
@@ -213,4 +215,53 @@ test('grouped legacy role paragraphs edit and delete as one profile record', asy
   const removed = await wb.api.mutateDraftRecord({ jobId, draftId: draft.id, sourceRevision: draft.revision, section: 'experience', operation: 'remove', index: 0, scope: 'profile' })
   expect(removed).toMatchObject({ ok: true, profileDeleteWarning: true, draft: { content: { experience: [] } } })
   expect(await wb.api.getEvidenceHistory(role.id)).toMatchObject([{ revision: 1, action: 'created' }, { revision: 2, action: 'updated' }, { revision: 3, action: 'deleted' }])
+}, 30000)
+
+test('manual skill declarations resolve matching suggestions once without authorizing unsupported past usage', async () => {
+  const { wb, jobId } = await generatedWorkspace(false, false, true)
+  const draft = (await wb.api.getDraft(jobId))!
+  expect(draft.suggestedSkills).toEqual([expect.objectContaining({ name: 'Docker', status: 'pending' })])
+  const added = await wb.api.mutateDraftRecord({ jobId, draftId: draft.id, sourceRevision: draft.revision, section: 'skills', operation: 'add', scope: 'cv-only', value: { name: 'Docker', category: 'Technologies' } })
+  expect(added).toMatchObject({ ok: true, recordIndex: 1, draft: { suggestedSkills: [expect.objectContaining({ name: 'Docker', status: 'confirmed' })], checkReport: { passed: true } } })
+  expect((await wb.api.getCanonicalDocument(jobId))?.sections.find(section => section.name === 'Skills')?.entries.filter(entry => entry.heading === 'Docker')).toHaveLength(1)
+  expect((await wb.api.getProfile()).skills.some(skill => skill.name === 'Docker')).toBe(false)
+  expect(await wb.api.correctDraft({ jobId, section: 'experience', index: 0, text: 'Used Docker in this role.' })).toMatchObject({ status: 'blocked', checkReport: { findings: expect.arrayContaining([expect.objectContaining({ code: 'unsupported-skill' })]) } })
+}, 30000)
+
+test('changing parent metadata stales a child-only cited CV and blocks prior approval', async () => {
+  const { wb, jobId } = await generatedWorkspace(true, true)
+  const draft = (await wb.api.getDraft(jobId))!
+  const role = (await wb.api.getExperience()).experience[0]
+  expect(draft.content.experience[0].citations).toEqual([{ evidenceId: role.factualItems[0].id, revision: role.factualItems[0].revision }])
+  const canonical = (await wb.api.getCanonicalDocument(jobId))!
+  await wb.api.saveDocumentFitReport(jobId, { documentHash: createHash('sha256').update(JSON.stringify(canonical)).digest('hex'), targetPages: 1, actualPages: 1, extractedText: [], linkTargets: [], links: [], overflow: false, proposedCuts: [], measuredAt: new Date().toISOString() })
+  expect(await wb.api.approveDraft(jobId)).toMatchObject({ ok: true })
+  await wb.api.saveExperience({ id: role.id, kind: role.kind, title: 'Updated role', organization: role.organization, description: role.description, factualItems: role.factualItems.map(({ id, text }) => ({ id, text })) })
+  expect(await wb.api.checkDraft(jobId)).toMatchObject({ passed: false, findings: expect.arrayContaining([expect.objectContaining({ code: 'stale-source', evidenceId: role.id })]) })
+  expect(await wb.api.assertDraftExportable(jobId)).toMatchObject({ ok: false })
+}, 30000)
+
+test('CV-only variations retain their profile origin so applying later updates the original without cloning records', async () => {
+  const { wb, jobId } = await generatedWorkspace(true)
+  let draft = (await wb.api.getDraft(jobId))!
+  const originalProfile = await wb.api.getProfile(), originalExperience = await wb.api.getExperience()
+  for (const section of ['education', 'experience', 'projects', 'skills'] as const) {
+    const record = listDraftRecords(draft).find(item => item.section === section)!
+    const originId = record.sourceId!
+    const value = { ...record.value, ...(section === 'education' ? { title: 'CV degree', description: 'Studied systems.' } : section === 'experience' ? { title: 'CV role', description: 'Built dependable services.' } : section === 'projects' ? { name: 'CV tool', description: 'Built useful tooling.' } : { name: 'TypeScript CV' }) }
+    const local = await wb.api.mutateDraftRecord({ jobId, draftId: draft.id, sourceRevision: draft.revision, section, operation: 'update', index: record.index, scope: 'cv-only', value })
+    expect(local.ok, local.message).toBe(true); draft = local.draft!
+    expect(draft.content[section][record.index].citations[0].evidenceId).not.toBe(originId)
+    const localRecord = listDraftRecords(draft).find(item => item.section === section)!
+    const applied = await wb.api.mutateDraftRecord({ jobId, draftId: draft.id, sourceRevision: draft.revision, section, operation: 'update', index: localRecord.index, scope: 'profile', value: localRecord.value })
+    expect(applied.ok, applied.message).toBe(true); draft = applied.draft!
+    expect(draft.content[section][localRecord.index].citations[0]).toEqual({ evidenceId: originId, revision: 2 })
+    expect((await wb.api.checkDraft(jobId))?.passed).toBe(true)
+  }
+  const profile = await wb.api.getProfile(), experience = await wb.api.getExperience()
+  expect(profile.education.map(item => item.id)).toEqual(originalProfile.education.map(item => item.id))
+  expect(profile.skills.map(item => item.id)).toEqual(originalProfile.skills.map(item => item.id))
+  expect(experience.experience.map(item => item.id)).toEqual(originalExperience.experience.map(item => item.id))
+  expect(experience.projects.map(item => item.id)).toEqual(originalExperience.projects.map(item => item.id))
+  expect(experience.experience[0].factualItems).toEqual(originalExperience.experience[0].factualItems)
 }, 30000)
