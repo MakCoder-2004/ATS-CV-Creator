@@ -72,6 +72,15 @@ export function visibleDocumentSections(document: CanonicalDocument) { return do
 export function groupedDocumentSkills(entries: CanonicalDocumentEntry[]) {
   return skillGroups.map(name => ({ name, entries: entries.filter(entry => (entry.skillGroup ?? skillGroupFor(entry.heading)) === name) })).filter(group => group.entries.length)
 }
+function projectDocumentLink(value: CanonicalDocumentEntry['links'][number]): CanonicalDocumentEntry['links'][number] {
+  try {
+    const url = new URL(value.url)
+    const [owner, repository] = url.pathname.split('/').filter(Boolean)
+    if (!/^(?:www\.)?github\.com$/i.test(url.hostname) || !owner || !repository || /^(?:orgs|users|settings|search|marketplace|topics|collections|features)$/i.test(owner)) return value
+    const name = decodeURIComponent(repository).replace(/\.git$/i, '')
+    return name ? { ...value, label: `github/${name}` } : value
+  } catch { return value }
+}
 export function createCanonicalDocument(draft: DraftRevision, profile: ProfileSnapshot, experience: ExperienceSnapshot): CanonicalDocument {
   const paragraphEntries = (section: 'education' | 'experience' | 'projects') => draft.content[section].map((item, index) => {
     const citations = item.citations.map(citation => citation.evidenceId)
@@ -88,7 +97,7 @@ export function createCanonicalDocument(draft: DraftRevision, profile: ProfileSn
       const locked = draft.lockedFields.projects.find(value => (value.sourceIds ?? [value.evidenceId]).some(id => citations.includes(id)))
       const record = experience.projects.find(value => value.id === locked?.evidenceId)
       if (locked) { heading = locked.name; parentId = locked.evidenceId }
-      if (record) { links = record.links; technologies = record.technologies.map(value => value.text) }
+      if (record) { links = record.links.map(projectDocumentLink); technologies = record.technologies.map(value => value.text) }
     }
     const prose = documentText(item.text)
     const cleaned = removeRepeatedEntryHeading(prose, heading, organization)
