@@ -34,6 +34,7 @@ import { SqliteCheckpointSaver } from './sqlite-checkpoint'
 import { createWorkspaceBackupEngine } from './workspace-backup'
 import type { WorkspaceBackupEngine } from '../shared/workspace-backup'
 import { generationRecoverySnapshotSchema } from '../shared/generation-recovery'
+import { profilePdfProposalSchema, type ProfilePdfProposal } from '../shared/profile-pdf-import'
 
 export interface SecureStorage {
   isEncryptionAvailable(): boolean
@@ -89,6 +90,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
     CREATE TABLE IF NOT EXISTS profile_entries (id TEXT PRIMARY KEY, section TEXT NOT NULL, revision INTEGER NOT NULL, data TEXT NOT NULL);
     CREATE UNIQUE INDEX IF NOT EXISTS profile_skill_unique ON profile_skills(lower(json_extract(data, '$.name')), lower(json_extract(data, '$.category')));
     CREATE TABLE IF NOT EXISTS evidence_revisions (id TEXT NOT NULL, revision INTEGER NOT NULL, action TEXT NOT NULL CHECK(action IN ('created','updated','deleted')), snapshot TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(id, revision));
+    CREATE TABLE IF NOT EXISTS profile_import_provenance (owner_id TEXT NOT NULL, owner_revision INTEGER NOT NULL, field TEXT NOT NULL, source_hash TEXT NOT NULL, page INTEGER NOT NULL, passage TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(owner_id, owner_revision, field, source_hash, page, passage));
     CREATE TABLE IF NOT EXISTS profile_experience (id TEXT PRIMARY KEY, revision INTEGER NOT NULL, data TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS profile_projects (id TEXT PRIMARY KEY, revision INTEGER NOT NULL, data TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, data TEXT NOT NULL);
@@ -104,7 +106,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
     CREATE TABLE IF NOT EXISTS document_fit_reports (job_id TEXT PRIMARY KEY, data TEXT NOT NULL);`)
   const providerOutcomeColumns = db.pragma('table_info(provider_attempt_outcomes)') as Array<{ name: string }>
   if (!providerOutcomeColumns.some(column => column.name === 'checkpointed_at')) db.exec('ALTER TABLE provider_attempt_outcomes ADD COLUMN checkpointed_at TEXT')
-  db.prepare('INSERT OR IGNORE INTO schema_migrations (version) VALUES (1), (2), (4), (5)').run()
+  db.prepare('INSERT OR IGNORE INTO schema_migrations (version) VALUES (1), (2), (4), (5), (6)').run()
 
   const readProfile = (): ProfileSnapshot => {
     const contactRow = db.prepare('SELECT data FROM profile_contact WHERE singleton = 1').get() as { data: string } | undefined
@@ -298,6 +300,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
     if (deleting) { const previous = plan.prior ?? record; recordRevision({ ...previous, revision: previous.revision + 1 } as never, 'deleted') }
     else { if (plan.prior && 'factualItems' in plan.prior && 'factualItems' in record) recordItemChanges(plan.prior.factualItems, record.factualItems); else if (!plan.prior && !deleting && 'factualItems' in record) recordItemChanges([], record.factualItems); if (plan.prior && 'technologies' in plan.prior && 'technologies' in record) recordItemChanges(plan.prior.technologies, record.technologies); else if (!plan.prior && !deleting && 'technologies' in record) recordItemChanges([], record.technologies); recordRevision(record as never, plan.prior ? 'updated' : 'created') }
   }
+  const profileImportBaseline = () => createHash('sha256').update(JSON.stringify({ profile: readProfile(), experience: readExperience(), history: db.prepare('SELECT id,revision,action,snapshot,created_at FROM evidence_revisions ORDER BY id,revision').all() })).digest('hex')
   const api: WorkbenchStorageAPI = {
     async getSettings() {
       const rows = db.prepare('SELECT key, value FROM settings WHERE key IN (?, ?, ?)').all('appearance', 'openrouter-model', 'faithfulness-check') as { key: string; value: string }[]
@@ -336,6 +339,61 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       return this.getSettings()
     },
     async getProfile() { return readProfile() },
+    async getProfileImportBaseline() { return profileImportBaseline() },
+    async importEmptyProfilePdf(sourceHash: string, baseline: string, input: ProfilePdfProposal) {
+      const validHash = /^[a-f0-9]{64}$/.test(sourceHash)
+      const checked = profilePdfProposalSchema.safeParse(input)
+      if (!validHash || !checked.success) return { ok: false, message: 'The reviewed CV proposals are invalid. Reopen the PDF and review them again.' }
+      const proposals = checked.data
+      if (proposals.contact && !proposals.contact.fullName?.trim()) return { ok: false, message: 'Add a full name to the contact proposal or skip it before applying.' }
+      const persistentId = (proposalRef: string) => proposals.proposalIds[proposalRef]
+      const associate = (ownerId: string, ownerRevision: number, proposalRef: string) => {
+        const proposalId = persistentId(proposalRef)
+        if (!proposalId) throw new Error('PROFILE_IMPORT_SOURCE_INVALID')
+        const sourceRows = proposals.sources.filter(source => source.proposalRef === proposalRef && source.proposalId === proposalId)
+        const insert = db.prepare('INSERT OR IGNORE INTO profile_import_provenance (owner_id,owner_revision,field,source_hash,page,passage,created_at) VALUES (?,?,?,?,?,?,?)')
+        for (const source of sourceRows) insert.run(ownerId, ownerRevision, source.field, sourceHash, source.page, source.passage, new Date().toISOString())
+      }
+      const tx = db.transaction(() => {
+        if (profileImportBaseline() !== baseline) throw new Error('STALE_PROFILE_PREVIEW')
+        if (profileRecords(readProfile(), readExperience()).length) throw new Error('PROFILE_NOT_EMPTY')
+        const contact = proposals.contact?.fullName ? contactRecordSchema.parse({ ...((({ proposalRef: _proposalRef, ...value }) => value)(proposals.contact)), id: persistentId(proposals.contact.proposalRef), revision: 1 }) : null
+        const skills = proposals.skills.map(item => { const { proposalRef: _proposalRef, ...value } = item; return skillRecordSchema.parse({ ...value, id: persistentId(item.proposalRef), revision: 1 }) })
+        const roles = proposals.experience.map(item => { const { proposalRef: _proposalRef, requiresDateResolution: _requiresDateResolution, ...value } = item; return experienceRecordSchema.parse({ ...value, id: persistentId(item.proposalRef), revision: 1, factualItems: item.factualItems.map(fact => ({ text: fact.text, id: persistentId(fact.proposalRef), revision: 1 })) }) })
+        const entries = proposals.entries.map(item => { const { proposalRef: _proposalRef, requiresDateResolution: _requiresDateResolution, ...value } = item; return profileEntrySchema.parse({ ...value, id: persistentId(item.proposalRef), revision: 1 }) })
+        const projects = proposals.projects.map(item => { const { proposalRef: _proposalRef, ...value } = item; return projectRecordSchema.parse({ ...value, id: persistentId(item.proposalRef), revision: 1, factualItems: item.factualItems.map(fact => ({ text: fact.text, id: persistentId(fact.proposalRef), revision: 1 })), technologies: item.technologies.map(technology => ({ text: technology.text, id: persistentId(technology.proposalRef), revision: 1 })) }) })
+        if (contact) {
+          db.prepare('INSERT INTO profile_contact (singleton,id,revision,data) VALUES (1,?,?,?)').run(contact.id, contact.revision, JSON.stringify(contact))
+          recordRevision(contact, 'created'); associate(contact.id, contact.revision, proposals.contact!.proposalRef)
+        }
+        for (const skill of skills) {
+          db.prepare('INSERT INTO profile_skills (id,revision,data) VALUES (?,?,?)').run(skill.id, skill.revision, JSON.stringify(skill))
+          recordRevision(skill, 'created'); associate(skill.id, skill.revision, proposals.skills.find(item => item.name === skill.name && item.category === skill.category)!.proposalRef)
+        }
+        roles.forEach((role, roleIndex) => {
+          const sourceRole = proposals.experience[roleIndex]
+          db.prepare('INSERT INTO profile_experience (id,revision,data) VALUES (?,?,?)').run(role.id, role.revision, JSON.stringify(role))
+          recordRevision(role, 'created'); recordItemChanges([], role.factualItems)
+          associate(role.id, role.revision, sourceRole.proposalRef)
+          role.factualItems.forEach((fact, index) => associate(fact.id, fact.revision, sourceRole.factualItems[index].proposalRef))
+        })
+        entries.forEach((entry, entryIndex) => {
+          db.prepare('INSERT INTO profile_entries (id,section,revision,data) VALUES (?,?,?,?)').run(entry.id, entry.section, entry.revision, JSON.stringify(entry))
+          recordRevision(entry, 'created'); associate(entry.id, entry.revision, proposals.entries[entryIndex].proposalRef)
+        })
+        projects.forEach((project, projectIndex) => {
+          const sourceProject = proposals.projects[projectIndex]
+          db.prepare('INSERT INTO profile_projects (id,revision,data) VALUES (?,?,?)').run(project.id, project.revision, JSON.stringify(project))
+          recordRevision(project, 'created'); recordItemChanges([], project.factualItems); recordItemChanges([], project.technologies)
+          associate(project.id, project.revision, sourceProject.proposalRef)
+          project.factualItems.forEach((fact, index) => associate(fact.id, fact.revision, sourceProject.factualItems[index].proposalRef))
+          project.technologies.forEach((technology, index) => associate(technology.id, technology.revision, sourceProject.technologies[index].proposalRef))
+        })
+        return { profile: readProfile(), experience: readExperience() }
+      })
+      try { return { ok: true, message: 'Reviewed CV details were added to your profile.', ...tx() } }
+      catch (error) { return { ok: false, message: error instanceof Error && error.message === 'STALE_PROFILE_PREVIEW' ? 'Your profile changed after this CV was reviewed. Nothing was applied; review the PDF again.' : error instanceof Error && error.message === 'PROFILE_NOT_EMPTY' ? 'This profile is no longer empty. Nothing was applied; use the separate profile editor to preserve existing facts.' : 'The reviewed CV could not be applied. No profile changes were made.' } }
+    },
     async validateProfileImport(input: string) {
       const result = validateProfileImport(input)
       return result.ok ? { ok: true, message: 'Profile import is valid.' } : { ok: false, message: result.message }
