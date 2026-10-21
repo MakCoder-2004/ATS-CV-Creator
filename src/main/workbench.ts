@@ -1073,6 +1073,10 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       if (!report || !report.overflow || report.documentHash !== documentHash || !current) return { ok: false, message: 'Page-fit proposal is stale. Measure the current preview again.' }
       const selected = new Set(entryIds)
       if (!selected.size || [...selected].some(id => !report.proposedCuts.some(cut => cut.entryId === id))) return { ok: false, message: 'Choose one or more proposed cuts from the current overflow report.' }
+      const canonical = await this.getCanonicalDocument(jobId)
+      for (const entry of canonical?.sections.flatMap(section => section.entries) ?? []) {
+        if (selected.has(entry.id)) for (const item of entry.reviewItems ?? []) selected.add(item.id)
+      }
       const content = { ...current.content }
       for (const section of ['education', 'experience', 'projects', 'skills', 'certificates'] as const) content[section] = content[section].filter((_, index) => !selected.has(`${section}-${index}`)) as never
       const suggestedSkills = current.suggestedSkills?.map(skill => selected.has(`suggested-skills-${skill.id}`) ? { ...skill, status: 'removed' as const, decidedAt: new Date().toISOString() } : skill)

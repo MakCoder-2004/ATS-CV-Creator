@@ -5,14 +5,14 @@ import { canonicalDocumentSchema, canonicalDocumentTextParts, createCanonicalDoc
 
 const document = canonicalDocumentSchema.parse({ version: 1, draftId: '11111111-1111-4111-8111-111111111111', jobId: '22222222-2222-4222-8222-222222222222', revision: 3, targetPages: 1, identity: { name: 'Zoë <Candidate>', headline: 'Engineer', contact: ['zoe@example.test'], links: [{ label: 'Portfolio', url: 'https://example.test/portfolio' }] }, sections: [{ name: 'Experience', entries: [{ id: 'experience-0', heading: 'Engineer', organization: 'Example', dates: '2020 – Present', text: 'Built Unicode résumé tools.', bullets: ['Built Unicode résumé tools.'], links: [] }] }], style: { fontFamily: 'Arial', bodyPt: 11, pageSize: 'A4', background: '#ffffff' } })
 
-test('canonical preview uses the fixed five-section order and isolated escaped A4 Arial markup', () => {
+test('review markup uses the template section order and isolated escaped Letter Lato markup', () => {
   const html = renderDocumentHtml(document)
   expect(document.sections.map(section => section.name)).toEqual(['Experience'])
   expect(html).toContain('Zoë &lt;Candidate&gt;')
   expect(html).toContain('2020 – Present')
   expect(html).toContain('href="https://example.test/portfolio"')
-  expect(html).toContain('font-family:Arial')
-  expect(html).toContain('@page{size:A4')
+  expect(html).toContain('font-family:Lato')
+  expect(html).toContain('@page{size:Letter')
   expect(html).toContain("default-src 'none'")
   expect(html).not.toContain('<script')
   expect(html).not.toContain('src="http')
@@ -42,11 +42,38 @@ test('canonical education and experience follow authoritative reverse chronology
   const result = createCanonicalDocument(draft, { contact: { fullName: 'Candidate', headline: 'Saved generic headline', links: [] }, education: [], certificates: [], skills: [], summary: [], languages: [], extras: [] } as never, { experience: [], projects: [] } as never)
   expect(result.sections[0].entries.map(entry => entry.heading)).toEqual(['Newer degree', 'Tied degree', 'Older degree'])
   expect(result.sections.find(section => section.name === 'Experience')?.entries.map(entry => entry.heading)).toEqual(['Newer role', 'Tied role', 'Older role'])
-  expect(result.identity.headline).toBe('Target role')
-  expect(result.identity.summary).toBe('Evidence-based short summary.')
+  expect(result.identity.headline).toBeUndefined()
+  expect(result.identity.summary).toBeUndefined()
   expect(result.sections.map(section => section.name)).toEqual(['Education', 'Experience', 'Skills'])
   expect(result.sections.find(section => section.name === 'Skills')?.entries.map(entry => entry.id)).toEqual(['suggested-skills-dddddddd-dddd-4ddd-8ddd-dddddddddddd'])
-  expect(renderDocumentHtml(result)).toContain('Evidence-based short summary.')
+  expect(renderDocumentHtml(result)).not.toContain('Evidence-based short summary.')
+})
+
+test('legacy experience and project items sharing a locked parent render once and retain each source review item', () => {
+  const roleId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+  const factId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
+  const projectId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
+  const projectFactId = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'
+  const original = draftRevisionSchema.parse({
+    id: document.draftId, jobId: document.jobId, revision: 1, pageTarget: 1, status: 'unverified', approved: false, createdAt: new Date(0).toISOString(), progress: 'Ready', attempts: 0,
+    lockedFields: { fullName: 'Candidate', education: [], experience: [{ evidenceId: roleId, sourceIds: [roleId, factId], title: 'Engineer', organization: 'Example Co' }], projects: [{ evidenceId: projectId, sourceIds: [projectId, projectFactId], name: 'Compiler' }], certificates: [] },
+    content: { education: [], experience: [{ text: 'Engineer — Example Co | Built parser.', citations: [{ evidenceId: roleId, revision: 1 }], rationale: 'Role source' }, { text: 'Engineer — Example Co | Reduced errors.', citations: [{ evidenceId: factId, revision: 1 }], rationale: 'Fact source' }], projects: [{ text: 'Compiler — Faster builds.', citations: [{ evidenceId: projectId, revision: 1 }], rationale: 'Project source' }, { text: 'Compiler — Added diagnostics.', citations: [{ evidenceId: projectFactId, revision: 1 }], rationale: 'Project fact' }], skills: [], certificates: [] },
+    evidence: [{ evidenceId: roleId, revision: 1, snapshot: {} }, { evidenceId: factId, revision: 1, snapshot: {} }, { evidenceId: projectId, revision: 1, snapshot: {} }, { evidenceId: projectFactId, revision: 1, snapshot: {} }]
+  })
+  const profile = { contact: null, skills: [], education: [], certificates: [], summary: [], languages: [], extras: [] }
+  const before = JSON.stringify({ original, profile })
+  const canonical = createCanonicalDocument(original, profile as never, { experience: [], projects: [] } as never)
+  const role = canonical.sections.find(section => section.name === 'Experience')!.entries[0]
+  const project = canonical.sections.find(section => section.name === 'Projects')!.entries[0]
+  expect(canonical.sections.find(section => section.name === 'Experience')!.entries).toHaveLength(1)
+  expect(role.text).toBe('Built parser.\nReduced errors.')
+  expect(role.reviewItems?.map(item => [item.id, item.text])).toEqual([['experience-0', 'Built parser.'], ['experience-1', 'Reduced errors.']])
+  expect(canonical.sections.find(section => section.name === 'Projects')!.entries).toHaveLength(1)
+  expect(project.text).toBe('Faster builds.\nAdded diagnostics.')
+  expect(project.reviewItems?.map(item => [item.id, item.text])).toEqual([['projects-0', 'Faster builds.'], ['projects-1', 'Added diagnostics.']])
+  expect(JSON.stringify({ original, profile })).toBe(before)
+  const single = createCanonicalDocument({ ...original, content: { ...original.content, experience: [original.content.experience[0]], projects: [original.content.projects[0]] } }, { contact: null, skills: [], education: [], certificates: [], summary: [], languages: [], extras: [] } as never, { experience: [], projects: [] } as never)
+  expect(single.sections.find(section => section.name === 'Experience')!.entries[0]).not.toHaveProperty('reviewItems')
 })
 
 test('canonical text parts reflect export reading order, visible headings and stripped bullets', () => {
@@ -56,18 +83,18 @@ test('canonical text parts reflect export reading order, visible headings and st
     { name: 'Skills' as const, entries: [{ id: 's1', heading: 'TypeScript', text: '', links: [] }] }
   ] }) as CanonicalDocument
   expect(canonicalDocumentTextParts(parityDocument)).toEqual([
-    'Zoë <Candidate>', 'Engineer', 'zoe@example.test', 'Portfolio', 'Professional summary', 'Summary text.',
-    'Projects', 'Project', '2024', 'Studio', 'Technologies:', 'TypeScript, React', 'Original marker text', 'Project site',
-    'Technical skills', 'TypeScript'
+    'Zoë <Candidate>', 'zoe@example.test', 'Portfolio',
+    'Projects', 'Project', '|', 'TypeScript, React', '2024', 'Original marker text', 'Project site',
+    'Technical Skills', 'Languages:', 'TypeScript'
   ])
   const html = renderDocumentHtml(parityDocument)
-  expect(html.indexOf('<h2>Professional summary</h2>')).toBeLessThan(html.indexOf('<h2>Projects</h2>'))
-  expect(html).toContain('<h2>Technical skills</h2>')
+  expect(html).not.toContain('Professional summary')
+  expect(html).toContain('<h2>Technical Skills</h2>')
 })
 
 test('description segmentation preserves wording and the HTML renderer safely escapes user content', () => {
   expect(splitDocumentBullets('• First item\n2. Second <item>')).toEqual(['First item', 'Second <item>'])
-  const html = renderDocumentHtml({ ...document, identity: { ...document.identity, summary: '<script>alert("x")</script>' } })
+  const html = renderDocumentHtml({ ...document, identity: { ...document.identity, name: '<script>alert("x")</script>' } })
   expect(html).toContain('&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;')
   expect(html).not.toContain('<script>')
 })
@@ -82,7 +109,7 @@ test('echoed source objects never become serialized document prose', () => {
   })
   const profile = profileSnapshotSchema.parse({ contact: null, skills: [], education: [], certificates: [], summary: [], languages: [], extras: [] })
   const canonical = createCanonicalDocument(draft, profile, { experience: [], projects: [] })
-  expect(canonical.identity.summary).toBe('Builds Python APIs.')
+  expect(canonical.identity.summary).toBeUndefined()
   expect(canonical.sections[0].entries[0].text).toBe('')
   const html = renderDocumentHtml(canonical)
   expect(html).toContain('BSc Computer Science')

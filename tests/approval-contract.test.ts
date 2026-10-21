@@ -11,7 +11,7 @@ const directories: string[] = []
 const opened: Array<ReturnType<typeof createWorkbench>> = []
 afterEach(() => { for (const workspace of opened.splice(0)) workspace.close(); for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true }) })
 
-async function fixture(regenerationTransport?: (signal: AbortSignal) => Promise<string>) {
+async function fixture(regenerationTransport?: (signal: AbortSignal) => Promise<string>, legacySources = false) {
   const prompts: string[] = []
   const directory = mkdtempSync(join(tmpdir(), 'approval-contract-')); directories.push(directory)
   const transport: AnalysisTransport = { async generate({ prompt, signal }) {
@@ -24,14 +24,17 @@ async function fixture(regenerationTransport?: (signal: AbortSignal) => Promise<
       const { sourcesByItem } = JSON.parse(prompt.slice(prompt.indexOf('{')))
       return JSON.stringify({ items: sourcesByItem.map((sources: string[]) => ({ text: sources[0], rationale: 'Retains the cited source while emphasizing its relevance.' })) })
     }
-    const { selected } = JSON.parse(prompt.slice(prompt.indexOf('{')))
-    return JSON.stringify({ headline: 'Engineer', summary: { text: 'Engineer with saved technical skills.', evidence: [selected[0].index], rationale: 'Selected profile evidence.' }, education: [], experience: [], projects: [], skills: selected.filter((item: { category: string }) => item.category === 'skills').map((item: { index: number; text: string }) => ({ name: JSON.parse(item.text).name, evidence: [item.index], rationale: 'Saved skill. PRIVATE_DRAFT_RATIONALE_CANARY' })), certificates: [] })
+    const { selected, experienceGroups = [], projectGroups = [] } = JSON.parse(prompt.slice(prompt.indexOf('{')))
+    return JSON.stringify({ headline: 'Engineer', summary: { text: 'Engineer with saved technical skills.', evidence: [selected[0].index], rationale: 'Selected profile evidence.' }, education: [], experience: legacySources ? experienceGroups.map((group: { indexes: number[] }) => ({ text: 'Delivered saved work.', evidence: group.indexes, rationale: 'Saved role wording.' })) : [], projects: legacySources ? projectGroups.map((group: { indexes: number[] }) => ({ text: 'Delivered saved project work.', evidence: group.indexes, rationale: 'Saved project wording.' })) : [], skills: selected.filter((item: { category: string }) => item.category === 'skills').map((item: { index: number; text: string }) => ({ name: JSON.parse(item.text).name, evidence: [item.index], rationale: 'Saved skill. PRIVATE_DRAFT_RATIONALE_CANARY' })), certificates: [] })
   } }
   const workspace = createWorkbench(directory, undefined, transport); opened.push(workspace)
   const budgets = await workspace.api.getAnalysisUsage()
   await workspace.api.setAnalysisBudgets({ ...analysisBudgetValues(budgets), minimumSpacingMs: 0, rateLimitWindowMs: 1000 })
   const skill = await workspace.api.saveSkill({ name: 'TypeScript', category: 'Programming' })
   if (!skill.ok) throw new Error('Could not create source fixture')
+  const legacyRole = legacySources ? await workspace.api.saveExperience({ kind: 'employment', title: 'Engineer', organization: 'Example Employer', description: 'Built systems.', factualItems: [{ text: 'Reduced failures.' }] }) : undefined
+  const legacyProject = legacySources ? await workspace.api.saveProject({ name: 'Compiler', description: 'Improved builds.', factualItems: [{ text: 'Added diagnostics.' }] }) : undefined
+  if (legacyRole && !legacyRole.ok || legacyProject && !legacyProject.ok) throw new Error('Could not create legacy grouping source fixture')
   const job = await workspace.api.saveJob({ title: 'Engineer', company: 'Example', description: 'TypeScript required.' })
   if (!job.ok) throw new Error('Could not create job fixture')
   const preview = await workspace.api.prepareOutboundConsent(job.value.id)
@@ -40,7 +43,7 @@ async function fixture(regenerationTransport?: (signal: AbortSignal) => Promise<
   await workspace.api.startAnalysis(preview.token)
   const generated = await workspace.api.generateDraft(preview.token)
   if (!generated.ok || !generated.draft) throw new Error('Could not generate draft fixture')
-  return { directory, workspace, jobId: job.value.id, draft: generated.draft, skillId: skill.value.skills[0].id, prompts }
+  return { directory, workspace, jobId: job.value.id, draft: generated.draft, skillId: skill.value.skills[0].id, prompts, legacyRole: legacyRole?.ok ? legacyRole.value.experience[0] : undefined, legacyProject: legacyProject?.ok ? legacyProject.value.projects[0] : undefined }
 }
 
 async function measure(workspace: ReturnType<typeof createWorkbench>, jobId: string, overflow = false) {
@@ -70,6 +73,29 @@ test('public export guard rejects unapproved, overflowing, and source-stale cano
   await other.workspace.api.approveDraft(other.jobId)
   await other.workspace.api.saveSkill({ id: other.skillId, name: 'Changed source', category: 'Programming' })
   expect(await other.workspace.api.assertDraftExportable(other.jobId)).toMatchObject({ ok: false, message: expect.stringMatching(/stale|current checks/i) })
+})
+
+test('accepting a grouped legacy page-fit cut removes every source paragraph while preserving the prior draft revision', async () => {
+  const { workspace, jobId, legacyRole, legacyProject } = await fixture(undefined, true)
+  if (!legacyRole || !legacyProject) throw new Error('Legacy source fixture unavailable')
+  await workspace.api.addDraftItem({ jobId, section: 'experience', text: 'Engineer — Example Employer | Built systems.', citation: { evidenceId: legacyRole.id, revision: legacyRole.revision } })
+  await workspace.api.addDraftItem({ jobId, section: 'experience', text: 'Engineer — Example Employer | Reduced failures.', citation: { evidenceId: legacyRole.factualItems[0].id, revision: legacyRole.factualItems[0].revision } })
+  await workspace.api.addDraftItem({ jobId, section: 'projects', text: 'Compiler — Improved builds.', citation: { evidenceId: legacyProject.id, revision: legacyProject.revision } })
+  await workspace.api.addDraftItem({ jobId, section: 'projects', text: 'Compiler — Added diagnostics.', citation: { evidenceId: legacyProject.factualItems[0].id, revision: legacyProject.factualItems[0].revision } })
+  const prior = await workspace.api.getDraft(jobId)
+  const canonical = await workspace.api.getCanonicalDocument(jobId)
+  if (!prior || !canonical) throw new Error('Legacy draft unavailable')
+  expect(canonical.sections.find(section => section.name === 'Experience')!.entries).toHaveLength(1)
+  expect(canonical.sections.find(section => section.name === 'Projects')!.entries).toHaveLength(1)
+  const documentHash = createHash('sha256').update(JSON.stringify(canonical)).digest('hex')
+  await workspace.api.saveDocumentFitReport(jobId, { documentHash, targetPages: canonical.targetPages, actualPages: canonical.targetPages + 1, extractedText: ['CV'], linkTargets: [], links: [], overflow: true, proposedCuts: [{ entryId: 'experience-0', label: 'Engineer', section: 'Experience' }, { entryId: 'projects-0', label: 'Compiler', section: 'Projects' }], measuredAt: new Date().toISOString() })
+  const result = await workspace.api.acceptDocumentCuts(jobId, documentHash, ['experience-0', 'projects-0'])
+  expect(result).toMatchObject({ ok: true })
+  expect(result.draft?.content.experience).toEqual([])
+  expect(result.draft?.content.projects).toEqual([])
+  expect(result.draft?.revision).toBe(prior.revision + 1)
+  expect(prior.content.experience).toHaveLength(3)
+  expect(prior.content.projects).toHaveLength(2)
 })
 
 test('regeneration proposals require fresh consent, compare without mutation, reject cleanly, accept scoped edits, and reject stale bases', async () => {
@@ -200,7 +226,7 @@ test('approval and eligibility survive SQLite reopen, theme changes, and unchang
   state.workspace.close(); opened.splice(opened.indexOf(state.workspace), 1)
   const reopened = createWorkbench(state.directory); opened.push(reopened)
   expect(await reopened.api.getDraft(state.jobId)).toMatchObject({ approved: true, approval: expect.any(Object) })
-  expect(await reopened.api.assertDraftExportable(state.jobId)).toMatchObject({ ok: true, document: { style: { background: '#ffffff', fontFamily: 'Arial' } } })
+  expect(await reopened.api.assertDraftExportable(state.jobId)).toMatchObject({ ok: true, document: { style: { background: '#ffffff', fontFamily: 'Lato', pageSize: 'Letter' } } })
 })
 
 test('a changed or deleted cited source blocks approval while an unrelated new source does not stale it', async () => {
