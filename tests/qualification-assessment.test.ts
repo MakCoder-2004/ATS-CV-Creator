@@ -35,6 +35,45 @@ test('assesses compound degree and ML qualifications from full profile evidence 
   expect(result.gaps.map(item => item.qualification)).toContain('Leadership')
 })
 
+test.each(['B.Sc. in Computer Science (Data Science)', 'BS in Data Science', 'B.S. in Computer Science', 'BSc Data Science'])('supports an OR-listed degree field from one education record: %s', title => {
+  const id = randomUUID()
+  const analysis = { required: ['Bachelor’s degree in Computer Science, Engineering, Artificial Intelligence, Data Science, or a related field'], preferred: [], tools: [], responsibilities: [], keywords: [] } as PostingAnalysis
+  const draft = { evidence: [], content: { education: [], experience: [], projects: [], skills: [], certificates: [] } } as unknown as DraftRevision
+  const result = qualificationCoverage(randomUUID(), analysis, draft, [{ evidenceId: id, revision: 1, snapshot: { section: 'education', title } }])
+  expect(result.assessments?.[0]).toMatchObject({ status: 'supported', inDraft: false, evidence: [{ evidenceId: id, revision: 1 }] })
+})
+
+test('does not combine a biology degree with a separate computer-science skill to satisfy one education requirement', () => {
+  const degreeId = randomUUID(), skillId = randomUUID()
+  const analysis = { required: ['Bachelor’s degree in Computer Science, Engineering, Artificial Intelligence, Data Science, or a related field'], preferred: [], tools: [], responsibilities: [], keywords: [] } as PostingAnalysis
+  const draft = { evidence: [], content: { education: [], experience: [], projects: [], skills: [], certificates: [] } } as unknown as DraftRevision
+  const result = qualificationCoverage(randomUUID(), analysis, draft, [
+    { evidenceId: degreeId, revision: 1, snapshot: { section: 'education', title: 'Bachelor of Biology' } },
+    { evidenceId: skillId, revision: 1, snapshot: { name: 'Computer Science', category: 'Technical' } },
+  ])
+  expect(result.assessments?.[0]).toMatchObject({ status: 'not-evidenced', evidence: [], inDraft: false })
+})
+
+test('marks future education and ML research evidence partial for production and years requirements', () => {
+  const educationId = randomUUID(), projectId = randomUUID()
+  const analysis = { required: ['Bachelor’s degree in Computer Science or Data Science', 'Machine learning deployment in production with 3–6 years experience'], preferred: [], tools: [], responsibilities: [], keywords: [] } as PostingAnalysis
+  const draft = { evidence: [], content: { education: [], experience: [], projects: [], skills: [], certificates: [] } } as unknown as DraftRevision
+  const result = qualificationCoverage(randomUUID(), analysis, draft, [
+    { evidenceId: educationId, revision: 1, snapshot: { section: 'education', title: 'B.Sc. Computer Science', startDate: '2025', endDate: '2090' } },
+    { evidenceId: projectId, revision: 1, snapshot: { name: 'ML research', description: 'Built a machine learning research model.' } },
+  ])
+  expect(result.assessments?.[0]).toMatchObject({ status: 'partial', remainingConcepts: expect.arrayContaining(['degree completion']) })
+  expect(result.assessments?.[1]).toMatchObject({ status: 'partial', matchedConcepts: ['machine learning'], remainingConcepts: expect.arrayContaining(['production', 'deployment', '3–6 years experience']) })
+})
+
+test('a superseded source revision cannot satisfy current profile assessment', () => {
+  const id = randomUUID()
+  const analysis = { required: ['Machine learning'], preferred: [], tools: [], responsibilities: [], keywords: [] } as PostingAnalysis
+  const draft = { evidence: [{ evidenceId: id, revision: 1, snapshot: { name: 'ML research', description: 'Machine learning project' } }], content: { education: [], experience: [], projects: [], skills: [{ name: 'ML', citations: [{ evidenceId: id, revision: 1 }] }], certificates: [] } } as unknown as DraftRevision
+  const result = qualificationCoverage(randomUUID(), analysis, draft, [{ evidenceId: id, revision: 2, snapshot: { name: 'Python', category: 'Technical' } }])
+  expect(result.assessments?.[0]).toMatchObject({ status: 'not-evidenced', evidence: [], inDraft: false })
+})
+
 test('uses draft-local cited evidence when no full profile evidence is supplied and ignores uncited suggested skills', () => {
   const { analysis, draft } = fixture()
   const result = qualificationCoverage(randomUUID(), analysis, draft, [])
