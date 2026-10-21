@@ -20,7 +20,7 @@ import { AnalysisError, createAnalysisDispatcher, type AnalysisTransport } from 
 import { createOpenRouterAnalysisTransport } from './openrouter-analysis-transport'
 import { createHash } from 'node:crypto'
 import { z } from 'zod'
-import { analysisBudgetsSchema, analysisResultSchema, analysisUsageSchema, defaultAnalysisBudgets, generationRecoverySchema, postingAnalysisSchema, type AnalysisBudgets, type AnalysisResult, type RecoveryChoice } from '../shared/posting-analysis'
+import { analysisBudgetsSchema, analysisResultSchema, analysisUsageSchema, defaultAnalysisBudgets, generationRecoverySchema, postingAnalysisSchema, displayPostingAnalysisSchema, type AnalysisBudgets, type AnalysisResult, type RecoveryChoice } from '../shared/posting-analysis'
 import { pacificDay } from '../shared/pacific-day'
 import { addDraftItemInputSchema, draftCorrectionInputSchema, draftRevisionSchema, suggestedSkillDecisionSchema, draftTailoringCorrectionSchema, type DraftRevision } from '../shared/draft'
 import { CitationValidationError, LegacyNarrativeCheckpointError, runSourceLinkedGraph } from './source-linked-generation'
@@ -196,7 +196,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
   }
   const startedAnalysisTokens = new Set<string>()
   const startedRegenerationTokens = new Set<string>()
-  const analysisCacheKey = (source: ConsentSource) => createHash('sha256').update(JSON.stringify({ job: { title: source.job.title, company: source.job.company, description: source.job.description }, model: source.model.name, prompt: 'posting-analysis-v1', schema: JSON.stringify(z.toJSONSchema(postingAnalysisSchema)) })).digest('hex')
+  const analysisCacheKey = (source: ConsentSource) => createHash('sha256').update(JSON.stringify({ job: { title: source.job.title, company: source.job.company, description: source.job.description }, minimizedPosting: prepareOutboundBundle(source).outgoing.job, model: source.model.name, prompt: 'posting-analysis-v2', schema: JSON.stringify(z.toJSONSchema(postingAnalysisSchema)) })).digest('hex')
   const activeAnalysisByJob = new Map<string, string>()
   const recoveredRunIds = new Set<string>()
   const readAnalysisBudgets = (): AnalysisBudgets => {
@@ -551,7 +551,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       const pending = pendingOutbound.get(token)
       if (!pending?.consentId) throw new Error('Review and authorize this exact outgoing bundle before analysis.')
       // Human-readable local copy only; generation and provider requests continue to use minimized analysis.
-      const displayAnalysis = (value: z.infer<typeof postingAnalysisSchema>) => postingAnalysisSchema.parse(Object.fromEntries(Object.entries(value).map(([key, items]) => [key, items.map(item => pending.bundle.restoreIdentifiers(item))])))
+      const displayAnalysis = (value: z.infer<typeof postingAnalysisSchema>) => displayPostingAnalysisSchema.parse(Object.fromEntries(Object.entries(value).map(([key, items]) => [key, items.map(item => pending.bundle.restoreIdentifiers(item))])))
       const cacheKey = analysisCacheKey(pending.source)
       const cached = db.prepare('SELECT data, run_id FROM posting_analysis_cache WHERE cache_key = ?').get(cacheKey) as { data: string; run_id: string } | undefined
       if (cached) {

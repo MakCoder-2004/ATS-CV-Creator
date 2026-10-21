@@ -61,7 +61,11 @@ test('posting analysis restores a display copy while cached and generated provid
   const requests: string[] = []
   const transport: AnalysisTransport = { async generate({ prompt }) {
     requests.push(prompt)
-    if (prompt.startsWith('Extract only explicit')) return JSON.stringify({ required: ['[[EMPLOYER_1]] Cloud Platform'], preferred: [], tools: ['[[EMPLOYER_1]] Cloud Platform'], responsibilities: [], keywords: [] })
+    if (prompt.startsWith('Extract only explicit')) {
+      const { job } = JSON.parse(prompt.slice(prompt.indexOf('{')))
+      const brand = /\[\[EMPLOYER_\d+\]\]/.exec(job.title)?.[0]
+      return JSON.stringify({ required: [`${brand} Cloud Platform`], preferred: [], tools: [`${brand} Cloud Platform`], responsibilities: [], keywords: [] })
+    }
     if (prompt.startsWith('Score these numbered')) return JSON.stringify({ relevance: [{ index: 0, score: 1, rationale: 'Relevant skill' }] })
     return JSON.stringify({ headline: '[[EMPLOYER_1]] Cloud Engineer', summary: { text: 'Uses [[EMPLOYER_1]] Cloud Platform.', evidence: [0], rationale: 'Saved cloud skill' }, education: [], experience: [], projects: [], certificates: [], skills: [{ name: '[[EMPLOYER_1]] Cloud Platform', evidence: [0], rationale: 'Saved skill' }] })
   } }
@@ -77,6 +81,9 @@ test('posting analysis restores a display copy while cached and generated provid
   expect(await wb.api.generateDraft(token)).toMatchObject({ ok: true, draft: { tailoring: { headline: 'Google Cloud Engineer' } } })
   expect(await wb.api.startAnalysis(await authorize())).toMatchObject({ cacheHit: true, displayAnalysis: { tools: ['Google Cloud Platform'] } })
   expect(requests).toHaveLength(3)
+  await wb.api.saveExperience({ kind: 'employment', title: 'Engineer', organization: 'A considerably longer employer name', description: 'Built services.' })
+  expect(await wb.api.startAnalysis(await authorize())).toMatchObject({ cacheHit: false, analysis: { tools: ['[[EMPLOYER_2]] Cloud Platform'] }, displayAnalysis: { tools: ['Google Cloud Platform'] } })
+  expect(requests).toHaveLength(4)
   expect(requests.join('\n')).not.toContain('Google')
 })
 
