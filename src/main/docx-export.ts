@@ -2,14 +2,14 @@ import { AlignmentType, Document, ExternalHyperlink, HeadingLevel, Packer, Parag
 import JSZip from 'jszip'
 import { documentSectionDisplayName, splitDocumentBullets, type CanonicalDocument, type CanonicalDocumentEntry } from '../shared/document'
 
-const hyperlinkParagraph = (links: CanonicalDocumentEntry['links']) => new Paragraph({ children: links.flatMap((link, index) => [...(index ? [new TextRun(' · ')] : []), new ExternalHyperlink({ link: link.url, children: [new TextRun({ text: link.label, style: 'Hyperlink' })] })]), spacing: { after: 60 } })
+const hyperlinkParagraph = (links: CanonicalDocumentEntry['links'], alignment: 'center' | 'left' = 'left') => new Paragraph({ alignment, children: links.flatMap((link, index) => [...(index ? [new TextRun(' · ')] : []), new ExternalHyperlink({ link: link.url, children: [new TextRun({ text: link.label, style: 'Hyperlink' })] })]), spacing: { after: 60 } })
 
 /** Builds an editable, single-column Word document from the approved canonical version. */
 export async function renderCanonicalDocx(document: CanonicalDocument): Promise<Buffer> {
   const paragraphs: Paragraph[] = [new Paragraph({ text: document.identity.name, heading: HeadingLevel.TITLE, alignment: AlignmentType.CENTER, spacing: { after: 40 }, keepNext: true })]
   if (document.identity.headline) paragraphs.push(new Paragraph({ text: document.identity.headline, alignment: AlignmentType.CENTER, spacing: { after: 40 }, keepNext: true }))
   if (document.identity.contact.length) paragraphs.push(new Paragraph({ text: document.identity.contact.join(' · '), alignment: AlignmentType.CENTER, spacing: { after: 40 }, keepNext: true }))
-  if (document.identity.links.length) paragraphs.push(hyperlinkParagraph(document.identity.links))
+  if (document.identity.links.length) paragraphs.push(hyperlinkParagraph(document.identity.links, 'center'))
   if (document.identity.summary) {
     paragraphs.push(new Paragraph({ text: 'Professional summary', heading: HeadingLevel.HEADING_1, border: { bottom: { color: '333333', space: 3, style: 'single', size: 4 } }, spacing: { before: 120, after: 60 }, keepNext: true }))
     paragraphs.push(new Paragraph({ text: document.identity.summary, spacing: { before: 40, after: 120 } }))

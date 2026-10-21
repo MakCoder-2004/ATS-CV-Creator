@@ -1074,7 +1074,8 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       if (!selected.size || [...selected].some(id => !report.proposedCuts.some(cut => cut.entryId === id))) return { ok: false, message: 'Choose one or more proposed cuts from the current overflow report.' }
       const content = { ...current.content }
       for (const section of ['education', 'experience', 'projects', 'skills', 'certificates'] as const) content[section] = content[section].filter((_, index) => !selected.has(`${section}-${index}`)) as never
-      const revised = draftRevisionSchema.parse({ ...current, id: randomUUID(), revision: current.revision + 1, content, approved: false, approval: undefined, checkReport: undefined, status: 'unverified', progress: 'Accepted page-fit cuts. Factual checks were invalidated; recheck and remeasure before review.', createdAt: new Date().toISOString() })
+      const suggestedSkills = current.suggestedSkills?.map(skill => selected.has(`suggested-skills-${skill.id}`) ? { ...skill, status: 'removed' as const, decidedAt: new Date().toISOString() } : skill)
+      const revised = draftRevisionSchema.parse({ ...current, ...(suggestedSkills ? { suggestedSkills } : {}), id: randomUUID(), revision: current.revision + 1, content, approved: false, approval: undefined, checkReport: undefined, status: 'unverified', progress: 'Accepted page-fit cuts. Factual checks were invalidated; recheck and remeasure before review.', createdAt: new Date().toISOString() })
       db.prepare('INSERT INTO draft_revisions (id,job_id,revision,data) VALUES (?,?,?,?)').run(revised.id, revised.jobId, revised.revision, JSON.stringify(revised))
       db.prepare('DELETE FROM document_fit_reports WHERE job_id = ?').run(jobId)
       return { ok: true, message: 'Accepted cuts saved as a new draft revision; remeasure and review it.', draft: revised }

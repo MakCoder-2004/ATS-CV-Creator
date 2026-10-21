@@ -6,7 +6,7 @@ import { join } from 'node:path'
 
 test('visible OpenRouter settings save non-secret preferences and explain privacy and credential status', async () => {
   const userData = mkdtempSync(join(tmpdir(), 'cv-tailor-openrouter-'))
-  const app = await electron.launch({ args: ['.'], env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData } })
+  const app = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData } })
   try {
     const page = await app.firstWindow()
     await expect(page.locator('[data-ui-ready="true"]')).toBeVisible()
@@ -24,12 +24,15 @@ test('visible OpenRouter settings save non-secret preferences and explain privac
     expect(faithfulnessBounds!.width).toBeGreaterThan(apiKeyBounds!.width * 1.7)
     const faithfulness = page.getByRole('switch', { name: 'Enable optional faithfulness review for newly authorized runs' })
     await expect(faithfulness).not.toBeChecked()
-    await faithfulness.check()
+    await faithfulness.click()
+    await expect(faithfulness).toBeChecked()
     await expect(page.getByText('Faithfulness preference saved locally. Existing unresolved findings are not waived.')).toBeVisible()
     await page.reload()
     await page.getByRole('button', { name: 'Settings' }).click()
     await expect(page.getByRole('switch', { name: 'Enable optional faithfulness review for newly authorized runs' })).toBeChecked()
-    await page.getByRole('switch', { name: 'Enable optional faithfulness review for newly authorized runs' }).uncheck()
+    await page.getByRole('switch', { name: 'Enable optional faithfulness review for newly authorized runs' }).click()
+    await expect(page.getByRole('switch', { name: 'Enable optional faithfulness review for newly authorized runs' })).not.toBeChecked()
+    expect(await page.evaluate(() => window.workbench.getSettings().then(value => value.openRouter.faithfulnessCheck))).toBe(false)
     await expect(page.getByText(/sends requests to third-party model providers/i)).toBeVisible()
     await expect(page.getByText(/LLM check is not proof/i)).toBeVisible()
     await expect(page.getByRole('link', { name: 'OpenRouter privacy policy' })).toHaveAttribute('href', 'https://openrouter.ai/privacy')

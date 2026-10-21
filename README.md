@@ -1,6 +1,16 @@
 # CV Tailor
 
-Personal Windows Workbench for managing local profile evidence (contact details, skills, experience, projects, education, certificates, summary, languages and extras), saved job postings, appearance, and OpenRouter API key and model ID preferences. Evidence changes are validated, versioned, and stored locally. A consent-bounded, source-linked draft can be generated, saved, checked, edited, measured for actual PDF page fit, and approved as an exact canonical document; approval and review state persist locally and reopen offline. Deterministic checks are limited and do not prove semantic truth. DOCX/PDF document export is **not implemented**. The approved browser-only prototype remains under `prototypes/cv-tailor-ui/` as design evidence, never part of the installed app.
+Personal Windows Workbench for managing local profile evidence (contact details, skills, experience, projects, education, certificates, summary, languages and extras), saved job postings, appearance, and OpenRouter API key and model ID preferences. Evidence changes are validated, versioned, and stored locally. A consent-bounded, source-linked draft can be generated, saved, checked, edited, measured for actual PDF page fit, and approved as an exact canonical document; approval and review state persist locally and reopen offline. Deterministic checks are limited and do not prove semantic truth. Approved CVs export as a selectable PDF or editable DOCX using the same canonical content; Word pagination may differ. The approved browser-only prototype remains under `prototypes/cv-tailor-ui/` as design evidence, never part of the installed app.
+
+## Create a tailored CV
+
+1. **Job posting:** add or open a saved role with its requirements.
+2. **Outgoing data:** inspect the minimized posting and profile facts, then authorize that run.
+3. **Generate:** the app analyzes the posting automatically. Review the required/preferred qualifications, tools, responsibilities and keywords, then generate the CV. Progress reflects actual operations, including local document measurement.
+4. **Review evidence:** review the target headline, short summary, tailored experience and projects alongside their sources. Posting-only skill suggestions are labeled **Not in your profile**; confirm you have each skill or remove it. Confirmations apply to this CV only, do not change your profile, and do not establish that you used a tool in past work. Resolve findings, check page length and acknowledge the current wording before approval.
+5. **Export:** save the approved single-column CV as PDF or Word. Review notices and pending/removed skill suggestions are never exported. Changes invalidate approval and require renewed review.
+
+Existing saved drafts remain readable. Interrupted checkpoints created before the tailored-summary contract may require a fresh authorized generation rather than silently inventing missing narrative. Automated checks and a clean template are not proof of factual truth or a guaranteed ATS result.
 
 ## Develop and verify
 

@@ -95,6 +95,8 @@
 .cv-workbench-start .paper-entry-select:focus-visible { outline-color: var(--paper-accent); }
 .cv-workbench-start .paper-skills .draft-paper-entry { display: inline-block; margin-right: 8px; }
 .cv-workbench-start .paper-skills .draft-paper-entry .draft-locked-facts { display: inline; }
+.cv-workbench-start .paper-skills .draft-locked-facts strong { font-weight: 400; }
+.cv-workbench-start .paper-skills .draft-paper-entry:not(:last-of-type)::after { content: ' · '; }
 .cv-workbench-start .paper-suggested-skill { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin: 8px 0; padding: 4px 8px; border-left: 2px solid var(--paper-warning-ink); color: var(--paper-warning-ink); background: var(--paper-warning); }
 .cv-workbench-start .paper-suggested-skill strong { font-size: 1em; font-weight: 500; }
 .cv-workbench-start .paper-suggested-skill span { font-size: .8em; }
