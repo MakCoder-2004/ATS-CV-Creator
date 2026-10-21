@@ -73,10 +73,10 @@ test('public workbench keeps rationale-only and unrelated-citation keywords advi
   const transport: AnalysisTransport = { async generate({ prompt }) {
     requests.push(prompt)
     if (prompt.includes('Extract only explicit qualifications')) return JSON.stringify({ required: ['JavaScript'], preferred: [], tools: [], responsibilities: [], keywords: ['JavaScript'] })
-    if (prompt.startsWith('Score these numbered')) { const { items } = JSON.parse(prompt.slice(prompt.indexOf('{'))); return JSON.stringify({ relevance: items.map((item: { index: number }) => ({ index: item.index, score: 1, rationale: 'JavaScript is relevant.' })) }) }
+    if (prompt.startsWith('Score these numbered')) { const { items } = JSON.parse(prompt.slice(prompt.indexOf('{'))); return JSON.stringify({ relevance: items.map((item: { index: number; text: string }) => ({ index: item.index, score: item.text.includes('Unrelated') ? 1 : 0, rationale: 'Only the unrelated source is selected.' })) }) }
     const { selected } = JSON.parse(prompt.slice(prompt.indexOf('{')))
     const unrelated = selected.find((item: { text: string }) => item.text.includes('Unrelated'))
-    return JSON.stringify({ headline: 'Developer', summary: { text: 'Developer with application experience.', evidence: [unrelated.index], rationale: 'Saved role evidence.' }, education: [], experience: [{ text: 'Built useful applications.', evidence: [unrelated.index], rationale: 'JavaScript is relevant.' }], projects: [], skills: [], certificates: [] })
+    return JSON.stringify({ headline: 'Developer', summary: { text: 'Developer with application experience.', evidence: [unrelated.index], rationale: 'Saved role evidence.' }, education: [], experience: selected.filter((item: { category: string }) => item.category === 'experience').map((item: { index: number }) => ({ text: 'Built useful applications.', evidence: [item.index], rationale: 'JavaScript is relevant.' })), projects: [], skills: [], certificates: [] })
   } }
   const wb = createWorkbench(dir, undefined, transport); workspaces.push(wb)
   const usage = await wb.api.getAnalysisUsage(); await wb.api.setAnalysisBudgets({ ...analysisBudgetValues(usage), minimumSpacingMs: 0 })

@@ -51,7 +51,7 @@ test('restores target wording and suggested tool names locally without exposing 
     }
   })
   expect(calls.join('\n')).not.toContain('Google')
-  expect(result.draft.tailoring).toMatchObject({ headline: 'Google Cloud Engineer', summary: { text: 'Uses Google Cloud Platform.', rationale: 'Saved Google Cloud Platform skill.' } })
+  expect('tailoring' in result.draft).toBe(false)
   expect(result.draft.content.skills[0]).toMatchObject({ name: 'Google Cloud Platform', rationale: 'Relevant Google technology.' })
   expect(result.draft.suggestedSkills).toEqual([expect.objectContaining({ name: 'Google Kubernetes Engine', postingTerm: 'Google Kubernetes Engine', status: 'pending' })])
 })
@@ -78,7 +78,9 @@ test('posting analysis restores a display copy while cached and generated provid
   const authorize = async () => { const preview = await wb.api.prepareOutboundConsent(job.value.id); if (!preview.ok) throw new Error(preview.message); await wb.api.acceptOutboundConsent(preview.token, true, true); return preview.token }
   const token = await authorize()
   expect(await wb.api.startAnalysis(token)).toMatchObject({ analysis: { tools: ['[[EMPLOYER_1]] Cloud Platform'] }, displayAnalysis: { tools: ['Google Cloud Platform'] } })
-  expect(await wb.api.generateDraft(token)).toMatchObject({ ok: true, draft: { tailoring: { headline: 'Google Cloud Engineer' } } })
+  const generated = await wb.api.generateDraft(token)
+  expect(generated).toMatchObject({ ok: true, draft: { content: { certificates: [] } } })
+  expect(generated.draft && 'tailoring' in generated.draft).toBe(false)
   expect(await wb.api.startAnalysis(await authorize())).toMatchObject({ cacheHit: true, displayAnalysis: { tools: ['Google Cloud Platform'] } })
   expect(requests).toHaveLength(3)
   await wb.api.saveExperience({ kind: 'employment', title: 'Engineer', organization: 'A considerably longer employer name', description: 'Built services.' })
@@ -87,9 +89,45 @@ test('posting analysis restores a display copy while cached and generated provid
   expect(requests.join('\n')).not.toContain('Google')
 })
 
-test('fresh generation rejects missing model-generated headline or summary', async () => {
-  const items = [{ id: randomUUID(), revision: 1, category: 'experience' as const, snapshot: { description: 'Built services.' }, text: 'Built services.' }]
-  await expect(runSourceLinkedGraph({ job: { title: 'Engineer' }, analysis: {}, items, identity: { id: randomUUID(), jobId: randomUUID(), revision: 1, createdAt: new Date().toISOString(), lockedFields: { fullName: 'Candidate', experience: [], education: [], projects: [], certificates: [] } }, call: async prompt => prompt.startsWith('Score these numbered') ? { value: { relevance: [{ index: 0, score: 1, rationale: 'Relevant.' }] }, attempts: 1 } : { value: { education: [], experience: [], projects: [], skills: [], certificates: [] }, attempts: 1 } })).rejects.toThrow()
+test('content-only generation groups role evidence and bounds concise bullets without retaining narrative fields', async () => {
+  const roleId = randomUUID(), factId = randomUUID()
+  const items = [
+    { id: roleId, revision: 1, category: 'experience' as const, parentId: roleId, snapshot: { title: 'Engineer', organization: 'Example Co', description: 'Built services.' }, text: 'Built services.' },
+    { id: factId, revision: 1, category: 'experience' as const, parentId: roleId, snapshot: { text: 'Improved reliability.' }, text: 'Improved reliability.' },
+    { id: randomUUID(), revision: 1, category: 'certificates' as const, snapshot: { title: 'Private certificate' }, text: 'Private certificate credential.' }
+  ]
+  const prompts: Array<{ prompt: string; schema: { safeParse(value: unknown): { success: boolean; data?: unknown } } }> = []
+  const result = await runSourceLinkedGraph({ job: { title: 'Engineer' }, analysis: {}, items, identity: { id: randomUUID(), jobId: randomUUID(), revision: 1, createdAt: new Date().toISOString(), lockedFields: { fullName: 'Candidate', experience: [{ evidenceId: roleId, title: 'Engineer', organization: 'Example Co' }], education: [], projects: [], certificates: [] } }, call: async (prompt, schema) => {
+    prompts.push({ prompt, schema })
+    if (prompt.startsWith('Score these numbered')) return { value: { relevance: items.flatMap((item, index) => item.category === 'certificates' ? [] : [{ index, score: 1, rationale: 'Relevant.' }]) }, attempts: 1 }
+    return { value: { experience: [{ text: 'Built reliable services.\nImproved reliability.', evidence: [0, 1], rationale: 'Relevant facts.' }], education: [], projects: [], skills: [], headline: 'Legacy headline', summary: { text: 'Legacy summary', evidence: [0], rationale: 'Legacy' }, certificates: [{ text: 'Ignore me', evidence: [0], rationale: 'Legacy' }] }, attempts: 1 }
+  } })
+  expect(prompts[0].prompt).not.toContain('Private certificate')
+  expect(prompts[1].schema.safeParse({ experience: [], education: [], projects: [], skills: [], headline: 'legacy', summary: {}, certificates: [] }).data).toEqual({ experience: [], education: [], projects: [], skills: [] })
+  expect(result.draft.content.experience).toHaveLength(1)
+  expect(result.draft.content.experience[0].citations).toEqual([{ evidenceId: roleId, revision: 1 }, { evidenceId: factId, revision: 1 }])
+  expect(result.draft.content.experience[0].text.split(/\r?\n/)).toHaveLength(2)
+  expect(result.draft.content.certificates).toEqual([])
+  expect('tailoring' in result.draft).toBe(false)
+})
+
+test('content generation retries repeated/overlong bullets and rejects cross-parent citations', async () => {
+  const roleId = randomUUID(), secondRoleId = randomUUID()
+  const items = [
+    { id: roleId, revision: 1, category: 'experience' as const, parentId: roleId, snapshot: {}, text: 'Built APIs.' },
+    { id: secondRoleId, revision: 1, category: 'experience' as const, parentId: secondRoleId, snapshot: {}, text: 'Maintained systems.' }
+  ]
+  let tailoringCalls = 0
+  const invoke = () => runSourceLinkedGraph({ job: { title: 'Engineer' }, analysis: {}, items, identity: { id: randomUUID(), jobId: randomUUID(), revision: 1, createdAt: new Date().toISOString(), lockedFields: { fullName: 'Candidate', experience: [{ evidenceId: roleId, title: 'Engineer', organization: 'Alpha' }, { evidenceId: secondRoleId, title: 'Developer', organization: 'Beta' }], education: [], projects: [], certificates: [] } }, call: async prompt => {
+    if (prompt.startsWith('Score these numbered')) return { value: { relevance: items.map((_, index) => ({ index, score: 1, rationale: 'Relevant.' })) }, attempts: 1 }
+    tailoringCalls++
+    return { value: { education: [], projects: [], skills: [], experience: [{ text: tailoringCalls === 1 ? `Engineer at Alpha ${'x'.repeat(301)}` : 'Built APIs.', evidence: tailoringCalls === 1 ? [0, 1] : [0], rationale: 'Relevant.' }, { text: 'Maintained systems.', evidence: [1], rationale: 'Relevant.' }] }, attempts: 1 }
+  } })
+  const result = await invoke()
+  expect(tailoringCalls).toBe(2)
+  expect(result.draft.content.experience.map(item => item.citations[0].evidenceId)).toEqual([roleId, secondRoleId])
+  tailoringCalls = 0
+  await expect(runSourceLinkedGraph({ job: { title: 'Engineer' }, analysis: {}, items, identity: { id: randomUUID(), jobId: randomUUID(), revision: 1, createdAt: new Date().toISOString(), lockedFields: { fullName: 'Candidate', experience: [], education: [], projects: [], certificates: [] } }, call: async prompt => prompt.startsWith('Score these numbered') ? { value: { relevance: items.map((_, index) => ({ index, score: 1, rationale: 'Relevant.' })) }, attempts: 1 } : { value: { education: [], projects: [], skills: [], experience: [{ text: 'Built APIs.', evidence: [0, 1], rationale: 'Mixed roles.' }] }, attempts: 1 } })).rejects.toThrow()
 })
 
 test('accepted frozen consent generates a batched source-linked draft that reopens offline with stable identity', async () => {
@@ -207,7 +245,8 @@ test('accepted frozen consent generates a batched source-linked draft that reope
   await wb.api.acceptOutboundConsent(thirdConsent.token, true, true)
   expect(await wb.api.startAnalysis(thirdConsent.token)).toMatchObject({ status: 'complete' })
   crossParentProjectCitation = true
-  expect(await wb.api.generateDraft(thirdConsent.token)).toMatchObject({ ok: true, draft: { status: 'blocked', checkReport: { passed: false, findings: expect.arrayContaining([expect.objectContaining({ code: 'wrong-parent' })]) } } })
+  const rejectedCrossParent = await wb.api.generateDraft(thirdConsent.token)
+  expect(rejectedCrossParent.ok).toBe(false)
   crossParentProjectCitation = false
   expect(originalDraft.content.experience[0].citations).toContainEqual({ evidenceId: role.value.experience[0].id, revision: 1 })
   expect(originalDraft.content.projects[0].citations).toContainEqual({ evidenceId: projectA.value.projects[0].id, revision: 1 })
@@ -272,10 +311,8 @@ test('accepted frozen consent generates a batched source-linked draft that reope
   expect(reopened).toEqual(originalDraft)
   expect(await wb.api.getDraft(secondJob.value.id)).toEqual(secondDraft.draft)
   expect(await wb.api.getAnalysis(job.value.id)).toMatchObject({ status: 'complete', progress: expect.stringContaining('Draft generated'), attempts: 4, runId: expect.any(String), generationStep: 'check-document', completedSteps: ['parse-posting', 'score-evidence', 'select-content', 'tailor-paragraphs', 'verify-claims', 'check-document'] })
-  const staleNarrative = await wb.api.correctDraftTailoring({ jobId: job.value.id, draftId: '00000000-0000-4000-8000-000000000000', field: 'summary', text: 'Revenue grew 500 percent.' })
-  expect(staleNarrative).toMatchObject({ ok: false })
-  const correctedNarrative = await wb.api.correctDraftTailoring({ jobId: job.value.id, draftId: reopened.id, field: 'summary', text: 'Revenue grew 500 percent.' })
-  expect(correctedNarrative).toMatchObject({ ok: true, draft: { checkReport: { passed: false, findings: expect.arrayContaining([expect.objectContaining({ code: 'unsupported-number', itemPath: 'tailoring.summary' })]) } } })
+  const obsoleteNarrative = await wb.api.correctDraftTailoring({ jobId: job.value.id, draftId: reopened.id, field: 'summary', text: 'Revenue grew 500 percent.' })
+  expect(obsoleteNarrative).toMatchObject({ ok: false })
 }, 20000)
 
 test('cancellation during the shared semantic batch suppresses its late response and draft persistence', async () => {

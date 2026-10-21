@@ -9,17 +9,17 @@ import { analysisBudgetValues } from '../src/shared/posting-analysis'
 import { draftRevisionSchema } from '../src/shared/draft'
 import { checkDraftFacts } from '../src/main/factual-verification'
 
-test.each(['experience', 'summary'] as const)('confirming a skill cannot establish unsupported usage in %s', section => {
+test('confirming a skill cannot establish unsupported usage in experience', () => {
   const roleId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
   const citation = { evidenceId: roleId, revision: 1 }
   const draft = draftRevisionSchema.parse({ id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', jobId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', revision: 1, pageTarget: 1, status: 'unverified', approved: false, attempts: 0, progress: 'Ready', createdAt: new Date(0).toISOString(),
     lockedFields: { fullName: 'Candidate', experience: [{ evidenceId: roleId, title: 'Engineer', organization: 'Example' }], education: [], projects: [], certificates: [] },
-    content: { education: [], projects: [], skills: [], certificates: [], experience: [{ text: section === 'experience' ? 'Built Rust APIs.' : 'Built Python APIs.', citations: [citation], rationale: 'Source role' }] },
-    tailoring: { headline: 'Engineer', summary: { text: section === 'summary' ? 'Builds Rust APIs.' : 'Builds Python APIs.', citations: [citation], rationale: 'Source role' } },
+    content: { education: [], projects: [], skills: [], certificates: [], experience: [{ text: 'Built Rust APIs.', citations: [citation], rationale: 'Source role' }] },
+    tailoring: { headline: 'Engineer', summary: { text: 'Builds Rust APIs.', citations: [citation], rationale: 'Legacy field' } },
     suggestedSkills: [{ id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd', name: 'Rust', postingTerm: 'Rust', sourceJobRevision: 1, status: 'confirmed', decidedAt: new Date(0).toISOString() }],
     evidence: [{ ...citation, snapshot: { title: 'Engineer', organization: 'Example', description: 'Built Python APIs.' } }]
   })
-  expect(checkDraftFacts(draft)).toMatchObject({ passed: false, findings: expect.arrayContaining([expect.objectContaining({ code: 'unsupported-skill', itemPath: section === 'summary' ? 'tailoring.summary' : 'experience[0]' })]) })
+  expect(checkDraftFacts(draft)).toMatchObject({ passed: false, findings: expect.arrayContaining([expect.objectContaining({ code: 'unsupported-skill', itemPath: 'experience[0]' })]) })
   draft.evidence[0].snapshot = { title: 'Engineer', organization: 'Example', description: 'Built Python and Rust APIs.' }
   expect(checkDraftFacts(draft)).toMatchObject({ passed: true })
 })

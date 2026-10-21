@@ -2,12 +2,19 @@ import { afterEach, expect, test } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { randomUUID } from 'node:crypto'
+import { checkDraftFacts } from '../src/main/factual-verification'
 import { createWorkbench } from '../src/main/workbench'
 import type { AnalysisTransport } from '../src/main/posting-analysis'
 import { analysisBudgetValues } from '../src/shared/posting-analysis'
 
 const dirs: string[] = [], opened: Array<ReturnType<typeof createWorkbench>> = []
 afterEach(() => { for (const item of opened.splice(0)) item.close(); for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
+
+test('legacy summary and headline are ignored by factual checks for the current content-only CV', () => {
+  const draft = { id: randomUUID(), jobId: randomUUID(), revision: 1, pageTarget: 1 as const, status: 'unverified' as const, approved: false, createdAt: new Date().toISOString(), progress: 'Ready', attempts: 0, lockedFields: { fullName: 'Candidate', experience: [], education: [], projects: [], certificates: [] }, content: { education: [], experience: [], projects: [], skills: [], certificates: [] }, evidence: [], tailoring: { headline: 'Ignored title', summary: { text: 'Revenue grew 900 percent.', citations: [{ evidenceId: randomUUID(), revision: 99 }], rationale: 'Legacy field' } } } as never
+  expect(checkDraftFacts(draft)).toMatchObject({ passed: true, findings: [] })
+})
 
 test.each([
   ['invalid citation', JSON.stringify({ headline: 'Engineer', summary: { text: 'Experienced engineer.', evidence: [0], rationale: 'Summary.' }, education: [], experience: [{ text: 'Secret model output', evidence: [99], rationale: 'bad' }], projects: [], skills: [], certificates: [] }), 'foreign-citation'],

@@ -23,7 +23,7 @@ import { z } from 'zod'
 import { analysisBudgetsSchema, analysisResultSchema, analysisUsageSchema, defaultAnalysisBudgets, generationRecoverySchema, postingAnalysisSchema, displayPostingAnalysisSchema, type AnalysisBudgets, type AnalysisResult, type RecoveryChoice } from '../shared/posting-analysis'
 import { pacificDay } from '../shared/pacific-day'
 import { addDraftItemInputSchema, draftCorrectionInputSchema, draftRevisionSchema, suggestedSkillDecisionSchema, draftTailoringCorrectionSchema, type DraftRevision } from '../shared/draft'
-import { CitationValidationError, LegacyNarrativeCheckpointError, runSourceLinkedGraph } from './source-linked-generation'
+import { CitationValidationError, runSourceLinkedGraph } from './source-linked-generation'
 import { prepareDraftInputs } from './draft-inputs'
 import { checkDraftFacts } from './factual-verification'
 import { factualCheckReportSchema } from '../shared/factual-report'
@@ -63,7 +63,8 @@ function reconcileNestedItems(items: NestedInput[], previous: NestedRecord[], ow
 const escapeCoverageTerm = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
 function preserveKnownFindings(checked: ReturnType<typeof checkDraftFacts>, prior: DraftRevision) {
-  const known = prior.checkReport?.findings.filter(finding => finding.itemPath === 'generation' || finding.code === 'semantic-unsupported').map(finding => {
+  const isLegacyNarrativeFinding = (finding: { itemPath: string }) => finding.itemPath.startsWith('tailoring.') || finding.itemPath === 'summary[0]'
+  const known = prior.checkReport?.findings.filter(finding => !isLegacyNarrativeFinding(finding) && (finding.itemPath === 'generation' || finding.code === 'semantic-unsupported')).map(finding => {
     if (finding.code !== 'semantic-unsupported') return finding
     const originDraftId = finding.originDraftId ?? prior.checkReport?.draftId ?? prior.id
     const originDraftRevision = finding.originDraftRevision ?? prior.checkReport?.draftRevision ?? prior.revision
@@ -708,7 +709,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
           }
         }
         const coverage = { ...qualificationCoverage(analysis.runId ?? analysis.jobId, analysis.analysis, result.draft), repairAttempts: coverageRepairAttempts }
-        const finalSemanticPairs: Array<{ section: keyof DraftRevision['content'] | 'summary'; itemPath: string; rewritten: string; evidence: string[] }> = (['education', 'experience', 'projects', 'skills', 'certificates'] as const).flatMap(section => result.draft.content[section].map((item, index) => {
+        const finalSemanticPairs: Array<{ section: keyof DraftRevision['content']; itemPath: string; rewritten: string; evidence: string[] }> = (['education', 'experience', 'projects', 'skills', 'certificates'] as const).flatMap(section => result.draft.content[section].map((item, index) => {
           const citations = item.citations
           const citedSources = citations.flatMap(citation => {
             const frozen = result.draft.evidence.find(evidence => evidence.evidenceId === citation.evidenceId && evidence.revision === citation.revision)
@@ -717,7 +718,6 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
           })
           return { section, itemPath: `${section}[${index}]`, rewritten: minimizeRestoredText('text' in item ? item.text : item.name), evidence: citedSources }
         }))
-        if (result.draft.tailoring) finalSemanticPairs.push({ section: 'summary', itemPath: 'summary[0]', rewritten: minimizeRestoredText(result.draft.tailoring.summary.text), evidence: result.draft.tailoring.summary.citations.flatMap(citation => safeItems.filter(source => source.id === citation.evidenceId && source.revision === citation.revision).map(source => source.text)) })
         const findingOrigin = { originDraftId: result.draft.id, originDraftRevision: result.draft.revision, originEvidenceRevisionHash: report.evidenceRevisionHash, historical: false }
         const semanticFindings: ReturnType<typeof factualCheckReportSchema.parse>['findings'] = []
         let semanticAttempts = 0
@@ -738,9 +738,8 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
               for (const finding of parsed.results.filter(item => !item.supported)) {
                 const pair = finalSemanticPairs.find(item => item.itemPath === finding.itemPath)!
                 const index = Number(/\[(\d+)\]/.exec(finding.itemPath)?.[1] ?? -1)
-                const summaryCitation = pair.section === 'summary' ? result.draft.tailoring?.summary.citations[0] : undefined
-                const contentCitation = pair.section === 'summary' ? undefined : result.draft.content[pair.section][index]?.citations[0]
-                semanticFindings.push({ code: 'semantic-unsupported', itemPath: finding.itemPath, evidenceId: summaryCitation?.evidenceId ?? contentCitation?.evidenceId, ...findingOrigin, message: `Second-opinion faithfulness check: ${finding.explanation}`, correction: 'Correct or remove this wording, then obtain a new authorized faithfulness check. This result is not proof and does not replace human review.' })
+                const contentCitation = result.draft.content[pair.section][index]?.citations[0]
+                semanticFindings.push({ code: 'semantic-unsupported', itemPath: finding.itemPath, evidenceId: contentCitation?.evidenceId, ...findingOrigin, message: `Second-opinion faithfulness check: ${finding.explanation}`, correction: 'Correct or remove this wording, then obtain a new authorized faithfulness check. This result is not proof and does not replace human review.' })
               }
             } catch (error) {
               if (error instanceof AnalysisError && error.code === 'CANCELLED') throw error
@@ -774,13 +773,6 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
         const cancelled = error instanceof AnalysisError && error.code === 'CANCELLED'
         const observedAttempts = (db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id = ?').get(pending.runId) as { count: number }).count
         const message = cancelled ? 'Draft generation was cancelled. No generated wording was retained.' : 'The generated response could not be safely validated. No model wording was retained; author a correction in the blocked draft or retry.'
-        if (error instanceof LegacyNarrativeCheckpointError) {
-          const safeMessage = 'This saved generation checkpoint is from an older format. Review outgoing data and start a fresh authorized generation.'
-          db.prepare("UPDATE generation_recovery SET status='cancelled',updated_at=? WHERE run_id=?").run(new Date().toISOString(), pending.runId)
-          const priorProgress = currentAnalysis.get(pending.jobId)
-          saveAnalysisState({ jobId: pending.jobId, runId: pending.runId, status: 'failed', analysis: analysis.analysis, progress: safeMessage, attempts: observedAttempts, error: safeMessage, cacheHit: analysis.cacheHit, ...(priorProgress?.runId === pending.runId ? { generationStep: priorProgress.generationStep, completedSteps: priorProgress.completedSteps } : {}) })
-          return { ok: false, message: safeMessage }
-        }
         const validationFailure = error instanceof SyntaxError || error instanceof z.ZodError || error instanceof CitationValidationError
         if (validationFailure) {
           const failed = draftRevisionSchema.parse({ ...failedDraftIdentity, pageTarget, status: 'blocked', approved: false, content: { education: [], experience: [], projects: [], skills: [], certificates: [] }, evidence: safeItems.map(item => ({ evidenceId: item.id, revision: item.revision, snapshot: item.snapshot })), progress: 'Generation failed validation; model output was discarded. This empty draft is editable only by adding locally authored content and remains blocked pending factual checks.', attempts: observedAttempts })
