@@ -10,6 +10,7 @@ import type { AddDraftItemInput, DraftCorrectionInput, DraftRevision, SuggestedS
 import type { FactualCheckReport } from './factual-report'
 import type { CanonicalDocument, DocumentFitReport, DocumentPdf } from './document'
 import type { RegenerationProposal, RegenerationTarget } from './regeneration'
+import type { MutateDraftRecordInput, MutateDraftRecordResult } from './draft-records'
 
 export const appearanceSchema = z.enum(['light', 'dark'])
 export type Appearance = z.infer<typeof appearanceSchema>
@@ -77,6 +78,7 @@ export interface WorkbenchAPI {
   decideSuggestedSkill(input: SuggestedSkillDecision): Promise<{ ok: boolean; message: string; draft?: DraftRevision }>
   correctDraftTailoring(input: DraftTailoringCorrection): Promise<{ ok: boolean; message: string; draft?: DraftRevision }>
   correctDraft(input: DraftCorrectionInput): Promise<DraftRevision | null>
+  mutateDraftRecord(input: MutateDraftRecordInput): Promise<MutateDraftRecordResult>
   addDraftItem(input: AddDraftItemInput): Promise<DraftRevision | null>
   getCanonicalDocument(jobId: string): Promise<CanonicalDocument | null>
   getDocumentPdf(jobId: string): Promise<DocumentPdf>

@@ -90,14 +90,14 @@ export function createCanonicalDocument(draft: DraftRevision, profile: ProfileSn
       if (locked) { heading = locked.title; organization = locked.organization; dates = dateRange(locked.startDate, locked.endDate, true); startDate = locked.startDate; parentId = locked.evidenceId }
     } else if (section === 'education') {
       const locked = draft.lockedFields.education.find(value => citations.includes(value.evidenceId))
-      const record = profile.education.find(value => value.id === locked?.evidenceId)
+      const record = (draft.evidence?.find(value => value.evidenceId === locked?.evidenceId)?.snapshot ?? profile.education.find(value => value.id === locked?.evidenceId)) as ProfileSnapshot['education'][number] | undefined
       if (locked) { heading = locked.title; organization = locked.institution; dates = dateRange(locked.startDate, locked.endDate); startDate = locked.startDate; educationEnd = locked.endDate }
       if (record?.link) links = [{ label: record.link, url: record.link }]
     } else {
       const locked = draft.lockedFields.projects.find(value => (value.sourceIds ?? [value.evidenceId]).some(id => citations.includes(id)))
-      const record = experience.projects.find(value => value.id === locked?.evidenceId)
+      const record = (draft.evidence?.find(value => value.evidenceId === locked?.evidenceId)?.snapshot ?? experience.projects.find(value => value.id === locked?.evidenceId)) as ExperienceSnapshot['projects'][number] | undefined
       if (locked) { heading = locked.name; parentId = locked.evidenceId }
-      if (record) { links = record.links.map(projectDocumentLink); technologies = record.technologies.map(value => value.text) }
+      if (record) { links = (record.links ?? []).map(projectDocumentLink); technologies = (record.technologies ?? []).map(value => value.text) }
     }
     const prose = documentText(item.text)
     const cleaned = removeRepeatedEntryHeading(prose, heading, organization)
@@ -116,7 +116,7 @@ export function createCanonicalDocument(draft: DraftRevision, profile: ProfileSn
       return grouped
     }, []).map(({ entry }) => entry)
   const skills: CanonicalDocumentEntry[] = [
-    ...draft.content.skills.map((skill, index) => ({ id: `skills-${index}`, heading: skill.name, skillGroup: skillGroupFor(skill.name, profile.skills.find(source => skill.citations.some(citation => citation.evidenceId === source.id))?.category), text: '', links: [] })),
+    ...draft.content.skills.map((skill, index) => { const snapshot = draft.evidence?.find(source => skill.citations.some(citation => citation.evidenceId === source.evidenceId))?.snapshot as { category?: string } | undefined; return { id: `skills-${index}`, heading: skill.name, skillGroup: skillGroupFor(skill.name, snapshot?.category ?? profile.skills.find(source => skill.citations.some(citation => citation.evidenceId === source.id))?.category), text: '', links: [] } }),
     ...(draft.suggestedSkills ?? []).filter(skill => skill.status === 'confirmed').map(skill => ({ id: `suggested-skills-${skill.id}`, heading: skill.name, skillGroup: skillGroupFor(skill.name), text: '', links: [] }))
   ]
   const contact = profile.contact

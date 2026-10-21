@@ -12,6 +12,7 @@ import { addDraftItemInputSchema, draftCorrectionInputSchema, draftGenerationSch
 import { factualCheckReportSchema } from '../shared/factual-report'
 import { canonicalDocumentSchema, documentFitReportSchema, documentPdfSchema } from '../shared/document'
 import { regenerationProposalSchema, regenerationResultSchema, regenerationTargetSchema } from '../shared/regeneration'
+import { mutateDraftRecordInputSchema } from '../shared/draft-records'
 
 const workspaceResult = z.object({ ok: z.boolean(), cancelled: z.boolean(), message: z.string() }).strict()
 const restoreSelection = z.discriminatedUnion('ok', [
@@ -129,6 +130,7 @@ const api: WorkbenchAPI = Object.freeze({
   async decideSuggestedSkill(input: Parameters<WorkbenchAPI['decideSuggestedSkill']>[0]) { return draftGenerationSchema.parse(await ipcRenderer.invoke('draft:skill-decision', suggestedSkillDecisionSchema.parse(input))) },
   async correctDraftTailoring(input: Parameters<WorkbenchAPI['correctDraftTailoring']>[0]) { return draftGenerationSchema.parse(await ipcRenderer.invoke('draft:tailoring:correct', draftTailoringCorrectionSchema.parse(input))) },
   async correctDraft(input: Parameters<WorkbenchAPI['correctDraft']>[0]) { const checked = draftCorrectionInputSchema.parse(input); const value = await ipcRenderer.invoke('draft:correct', checked); return value === null ? null : draftRevisionSchema.parse(value) },
+  async mutateDraftRecord(input: Parameters<WorkbenchAPI['mutateDraftRecord']>[0]) { return await ipcRenderer.invoke('draft:record:mutate', mutateDraftRecordInputSchema.parse(input)) },
   async addDraftItem(input: Parameters<WorkbenchAPI['addDraftItem']>[0]) { const checked = addDraftItemInputSchema.parse(input); const value = await ipcRenderer.invoke('draft:add-item', checked); return value === null ? null : draftRevisionSchema.parse(value) },
   async getCanonicalDocument(jobId: string) { const value = await ipcRenderer.invoke('document:preview', analysisIdSchema.parse(jobId)); return value === null ? null : canonicalDocumentSchema.parse(value) },
   async getDocumentPdf(jobId: string) { return documentPdfSchema.parse(await ipcRenderer.invoke('document:pdf', analysisIdSchema.parse(jobId))) },
