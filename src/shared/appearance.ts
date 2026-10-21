@@ -17,6 +17,10 @@ export const settingsSchema = z.object({ appearance: appearanceSchema, openRoute
 export type Settings = z.infer<typeof settingsSchema>
 export const openRouterModelInputSchema = openRouterModelSchema
 
+export type WorkspaceRestorePreview = { token: string; effects: Array<{ label: string; current: number; replacement: number }> }
+export type WorkspaceRestoreSelection = { ok: true; preview: WorkspaceRestorePreview } | { ok: false; cancelled: boolean; message: string }
+export type WorkspaceBackupResult = { ok: boolean; cancelled: boolean; message: string }
+
 /** Public renderer-facing application contract; no generic invoke or file access. */
 export interface WorkbenchAPI {
   getSettings(): Promise<Settings>
@@ -27,6 +31,10 @@ export interface WorkbenchAPI {
   revealOpenRouterApiKey(): Promise<string>
   copyOpenRouterApiKey(): Promise<void>
   removeOpenRouterApiKey(): Promise<Settings>
+  exportWorkspaceBackup(): Promise<WorkspaceBackupResult>
+  previewWorkspaceRestore(): Promise<WorkspaceRestoreSelection>
+  applyWorkspaceRestore(token: string): Promise<{ ok: boolean; message: string }>
+  cancelWorkspaceRestore(token: string): Promise<{ ok: boolean; message: string }>
   getProfile(): Promise<ProfileSnapshot>
   exportProfile(): Promise<{ ok: boolean; cancelled: boolean; message: string }>
   previewProfileImport(): Promise<ProfileExchangeResult>
@@ -76,7 +84,7 @@ export interface WorkbenchAPI {
   setAnalysisBudgets(value: AnalysisBudgets): Promise<AnalysisUsage>
 }
 
-export type WorkbenchStorageAPI = Omit<WorkbenchAPI, 'exportProfile' | 'previewProfileImport' | 'applyProfileImport' | 'cancelProfileImport' | 'measureDocument' | 'copyOpenRouterApiKey' | 'exportApprovedPdf' | 'exportDraftDocx'> & {
+export type WorkbenchStorageAPI = Omit<WorkbenchAPI, 'exportProfile' | 'previewProfileImport' | 'applyProfileImport' | 'cancelProfileImport' | 'exportWorkspaceBackup' | 'previewWorkspaceRestore' | 'applyWorkspaceRestore' | 'cancelWorkspaceRestore' | 'measureDocument' | 'copyOpenRouterApiKey' | 'exportApprovedPdf' | 'exportDraftDocx'> & {
   saveDocumentFitReport(jobId: string, report: DocumentFitReport): Promise<DocumentFitReport>
   validateProfileImport(input: string): Promise<{ ok: boolean; message: string }>
   replaceProfile(input: string): Promise<{ ok: boolean; message: string; profile?: ProfileSnapshot }>

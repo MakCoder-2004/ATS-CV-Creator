@@ -16,6 +16,7 @@ import { contactSaveInputSchema, evidenceRevisionSchema, profileEntrySaveSchema,
 import { experienceSaveInputSchema, experienceSnapshotSchema, experienceMutationResultSchema, projectSaveInputSchema } from '../shared/experience'
 import { jobRecordSchema, jobSaveInputSchema, jobSaveResultSchema } from '../shared/jobs'
 import { registerProfileExchangeIpc } from './profile-exchange-ipc'
+import { registerWorkspaceBackupIpc } from './workspace-backup-ipc'
 import { outboundConsentActionSchema, outboundConsentPreviewSchema } from '../shared/outbound-consent-contract'
 import { analysisBudgetsSchema, analysisIdSchema, analysisResultSchema, analysisStartInputSchema, analysisUsageSchema, generationRecoverySchema, recoveryChoiceSchema } from '../shared/posting-analysis'
 import { addDraftItemInputSchema, draftCorrectionInputSchema, draftGenerationSchema, draftRevisionSchema } from '../shared/draft'
@@ -78,6 +79,12 @@ app.whenReady().then(() => {
     return JSON.stringify({ required: ['TypeScript', 'Kubernetes'], preferred: ['Cloud architecture'], tools: ['TypeScript'], responsibilities: ['Build reliable services'], keywords: ['TypeScript', 'Kubernetes', 'Cloud architecture'] })
   } } : undefined
   workspace = createWorkbench(app.getPath('userData'), safeStorage, scriptedAnalysis)
+  registerWorkspaceBackupIpc(() => window!, () => workspace!, () => {
+    const reopened = createWorkbench(app.getPath('userData'), safeStorage, scriptedAnalysis)
+    const previous = workspace!
+    workspace = reopened
+    previous.close()
+  }, trusted)
   ipcMain.handle('settings:get', (event, ...args: unknown[]) => {
     trusted(event)
     if (args.length) throw new Error('Unexpected arguments')
