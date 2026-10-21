@@ -14,9 +14,15 @@ test('automatically organizes marker-led PDF facts into profile-shaped, source-b
   expect(result.unmapped).toContainEqual({ page: 1, text: 'UNKNOWN: Community mentor' })
 })
 
+test('maps a conventional contact header without requiring explicit labels', () => {
+  const result = mapProfilePdfPages([{ page: 1, text: 'Ada Example | Software engineer | ada@example.test | +1 555 0100' }])
+  expect(result.contact).toMatchObject({ fullName: 'Ada Example', headline: 'Software engineer', email: 'ada@example.test', phone: '+1 555 0100' })
+  expect(result.sources.map(source => source.field)).toEqual(['contact.fullName', 'contact.email', 'contact.headline', 'contact.phone'])
+})
+
 test('maps programming languages, tools, and concepts into their distinct profile skill categories', () => {
-  const result = mapProfilePdfPages([{ page: 3, text: ['PROGRAMMING LANGUAGES: Python, Java', 'TOOLS: React, Git', 'CONCEPTS: Distributed systems'].join('\n') }])
-  expect(result.skills).toEqual([{ name: 'Python', category: 'Languages' }, { name: 'Java', category: 'Languages' }, { name: 'React', category: 'Tools' }, { name: 'Git', category: 'Tools' }, { name: 'Distributed systems', category: 'Domain' }])
+  const result = mapProfilePdfPages([{ page: 3, text: ['PROGRAMMING LANGUAGES: Python, Java', 'TOOLS: React, Git', 'CONCEPTS: Distributed systems', 'SKILLS: Git'].join('\n') }])
+  expect(result.skills).toEqual([{ name: 'Python', category: 'Languages' }, { name: 'Java', category: 'Languages' }, { name: 'React', category: 'Tools' }, { name: 'Git', category: 'Tools' }, { name: 'Distributed systems', category: 'Domain' }, { name: 'Git', category: 'Technical' }])
 })
 
 test('maps spoken languages separately from programming skills and preserves source date precision', () => {

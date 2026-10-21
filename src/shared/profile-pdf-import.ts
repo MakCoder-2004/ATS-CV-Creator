@@ -44,6 +44,21 @@ export function mapProfilePdfPages(pages: Array<{ page: number; text: string; li
       }
       const header = line.match(/^([A-Z][A-Z ]{2,}):\s*(.*)$/)
       if (!header) {
+        if (!contact.fullName && !section) {
+          const parts = line.split(/\s+[|]\s+/).map(value => value.trim())
+          const emailIndex = parts.findIndex(value => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value))
+          if (emailIndex > 0) {
+            contact.fullName = parts[0]
+            sources.push(source(line, page.page, 'contact.fullName'))
+            contact.email = parts[emailIndex]
+            sources.push(source(line, page.page, 'contact.email'))
+            const headline = parts.slice(1, emailIndex).find(value => value && !/^[+()\d][+()\d .-]{5,}$/.test(value))
+            if (headline) { contact.headline = headline; sources.push(source(line, page.page, 'contact.headline')) }
+            const phone = parts.slice(emailIndex + 1).find(value => /^[+()\d][+()\d .-]{5,}$/.test(value))
+            if (phone) { contact.phone = phone; sources.push(source(line, page.page, 'contact.phone')) }
+            continue
+          }
+        }
         if (['skills', 'programming languages', 'tools', 'concepts'].includes(section)) {
           const category = section === 'programming languages' ? 'Languages' : section === 'tools' ? 'Tools' : section === 'concepts' ? 'Domain' : 'Technical'
           for (const name of line.split(/[,;|•]/).map(value => value.trim()).filter(Boolean)) { skills.push({ name, category }); sources.push(source(line, page.page, `skills.${name}`)) }
@@ -119,7 +134,7 @@ export function mapProfilePdfPages(pages: Array<{ page: number; text: string; li
     for (const link of page.links ?? []) unmapped.push({ page: page.page, text: `Unassigned PDF hyperlink: ${link.label} — ${link.url}` })
   }
   if (summaryText) entries.push({ section: 'summary', title: 'Summary', description: summaryText })
-  const deduplicatedSkills = [...new Map(skills.map(skill => [skill.name.toLocaleLowerCase(), skill])).values()]
+  const deduplicatedSkills = [...new Map(skills.map(skill => [`${skill.name.toLocaleLowerCase()}\u0000${skill.category.toLocaleLowerCase()}`, skill])).values()]
   const cleanContact = Object.fromEntries(Object.entries(contact).filter(([, value]) => typeof value !== 'string' || value.trim()))
   return profilePdfProposalSchema.parse({ ...(Object.keys(cleanContact).length ? { contact: cleanContact } : {}), skills: deduplicatedSkills, experience, projects, entries, sources, unmapped })
 }
