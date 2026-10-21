@@ -1,14 +1,14 @@
-import { useState, type FormEvent, type RefObject } from 'react'
+import type { RefObject } from 'react'
 import { Check, CheckCircle2, Circle, LoaderCircle } from 'lucide-react'
 import type { AnalysisResult, GenerationStep } from '../shared/posting-analysis'
 import type { DraftRevision } from '../shared/draft'
-import { describeSource, readableText } from './review-copy'
+
 
 const progressSteps: Array<{ id: GenerationStep; label: string; detail: string }> = [
   { id: 'parse-posting', label: 'Parse posting', detail: 'Extract qualifications and keywords' },
   { id: 'score-evidence', label: 'Score evidence', detail: 'Match the role to your saved career facts' },
   { id: 'select-content', label: 'Select content', detail: 'Choose relevant experience and projects' },
-  { id: 'tailor-paragraphs', label: 'Tailor paragraphs', detail: 'Write your headline, summary and descriptions' },
+  { id: 'tailor-paragraphs', label: 'Tailor paragraphs', detail: 'Tailor experience and project descriptions' },
   { id: 'verify-claims', label: 'Verify claims', detail: 'Check wording against your saved sources' },
   { id: 'check-document', label: 'Check document', detail: 'Prepare your document and measure its page length' },
 ]
@@ -51,28 +51,16 @@ export function SuggestedSkillReview({ draft, busy, onDecision }: { draft: Draft
   </section>
 }
 
-export function TailoringInspector({ selection, draft, jobTitle, busy, headingRef, onReturn, onCorrect }: {
-  selection: string; draft: DraftRevision; jobTitle: string; busy: boolean; headingRef: RefObject<HTMLHeadingElement | null>; onReturn: () => void
-  onCorrect: (field: 'headline' | 'summary', text: string) => Promise<boolean>
+export function TailoringInspector({ selection, draft, headingRef, onReturn }: {
+  selection: string; draft: DraftRevision; headingRef: RefObject<HTMLHeadingElement | null>; onReturn: () => void
 }) {
-  const [editing, setEditing] = useState(false)
   const suggestion = draft.suggestedSkills?.find(skill => `suggested-skills-${skill.id}` === selection)
-  const isHeadline = selection === 'tailoring-headline'
-  const paragraph = !isHeadline && !suggestion ? draft.tailoring?.summary : undefined
-  const text = readableText(suggestion?.name ?? (isHeadline ? draft.tailoring?.headline : paragraph?.text) ?? '')
-  const sources = paragraph?.citations.map(citation => describeSource(draft.evidence.find(item => item.evidenceId === citation.evidenceId && item.revision === citation.revision)?.snapshot)) ?? []
-  async function save(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    const value = new FormData(event.currentTarget).get('wording')
-    if (typeof value === 'string' && await onCorrect(isHeadline ? 'headline' : 'summary', value)) setEditing(false)
-  }
+  if (!suggestion) return null
   return <section className="review-inspector-panel" aria-label="Selected wording and sources">
     <h2 ref={headingRef} tabIndex={-1}>Review the wording</h2>
     <button className="secondary-button review-back-button" type="button" onClick={onReturn}>Back to selected wording</button>
-    <div className="selected-review"><p className="selected-review-context">{suggestion ? 'Skill confirmed by you' : isHeadline ? 'Target headline' : 'Professional summary'}</p><h3>{suggestion ? suggestion.name : isHeadline ? 'A headline for this application' : 'Your summary'}</h3>
-    {!suggestion && <blockquote>{text}</blockquote>}
-    {suggestion ? <><p>You confirmed that you have this skill for this CV. It is not a saved profile fact and is not evidence that you used it in a previous role or project.</p><p>Posting term: {suggestion.postingTerm}</p></> : isHeadline ? <><div className="tailoring-source"><strong>Target role</strong><p>{jobTitle}</p></div><p>This headline describes the role you are targeting. Your historical employment titles, organizations and dates are unchanged.</p></> : <><h3>Supporting career facts</h3><ul className="source-list">{sources.map((source, index) => <li key={index}><strong>{source.heading}</strong><details><summary>Read source wording</summary><p>{source.detail}</p></details></li>)}</ul><p className="inclusion-note"><strong>Why it’s here</strong><br />{paragraph?.rationale}</p></>}
-    {!suggestion && (!editing ? <button className="secondary-button" type="button" disabled={busy} onClick={() => setEditing(true)}>Edit wording</button> : <form className="selected-edit-form" onSubmit={event => void save(event)}><label>Wording for this CV<textarea name="wording" defaultValue={text} required maxLength={isHeadline ? 160 : 3000} /></label><p>Only rephrase saved facts here. Add new facts to My profile first.</p><div><button className="secondary-button" type="button" onClick={() => setEditing(false)}>Cancel</button><button className="primary-button" type="submit" disabled={busy}>Save wording</button></div></form>)}
+    <div className="selected-review"><p className="selected-review-context">Skill confirmed by you</p><h3>{suggestion.name}</h3>
+      <p>You confirmed that you have this skill for this CV. It is not a saved profile fact and is not evidence that you used it in a previous role or project.</p><p>Posting term: {suggestion.postingTerm}</p>
     </div>
   </section>
 }

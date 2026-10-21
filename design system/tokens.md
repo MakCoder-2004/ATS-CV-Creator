@@ -50,7 +50,7 @@ Values below describe the approved Workbench direction and live app baseline (`s
 | `--warning-ink` | `#F5D9A4` | Warning text |
 | `--warning-border` | `#846833` | Warning boundary |
 
-CV paper is a deliberately separate artifact: always white `#FFFFFF`, text `#202838`, Arial, light document borders regardless of application appearance. Do not darken or re-theme the CV preview.
+CV paper is a deliberately separate artifact: always white `#FFFFFF`, text `#202838`, Lato, Letter page ratio (612:792), and light document borders regardless of application appearance. The review-stage structured layout is selectable and content-faithful but does not claim exact pagination; the Export stage canvas renders the compiled PDF. PDF is authoritative, while editable Word may reflow. Do not darken or re-theme the CV preview.
 
 Semantic status must never rely on color alone. Pair with a plain-language label and/or recognizable icon. Keep text/background contrast at least WCAG AA 4.5:1 for normal text and 3:1 for large text and graphical controls. Check actual combinations, especially muted text, selected states and dark theme.
 
@@ -58,7 +58,7 @@ Semantic status must never rely on color alone. Pair with a plain-language label
 
 - **Application body/UI:** Manrope Variable, local font asset; 14px root, weight 450 regular / 650 emphasis.
 - **Display/headings:** Sora Variable, local font asset; use only for brand and page/section headings, typically 700–750.
-- **CV artifact:** Arial, 11pt at 1.4 line-height in the exported A4 document. The responsive review paper scales body text from 11.5px toward an 11pt equivalent at full width; it keeps a 210:297 paper aspect ratio without clipping overflowing content. Name is visually prominent; section headings are restrained, ruled and sentence case. Content is left-aligned and document-like, with only identity/contact metadata centered. Paper-only selection and pending-skill annotations use the existing light selected/warning artifact palette regardless of app theme; those annotations never enter exports.
+- **CV artifact:** Lato, 11pt at 1.4 line-height in the Letter document. The responsive structured review layout uses a 612:792 paper ratio and grows with content rather than clipping it. Name is visually prominent; section headings are restrained, ruled and sentence case. Content is left-aligned and document-like, with only identity/contact metadata centered. Paper-only selection and pending-skill annotations use the existing light selected/warning artifact palette regardless of app theme; those annotations never enter exports. Export-stage PDF canvas pages show the actual compiled output.
 - **Body line height:** 1.55 (21.7px at 14px). Dense supporting text 1.5–1.65. Do not use below 1.4 for readable text.
 - **Type scale:** page title 23–30px responsive, weight 750, tracking `-0.04em`; section title 16–17px, weight 700; body/control 14px; labels and metadata 12–13px; fine metadata 10–11px only for nonessential supporting details. Never use 10–11px for instructions, validation, or primary content.
 - Sentence case throughout. Headings and body are left-aligned; center alignment is reserved for concise empty states or centered document metadata. Do not justify text.
