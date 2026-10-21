@@ -21,7 +21,7 @@ test('public generation contract persists a blocked editable draft when a number
     }
     const { selected } = JSON.parse(prompt.slice(prompt.indexOf('{')))
     const experience = selected.filter((item: { category: string }) => item.category === 'experience')
-    return JSON.stringify({ education: [], experience: experience.map((item: { index: number }) => ({ text: 'Improved service throughput by 500 percent.', evidence: [item.index], rationale: 'Relevant to delivery.' })), projects: [], skills: [], certificates: [] })
+    return JSON.stringify({ headline: 'Engineer', summary: { text: 'Engineer with service experience.', evidence: [experience[0].index], rationale: 'Saved role evidence.' }, education: [], experience: experience.map((item: { index: number }) => ({ text: 'Improved service throughput by 500 percent.', evidence: [item.index], rationale: 'Relevant to delivery.' })), projects: [], skills: [], certificates: [] })
   } }
   const workspace = createWorkbench(directory, undefined, transport); workspaces.push(workspace)
   const budgets = await workspace.api.getAnalysisUsage()
@@ -57,7 +57,7 @@ test('public generation contract discards a provider response if its consent sco
     const experience = selected.filter((item: { category: string }) => item.category === 'experience')
     notifyDispatch()
     await providerGate
-    return JSON.stringify({ education: [], experience: experience.map((item: { index: number; text: string }) => ({ text: item.text, evidence: [item.index], rationale: 'Relevant evidence.' })), projects: [], skills: [], certificates: [] })
+    return JSON.stringify({ headline: 'Engineer', summary: { text: 'Engineer with service experience.', evidence: [experience[0].index], rationale: 'Saved role evidence.' }, education: [], experience: experience.map((item: { index: number; text: string }) => ({ text: item.text, evidence: [item.index], rationale: 'Relevant evidence.' })), projects: [], skills: [], certificates: [] })
   } }
   const workspace = createWorkbench(directory, undefined, transport); workspaces.push(workspace)
   const budgets = await workspace.api.getAnalysisUsage()

@@ -25,7 +25,7 @@ async function fixture(regenerationTransport?: (signal: AbortSignal) => Promise<
       return JSON.stringify({ items: sourcesByItem.map((sources: string[]) => ({ text: sources[0], rationale: 'Retains the cited source while emphasizing its relevance.' })) })
     }
     const { selected } = JSON.parse(prompt.slice(prompt.indexOf('{')))
-    return JSON.stringify({ education: [], experience: [], projects: [], skills: selected.filter((item: { category: string }) => item.category === 'skills').map((item: { index: number; text: string }) => ({ name: JSON.parse(item.text).name, evidence: [item.index], rationale: 'Saved skill. PRIVATE_DRAFT_RATIONALE_CANARY' })), certificates: [] })
+    return JSON.stringify({ headline: 'Engineer', summary: { text: 'Engineer with saved technical skills.', evidence: [selected[0].index], rationale: 'Selected profile evidence.' }, education: [], experience: [], projects: [], skills: selected.filter((item: { category: string }) => item.category === 'skills').map((item: { index: number; text: string }) => ({ name: JSON.parse(item.text).name, evidence: [item.index], rationale: 'Saved skill. PRIVATE_DRAFT_RATIONALE_CANARY' })), certificates: [] })
   } }
   const workspace = createWorkbench(directory, undefined, transport); opened.push(workspace)
   const budgets = await workspace.api.getAnalysisUsage()

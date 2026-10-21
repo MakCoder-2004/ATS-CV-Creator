@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { existsSync, linkSync, lstatSync, mkdirSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
 import { basename, dirname, extname, join } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
-import { renderDocumentHtml } from '../shared/document'
+import { renderDocumentHtml, canonicalDocumentTextParts } from '../shared/document'
 import { containsPdfTextInOrder, pdfFilename, writePdfAtomically } from '../shared/export'
 import { renderCanonicalDocx } from './docx-export'
 import { z } from 'zod'
@@ -19,7 +19,7 @@ import { registerProfileExchangeIpc } from './profile-exchange-ipc'
 import { registerWorkspaceBackupIpc } from './workspace-backup-ipc'
 import { outboundConsentActionSchema, outboundConsentPreviewSchema } from '../shared/outbound-consent-contract'
 import { analysisBudgetsSchema, analysisIdSchema, analysisResultSchema, analysisStartInputSchema, analysisUsageSchema, generationRecoverySchema, recoveryChoiceSchema } from '../shared/posting-analysis'
-import { addDraftItemInputSchema, draftCorrectionInputSchema, draftGenerationSchema, draftRevisionSchema } from '../shared/draft'
+import { addDraftItemInputSchema, draftCorrectionInputSchema, draftGenerationSchema, draftRevisionSchema, suggestedSkillDecisionSchema, draftTailoringCorrectionSchema } from '../shared/draft'
 import { factualCheckReportSchema } from '../shared/factual-report'
 import { regenerationProposalSchema, regenerationResultSchema, regenerationTargetSchema } from '../shared/regeneration'
 
@@ -54,7 +54,7 @@ if (!app.isPackaged && process.env.CV_TAILOR_TEST_USER_DATA_DIR) {
 app.whenReady().then(() => {
   let scriptedAttempts = 0
   let recoveryFailureSent = false
-  const scriptedAnalysis: AnalysisTransport | undefined = !app.isPackaged && ['1', 'retry', 'generation', 'factual', 'invalid', 'faithfulness', 'recovery', 'delayed'].includes(process.env.CV_TAILOR_SCRIPTED_ANALYSIS ?? '') ? { generate: async ({ prompt }) => {
+  const scriptedAnalysis: AnalysisTransport | undefined = !app.isPackaged && ['1', 'retry', 'generation', 'factual', 'invalid', 'faithfulness', 'recovery', 'delayed', 'tailored-flow'].includes(process.env.CV_TAILOR_SCRIPTED_ANALYSIS ?? '') ? { generate: async ({ prompt }) => {
     scriptedAttempts++
     if (process.env.CV_TAILOR_SCRIPTED_ANALYSIS === 'delayed' && prompt.startsWith('Write conservative')) await new Promise<void>(resolve => setTimeout(resolve, 30000))
     if (process.env.CV_TAILOR_SCRIPTED_ANALYSIS === 'recovery' && prompt.startsWith('Write conservative') && !recoveryFailureSent) { recoveryFailureSent = true; throw Object.assign(new Error('scripted offline interruption'), { code: 'ECONNRESET' }) }
@@ -65,17 +65,24 @@ app.whenReady().then(() => {
       return JSON.stringify({ results: pairs.map((pair: { itemPath: string }) => ({ itemPath: pair.itemPath, supported: false, explanation: 'Scripted smoke finding: wording needs human comparison with its source.' })) })
     }
     if (process.env.CV_TAILOR_SCRIPTED_ANALYSIS === 'retry' && scriptedAttempts === 1) throw { status: 429, retryAfter: 3 }
-    if (['generation', 'factual', 'invalid', 'faithfulness', 'recovery', 'delayed'].includes(process.env.CV_TAILOR_SCRIPTED_ANALYSIS ?? '') && prompt.startsWith('Score these numbered')) {
+    if (['generation', 'factual', 'invalid', 'faithfulness', 'recovery', 'delayed', 'tailored-flow'].includes(process.env.CV_TAILOR_SCRIPTED_ANALYSIS ?? '') && prompt.startsWith('Score these numbered')) {
       const { items } = JSON.parse(prompt.slice(prompt.indexOf('{')))
       return JSON.stringify({ relevance: items.map((item: { index: number }) => ({ index: item.index, score: 0.9, rationale: 'Directly supports the posting.' })) })
     }
     if (process.env.CV_TAILOR_SCRIPTED_ANALYSIS === 'invalid' && prompt.startsWith('Write conservative')) return '{ malformed response'
-    if (['generation', 'factual', 'invalid', 'faithfulness', 'recovery', 'delayed'].includes(process.env.CV_TAILOR_SCRIPTED_ANALYSIS ?? '') && prompt.startsWith('Write conservative')) {
-      const { selected } = JSON.parse(prompt.slice(prompt.indexOf('{')))
-      const paragraphs = (category: string) => selected.filter((item: { category: string }) => item.category === category).map((item: { index: number; text: string }) => ({ text: process.env.CV_TAILOR_SCRIPTED_ANALYSIS === 'factual' && category === 'experience' ? 'Reduced delivery time by 900 percent.' : item.text, evidence: [item.index], rationale: 'Selected from authorized profile evidence.' }))
+    if (['generation', 'factual', 'invalid', 'faithfulness', 'recovery', 'delayed', 'tailored-flow'].includes(process.env.CV_TAILOR_SCRIPTED_ANALYSIS ?? '') && prompt.startsWith('Write conservative')) {
+      const { selected, job } = JSON.parse(prompt.slice(prompt.indexOf('{')))
+      const sourceWording = (text: string) => { try { const item = JSON.parse(text); return item.description || item.text || item.field || item.title || item.name || text } catch { return text } }
+      const paragraphs = (category: string) => selected.filter((item: { category: string }) => item.category === category).map((item: { index: number; text: string }) => ({ text: process.env.CV_TAILOR_SCRIPTED_ANALYSIS === 'factual' && category === 'experience' ? 'Reduced delivery time by 900 percent.' : sourceWording(item.text), evidence: [item.index], rationale: 'Selected from authorized profile evidence.' }))
       const skills = selected.filter((item: { category: string }) => item.category === 'skills').map((item: { index: number; text: string }) => ({ name: JSON.parse(item.text).name, evidence: [item.index], rationale: 'Selected from the saved skill inventory.' }))
-      return JSON.stringify({ education: paragraphs('education'), experience: paragraphs('experience'), projects: paragraphs('projects'), skills, certificates: paragraphs('certificates') })
+      const summarySource = selected.find((item: { category: string }) => item.category === 'experience') ?? selected[0]
+      let sourceText: { description?: string; name?: string; title?: string } | null = null
+      if (summarySource) { try { sourceText = JSON.parse(summarySource.text) } catch { sourceText = { description: summarySource.text } } }
+      const summary = { text: sourceText?.description ?? sourceText?.name ?? sourceText?.title ?? 'Saved career facts selected for this application.', evidence: summarySource ? [summarySource.index] : [], rationale: 'A brief introduction based only on selected career facts.' }
+      const headline = process.env.CV_TAILOR_SCRIPTED_ANALYSIS === 'tailored-flow' ? 'AI/ML Engineer' : job.title
+      return JSON.stringify({ headline, summary, education: paragraphs('education'), experience: paragraphs('experience'), projects: paragraphs('projects'), skills, certificates: paragraphs('certificates') })
     }
+    if (process.env.CV_TAILOR_SCRIPTED_ANALYSIS === 'tailored-flow') return JSON.stringify({ required: ['Python', 'RASA', 'Google Cloud Platform', 'NLP'], preferred: ['Docker'], tools: ['Python', 'RASA', 'Google Cloud Platform', 'spaCy', 'Git', 'Docker'], responsibilities: ['Build Python APIs and conversational AI solutions'], keywords: ['Python', 'NLP', 'intent classification', 'model evaluation', 'backend services'] })
     return JSON.stringify({ required: ['TypeScript', 'Kubernetes'], preferred: ['Cloud architecture'], tools: ['TypeScript'], responsibilities: ['Build reliable services'], keywords: ['TypeScript', 'Kubernetes', 'Cloud architecture'] })
   } } : undefined
   workspace = createWorkbench(app.getPath('userData'), safeStorage, scriptedAnalysis)
@@ -332,6 +339,8 @@ app.whenReady().then(() => {
   ipcMain.handle('draft:check', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected job ID'); const report = await workspace!.api.checkDraft(analysisIdSchema.parse(args[0])); return report === null ? null : factualCheckReportSchema.parse(report) })
   ipcMain.handle('draft:approve', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected job ID'); return workspace!.api.approveDraft(analysisIdSchema.parse(args[0])) })
   ipcMain.handle('draft:export-guard', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected job ID'); return workspace!.api.assertDraftExportable(analysisIdSchema.parse(args[0])) })
+  ipcMain.handle('draft:skill-decision', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected a skill review decision'); return draftGenerationSchema.parse(await workspace!.api.decideSuggestedSkill(suggestedSkillDecisionSchema.parse(args[0]))) })
+  ipcMain.handle('draft:tailoring:correct', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected tailored wording'); return draftGenerationSchema.parse(await workspace!.api.correctDraftTailoring(draftTailoringCorrectionSchema.parse(args[0]))) })
   ipcMain.handle('draft:correct', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected correction input'); return await workspace!.api.correctDraft(draftCorrectionInputSchema.parse(args[0])) })
   ipcMain.handle('draft:add-item', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected draft item input'); return await workspace!.api.addDraftItem(addDraftItemInputSchema.parse(args[0])) })
   ipcMain.handle('document:preview', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected job ID'); return workspace!.api.getCanonicalDocument(analysisIdSchema.parse(args[0])) })
@@ -374,7 +383,7 @@ app.whenReady().then(() => {
       }
       await loadingTask.destroy()
       if (!parsed.numPages || parsed.numPages > canonical.targetPages || !extracted.length) throw new Error('The rendered PDF failed selectable-text or page-target checks.')
-      const requiredText = [canonical.identity.name, ...(canonical.identity.headline ? [canonical.identity.headline] : []), ...canonical.identity.contact, ...canonical.identity.links.map(link => link.label), ...canonical.sections.flatMap(section => [section.name, ...section.entries.flatMap(entry => [entry.heading, ...(entry.dates ? [entry.dates] : []), ...(entry.organization ? [entry.organization] : []), entry.text, ...entry.links.map(link => link.label)])])]
+      const requiredText = canonicalDocumentTextParts(canonical)
       if (!containsPdfTextInOrder(extracted, requiredText)) throw new Error('The rendered PDF content or reading order did not match the approved CV.')
       const requiredLinks = [...canonical.identity.links, ...canonical.sections.flatMap(section => section.entries.flatMap(entry => entry.links))].map(link => link.url)
       if (requiredLinks.some(url => !links.has(url))) throw new Error('A PDF hyperlink target did not survive local validation.')

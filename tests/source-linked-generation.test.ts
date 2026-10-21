@@ -15,24 +15,81 @@ test('cross-category model citations get one bounded correction request without 
   const experienceId = randomUUID(), skillId = randomUUID()
   const items = [
     { id: experienceId, revision: 1, category: 'experience' as const, snapshot: {}, text: '{"title":"Engineer","description":"Built TypeScript tools"}' },
-    { id: skillId, revision: 1, category: 'skills' as const, snapshot: {}, text: '{"name":"TypeScript","category":"Programming"}' }
+    { id: skillId, revision: 1, category: 'skills' as const, snapshot: { name: 'TypeScript' }, text: '{"name":"TypeScript","category":"Programming"}' }
   ]
   const calls: string[] = []
+  const progress: Array<{ step?: string; completed?: string[] }> = []
   let correctOnRetry = true
-  const invoke = () => runSourceLinkedGraph({ job: { title: 'Engineer' }, analysis: {}, items, identity: { id: randomUUID(), jobId: randomUUID(), revision: 1, createdAt: new Date().toISOString(), lockedFields: { fullName: 'Synthetic Candidate', experience: [], education: [], projects: [], certificates: [] } }, call: async prompt => {
+  const invoke = () => runSourceLinkedGraph({ onProgress: (_message, step, completed) => progress.push({ step, completed }), job: { title: 'Engineer' }, sourceJobRevision: 'job-revision-2', analysis: { tools: ['TypeScript', 'Rust'], keywords: ['Senior'] }, items, identity: { id: randomUUID(), jobId: randomUUID(), revision: 1, createdAt: new Date().toISOString(), lockedFields: { fullName: 'Synthetic Candidate', experience: [], education: [], projects: [], certificates: [] } }, call: async prompt => {
     calls.push(prompt)
     if (prompt.startsWith('Score these numbered')) return { value: { relevance: items.map((_, index) => ({ index, score: 1, rationale: 'Relevant synthetic source.' })) }, attempts: 1 }
     const invalid = calls.length === 2 || !correctOnRetry
-    return { value: { education: [], experience: [{ text: 'Built TypeScript tools', evidence: [0], rationale: 'Synthetic source.' }], projects: [], skills: [{ name: 'TypeScript', evidence: invalid ? [1, 0] : [1], rationale: 'Saved skill.' }], certificates: [] }, attempts: 1 }
+    return { value: { headline: 'Engineer', summary: { text: 'Engineer with TypeScript experience.', evidence: [0], rationale: 'Synthetic source.' }, education: [], experience: [{ text: 'Built TypeScript tools', evidence: [0], rationale: 'Synthetic source.' }], projects: [], skills: [{ name: 'TypeScript', evidence: invalid ? [1, 0] : [1], rationale: 'Saved skill.' }], certificates: [] }, attempts: 1 }
   } })
   const result = await invoke()
   expect(calls).toHaveLength(3)
   expect(calls[1]).toContain('allowedEvidenceBySection')
   expect(result.draft.attempts).toBe(3)
   expect(result.draft.content.skills[0].citations).toEqual([{ evidenceId: skillId, revision: 1 }])
+  expect(progress.map(item => item.step)).toEqual(expect.arrayContaining(['score-evidence', 'select-content', 'tailor-paragraphs']))
+  expect(progress.at(-1)?.completed).toEqual(expect.arrayContaining(['parse-posting', 'score-evidence', 'select-content', 'tailor-paragraphs']))
+  expect(result.draft.suggestedSkills).toEqual([expect.objectContaining({ name: 'Rust', sourceJobRevision: 'job-revision-2', status: 'pending' })])
+  expect(result.draft.suggestedSkills?.some(skill => skill.name === 'Senior')).toBe(false)
   calls.length = 0; correctOnRetry = false
   await expect(invoke()).rejects.toBeInstanceOf(CitationValidationError)
   expect(calls).toHaveLength(3)
+})
+
+test('restores target wording and suggested tool names locally without exposing identifiers in generation requests', async () => {
+  const calls: string[] = []
+  const source = { id: randomUUID(), revision: 1, category: 'skills' as const, snapshot: { name: 'Google Cloud Platform', category: 'Cloud' }, text: '{"name":"[[EMPLOYER_1]] Cloud Platform","category":"Cloud"}' }
+  const result = await runSourceLinkedGraph({ job: { title: '[[EMPLOYER_1]] Cloud Engineer' }, analysis: { tools: ['[[EMPLOYER_1]] Cloud Platform', '[[EMPLOYER_1]] Kubernetes Engine'] }, items: [source], savedSkillNames: ['Google Cloud Platform'], sourceJobRevision: 'posting-v1', restoreText: text => text.replaceAll('[[EMPLOYER_1]]', 'Google'),
+    identity: { id: randomUUID(), jobId: randomUUID(), revision: 1, createdAt: new Date().toISOString(), lockedFields: { fullName: 'Candidate', experience: [], education: [], projects: [], certificates: [] } },
+    call: async prompt => {
+      calls.push(prompt)
+      return { attempts: 1, value: prompt.startsWith('Score these numbered') ? { relevance: [{ index: 0, score: 1, rationale: 'Relevant cloud skill' }] } : { headline: '[[EMPLOYER_1]] Cloud Engineer', summary: { text: 'Uses [[EMPLOYER_1]] Cloud Platform.', evidence: [0], rationale: 'Saved [[EMPLOYER_1]] Cloud Platform skill.' }, education: [], experience: [], projects: [], certificates: [], skills: [{ name: '[[EMPLOYER_1]] Cloud Platform', evidence: [0], rationale: 'Relevant [[EMPLOYER_1]] technology.' }] } }
+    }
+  })
+  expect(calls.join('\n')).not.toContain('Google')
+  expect(result.draft.tailoring).toMatchObject({ headline: 'Google Cloud Engineer', summary: { text: 'Uses Google Cloud Platform.', rationale: 'Saved Google Cloud Platform skill.' } })
+  expect(result.draft.content.skills[0]).toMatchObject({ name: 'Google Cloud Platform', rationale: 'Relevant Google technology.' })
+  expect(result.draft.suggestedSkills).toEqual([expect.objectContaining({ name: 'Google Kubernetes Engine', postingTerm: 'Google Kubernetes Engine', status: 'pending' })])
+})
+
+test('posting analysis restores a display copy while cached and generated provider data stays minimized', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'analysis-display-')); dirs.push(dir)
+  const requests: string[] = []
+  const transport: AnalysisTransport = { async generate({ prompt }) {
+    requests.push(prompt)
+    if (prompt.startsWith('Extract only explicit')) {
+      const { job } = JSON.parse(prompt.slice(prompt.indexOf('{')))
+      const brand = /\[\[EMPLOYER_\d+\]\]/.exec(job.title)?.[0]
+      return JSON.stringify({ required: [`${brand} Cloud Platform`], preferred: [], tools: [`${brand} Cloud Platform`], responsibilities: [], keywords: [] })
+    }
+    if (prompt.startsWith('Score these numbered')) return JSON.stringify({ relevance: [{ index: 0, score: 1, rationale: 'Relevant skill' }] })
+    return JSON.stringify({ headline: '[[EMPLOYER_1]] Cloud Engineer', summary: { text: 'Uses [[EMPLOYER_1]] Cloud Platform.', evidence: [0], rationale: 'Saved cloud skill' }, education: [], experience: [], projects: [], certificates: [], skills: [{ name: '[[EMPLOYER_1]] Cloud Platform', evidence: [0], rationale: 'Saved skill' }] })
+  } }
+  const wb = createWorkbench(dir, undefined, transport); opened.push(wb)
+  await wb.api.setAnalysisBudgets({ ...analysisBudgetValues(await wb.api.getAnalysisUsage()), minimumSpacingMs: 0, rateLimitAttempts: 100, rateLimitWindowMs: 1000 })
+  await wb.api.saveContact({ fullName: 'Local Candidate' })
+  await wb.api.saveSkill({ name: 'Google Cloud Platform', category: 'Cloud' })
+  const job = await wb.api.saveJob({ title: 'Google Cloud Engineer', company: 'Google', description: 'Google Cloud Platform skills required.' })
+  if (!job.ok) throw new Error('Fixture job failed')
+  const authorize = async () => { const preview = await wb.api.prepareOutboundConsent(job.value.id); if (!preview.ok) throw new Error(preview.message); await wb.api.acceptOutboundConsent(preview.token, true, true); return preview.token }
+  const token = await authorize()
+  expect(await wb.api.startAnalysis(token)).toMatchObject({ analysis: { tools: ['[[EMPLOYER_1]] Cloud Platform'] }, displayAnalysis: { tools: ['Google Cloud Platform'] } })
+  expect(await wb.api.generateDraft(token)).toMatchObject({ ok: true, draft: { tailoring: { headline: 'Google Cloud Engineer' } } })
+  expect(await wb.api.startAnalysis(await authorize())).toMatchObject({ cacheHit: true, displayAnalysis: { tools: ['Google Cloud Platform'] } })
+  expect(requests).toHaveLength(3)
+  await wb.api.saveExperience({ kind: 'employment', title: 'Engineer', organization: 'A considerably longer employer name', description: 'Built services.' })
+  expect(await wb.api.startAnalysis(await authorize())).toMatchObject({ cacheHit: false, analysis: { tools: ['[[EMPLOYER_2]] Cloud Platform'] }, displayAnalysis: { tools: ['Google Cloud Platform'] } })
+  expect(requests).toHaveLength(4)
+  expect(requests.join('\n')).not.toContain('Google')
+})
+
+test('fresh generation rejects missing model-generated headline or summary', async () => {
+  const items = [{ id: randomUUID(), revision: 1, category: 'experience' as const, snapshot: { description: 'Built services.' }, text: 'Built services.' }]
+  await expect(runSourceLinkedGraph({ job: { title: 'Engineer' }, analysis: {}, items, identity: { id: randomUUID(), jobId: randomUUID(), revision: 1, createdAt: new Date().toISOString(), lockedFields: { fullName: 'Candidate', experience: [], education: [], projects: [], certificates: [] } }, call: async prompt => prompt.startsWith('Score these numbered') ? { value: { relevance: [{ index: 0, score: 1, rationale: 'Relevant.' }] }, attempts: 1 } : { value: { education: [], experience: [], projects: [], skills: [], certificates: [] }, attempts: 1 } })).rejects.toThrow()
 })
 
 test('accepted frozen consent generates a batched source-linked draft that reopens offline with stable identity', async () => {
@@ -60,7 +117,7 @@ test('accepted frozen consent generates a batched source-linked draft that reope
     const byCategory = (category: string) => selected.filter((item: { category: string }) => item.category === category).map((item: { index: number; category: string; text: string }) => ({ text: category === 'experience' && unsupportedClaim === 'responsibility' ? 'Led a global team and owned architecture.' : category === 'experience' && unsupportedClaim === 'number' ? 'Delivered 500 percent growth.' : item.text, evidence: [item.index], rationale: 'Selected for direct relevance.' }))
     const projects = selected.filter((item: { category: string }) => item.category === 'projects')
     const projectOutput = crossParentProjectCitation && projects.length > 1 ? [{ text: 'Combined project claims.', evidence: projects.slice(0, 2).map((item: { index: number }) => item.index), rationale: 'Test invalid cross-project association.' }] : byCategory('projects')
-    return JSON.stringify({ education: byCategory('education'), experience: byCategory('experience'), projects: projectOutput, skills: selected.filter((item: { category: string }) => item.category === 'skills').map((item: { index: number; text: string }) => ({ name: JSON.parse(item.text).name, evidence: [item.index], rationale: 'Profile skill matches the posting.' })), certificates: byCategory('certificates') })
+    return JSON.stringify({ headline: 'Software Engineer', summary: { text: 'Engineer with experience building reliable services.', evidence: selected.filter((item: { category: string }) => item.category === 'experience').slice(0, 1).map((item: { index: number }) => item.index), rationale: 'Grounded in saved experience.' }, education: byCategory('education'), experience: byCategory('experience'), projects: projectOutput, skills: selected.filter((item: { category: string }) => item.category === 'skills').map((item: { index: number; text: string }) => ({ name: JSON.parse(item.text).name, evidence: [item.index], rationale: 'Profile skill matches the posting.' })), certificates: byCategory('certificates') })
   } }
   let wb = createWorkbench(dir, undefined, transport); opened.push(wb)
   const budget = await wb.api.getAnalysisUsage()
@@ -211,9 +268,14 @@ test('accepted frozen consent generates a batched source-linked draft that reope
   wb.close(); opened.pop()
   wb = createWorkbench(dir, undefined, { async generate() { throw Error('offline') } }); opened.push(wb)
   const reopened = await wb.api.getDraft(job.value.id)
+  if (!reopened) throw new Error('reopened draft fixture')
   expect(reopened).toEqual(originalDraft)
   expect(await wb.api.getDraft(secondJob.value.id)).toEqual(secondDraft.draft)
-  expect(await wb.api.getAnalysis(job.value.id)).toMatchObject({ status: 'complete', progress: expect.stringContaining('Draft generated'), attempts: 4, runId: expect.any(String) })
+  expect(await wb.api.getAnalysis(job.value.id)).toMatchObject({ status: 'complete', progress: expect.stringContaining('Draft generated'), attempts: 4, runId: expect.any(String), generationStep: 'check-document', completedSteps: ['parse-posting', 'score-evidence', 'select-content', 'tailor-paragraphs', 'verify-claims', 'check-document'] })
+  const staleNarrative = await wb.api.correctDraftTailoring({ jobId: job.value.id, draftId: '00000000-0000-4000-8000-000000000000', field: 'summary', text: 'Revenue grew 500 percent.' })
+  expect(staleNarrative).toMatchObject({ ok: false })
+  const correctedNarrative = await wb.api.correctDraftTailoring({ jobId: job.value.id, draftId: reopened.id, field: 'summary', text: 'Revenue grew 500 percent.' })
+  expect(correctedNarrative).toMatchObject({ ok: true, draft: { checkReport: { passed: false, findings: expect.arrayContaining([expect.objectContaining({ code: 'unsupported-number', itemPath: 'tailoring.summary' })]) } } })
 }, 20000)
 
 test('cancellation during the shared semantic batch suppresses its late response and draft persistence', async () => {
@@ -232,7 +294,7 @@ test('cancellation during the shared semantic batch suppresses its late response
       return JSON.stringify({ relevance: items.map((item: { index: number }) => ({ index: item.index, score: 1, rationale: 'Relevant.' })) })
     }
     const { selected } = JSON.parse(prompt.slice(prompt.indexOf('{')))
-    return JSON.stringify({ education: [], experience: selected.filter((item: { category: string }) => item.category === 'experience').map((item: { index: number; text: string }) => ({ text: item.text, evidence: [item.index], rationale: 'Relevant.' })), projects: [], skills: [], certificates: [] })
+    return JSON.stringify({ headline: 'Engineer', summary: { text: 'Experienced engineer.', evidence: selected.filter((item: { category: string }) => item.category === 'experience').slice(0, 1).map((item: { index: number }) => item.index), rationale: 'Based on saved role evidence.' }, education: [], experience: selected.filter((item: { category: string }) => item.category === 'experience').map((item: { index: number; text: string }) => ({ text: item.text, evidence: [item.index], rationale: 'Relevant.' })), projects: [], skills: [], certificates: [] })
   } }
   const wb = createWorkbench(dir, undefined, transport); opened.push(wb)
   const usage = await wb.api.getAnalysisUsage()

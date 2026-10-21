@@ -43,12 +43,19 @@ test('user approves and exports a selectable PDF, while cancellation and overwri
     const flow = page.getByRole('region', { name: 'Tailoring workflow' })
     await flow.getByRole('checkbox', { name: /reviewed what is sent/i }).check()
     await flow.getByRole('button', { name: 'Authorize this run' }).click()
-    await flow.getByRole('button', { name: 'Analyze posting' }).click()
     await expect(flow.getByRole('button', { name: 'Generate tailored draft' })).toBeVisible({ timeout: 15000 })
     await flow.getByRole('button', { name: 'Generate tailored draft' }).click()
     await expect(page.getByRole('region', { name: 'CV document' }).getByText('Zoë Candidate')).toBeVisible({ timeout: 15000 })
     await page.getByRole('button', { name: 'Check page length' }).click()
     await expect(page.getByText(/Fits the selected target/i)).toBeVisible({ timeout: 45000 })
+    const skillReview = page.getByRole('region', { name: 'New skills to review' })
+    const pendingSkills = (await page.evaluate(id => window.workbench.getDraft(id), jobId))?.suggestedSkills?.filter(skill => skill.status === 'pending') ?? []
+    for (const skill of pendingSkills) await skillReview.getByRole('button', { name: `Remove ${skill.name}` }).click()
+    await page.getByRole('button', { name: 'Check page length' }).click()
+    await expect(page.getByText(/Fits the selected target/i)).toBeVisible({ timeout: 45000 })
+    await page.getByRole('checkbox', { name: 'I reviewed this CV and its wording.' }).check()
+    await page.getByRole('button', { name: 'Check CV for issues' }).click()
+    await expect(page.getByRole('button', { name: 'Approve CV' })).toBeEnabled()
     await page.getByRole('button', { name: 'Approve CV' }).click()
     await expect(page.getByRole('button', { name: 'Export approved PDF' })).toBeEnabled()
 
@@ -66,9 +73,7 @@ test('user approves and exports a selectable PDF, while cancellation and overwri
       return true
     }, output)
     await page.getByRole('button', { name: 'Export approved PDF' }).click()
-    await expect(page.getByRole('status').filter({ hasText: /Approved PDF saved|rendered PDF/i })).toBeVisible({ timeout: 20000 })
-    const exportStatus = await page.getByRole('status').last().innerText()
-    expect(exportStatus).toBe('Approved PDF saved and checked locally.')
+    await expect(page.getByRole('status').filter({ hasText: 'Approved PDF saved and checked locally.' })).toBeVisible({ timeout: 20000 })
     suggested = await app.evaluate(() => (globalThis as any).__suggestedPdfName)
     expect(suggested).toBe('Zoë Candidate - Example Co - Engineer.pdf')
     const bytes = readFileSync(output)
@@ -87,8 +92,9 @@ test('user approves and exports a selectable PDF, while cancellation and overwri
     expect(joined).toContain('Zoë Candidate')
     expect(joined).toContain('CaféScript')
     const folded = joined.toLocaleLowerCase()
-    expect(folded.indexOf('education')).toBeLessThan(folded.indexOf('experience'))
-    expect(folded.indexOf('experience')).toBeLessThan(folded.indexOf('projects'))
+    expect(folded).not.toMatch(/\beducation\b/)
+    expect(folded.indexOf('professional summary')).toBeLessThan(folded.indexOf('experience'))
+    expect(folded).not.toMatch(/\bprojects\b/)
     const orderedExperience = ['Platform Engineer', '01/2023 – 06/2024', 'Northstar Systems', 'Built dependable service infrastructure.', 'Software Engineer', '01/2020 – 12/2022', 'Harbor Technologies', 'Led a careful platform migration.']
     let orderCursor = 0
     for (const part of orderedExperience) { const found = joined.indexOf(part, orderCursor); expect(found, `expected extracted text in canonical order: ${part}`).toBeGreaterThanOrEqual(0); orderCursor = found + part.length }

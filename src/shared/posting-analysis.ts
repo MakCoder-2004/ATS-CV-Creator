@@ -2,12 +2,17 @@ import { z } from 'zod'
 
 const words = z.array(z.string().trim().min(1).max(300)).max(100)
 export const postingAnalysisSchema = z.object({ required: words, preferred: words, tools: words, responsibilities: words, keywords: words }).strict()
+// Local identifier restoration can expand provider-limited terms; it must not invalidate a successful analysis.
+const displayWords = z.array(z.string().trim().min(1).max(10000)).max(100)
+export const displayPostingAnalysisSchema = postingAnalysisSchema.extend({ required: displayWords, preferred: displayWords, tools: displayWords, responsibilities: displayWords, keywords: displayWords })
 export const analysisStatusSchema = z.enum(['queued', 'running', 'complete', 'failed', 'cancelled'])
 export const generationRecoverySchema = z.object({ jobId: z.string().uuid(), runId: z.string().uuid(), status: z.enum(['interrupted', 'uncertain', 'paused']), attempts: z.number().int().nonnegative(), uncertainAttempts: z.number().int().nonnegative(), progress: z.string(), canResume: z.boolean() }).strict()
 export const recoveryChoiceSchema = z.enum(['resume', 'retry-uncertain'])
 export type GenerationRecovery = z.infer<typeof generationRecoverySchema>
 export type RecoveryChoice = z.infer<typeof recoveryChoiceSchema>
-export const analysisResultSchema = z.object({ jobId: z.string().uuid(), runId: z.string().uuid().optional(), status: analysisStatusSchema, analysis: postingAnalysisSchema.nullable(), progress: z.string(), attempts: z.number().int().nonnegative(), error: z.string().optional(), cacheHit: z.boolean() }).strict()
+export const generationStepSchema = z.enum(['parse-posting', 'score-evidence', 'select-content', 'tailor-paragraphs', 'verify-claims', 'check-document'])
+export type GenerationStep = z.infer<typeof generationStepSchema>
+export const analysisResultSchema = z.object({ generationStep: generationStepSchema.optional(), completedSteps: z.array(generationStepSchema).optional(), jobId: z.string().uuid(), runId: z.string().uuid().optional(), status: analysisStatusSchema, analysis: postingAnalysisSchema.nullable(), displayAnalysis: displayPostingAnalysisSchema.optional(), progress: z.string(), attempts: z.number().int().nonnegative(), error: z.string().optional(), cacheHit: z.boolean() }).strict()
 export const analysisBudgetsSchema = z.object({
   minimumSpacingMs: z.number().int().min(0).max(60000),
   rateLimitAttempts: z.number().int().min(1).max(100),

@@ -1,23 +1,40 @@
 import { AlignmentType, Document, ExternalHyperlink, HeadingLevel, Packer, Paragraph, TextRun } from 'docx'
 import JSZip from 'jszip'
-import type { CanonicalDocument } from '../shared/document'
+import { documentSectionDisplayName, splitDocumentBullets, type CanonicalDocument, type CanonicalDocumentEntry } from '../shared/document'
+
+const hyperlinkParagraph = (links: CanonicalDocumentEntry['links'], alignment: 'center' | 'left' = 'left') => new Paragraph({ alignment, children: links.flatMap((link, index) => [...(index ? [new TextRun(' · ')] : []), new ExternalHyperlink({ link: link.url, children: [new TextRun({ text: link.label, style: 'Hyperlink' })] })]), spacing: { after: 60 } })
 
 /** Builds an editable, single-column Word document from the approved canonical version. */
 export async function renderCanonicalDocx(document: CanonicalDocument): Promise<Buffer> {
-  const paragraphs: Paragraph[] = [new Paragraph({ text: document.identity.name, heading: HeadingLevel.TITLE, alignment: AlignmentType.CENTER, spacing: { after: 40 } })]
-  if (document.identity.headline) paragraphs.push(new Paragraph({ text: document.identity.headline, alignment: AlignmentType.CENTER, spacing: { after: 40 } }))
-  if (document.identity.contact.length) paragraphs.push(new Paragraph({ text: document.identity.contact.join(' · '), alignment: AlignmentType.CENTER, spacing: { after: 40 } }))
-  if (document.identity.links.length) paragraphs.push(new Paragraph({ children: document.identity.links.flatMap((link, index) => [...(index ? [new TextRun(' · ')] : []), new ExternalHyperlink({ link: link.url, children: [new TextRun({ text: link.label, style: 'Hyperlink' })] })]), alignment: AlignmentType.CENTER, spacing: { after: 120 } }))
+  const paragraphs: Paragraph[] = [new Paragraph({ text: document.identity.name, heading: HeadingLevel.TITLE, alignment: AlignmentType.CENTER, spacing: { after: 40 }, keepNext: true })]
+  if (document.identity.headline) paragraphs.push(new Paragraph({ text: document.identity.headline, alignment: AlignmentType.CENTER, spacing: { after: 40 }, keepNext: true }))
+  if (document.identity.contact.length) paragraphs.push(new Paragraph({ text: document.identity.contact.join(' · '), alignment: AlignmentType.CENTER, spacing: { after: 40 }, keepNext: true }))
+  if (document.identity.links.length) paragraphs.push(hyperlinkParagraph(document.identity.links, 'center'))
+  if (document.identity.summary) {
+    paragraphs.push(new Paragraph({ text: 'Professional summary', heading: HeadingLevel.HEADING_1, border: { bottom: { color: '333333', space: 3, style: 'single', size: 4 } }, spacing: { before: 120, after: 60 }, keepNext: true }))
+    paragraphs.push(new Paragraph({ text: document.identity.summary, spacing: { before: 40, after: 120 } }))
+  }
   for (const section of document.sections) {
-    paragraphs.push(new Paragraph({ text: section.name.toUpperCase(), heading: HeadingLevel.HEADING_1, border: { bottom: { color: '333333', space: 3, style: 'single', size: 4 } }, spacing: { before: 120, after: 60 }, keepNext: true }))
+    if (!section.entries.length) continue
+    paragraphs.push(new Paragraph({ text: documentSectionDisplayName(section.name), heading: HeadingLevel.HEADING_1, border: { bottom: { color: '333333', space: 3, style: 'single', size: 4 } }, spacing: { before: 120, after: 60 }, keepNext: true }))
+    if (section.name === 'Skills') {
+      paragraphs.push(new Paragraph({ text: section.entries.map(entry => entry.heading).join(' · '), spacing: { after: 60 } }))
+      continue
+    }
     for (const entry of section.entries) {
-      paragraphs.push(new Paragraph({ children: [new TextRun({ text: entry.heading, bold: true }), ...(entry.dates ? [new TextRun({ text: `\t${entry.dates}` })] : [])], tabStops: [{ type: 'right', position: 9360 }], spacing: { after: 30 }, keepNext: Boolean(entry.organization || entry.text) }))
-      if (entry.organization) paragraphs.push(new Paragraph({ text: entry.organization, spacing: { after: 30 }, keepNext: Boolean(entry.text) }))
-      if (entry.text) paragraphs.push(new Paragraph({ text: entry.text, spacing: { after: 60 } }))
-      if (entry.links.length) paragraphs.push(new Paragraph({ children: entry.links.flatMap((link, index) => [...(index ? [new TextRun(' · ')] : []), new ExternalHyperlink({ link: link.url, children: [new TextRun({ text: link.label, style: 'Hyperlink' })] })]), spacing: { after: 60 } }))
+      paragraphs.push(new Paragraph({ children: [new TextRun({ text: entry.heading, bold: true }), ...(entry.dates ? [new TextRun({ text: `\t${entry.dates}` })] : [])], tabStops: [{ type: 'right', position: 9360 }], spacing: { after: 30 }, keepNext: Boolean(entry.organization || entry.technologies?.length || entry.text || entry.bullets?.length) }))
+      if (entry.organization) paragraphs.push(new Paragraph({ text: entry.organization, spacing: { after: 30 }, keepNext: Boolean(entry.technologies?.length || entry.text || entry.bullets?.length) }))
+      if (entry.technologies?.length) paragraphs.push(new Paragraph({ children: [new TextRun({ text: 'Technologies: ', bold: true }), new TextRun(entry.technologies.join(', '))], spacing: { after: 30 }, keepNext: Boolean(entry.text || entry.bullets?.length) }))
+      const bullets = entry.bullets?.length ? entry.bullets : splitDocumentBullets(entry.text)
+      for (const bullet of bullets) paragraphs.push(new Paragraph({ text: bullet, bullet: { level: 0 }, indent: { left: 360, hanging: 180 }, spacing: { after: 30 } }))
+      if (entry.links.length) paragraphs.push(hyperlinkParagraph(entry.links))
     }
   }
-  const doc = new Document({ creator: 'CV Tailor', title: `${document.identity.name} - Tailored CV`, sections: [{ properties: { page: { size: { width: 11906, height: 16838 }, margin: { top: 794, right: 794, bottom: 794, left: 794 } } }, children: paragraphs }], styles: { default: { document: { run: { font: 'Arial', size: 22, color: '202838' }, paragraph: { spacing: { line: 276 } } }, title: { run: { font: 'Arial', size: 34, bold: true, color: '202838' }, paragraph: { alignment: AlignmentType.CENTER } }, heading1: { run: { font: 'Arial', size: 24, bold: true, color: '202838' } } } } })
+  const doc = new Document({
+    creator: 'CV Tailor', title: `${document.identity.name} - Tailored CV`,
+    sections: [{ properties: { page: { size: { width: 11906, height: 16838 }, margin: { top: 794, right: 794, bottom: 794, left: 794 } } }, children: paragraphs }],
+    styles: { default: { document: { run: { font: 'Arial', size: 22, color: '202838' }, paragraph: { spacing: { line: 336 } } }, title: { run: { font: 'Arial', size: 34, bold: true, color: '202838' }, paragraph: { alignment: AlignmentType.CENTER } }, heading1: { run: { font: 'Arial', size: 24, bold: true, color: '202838' } } }
+  } })
   return Packer.toBuffer(doc)
 }
 

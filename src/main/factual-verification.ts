@@ -17,11 +17,29 @@ function numericExpressions(text: string): string[] {
   return [...text.matchAll(pattern)].map(match => normalized(match[0]))
 }
 
-export function checkDraftFacts(draft: DraftRevision) {
+export function checkDraftFacts(draft: DraftRevision, options: { includeSkillDecisions?: boolean } = {}) {
   const findings: FactualFinding[] = []
   const parsed = draftContentSchema.safeParse(draft.content)
   if (!parsed.success) findings.push({ code: 'schema', itemPath: 'content', message: 'Draft content does not match the required five-section schema.', correction: 'Correct the malformed section or item and rerun factual checks.' })
   const evidence = new Map(draft.evidence.map(item => [item.evidenceId, item]))
+  for (const suggestion of options.includeSkillDecisions !== false ? draft.suggestedSkills ?? [] : []) if (suggestion.status === 'pending') findings.push({ code: 'unconfirmed-skill', itemPath: `suggestedSkills.${suggestion.id}`, message: `Skill “${suggestion.name}” must be confirmed or removed before approval.`, correction: 'Confirm this skill as your declaration or remove the suggestion.' })
+  const summaryText = draft.tailoring?.summary.text ?? ''
+  const summaryCitedText = (draft.tailoring?.summary.citations ?? []).flatMap(citation => { const source = evidence.get(citation.evidenceId); return source ? strings(source.snapshot) : [] }).join(' ')
+  const checkPostingSkills = (text: string, citedText: string, itemPath: string) => {
+    for (const suggestion of draft.suggestedSkills ?? []) {
+      const escaped = suggestion.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      const term = new RegExp(`(?<![\\p{L}\\p{N}])${escaped}(?![\\p{L}\\p{N}])`, 'iu')
+      if (term.test(text) && !term.test(citedText)) findings.push({ code: 'unsupported-skill', itemPath, message: `Posting skill “${suggestion.name}” is not supported by this wording’s cited career facts.`, correction: 'Remove the unsupported skill from this description or add genuine supporting facts to your profile and create a new CV. A skill confirmation does not establish past usage.' })
+    }
+  }
+  checkPostingSkills(summaryText, summaryCitedText, 'tailoring.summary')
+  const summaryNumbers = new Set(numericExpressions(summaryCitedText))
+  for (const expression of numericExpressions(summaryText)) if (!summaryNumbers.has(expression)) findings.push({ code: 'unsupported-number', itemPath: 'tailoring.summary', evidenceId: draft.tailoring?.summary.citations[0]?.evidenceId, message: `Summary quantity “${expression}” is not present in its cited evidence.`, correction: 'Use the cited source’s exact supported quantity or remove the number.' })
+  for (const [index, citation] of (draft.tailoring?.summary.citations ?? []).entries()) {
+    const source = evidence.get(citation.evidenceId)
+    if (!source) findings.push({ code: 'foreign-citation', itemPath: `tailoring.summary[${index}]`, evidenceId: citation.evidenceId, message: 'Summary citation is outside the frozen evidence revisions.', correction: 'Use only saved evidence included in this draft.' })
+    else if (source.revision !== citation.revision) findings.push({ code: 'invalid-citation', itemPath: `tailoring.summary[${index}]`, evidenceId: citation.evidenceId, message: 'Summary citation revision does not match its frozen source.', correction: 'Use the source revision saved in this draft.' })
+  }
   const parents = new Map<string, string>()
   for (const parent of [...draft.lockedFields.experience, ...draft.lockedFields.projects]) for (const sourceId of parent.sourceIds ?? [parent.evidenceId]) parents.set(sourceId, parent.evidenceId)
   const expectedParents: Record<string, Array<{ evidenceId: string; sourceIds?: string[] }>> = { experience: draft.lockedFields.experience, projects: draft.lockedFields.projects }
@@ -44,6 +62,7 @@ export function checkDraftFacts(draft: DraftRevision) {
     if (wrongType || parentMismatch || associatedParents.size > 1) findings.push({ code: 'wrong-parent', itemPath, message: 'Citation type or parent does not match this draft section and its frozen evidence ownership.', correction: 'Cite evidence of the correct section type from the matching saved parent record.' })
     const text = item.text ?? item.name ?? ''
     const citedText = cited.flatMap(({ source }) => source ? strings(source.snapshot) : []).join(' ')
+    if (section !== 'skills') checkPostingSkills(text, citedText, itemPath)
     if (section === 'skills' && normalized(text) && !normalized(citedText).includes(normalized(text))) findings.push({ code: 'unsupported-skill', itemPath, message: `Skill “${text}” is not named in its cited evidence; equivalent wording needs explicit evidence support.`, correction: 'Use the saved skill name or add genuine supporting profile evidence.' })
     const sourceNumbers = new Set(numericExpressions(citedText))
     for (const expression of numericExpressions(text)) if (!sourceNumbers.has(expression)) findings.push({ code: 'unsupported-number', itemPath, evidenceId: item.citations[0]?.evidenceId, message: `Numeric value, unit, currency, or qualifier “${expression}” is not present in the cited evidence.`, correction: 'Use the cited source’s exact supported quantity and qualifier, cite directly relevant evidence, or remove the number.' })

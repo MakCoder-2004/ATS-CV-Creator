@@ -14,7 +14,7 @@ test('workbench opens and remembers a keyboard-accessible appearance choice', as
     first = await launch()
     const firstPage = await first.firstWindow()
     await expect(firstPage.locator('[data-ui-ready="true"]')).toBeVisible()
-    await expect(firstPage.getByRole('heading', { name: 'Job posting' })).toBeVisible()
+    await expect(firstPage.getByRole('heading', { name: 'Start with the right role.' })).toBeVisible()
     await expect(firstPage.getByRole('button', { name: 'Use light mode' })).toHaveAttribute('aria-pressed', 'true')
     const bridgeMethods = await firstPage.evaluate(() => Object.keys(window.workbench))
     expect(bridgeMethods).toEqual(expect.arrayContaining(['getSettings', 'setAppearance', 'getProfile', 'listJobs']))

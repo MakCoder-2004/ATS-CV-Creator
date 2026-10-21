@@ -10,9 +10,9 @@ const dirs: string[] = [], opened: Array<ReturnType<typeof createWorkbench>> = [
 afterEach(() => { for (const item of opened.splice(0)) item.close(); for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
 
 test.each([
-  ['invalid citation', JSON.stringify({ education: [], experience: [{ text: 'Secret model output', evidence: [99], rationale: 'bad' }], projects: [], skills: [], certificates: [] }), 'foreign-citation'],
+  ['invalid citation', JSON.stringify({ headline: 'Engineer', summary: { text: 'Experienced engineer.', evidence: [0], rationale: 'Summary.' }, education: [], experience: [{ text: 'Secret model output', evidence: [99], rationale: 'bad' }], projects: [], skills: [], certificates: [] }), 'foreign-citation'],
   ['malformed JSON', '{"experience":"Sensitive provider output', 'schema'],
-  ['missing citations', JSON.stringify({ education: [], experience: [{ text: 'Secret model output', rationale: 'bad' }], projects: [], skills: [], certificates: [] }), 'schema']
+  ['missing citations', JSON.stringify({ headline: 'Engineer', summary: { text: 'Experienced engineer.', evidence: [0], rationale: 'Summary.' }, education: [], experience: [{ text: 'Secret model output', rationale: 'bad' }], projects: [], skills: [], certificates: [] }), 'schema']
 ])('public API persists a blocked editable draft after %s', async (_case, tailored, expectedCode) => {
   const dir = mkdtempSync(join(tmpdir(), 'factual-failure-')); dirs.push(dir)
   const transport: AnalysisTransport = { async generate({ prompt }) {
@@ -54,7 +54,7 @@ test('public API rejects unsupported skill equivalence and binds the blocked rep
     const skill = selected.find((item: { category: string }) => item.category === 'skills')
     const experience = selected.find((item: { category: string }) => item.category === 'experience')
     const project = selected.find((item: { category: string }) => item.category === 'projects')
-    return JSON.stringify({ education: [], experience: experience ? [{ text: 'Managed budgets over $5,000.', evidence: [experience.index], rationale: 'Relevant.' }] : [], projects: project ? [{ text: project.text, evidence: [project.index], rationale: 'Project.' }] : [], skills: skill ? [{ name: 'Cloud architecture', evidence: [skill.index], rationale: 'Equivalent terminology.' }] : [], certificates: [] })
+    return JSON.stringify({ headline: 'Finance Engineer', summary: experience ? { text: 'Experienced finance engineer.', evidence: [experience.index], rationale: 'Saved experience.' } : { text: 'Experienced engineer.', evidence: [selected[0].index], rationale: 'Saved evidence.' }, education: [], experience: experience ? [{ text: 'Managed budgets over $5,000.', evidence: [experience.index], rationale: 'Relevant.' }] : [], projects: project ? [{ text: project.text, evidence: [project.index], rationale: 'Project.' }] : [], skills: skill ? [{ name: 'Cloud architecture', evidence: [skill.index], rationale: 'Equivalent terminology.' }] : [], certificates: [] })
   } }
   const wb = createWorkbench(dir, undefined, transport); opened.push(wb)
   await wb.api.setAnalysisBudgets({ ...analysisBudgetValues(await wb.api.getAnalysisUsage()), minimumSpacingMs: 0 })
@@ -89,7 +89,7 @@ test('public API saves revision-bound factual check reports and rejects unsuppor
     const { selected } = JSON.parse(prompt.slice(prompt.indexOf('{')))
     const experience = selected.filter((item: { category: string }) => item.category === 'experience').map((item: { index: number }) => ({ text: 'Reduced latency by over 12 dollars.', evidence: [item.index], rationale: 'Relevant result.' }))
     const projects = selected.filter((item: { category: string }) => item.category === 'projects').map((item: { index: number; text: string }) => ({ text: item.text, evidence: [item.index], rationale: 'Separate project evidence.' }))
-    return JSON.stringify({ education: [], experience, projects, skills: [], certificates: [] })
+    return JSON.stringify({ headline: 'Engineer', summary: experience.length ? { text: 'Reduced latency across engineering work.', evidence: [experience[0].evidence[0]], rationale: 'Saved role evidence.' } : { text: 'Professional engineer.', evidence: [selected[0].index], rationale: 'Saved evidence.' }, education: [], experience, projects, skills: [], certificates: [] })
   } }
   const wb = createWorkbench(dir, undefined, transport); opened.push(wb)
   const budgets = await wb.api.getAnalysisUsage()

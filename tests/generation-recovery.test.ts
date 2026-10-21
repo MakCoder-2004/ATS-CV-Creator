@@ -33,7 +33,7 @@ function recoveryTransport(onTailor?: () => Promise<string>): AnalysisTransport 
     }
     if (onTailor) return onTailor()
     const { selected } = JSON.parse(prompt.slice(prompt.indexOf('{')))
-    return JSON.stringify({ education: [], experience: selected.filter((item: { category: string }) => item.category === 'experience').map((item: { index: number; text: string }) => ({ text: item.text, evidence: [item.index], rationale: 'Relevant.' })), projects: [], skills: [], certificates: [] })
+    return JSON.stringify({ headline: 'Engineer', summary: { text: 'Engineer with relevant evidence.', evidence: [selected[0].index], rationale: 'Selected profile evidence.' }, education: [], experience: selected.filter((item: { category: string }) => item.category === 'experience').map((item: { index: number; text: string }) => ({ text: item.text, evidence: [item.index], rationale: 'Relevant.' })), projects: [], skills: [], certificates: [] })
   } }
 }
 
@@ -45,7 +45,7 @@ test('public recovery restores frozen consent and resumes a confirmed checkpoint
     if (offlineOnce) { offlineOnce = false; throw Object.assign(new Error('offline'), { code: 'ECONNRESET' }) }
     return ''
   })
-  const capturing: AnalysisTransport = { async generate(input) { prompts.push(input.prompt); const answer = await transport.generate(input); if (answer) return answer; const { selected } = JSON.parse(input.prompt.slice(input.prompt.indexOf('{'))); return JSON.stringify({ education: [], experience: selected.filter((item: { category: string }) => item.category === 'experience').map((item: { index: number; text: string }) => ({ text: item.text, evidence: [item.index], rationale: 'Relevant.' })), projects: [], skills: [], certificates: [] }) } }
+  const capturing: AnalysisTransport = { async generate(input) { prompts.push(input.prompt); const answer = await transport.generate(input); if (answer) return answer; const { selected } = JSON.parse(input.prompt.slice(input.prompt.indexOf('{'))); return JSON.stringify({ headline: 'Engineer', summary: { text: 'Engineer with relevant evidence.', evidence: [selected[0].index], rationale: 'Selected profile evidence.' }, education: [], experience: selected.filter((item: { category: string }) => item.category === 'experience').map((item: { index: number; text: string }) => ({ text: item.text, evidence: [item.index], rationale: 'Relevant.' })), projects: [], skills: [], certificates: [] }) } }
   let workspace = createWorkbench(directory, undefined, capturing); opened.push(workspace)
   const { jobId, token } = await seed(workspace, 3)
   const interrupted = await workspace.api.generateDraft(token)
