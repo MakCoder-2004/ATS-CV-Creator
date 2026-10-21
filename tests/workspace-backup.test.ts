@@ -26,7 +26,7 @@ const scripted: AnalysisTransport = { async generate({ prompt }) {
   }
   const { selected } = JSON.parse(prompt.slice(prompt.indexOf('{')))
   const paragraphs = (category: string) => selected.filter((item: { category: string }) => item.category === category).map((item: { index: number; text: string }) => ({ text: item.text, evidence: [item.index], rationale: 'Cited authorized evidence.' }))
-  return JSON.stringify({ education: paragraphs('education'), experience: paragraphs('experience'), projects: paragraphs('projects'), skills: selected.filter((item: { category: string }) => item.category === 'skills').map((item: { index: number; text: string }) => ({ name: JSON.parse(item.text).name, evidence: [item.index], rationale: 'Saved skill.' })), certificates: paragraphs('certificates') })
+  return JSON.stringify({ headline: 'Engineer', summary: { text: 'Engineer with saved experience.', evidence: [selected[0].index], rationale: 'Selected source.' }, education: paragraphs('education'), experience: paragraphs('experience'), projects: paragraphs('projects'), skills: selected.filter((item: { category: string }) => item.category === 'skills').map((item: { index: number; text: string }) => ({ name: JSON.parse(item.text).name, evidence: [item.index], rationale: 'Saved skill.' })), certificates: paragraphs('certificates') })
 } }
 function open(directory: string) { const instance = createWorkbench(directory, undefined, scripted); instances.push(instance); return instance }
 function fixture() { const dir = mkdtempSync(join(tmpdir(), 'cv-tailor-complete-backup-')); directories.push(dir); return { dir, workbench: open(dir) } }

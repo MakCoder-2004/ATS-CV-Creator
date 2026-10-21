@@ -40,6 +40,11 @@ test('cross-category model citations get one bounded correction request without 
   expect(calls).toHaveLength(3)
 })
 
+test('fresh generation rejects missing model-generated headline or summary', async () => {
+  const items = [{ id: randomUUID(), revision: 1, category: 'experience' as const, snapshot: { description: 'Built services.' }, text: 'Built services.' }]
+  await expect(runSourceLinkedGraph({ job: { title: 'Engineer' }, analysis: {}, items, identity: { id: randomUUID(), jobId: randomUUID(), revision: 1, createdAt: new Date().toISOString(), lockedFields: { fullName: 'Candidate', experience: [], education: [], projects: [], certificates: [] } }, call: async prompt => prompt.startsWith('Score these numbered') ? { value: { relevance: [{ index: 0, score: 1, rationale: 'Relevant.' }] }, attempts: 1 } : { value: { education: [], experience: [], projects: [], skills: [], certificates: [] }, attempts: 1 } })).rejects.toThrow()
+})
+
 test('accepted frozen consent generates a batched source-linked draft that reopens offline with stable identity', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'source-linked-draft-')); dirs.push(dir)
   const requests: string[] = []
