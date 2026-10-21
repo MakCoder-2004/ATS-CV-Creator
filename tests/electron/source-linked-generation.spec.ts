@@ -173,7 +173,8 @@ test('real Electron UI generates and exposes cited draft with a DEV-only scripte
     const canonicalDocument = await page.evaluate(id => window.workbench.getCanonicalDocument(id), jobId)
     const normalized = (values: string[]) => values.join(' ').replace(/[\s\p{P}\p{S}]+/gu, '').normalize('NFKC').toLowerCase()
     const pdfText = normalized(pdfReport!.extractedText), docxText = normalized(parsedDocx.text)
-    const canonicalIdentity = canonicalDocument!.identity as typeof canonicalDocument.identity & { email?: string; phone?: string; location?: string; headline?: string; summary?: string }
+    if (!canonicalDocument) throw new Error('Expected the current canonical CV')
+    const canonicalIdentity = canonicalDocument.identity
     expect(canonicalIdentity).not.toHaveProperty('headline')
     expect(canonicalIdentity).not.toHaveProperty('summary')
     const canonicalStrings = [canonicalIdentity.name, canonicalIdentity.email ?? '', canonicalIdentity.phone ?? '', canonicalIdentity.location ?? '', ...canonicalIdentity.links.map(link => link.label), ...canonicalDocument!.sections.flatMap(section => [section.name, ...section.entries.flatMap(entry => [entry.heading, entry.organization ?? '', entry.dates ?? '', entry.text, ...entry.links.map(link => link.label)])])].filter(Boolean)
@@ -201,7 +202,7 @@ test('real Electron UI generates and exposes cited draft with a DEV-only scripte
         expect(position, `Missing/out-of-order section ${section.name}`).toBeGreaterThanOrEqual(cursor)
         cursor = position + normalized([section.name]).length
         for (const entry of section.entries) {
-          const fields = [entry.organization ?? '', entry.heading, entry.dates ?? '', entry.text, ...entry.links.map(link => link.label)].filter(Boolean)
+          const fields = [entry.organization ?? '', entry.dates ?? '', entry.heading, entry.text, ...entry.links.map(link => link.label)].filter(Boolean)
           for (const field of fields) {
             position = value.indexOf(normalized([field]), cursor)
             expect(position, `Missing/out-of-order field ${field} in ${section.name}`).toBeGreaterThanOrEqual(cursor)

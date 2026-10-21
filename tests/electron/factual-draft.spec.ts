@@ -9,7 +9,7 @@ test('visible failed-draft findings can be corrected and rechecked without losin
   const userData = mkdtempSync(join(tmpdir(), 'cv-tailor-factual-ui-'))
   let app: Awaited<ReturnType<typeof electron.launch>> | undefined
   try {
-    app = await electron.launch({ args: ['.'], timeout: 60000, env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData, CV_TAILOR_SCRIPTED_ANALYSIS: 'factual' } })
+    app = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], timeout: 60000, env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData, CV_TAILOR_SCRIPTED_ANALYSIS: 'factual' } })
     const page = await app.firstWindow()
     await expect(page.locator('[data-ui-ready="true"]')).toBeVisible()
     await page.getByRole('button', { name: 'My profile' }).click()
@@ -45,7 +45,7 @@ test('visible failed-draft findings can be corrected and rechecked without losin
     await correction.fill('Reduced delivery time by 12 percent.')
     await draft.getByRole('button', { name: 'Save wording and recheck' }).click()
     await expect(draft).toContainText('Finish reviewing', { timeout: 10000 })
-    await expect(page.getByRole('article', { name: 'Draft CV preview' })).toContainText('Reduced delivery time by 12 percent.')
+    await expect(page.getByRole('article', { name: 'Draft CV review layout' })).toContainText('Reduced delivery time by 12 percent.')
     await expect(draft.getByRole('button', { name: 'Approve CV' })).toBeDisabled()
     await expect(review.getByRole('button', { name: 'Export editable DOCX' })).toHaveCount(0)
   } finally {

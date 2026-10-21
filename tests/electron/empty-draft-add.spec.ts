@@ -39,7 +39,7 @@ test('user can add locally authored content to the visible empty failed draft', 
     await draft.getByLabel('Correction evidence').selectOption({ index: 1 })
     await draft.getByLabel('Your correction').fill('Built reliable services.')
     await draft.getByRole('button', { name: 'Save local correction' }).click()
-    await expect(page.getByRole('article', { name: 'Draft CV preview' })).toContainText('Built reliable services.')
+    await expect(page.getByRole('article', { name: 'Draft CV review layout' })).toContainText('Built reliable services.')
     await expect(draft).toContainText('Changes needed')
     await expect(draft.getByRole('button', { name: 'Approve CV' })).toBeDisabled()
   } finally {

@@ -130,11 +130,10 @@ The compiler bundling seam is now prepared under the scoped non-application file
 - TeX Live package management and licensing note: [Installing and updating packages](https://tug.org/texlive/pkginstall.html).
 - Template package references: CTAN [fontawesome5](https://ctan.org/pkg/fontawesome5), [lato](https://ctan.org/pkg/lato), and [glyphtounicode/pdfTeX manual](https://tug.ctan.org/systems/doc/pdftex/manual/pdftex-a.pdf).
 
-## Unresolved decisions
+## Product decisions and implementation follow-through
 
-- Whether the product may bundle a TeX distribution at all, given installer size, update/support ownership, package licensing review, and user expectations.
-- MiKTeX portable/preloaded versus TeX Live selected scheme; no Windows installer, fresh-machine, native SQLite/reopen, or packaged-app test was performed as part of this research.
-- Which exact compiler/distribution/package versions and fonts constitute the reference baseline, and how strict “exactly match” means (pixel-identical versus same layout/typography/content).
-- Whether export is guaranteed offline, whether the app can download signed/pinned assets on first run, and how updates/security fixes are distributed.
-- The app-level sandbox and timeout strategy for a compiler child process.
-- The definitive Overleaf project compiler/version and whether its cloud package/font versions are reproducibly captured.
+The user confirmed **content-only generation**, **the literal supplied template structure** (no summary, target-headline line or Certificates), and **a self-contained offline app** rather than a separate compiler installation or first-run package download. The implementation selects the validated TinyTeX/pdfLaTeX tree; the locked 132-package manifest and provisioning scripts above define its baseline. The renderer never receives compiler paths or raw TeX. Measurement, actual PDF preview and export share the compiled bytes; compilation uses escaped text, a fixed executable, no shell escape, private temporary sources, output limits, and a 20-second deadline per pass. This is not an OS sandbox.
+
+A populated Unicode regression exposed an original-template issue: OT1 font encoding extracts “Zoë” and “résumé” as out-of-order accent glyphs. For extended Latin content the compiler adds `\\usepackage[T1]{fontenc}` before the existing Lato package; the source template itself, layout macros, margins and paper size remain unchanged. Pure ASCII template compilation remains unchanged and pixel-identical to the supplied baseline. The Unicode test requires correct extracted accented text rather than relaxing the reading-order guard.
+
+Installer, actual installed-app/native SQLite reopen, compiled-PDF checks and complete regression results are recorded separately in `docs/validation/latex-export.md`. Runtime compilation uses only bundled dependencies and does not invoke tlmgr. Physical firewall/network-disconnection isolation was not tested. Public redistribution still needs a full third-party licensing review; included notices/inventory are not legal certification. The original Overleaf cloud engine/package snapshot remains unknown, so the supplied PDF—not an unrecorded cloud environment—is the visual reference. Future compiler updates must deliberately update pins and rerun visual, extraction and installer checks.

@@ -9,7 +9,7 @@ test('profile contact and categorized skills can be created, edited, and deleted
   const userData = mkdtempSync(join(tmpdir(), 'cv-tailor-profile-'))
   let running: ElectronApplication | undefined
   const launch = async () => {
-    running = await electron.launch({ args: ['.'], env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData } })
+    running = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData } })
     return running
   }
   try {

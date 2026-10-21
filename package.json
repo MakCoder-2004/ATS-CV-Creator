@@ -1,7 +1,7 @@
 {
   "name": "cv-tailor",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "CV Tailor personal Windows workbench",
   "author": "CV Tailor",
   "license": "UNLICENSED",
@@ -18,7 +18,9 @@
     "test:electron": "npm run build && electron-rebuild -f -w better-sqlite3 && playwright test",
     "rebuild:electron": "electron-rebuild -f -w better-sqlite3",
     "verify:electron-sqlite": "node scripts/verify-electron-sqlite.cjs",
-    "dist:win": "npm run build && npm run rebuild:electron && npm run verify:electron-sqlite && electron-builder --win nsis && node scripts/verify-electron-sqlite.cjs --packaged",
+    "prepare:latex": "node scripts/prepare-latex.cjs",
+    "verify:latex": "node scripts/verify-latex.cjs --smoke",
+    "dist:win": "npm run verify:latex && npm run build && npm run rebuild:electron && npm run verify:electron-sqlite && electron-builder --win nsis && node scripts/verify-electron-sqlite.cjs --packaged && node scripts/verify-latex.cjs --packaged --smoke",
     "prototype": "npm run dev --workspace @cv-tailor/ui-prototype",
     "prototype:build": "npm run build --workspace @cv-tailor/ui-prototype",
     "prototype:typecheck": "npm run typecheck --workspace @cv-tailor/ui-prototype"
@@ -86,6 +88,22 @@
       "createDesktopShortcut": true
     },
     "extraResources": [
+      {
+        "from": ".tools/latex",
+        "to": "latex"
+      },
+      {
+        "from": "resources/cv-template",
+        "to": "cv-template"
+      },
+      {
+        "from": "resources/latex-licenses",
+        "to": "licenses/latex"
+      },
+      {
+        "from": "resources/fonts/lato/OFL.txt",
+        "to": "licenses/lato-review-OFL.txt"
+      },
       {
         "from": "node_modules/@fontsource-variable/manrope/LICENSE",
         "to": "licenses/manrope-OFL.txt"

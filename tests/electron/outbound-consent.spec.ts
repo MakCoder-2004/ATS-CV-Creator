@@ -8,7 +8,7 @@ test('user inspects minimized data, declines or explicitly authorizes only one r
   const userData = mkdtempSync(join(tmpdir(), 'cv-tailor-consent-ui-'))
   let app: ElectronApplication | undefined
   try {
-    app = await electron.launch({ args: ['.'], env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData } })
+    app = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData } })
     const page = await app.firstWindow()
     await expect(page.locator('[data-ui-ready="true"]')).toBeVisible()
     await page.getByRole('button', { name: 'My profile' }).click()

@@ -29,6 +29,7 @@ test('cross-category model citations get one bounded correction request without 
   const result = await invoke()
   expect(calls).toHaveLength(3)
   expect(calls[1]).toContain('allowedEvidenceBySection')
+  expect(calls[1].match(/Built TypeScript tools/g)).toHaveLength(1) // parent groups reference indexes, not duplicate source text
   expect(result.draft.attempts).toBe(3)
   expect(result.draft.content.skills[0].citations).toEqual([{ evidenceId: skillId, revision: 1 }])
   expect(progress.map(item => item.step)).toEqual(expect.arrayContaining(['score-evidence', 'select-content', 'tailor-paragraphs']))

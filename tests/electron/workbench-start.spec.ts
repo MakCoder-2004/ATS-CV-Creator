@@ -8,7 +8,7 @@ test('Tailor CV follows the focused workbench phases and keeps the selected post
   test.setTimeout(90000)
   const userData = mkdtempSync(join(tmpdir(), 'cv-tailor-workbench-start-'))
   let app: Awaited<ReturnType<typeof electron.launch>> | undefined
-  const launch = async () => { app = await electron.launch({ args: ['.'], env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData, CV_TAILOR_SCRIPTED_ANALYSIS: 'retry' } }); return app }
+  const launch = async () => { app = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData, CV_TAILOR_SCRIPTED_ANALYSIS: 'retry' } }); return app }
   try {
     let page = await (await launch()).firstWindow()
     await expect(page.locator('[data-ui-ready="true"]')).toBeVisible()

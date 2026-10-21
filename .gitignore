@@ -14,6 +14,7 @@
 !.env.example
 
 # Dependencies and build output
+.tools/
 node_modules/
 dist/
 out/

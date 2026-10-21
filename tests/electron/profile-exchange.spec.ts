@@ -16,7 +16,7 @@ test('user previews and confirms a profile JSON replacement', async () => {
   }))
   let running: ElectronApplication | undefined
   try {
-    running = await electron.launch({ args: ['.'], env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: join(userData, 'workspace') } })
+    running = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: join(userData, 'workspace') } })
     const page = await running.firstWindow()
     await expect(page.locator('[data-ui-ready="true"]')).toBeVisible({ timeout: 15000 })
     await running.evaluate(({ dialog }, selectedPath) => {

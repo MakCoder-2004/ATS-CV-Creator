@@ -3,9 +3,11 @@ import type { ZodError } from 'zod'
 import { fileURLToPath } from 'node:url'
 import { existsSync, linkSync, lstatSync, mkdirSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
 import { basename, dirname, extname, join } from 'node:path'
-import { createHash, randomUUID } from 'node:crypto'
-import { renderDocumentHtml, canonicalDocumentTextParts } from '../shared/document'
-import { containsPdfTextInOrder, pdfFilename, writePdfAtomically } from '../shared/export'
+import { randomUUID } from 'node:crypto'
+import { pdfFilename, writePdfAtomically } from '../shared/export'
+import { removeRepeatedEntryHeading } from '../shared/document'
+import { createLatexCompiler, hashDocument } from './latex-compiler'
+import { assertCompiledContent, inspectCompiledPdf } from './pdf-document'
 import { renderCanonicalDocx } from './docx-export'
 import { z } from 'zod'
 import { createWorkbench } from './workbench'
@@ -52,12 +54,18 @@ if (!app.isPackaged && process.env.CV_TAILOR_TEST_USER_DATA_DIR) {
   app.setPath('userData', process.env.CV_TAILOR_TEST_USER_DATA_DIR)
 }
 app.whenReady().then(() => {
+  const compiler = createLatexCompiler({
+    toolchainRoot: app.isPackaged ? join(process.resourcesPath, 'latex') : join(__dirname, '../..', '.tools', 'latex'),
+    templateRoot: app.isPackaged ? join(process.resourcesPath, 'cv-template') : join(__dirname, '../..', 'resources', 'cv-template'),
+    tempRoot: join(app.getPath('temp'), 'cv-tailor-pdf')
+  })
   let scriptedAttempts = 0
   let recoveryFailureSent = false
   const scriptedAnalysis: AnalysisTransport | undefined = !app.isPackaged && ['1', 'retry', 'generation', 'factual', 'invalid', 'faithfulness', 'recovery', 'delayed', 'tailored-flow'].includes(process.env.CV_TAILOR_SCRIPTED_ANALYSIS ?? '') ? { generate: async ({ prompt }) => {
     scriptedAttempts++
-    if (process.env.CV_TAILOR_SCRIPTED_ANALYSIS === 'delayed' && prompt.startsWith('Write conservative')) await new Promise<void>(resolve => setTimeout(resolve, 30000))
-    if (process.env.CV_TAILOR_SCRIPTED_ANALYSIS === 'recovery' && prompt.startsWith('Write conservative') && !recoveryFailureSent) { recoveryFailureSent = true; throw Object.assign(new Error('scripted offline interruption'), { code: 'ECONNRESET' }) }
+    const isTailoring = /^Write (?:conservative|concise)/.test(prompt)
+    if (process.env.CV_TAILOR_SCRIPTED_ANALYSIS === 'delayed' && isTailoring) await new Promise<void>(resolve => setTimeout(resolve, 30000))
+    if (process.env.CV_TAILOR_SCRIPTED_ANALYSIS === 'recovery' && isTailoring && !recoveryFailureSent) { recoveryFailureSent = true; throw Object.assign(new Error('scripted offline interruption'), { code: 'ECONNRESET' }) }
     if (prompt.startsWith('Factual repair cycle')) return JSON.stringify({ corrections: [] })
     if (prompt.startsWith('Propose conservative replacement wording')) { const { sourcesByItem } = JSON.parse(prompt.slice(prompt.indexOf('{'))); return JSON.stringify({ items: sourcesByItem.map(() => ({ text: 'Rephrased within the authorized evidence.', rationale: 'Rephrased only within the currently cited evidence.' })) }) }
     if (process.env.CV_TAILOR_SCRIPTED_ANALYSIS === 'faithfulness' && prompt.startsWith('Compare all rewritten/source pairs')) {
@@ -69,18 +77,19 @@ app.whenReady().then(() => {
       const { items } = JSON.parse(prompt.slice(prompt.indexOf('{')))
       return JSON.stringify({ relevance: items.map((item: { index: number }) => ({ index: item.index, score: 0.9, rationale: 'Directly supports the posting.' })) })
     }
-    if (process.env.CV_TAILOR_SCRIPTED_ANALYSIS === 'invalid' && prompt.startsWith('Write conservative')) return '{ malformed response'
-    if (['generation', 'factual', 'invalid', 'faithfulness', 'recovery', 'delayed', 'tailored-flow'].includes(process.env.CV_TAILOR_SCRIPTED_ANALYSIS ?? '') && prompt.startsWith('Write conservative')) {
-      const { selected, job } = JSON.parse(prompt.slice(prompt.indexOf('{')))
-      const sourceWording = (text: string) => { try { const item = JSON.parse(text); return item.description || item.text || item.field || item.title || item.name || text } catch { return text } }
-      const paragraphs = (category: string) => selected.filter((item: { category: string }) => item.category === category).map((item: { index: number; text: string }) => ({ text: process.env.CV_TAILOR_SCRIPTED_ANALYSIS === 'factual' && category === 'experience' ? 'Reduced delivery time by 900 percent.' : sourceWording(item.text), evidence: [item.index], rationale: 'Selected from authorized profile evidence.' }))
+    if (process.env.CV_TAILOR_SCRIPTED_ANALYSIS === 'invalid' && isTailoring) return '{ malformed response'
+    if (['generation', 'factual', 'invalid', 'faithfulness', 'recovery', 'delayed', 'tailored-flow'].includes(process.env.CV_TAILOR_SCRIPTED_ANALYSIS ?? '') && isTailoring) {
+      const { selected, experienceGroups, projectGroups } = JSON.parse(prompt.slice(prompt.indexOf('{')))
+      const sourceWording = (text: string) => { try { const item = JSON.parse(text); return removeRepeatedEntryHeading(item.description || item.text || item.field || item.title || item.name || text, item.title ?? item.name ?? '', item.organization) || item.title || item.name || text } catch { return text } }
+      const paragraphs = (category: string) => {
+        const groups: Array<{ indexes: number[] }> = category === 'experience' ? experienceGroups : category === 'projects' ? projectGroups : selected.filter((item: { category: string }) => item.category === category).map((item: { index: number }) => ({ indexes: [item.index] }))
+        return groups.map(group => {
+          const item = selected.find((source: { index: number }) => group.indexes.includes(source.index))
+          return { text: process.env.CV_TAILOR_SCRIPTED_ANALYSIS === 'factual' && category === 'experience' ? 'Reduced delivery time by 900 percent.' : sourceWording(item.text), evidence: [item.index], rationale: 'Selected from authorized profile evidence.' }
+        })
+      }
       const skills = selected.filter((item: { category: string }) => item.category === 'skills').map((item: { index: number; text: string }) => ({ name: JSON.parse(item.text).name, evidence: [item.index], rationale: 'Selected from the saved skill inventory.' }))
-      const summarySource = selected.find((item: { category: string }) => item.category === 'experience') ?? selected[0]
-      let sourceText: { description?: string; name?: string; title?: string } | null = null
-      if (summarySource) { try { sourceText = JSON.parse(summarySource.text) } catch { sourceText = { description: summarySource.text } } }
-      const summary = { text: sourceText?.description ?? sourceText?.name ?? sourceText?.title ?? 'Saved career facts selected for this application.', evidence: summarySource ? [summarySource.index] : [], rationale: 'A brief introduction based only on selected career facts.' }
-      const headline = process.env.CV_TAILOR_SCRIPTED_ANALYSIS === 'tailored-flow' ? 'AI/ML Engineer' : job.title
-      return JSON.stringify({ headline, summary, education: paragraphs('education'), experience: paragraphs('experience'), projects: paragraphs('projects'), skills, certificates: paragraphs('certificates') })
+      return JSON.stringify({ education: paragraphs('education'), experience: paragraphs('experience'), projects: paragraphs('projects'), skills })
     }
     if (process.env.CV_TAILOR_SCRIPTED_ANALYSIS === 'tailored-flow') return JSON.stringify({ required: ['Python', 'RASA', 'Google Cloud Platform', 'NLP'], preferred: ['Docker'], tools: ['Python', 'RASA', 'Google Cloud Platform', 'spaCy', 'Git', 'Docker'], responsibilities: ['Build Python APIs and conversational AI solutions'], keywords: ['Python', 'NLP', 'intent classification', 'model evaluation', 'backend services'] })
     return JSON.stringify({ required: ['TypeScript', 'Kubernetes'], preferred: ['Cloud architecture'], tools: ['TypeScript'], responsibilities: ['Build reliable services'], keywords: ['TypeScript', 'Kubernetes', 'Cloud architecture'] })
@@ -291,37 +300,11 @@ app.whenReady().then(() => {
   const measureDocumentForJob = async (jobId: string) => {
     const document = await workspace!.api.getCanonicalDocument(jobId)
     if (!document) throw new Error('Generate a draft before measuring page fit.')
-    const html = renderDocumentHtml(document), pdfWindow = new BrowserWindow({ show: false, webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true } })
-    try {
-      await pdfWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`)
-      await pdfWindow.webContents.executeJavaScript('document.fonts.ready')
-      const pdf = await pdfWindow.webContents.printToPDF({ pageSize: 'A4', printBackground: true, preferCSSPageSize: true, margins: { top: 0, bottom: 0, left: 0, right: 0 } })
-      const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs')
-      const loadingTask = pdfjs.getDocument({ data: new Uint8Array(pdf), useSystemFonts: true })
-      const parsedPdf = await loadingTask.promise
-      const extractedText: string[] = [], linkTargets = new Set<string>(), links = new Map<string, { label: string; url: string }>()
-      for (let pageNumber = 1; pageNumber <= parsedPdf.numPages; pageNumber++) {
-        const page = await parsedPdf.getPage(pageNumber)
-        const textContent = await page.getTextContent()
-        const textItems = textContent.items.filter((item): item is typeof item & { str: string; transform: number[]; width: number; height: number } => 'str' in item && typeof item.str === 'string')
-        extractedText.push(...textItems.flatMap(item => item.str.trim() ? [item.str.trim()] : []))
-        const annotations = await page.getAnnotations({ intent: 'display' })
-        for (const annotation of annotations) if (annotation.subtype === 'Link' && annotation.url) {
-          linkTargets.add(annotation.url)
-          const [x0, y0, x1, y1] = annotation.rect
-          const label = textItems.filter(item => {
-            const left = item.transform[4], baseline = item.transform[5], right = left + item.width, top = baseline + item.height
-            return right > x0 && left < x1 && top > y0 && baseline < y1
-          }).map(item => item.str.trim()).filter(Boolean).join(' ').trim()
-          if (label) links.set(`${label}\u0000${annotation.url}`, { label, url: annotation.url })
-        }
-      }
-      const actualPages = parsedPdf.numPages
-      await loadingTask.destroy()
-      if (!actualPages || !extractedText.length) throw new Error('Electron PDF has no measurable pages or extractable selectable text.')
-      const entries = document.sections.flatMap(section => section.entries.map(entry => ({ entryId: entry.id, label: entry.heading, section: section.name })))
-      return workspace!.api.saveDocumentFitReport(jobId, { documentHash: createHash('sha256').update(JSON.stringify(document)).digest('hex'), targetPages: document.targetPages, actualPages, extractedText, linkTargets: [...linkTargets], links: [...links.values()], overflow: actualPages > document.targetPages, proposedCuts: actualPages > document.targetPages ? entries.slice(1).reverse() : [], measuredAt: new Date().toISOString() })
-    } finally { pdfWindow.destroy() }
+    const compiled = await compiler.compile(document)
+    const inspected = await inspectCompiledPdf(compiled.pdf)
+    assertCompiledContent(document, inspected)
+    const entries = document.sections.flatMap(section => section.entries.map(entry => ({ entryId: entry.id, label: entry.heading, section: section.name })))
+    return workspace!.api.saveDocumentFitReport(jobId, { documentHash: compiled.documentHash, targetPages: document.targetPages, ...inspected, overflow: inspected.actualPages > document.targetPages, proposedCuts: inspected.actualPages > document.targetPages ? entries.slice(1).reverse() : [], measuredAt: new Date().toISOString() })
   }
   ipcMain.handle('draft:regeneration:resolve', async (event, ...args: unknown[]) => {
     trusted(event); if (args.length !== 3 || !['accept','reject'].includes(args[2] as string)) throw new Error('Expected job ID, proposal ID and decision')
@@ -344,6 +327,17 @@ app.whenReady().then(() => {
   ipcMain.handle('draft:correct', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected correction input'); return await workspace!.api.correctDraft(draftCorrectionInputSchema.parse(args[0])) })
   ipcMain.handle('draft:add-item', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected draft item input'); return await workspace!.api.addDraftItem(addDraftItemInputSchema.parse(args[0])) })
   ipcMain.handle('document:preview', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected job ID'); return workspace!.api.getCanonicalDocument(analysisIdSchema.parse(args[0])) })
+  ipcMain.handle('document:pdf', async (event, ...args: unknown[]) => {
+    trusted(event); if (args.length !== 1) throw new Error('Expected job ID')
+    const jobId = analysisIdSchema.parse(args[0])
+    const canonical = await workspace!.api.getCanonicalDocument(jobId)
+    if (!canonical) throw new Error('Create a CV before opening its PDF preview.')
+    const compiled = await compiler.compile(canonical)
+    assertCompiledContent(canonical, await inspectCompiledPdf(compiled.pdf))
+    const current = await workspace!.api.getCanonicalDocument(jobId)
+    if (!current || hashDocument(current) !== compiled.documentHash) throw new Error('The CV changed while its PDF was prepared. Open the preview again.')
+    return { documentHash: compiled.documentHash, pdfBase64: compiled.pdf.toString('base64') }
+  })
   ipcMain.handle('document:measure', async (event, ...args: unknown[]) => {
     trusted(event); if (args.length !== 1) throw new Error('Expected job ID')
     return measureDocumentForJob(analysisIdSchema.parse(args[0]))
@@ -365,28 +359,10 @@ app.whenReady().then(() => {
         if (overwrite.response !== 1) return { ok: false, cancelled: true, message: 'PDF export cancelled; the existing file was kept.' }
         overwriteApproved = true
       }
-      const pdfWindow = new BrowserWindow({ show: false, webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true } })
-      let pdf: Buffer
-      try {
-        await pdfWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(renderDocumentHtml(canonical))}`)
-        await pdfWindow.webContents.executeJavaScript('document.fonts.ready')
-        pdf = await pdfWindow.webContents.printToPDF({ pageSize: 'A4', printBackground: true, preferCSSPageSize: true, margins: { top: 0, bottom: 0, left: 0, right: 0 } })
-      } finally { pdfWindow.destroy() }
-      const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs')
-      const loadingTask = pdfjs.getDocument({ data: new Uint8Array(pdf), useSystemFonts: true })
-      const parsed = await loadingTask.promise
-      const extracted: string[] = [], links = new Set<string>()
-      for (let pageNo = 1; pageNo <= parsed.numPages; pageNo++) {
-        const page = await parsed.getPage(pageNo)
-        extracted.push(...(await page.getTextContent()).items.flatMap(item => 'str' in item && item.str.trim() ? [item.str.trim()] : []))
-        for (const annotation of await page.getAnnotations({ intent: 'display' })) if (annotation.subtype === 'Link' && annotation.url) links.add(annotation.url)
-      }
-      await loadingTask.destroy()
-      if (!parsed.numPages || parsed.numPages > canonical.targetPages || !extracted.length) throw new Error('The rendered PDF failed selectable-text or page-target checks.')
-      const requiredText = canonicalDocumentTextParts(canonical)
-      if (!containsPdfTextInOrder(extracted, requiredText)) throw new Error('The rendered PDF content or reading order did not match the approved CV.')
-      const requiredLinks = [...canonical.identity.links, ...canonical.sections.flatMap(section => section.entries.flatMap(entry => entry.links))].map(link => link.url)
-      if (requiredLinks.some(url => !links.has(url))) throw new Error('A PDF hyperlink target did not survive local validation.')
+      const { pdf } = await compiler.compile(canonical)
+      const inspected = await inspectCompiledPdf(pdf)
+      assertCompiledContent(canonical, inspected)
+      if (inspected.actualPages > canonical.targetPages) throw new Error('The compiled PDF exceeds the approved page target. Return to review and shorten it before exporting.')
       const latest = await workspace!.api.assertDraftExportable(jobId)
       if (!latest.ok || !latest.document || JSON.stringify(latest.document) !== JSON.stringify(canonical)) throw new Error('The approved CV changed during export. No file was written.')
       writePdfAtomically(destination.filePath, pdf, overwriteApproved)

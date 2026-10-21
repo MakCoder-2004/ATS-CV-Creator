@@ -64,10 +64,12 @@ function main() {
   const args = process.argv.slice(2);
   let root = path.resolve(repoRoot, '.tools', 'latex');
   let smoke = false;
+  let packaged = false;
   for (let index = 0; index < args.length; index++) {
     if (args[index] === '--root' && args[index + 1]) root = path.resolve(args[++index]);
     else if (args[index] === '--smoke') smoke = true;
-    else fail('usage: node scripts/verify-latex.cjs [--root <tree>] [--smoke]');
+    else if (args[index] === '--packaged') { packaged = true; root = path.join(repoRoot, 'release', 'win-unpacked', 'resources', 'latex'); }
+    else fail('usage: node scripts/verify-latex.cjs [--root <tree>] [--smoke] [--packaged]');
   }
   if (process.platform !== 'win32') fail('the pinned toolchain is Windows x64; verify it on Windows');
 
@@ -104,11 +106,11 @@ function main() {
     if (!fs.existsSync(path.join(root, filename))) fail(`required bundled TeX Live license file missing: ${filename}`);
   }
   for (const relative of lock.licenses.additionalNoticeFiles) {
-    const file = path.resolve(repoRoot, relative);
+    const file = packaged ? path.join(path.dirname(root), 'licenses', 'latex', path.basename(relative)) : path.resolve(repoRoot, relative);
     if (!file.startsWith(`${repoRoot}${path.sep}`) || !fs.existsSync(file)) fail(`required license/notice file missing: ${relative}`);
   }
   if (smoke) {
-    const template = path.join(repoRoot, 'CV', 'overleaf template');
+    const template = packaged ? path.join(path.dirname(root), 'cv-template') : path.join(repoRoot, 'resources', 'cv-template');
     const work = fs.mkdtempSync(path.join(os.tmpdir(), 'cv-tailor-latex-smoke-'));
     try {
       copyTemplate(template, work);

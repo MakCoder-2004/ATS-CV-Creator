@@ -34,7 +34,7 @@ test('installed app compiles a generated draft with its bundled LaTeX toolchain'
   try {
     // Create a real workspace through the public API. The scripted provider makes this fixture offline and deterministic.
     dev = await electron.launch({
-      args: ['.', '--disable-gpu'],
+      args: [join(process.cwd(), 'out/main/index.js'), '--disable-gpu'],
       timeout: 60000,
       env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: directory, CV_TAILOR_SCRIPTED_ANALYSIS: 'generation' },
     })
@@ -51,7 +51,7 @@ test('installed app compiles a generated draft with its bundled LaTeX toolchain'
       const accepted = await window.workbench.acceptOutboundConsent(consent.token, true, true)
       if (!accepted.ok) throw new Error(accepted.message)
       const analysis = await window.workbench.startAnalysis(consent.token)
-      if (!analysis.ok) throw new Error('Scripted analysis failed.')
+      if (analysis.status !== 'complete') throw new Error(analysis.progress)
       const generation = await window.workbench.generateDraft(consent.token)
       if (!generation.ok) throw new Error(generation.message)
       return { jobId: job.value.id }
@@ -63,6 +63,7 @@ test('installed app compiles a generated draft with its bundled LaTeX toolchain'
     installed = await electron.launch({ executablePath, args: [`--user-data-dir=${directory}`], timeout: 60000 })
     page = await installed.firstWindow()
     await expect(page.locator('[data-ui-ready="true"]')).toBeVisible({ timeout: 30000 })
+    await page.getByRole('button', { name: 'Engineer Example Co', exact: true }).click()
     await expect(page.getByRole('region', { name: 'CV document' }).getByText('Zoë Candidate')).toBeVisible({ timeout: 20000 })
     const canonical = await page.evaluate(id => window.workbench.getCanonicalDocument(id), setup.jobId)
     expect(canonical?.style).toMatchObject({ fontFamily: 'Lato', pageSize: 'Letter' })
@@ -91,8 +92,17 @@ test('installed app compiles a generated draft with its bundled LaTeX toolchain'
     expect(links.flatMap(item => item.subtype === 'Link' && item.url ? [item.url] : [])).toContain('https://example.test/portfolio')
     await loadingTask.destroy()
 
+    await page.getByRole('button', { name: 'Remove TypeScript', exact: true }).click()
     await page.getByRole('button', { name: 'Check page length' }).click()
     await expect(page.getByText(/Fits the selected target/i)).toBeVisible({ timeout: 45000 })
+    await page.getByRole('checkbox', { name: 'I reviewed this CV and its wording.' }).check()
+    await page.getByRole('button', { name: 'Check CV for issues' }).click()
+    await expect(page.getByRole('button', { name: 'Approve CV' })).toBeEnabled()
+    await page.getByRole('button', { name: 'Approve CV' }).click()
+    const preview = page.getByRole('region', { name: 'Compiled PDF preview' })
+    await expect(preview.getByText('1 page', { exact: true })).toBeVisible({ timeout: 30000 })
+    await expect(preview.locator('canvas[data-pdf-page="1"]')).toBeVisible()
+    await page.screenshot({ path: 'test-results/installed-latex-preview.png', fullPage: true })
   } finally {
     await dev?.close().catch(() => {})
     await installed?.close().catch(() => {})

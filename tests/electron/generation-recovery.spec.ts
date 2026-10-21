@@ -58,7 +58,7 @@ test('visible recovery waits for explicit resume after Electron close and reopen
     expect(await page.evaluate(() => window.workbench.getAnalysisUsage().then(value => value.attempts))).toBe(attemptsBefore)
     await recovery.getByRole('button', { name: 'Retry generation' }).click()
     await expect.poll(async () => page.evaluate(() => window.workbench.getAnalysisUsage().then(value => value.attempts)), { timeout: 10000 }).toBe(attemptsBefore + 1)
-    await expect(page.getByLabel('CV review')).toContainText('Finish reviewing', { timeout: 15000 })
+    await expect(page.getByRole('region', { name: 'CV review', exact: true })).toContainText('Finish reviewing', { timeout: 15000 })
     expect(await page.evaluate(jobId => window.workbench.getDraft(jobId).then(value => value?.content.experience.length), setup.jobId)).toBe(1)
     expect(await page.evaluate(jobId => window.workbench.getGenerationRecovery(jobId), setup.jobId)).toBeNull()
   } finally {

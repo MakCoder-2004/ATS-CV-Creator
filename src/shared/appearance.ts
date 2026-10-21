@@ -8,7 +8,7 @@ import type { OutboundConsentAction, OutboundConsentPreview } from './outbound-c
 import type { AnalysisBudgets, AnalysisResult, AnalysisUsage, GenerationRecovery, RecoveryChoice } from './posting-analysis'
 import type { AddDraftItemInput, DraftCorrectionInput, DraftRevision, SuggestedSkillDecision, DraftTailoringCorrection } from './draft'
 import type { FactualCheckReport } from './factual-report'
-import type { CanonicalDocument, DocumentFitReport } from './document'
+import type { CanonicalDocument, DocumentFitReport, DocumentPdf } from './document'
 import type { RegenerationProposal, RegenerationTarget } from './regeneration'
 
 export const appearanceSchema = z.enum(['light', 'dark'])
@@ -79,6 +79,7 @@ export interface WorkbenchAPI {
   correctDraft(input: DraftCorrectionInput): Promise<DraftRevision | null>
   addDraftItem(input: AddDraftItemInput): Promise<DraftRevision | null>
   getCanonicalDocument(jobId: string): Promise<CanonicalDocument | null>
+  getDocumentPdf(jobId: string): Promise<DocumentPdf>
   measureDocument(jobId: string): Promise<DocumentFitReport>
   getDocumentFitReport(jobId: string): Promise<DocumentFitReport | null>
   acceptDocumentCuts(jobId: string, documentHash: string, entryIds: string[]): Promise<{ ok: boolean; message: string; draft?: DraftRevision }>
@@ -86,7 +87,7 @@ export interface WorkbenchAPI {
   setAnalysisBudgets(value: AnalysisBudgets): Promise<AnalysisUsage>
 }
 
-export type WorkbenchStorageAPI = Omit<WorkbenchAPI, 'exportProfile' | 'previewProfileImport' | 'applyProfileImport' | 'cancelProfileImport' | 'exportWorkspaceBackup' | 'previewWorkspaceRestore' | 'applyWorkspaceRestore' | 'cancelWorkspaceRestore' | 'measureDocument' | 'copyOpenRouterApiKey' | 'exportApprovedPdf' | 'exportDraftDocx'> & {
+export type WorkbenchStorageAPI = Omit<WorkbenchAPI, 'exportProfile' | 'previewProfileImport' | 'applyProfileImport' | 'cancelProfileImport' | 'exportWorkspaceBackup' | 'previewWorkspaceRestore' | 'applyWorkspaceRestore' | 'cancelWorkspaceRestore' | 'measureDocument' | 'getDocumentPdf' | 'copyOpenRouterApiKey' | 'exportApprovedPdf' | 'exportDraftDocx'> & {
   saveDocumentFitReport(jobId: string, report: DocumentFitReport): Promise<DocumentFitReport>
   validateProfileImport(input: string): Promise<{ ok: boolean; message: string }>
   replaceProfile(input: string): Promise<{ ok: boolean; message: string; profile?: ProfileSnapshot }>

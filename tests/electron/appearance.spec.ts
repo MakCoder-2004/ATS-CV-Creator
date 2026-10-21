@@ -7,7 +7,7 @@ import { join } from 'node:path'
 // Launch the built app twice, exercising the actual renderer → preload → IPC → SQLite path.
 test('workbench opens and remembers a keyboard-accessible appearance choice', async () => {
   const userData = mkdtempSync(join(tmpdir(), 'cv-tailor-electron-'))
-  const launch = () => electron.launch({ args: ['.'], env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData } })
+  const launch = () => electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData } })
   let first: Awaited<ReturnType<typeof electron.launch>> | undefined
   let reopened: Awaited<ReturnType<typeof electron.launch>> | undefined
   try {

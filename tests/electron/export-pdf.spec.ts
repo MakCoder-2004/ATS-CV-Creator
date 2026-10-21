@@ -3,14 +3,14 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-// The public preload API and visible review flow cross the real renderer, main process, SQLite, printToPDF and filesystem boundaries.
+// The public preload API and visible review flow cross the real renderer, main process, SQLite, bundled pdfLaTeX and filesystem boundaries.
 test('user approves and exports a selectable PDF, while cancellation and overwrite failures preserve existing files', async () => {
   test.setTimeout(120000)
   const root = mkdtempSync(join(tmpdir(), 'cv-tailor-export-pdf-'))
   const userData = join(root, 'workspace'), output = join(root, 'Zoe Candidate - Example Co - Engineer.pdf')
   let app: ElectronApplication | undefined
   try {
-    app = await electron.launch({ args: ['.', '--disable-gpu'], timeout: 60000, env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData, CV_TAILOR_SCRIPTED_ANALYSIS: 'generation' } })
+    app = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js'), '--disable-gpu'], timeout: 60000, env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData, CV_TAILOR_SCRIPTED_ANALYSIS: 'generation' } })
     const page = await app.firstWindow()
     await expect(page.locator('[data-ui-ready="true"]')).toBeVisible({ timeout: 20000 })
     const saved = await page.evaluate(async () => {
@@ -103,7 +103,7 @@ test('user approves and exports a selectable PDF, while cancellation and overwri
     const firstPage = await loaded.getPage(1)
     expect(firstPage.view[2] - firstPage.view[0]).toBeCloseTo(612, 0)
     expect(firstPage.view[3] - firstPage.view[1]).toBeCloseTo(792, 0)
-    const orderedExperience = ['Northstar Systems', 'Platform Engineer', '01/2023 – 06/2024', 'Built dependable service infrastructure.', 'Harbor Technologies', 'Software Engineer', '01/2020 – 12/2022', 'Led a careful platform migration.']
+    const orderedExperience = ['Northstar Systems', 'Jan 2023 – Jun 2024', 'Platform Engineer', 'Built dependable service infrastructure.', 'Harbor Technologies', 'Jan 2020 – Dec 2022', 'Software Engineer', 'Led a careful platform migration.']
     let orderCursor = 0
     for (const part of orderedExperience) { const found = joined.indexOf(part, orderCursor); expect(found, `expected extracted text in canonical order: ${part}`).toBeGreaterThanOrEqual(0); orderCursor = found + part.length }
     expect(targets).toContain('https://example.test/portfolio')

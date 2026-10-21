@@ -7,7 +7,7 @@ import { join } from 'node:path'
 test('education editor persists and clearly labels local-only profile sections', async () => {
   const userData = mkdtempSync(join(tmpdir(), 'cv-tailor-extra-profile-'))
   let app: Awaited<ReturnType<typeof electron.launch>> | undefined
-  const launch = () => electron.launch({ args: ['.'], env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData } })
+  const launch = () => electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData } })
   try {
     app = await launch()
     let page = await app.firstWindow()
