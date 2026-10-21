@@ -1,7 +1,7 @@
 import React, { FormEvent, useEffect, useRef, useState } from 'react'
 import { UserRound } from 'lucide-react'
 import type { ContactInput, ProfileEntry, ProfileEntryInput, ProfileSnapshot, SkillInput, SkillRecord } from '../shared/profile'
-import type { ProfilePdfProposal, ProfilePdfPreview } from '../shared/profile-pdf-import'
+import { profilePdfProposalSchema, type ProfilePdfProposal, type ProfilePdfPreview } from '../shared/profile-pdf-import'
 import { ExperienceEditor } from './ExperienceEditor'
 import { FieldSelect } from './controls/FieldSelect'
 import { MonthYearPicker } from './controls/MonthYearPicker'
@@ -29,6 +29,7 @@ export function ProfileEditor() {
   const [pdfPreview, setPdfPreview] = useState<Extract<ProfilePdfPreview, { ok: true }> | null>(null)
   const [pdfSelected, setPdfSelected] = useState<{ contact: boolean; skills: boolean[]; experience: boolean[]; entries: boolean[]; projects: boolean[] }>({ contact: true, skills: [], experience: [], entries: [], projects: [] })
   const [pdfBusy, setPdfBusy] = useState(false)
+  const [pdfValidationError, setPdfValidationError] = useState('')
 
   function loadLinks(items: Array<string | { label: string; url: string }>) {
     setLinks(items.map(item => ({ key: ++nextLinkKey.current, label: typeof item === 'string' ? item : item.label, url: typeof item === 'string' ? item : item.url })))
@@ -69,6 +70,7 @@ export function ProfileEditor() {
     finally { setPdfBusy(false) }
   }
   function updatePdfProposal(update: (current: ProfilePdfProposal) => ProfilePdfProposal) {
+    setPdfValidationError('')
     setPdfPreview(current => current ? { ...current, proposals: update(current.proposals) } : current)
   }
   async function cancelPdfReview() {
@@ -87,6 +89,13 @@ export function ProfileEditor() {
       experience: pdfPreview.proposals.experience.filter((_, index) => pdfSelected.experience[index]),
       entries: pdfPreview.proposals.entries.filter((_, index) => pdfSelected.entries[index]),
       projects: pdfPreview.proposals.projects.filter((_, index) => pdfSelected.projects[index]) }
+    const validatedProposals = profilePdfProposalSchema.safeParse(proposals)
+    if (!validatedProposals.success) {
+      setPdfValidationError(`Correct or skip selected proposal fields before applying: ${validatedProposals.error.issues.map(issue => `${issue.path.join('.') || 'proposal'}: ${issue.message}`).join('; ')}`)
+      setPdfBusy(false)
+      return
+    }
+    setPdfValidationError('')
     try {
       const result = await window.workbench.applyProfilePdfImport(pdfPreview.token, proposals)
       setPdfPreview(null)
@@ -199,7 +208,7 @@ export function ProfileEditor() {
     <div className="profile-summary"><span className="profile-avatar"><UserRound size={22} aria-hidden="true" /></span><div><strong>{snapshot?.contact?.fullName ?? 'Start your profile'}</strong><p>{snapshot?.contact?.headline ?? 'Your career facts, organized by section.'}</p></div><span className="profile-local-label">Saved on this device</span></div>
     <section className="profile-exchange-toolbar" aria-label="Profile files"><div><strong>Profile files</strong><p>JSON exchange stays separate. CV upload reads a text PDF locally and never sends it to a model.</p></div><div className="profile-exchange-actions"><button className="secondary-button" type="button" onClick={() => void exportProfile()}>Export profile JSON</button><button className="secondary-button" type="button" onClick={() => void previewImport()}>Import profile JSON</button><button className="primary-button" type="button" onClick={() => void uploadPdf()} disabled={pdfBusy}>{pdfBusy ? 'Reading PDF…' : 'Upload CV'}</button></div></section>
     {pdfBusy && <p className="profile-message" role="status" aria-live="polite">Reading the selected PDF on this device…</p>}
-    {pdfPreview && <section className="profile-panel pdf-import-review" role="region" aria-labelledby="pdf-import-title"><div className="panel-heading"><div><span className="context">Local PDF review</span><h2 id="pdf-import-title">Review proposed profile details</h2><p>Correct or skip each group. Nothing is saved until you apply. Source passages may contain sensitive personal data and will be retained only for accepted facts.</p></div></div>
+    {pdfPreview && <section className="profile-panel pdf-import-review" role="region" aria-labelledby="pdf-import-title"><div className="panel-heading"><div><span className="context">Local PDF review</span><h2 id="pdf-import-title">Review proposed profile details</h2><p>Correct or skip each group. Nothing is saved until you apply. Source passages may contain sensitive personal data and will be retained only for accepted facts.</p></div></div>{pdfValidationError && <p className="profile-message error" role="alert">{pdfValidationError}</p>}
       {pdfPreview.proposals.contact && <fieldset className="pdf-proposal"><legend>Contact details</legend><label className="pdf-include"><input type="checkbox" checked={pdfSelected.contact} onChange={event => setPdfSelected(state => ({ ...state, contact: event.target.checked }))} /> Include this proposal</label>
         {(['fullName','headline','email','phone','location'] as const).map(field => <label key={field}>{field === 'fullName' ? 'Full name' : field[0].toUpperCase() + field.slice(1)}<input value={pdfPreview.proposals.contact?.[field] ?? ''} onChange={event => updatePdfProposal(current => ({ ...current, contact: { ...(current.contact ?? {}), [field]: event.target.value } }))} /></label>)}{(pdfPreview.proposals.contact.links ?? []).map((link,index) => <div className="form-grid" key={`contact-link-${index}`}><label>Link name<input value={link.label} onChange={event => updatePdfProposal(current => ({ ...current, contact: { ...current.contact, links: current.contact?.links?.map((item,i) => i === index ? { ...item, label: event.target.value } : item) } }))} /></label><label>Link URL<input value={link.url} onChange={event => updatePdfProposal(current => ({ ...current, contact: { ...current.contact, links: current.contact?.links?.map((item,i) => i === index ? { ...item, url: event.target.value } : item) } }))} /></label></div>)}
         {pdfPreview.proposals.sources.filter(source => source.field.startsWith('contact.')).map((source,index) => <blockquote key={`contact-source-${index}`}><small>Page {source.page} · {source.field}</small><br />{source.passage}</blockquote>)}

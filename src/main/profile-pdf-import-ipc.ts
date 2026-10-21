@@ -38,13 +38,17 @@ export function registerProfilePdfImportIpc(getWindow: () => BrowserWindow, getS
     if (!saved) return profilePdfApplyResultSchema.parse({ ok: false, message: 'This CV review expired. Select the PDF again.' })
     const proposals = profilePdfProposalSchema.safeParse(args[1])
     if (!proposals.success) return profilePdfApplyResultSchema.parse({ ok: false, message: 'Resolve invalid proposal fields or skip them before applying.' })
+    if (proposals.data.contact && !proposals.data.contact.fullName?.trim()) return profilePdfApplyResultSchema.parse({ ok: false, message: 'Add a full name to the contact proposal or skip it before applying.' })
     const cited = new Set(saved.proposals.sources.map(source => JSON.stringify(source)))
     if (proposals.data.sources.some(source => !cited.has(JSON.stringify(source)))) return profilePdfApplyResultSchema.parse({ ok: false, message: 'A source passage changed during review. Select the PDF again.' })
     const unchanged = (section: 'skills' | 'experience' | 'projects' | 'entries') => JSON.stringify(proposals.data[section]) === JSON.stringify(saved.proposals[section])
     const acceptedSources = proposals.data.sources.filter(source => {
       const [group, field] = source.field.split('.')
       if (group === 'contact') return JSON.stringify(saved.proposals.contact?.[field as keyof NonNullable<typeof saved.proposals.contact>]) === JSON.stringify(proposals.data.contact?.[field as keyof NonNullable<typeof proposals.data.contact>])
-      if (group === 'skills') return unchanged('skills')
+      if (group === 'skills') {
+        const name = source.field.slice('skills.'.length), original = saved.proposals.skills.find(skill => skill.name === name), accepted = proposals.data.skills.find(skill => skill.name === name)
+        return JSON.stringify(original) === JSON.stringify(accepted)
+      }
       if (group === 'experience') return unchanged('experience')
       if (group === 'projects') return unchanged('projects')
       if (group === 'entries') return unchanged('entries')

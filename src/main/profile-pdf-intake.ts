@@ -28,12 +28,18 @@ export async function extractProfilePdf(bytes: Uint8Array): Promise<PdfIntake> {
   const worker = new Worker(existsSync(packagedWorker) ? packagedWorker : sourceWorker, { resourceLimits: { maxOldGenerationSizeMb: 192, maxYoungGenerationSizeMb: 32, stackSizeMb: 4 } })
   try {
     return await new Promise<PdfIntake>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('PDF reading exceeded the 5 second limit. Choose a smaller or simpler file.')), profilePdfLimits.timeoutMs)
-      const finish = (action: () => void) => { clearTimeout(timer); action() }
-      worker.once('message', (result: WorkerResult) => finish(() => result.ok ? resolve(result.value) : reject(new Error(result.message))))
+      let timer: ReturnType<typeof setTimeout> | undefined, settled = false
+      const finish = (action: () => void) => { if (settled) return; settled = true; if (timer) clearTimeout(timer); action() }
+      worker.on('message', (result: WorkerResult | { ready: true }) => {
+        if ('ready' in result) {
+          timer = setTimeout(() => finish(() => reject(new Error('PDF reading exceeded the 5 second limit. Choose a smaller or simpler file.'))), profilePdfLimits.timeoutMs)
+          worker.postMessage(Buffer.from(bytes))
+          return
+        }
+        finish(() => result.ok ? resolve(result.value) : reject(new Error(result.message)))
+      })
       worker.once('error', error => finish(() => reject(new Error(`PDF parser worker failed: ${error.message}`))))
       worker.once('exit', code => { if (code !== 0) finish(() => reject(new Error('PDF parser worker stopped unexpectedly.'))) })
-      worker.postMessage(Buffer.from(bytes))
     })
   } finally {
     await worker.terminate()

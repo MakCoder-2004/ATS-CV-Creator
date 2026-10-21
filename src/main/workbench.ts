@@ -333,8 +333,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       const checked = profilePdfProposalSchema.safeParse(input)
       if (!validHash || !checked.success) return { ok: false, message: 'The reviewed CV proposals are invalid. Reopen the PDF and review them again.' }
       const proposals = checked.data
-      const sourcesByField = new Map<string, typeof proposals.sources>()
-      for (const source of proposals.sources) sourcesByField.set(source.field, [...(sourcesByField.get(source.field) ?? []), source])
+      if (proposals.contact && !proposals.contact.fullName?.trim()) return { ok: false, message: 'Add a full name to the contact proposal or skip it before applying.' }
       const associate = (ownerId: string, ownerRevision: number, field: string) => {
         const sourceRows = proposals.sources.filter(source => source.field === field || source.field.startsWith(`${field}.`))
         const insert = db.prepare('INSERT OR IGNORE INTO profile_import_provenance (owner_id,owner_revision,field,source_hash,page,passage,created_at) VALUES (?,?,?,?,?,?,?)')

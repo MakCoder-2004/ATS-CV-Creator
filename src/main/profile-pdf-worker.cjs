@@ -1,6 +1,7 @@
 const { parentPort } = require('node:worker_threads')
 const { createHash } = require('node:crypto')
 
+parentPort.postMessage({ ready: true })
 parentPort.on('message', async bytes => {
   let loading
   try {
