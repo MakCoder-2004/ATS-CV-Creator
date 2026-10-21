@@ -7,7 +7,9 @@ export const generationRecoverySchema = z.object({ jobId: z.string().uuid(), run
 export const recoveryChoiceSchema = z.enum(['resume', 'retry-uncertain'])
 export type GenerationRecovery = z.infer<typeof generationRecoverySchema>
 export type RecoveryChoice = z.infer<typeof recoveryChoiceSchema>
-export const analysisResultSchema = z.object({ jobId: z.string().uuid(), runId: z.string().uuid().optional(), status: analysisStatusSchema, analysis: postingAnalysisSchema.nullable(), progress: z.string(), attempts: z.number().int().nonnegative(), error: z.string().optional(), cacheHit: z.boolean() }).strict()
+export const generationStepSchema = z.enum(['parse-posting', 'score-evidence', 'select-content', 'tailor-paragraphs', 'verify-claims', 'check-document'])
+export type GenerationStep = z.infer<typeof generationStepSchema>
+export const analysisResultSchema = z.object({ generationStep: generationStepSchema.optional(), completedSteps: z.array(generationStepSchema).optional(), jobId: z.string().uuid(), runId: z.string().uuid().optional(), status: analysisStatusSchema, analysis: postingAnalysisSchema.nullable(), progress: z.string(), attempts: z.number().int().nonnegative(), error: z.string().optional(), cacheHit: z.boolean() }).strict()
 export const analysisBudgetsSchema = z.object({
   minimumSpacingMs: z.number().int().min(0).max(60000),
   rateLimitAttempts: z.number().int().min(1).max(100),

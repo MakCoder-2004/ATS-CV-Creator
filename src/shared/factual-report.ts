@@ -1,7 +1,7 @@
 import { z } from 'zod'
 
 export const factualFindingSchema = z.object({
-  code: z.enum(['schema', 'generation-failure', 'missing-citation', 'invalid-citation', 'foreign-citation', 'wrong-parent', 'unsupported-skill', 'locked-field-mismatch', 'unsupported-number', 'stale-source', 'semantic-unsupported']),
+  code: z.enum(['schema', 'generation-failure', 'missing-citation', 'invalid-citation', 'foreign-citation', 'wrong-parent', 'unsupported-skill', 'unconfirmed-skill', 'locked-field-mismatch', 'unsupported-number', 'stale-source', 'semantic-unsupported']),
   message: z.string(),
   itemPath: z.string(),
   evidenceId: z.string().optional(),
