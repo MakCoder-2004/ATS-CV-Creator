@@ -2,7 +2,7 @@
 
 **Question:** Does the five-stage flow clearly separate posting analysis, CV generation and human decisions about newly suggested skills, with a better document template?
 
-**Status:** awaiting user feedback. This is not production implementation or an approved design change.
+**Status:** approved by the user (“yes that is exactly what i want, go on”). Production implementation is tracked in GitHub issue #25. This branch remains a throwaway primary design source, not production code.
 
 ## Run
 
@@ -66,4 +66,4 @@ Branch: `prototype/cv-creation-flow`.
 
 Worktree: `E:/cv-tailor-flow-preview`.
 
-Do not merge this branch into main. Record the user's selected arrangement and feedback here before creating implementation issues or making production changes. No implementation issue has been created yet because design approval is pending.
+Do not merge this branch into main. The user approved the five-stage flow, analysis pause, draft-local skill decisions, loading treatment and PDF-style document direction. Production uses education-first order closest to the supplied reference (C), with the target headline and Professional summary above it. Implementation issue: https://github.com/MakCoder-2004/ATS-CV-Creator/issues/25. Preserve all three arrangements here as primary design evidence; the prototype's simulated state is not implementation authority.
