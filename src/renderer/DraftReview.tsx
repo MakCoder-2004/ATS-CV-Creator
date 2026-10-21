@@ -1,4 +1,4 @@
-import { documentSectionNames, documentSectionDisplayName, groupedDocumentSkills, skillGroupFor, skillGroups, splitDocumentBullets, type CanonicalDocument } from '../shared/document'
+import { documentSectionNames, documentSectionDisplayName, groupedDocumentSkills, skillGroupFor, skillGroups, splitDocumentBullets, type CanonicalDocument, type CanonicalDocumentEntry } from '../shared/document'
 import type { ReactNode } from 'react'
 import type { DraftRevision } from '../shared/draft'
 
@@ -7,13 +7,17 @@ export function DraftDocument({ document, selectedId, onSelectEntry, approved = 
   const sections = document.sections.filter(section => section.name !== 'Certificates').map(section => ({ ...section, entries: section.entries }))
   if (pending.length && !sections.some(section => section.name === 'Skills')) { sections.push({ name: 'Skills', entries: [] }); sections.sort((a, b) => documentSectionNames.indexOf(a.name) - documentSectionNames.indexOf(b.name)) }
   const selectable = (id: string, label: string, content: ReactNode) => onSelectEntry ? <button type="button" id={`cv-review-${id}`} className={`paper-entry-select${selectedId === id ? ' is-selected' : ''}`} aria-label={`Review sources for ${label}`} aria-pressed={selectedId === id} onClick={() => onSelectEntry(id)}>{content}</button> : content
+  const secondaryRow = (entry: CanonicalDocumentEntry) => {
+    const row = <span className="paper-organization paper-secondary-row"><em>{entry.organization ? entry.heading : ''}</em>{entry.grade && <em className="paper-grade">{entry.grade}</em>}</span>
+    return !entry.text && entry.grade ? selectable(entry.id, entry.heading, row) : row
+  }
   return <article className={`paper paper--canonical paper--${document.style.pageSize.toLowerCase()} paper--${document.style.fontFamily.toLowerCase()}`} aria-label={approved ? 'Approved CV review layout' : 'Draft CV review layout'}>
     <header className="paper-header"><strong>{document.identity.name}</strong>{document.identity.contact.length > 0 && <span>{document.identity.contact.join(' | ')}</span>}{document.identity.links.length > 0 && <span>{document.identity.links.map(link => link.label).join(' | ')}</span>}</header>
     {sections.filter(section => section.entries.length || section.name === 'Skills' && pending.length).map(section => <section className={`source-section${section.name === 'Skills' ? ' paper-skills' : ''}`} key={section.name}><h2>{documentSectionDisplayName(section.name)}</h2>
       {section.name === 'Skills' ? <Skills entries={section.entries} selectable={selectable} pending={pending} /> : section.entries.map(entry => <div className={`draft-paper-entry paper-entry--${section.name.toLowerCase()}`} key={entry.id}>
-        <span className="draft-locked-facts"><span><strong>{section.name === 'Projects' ? entry.heading : entry.organization || entry.heading}</strong>{section.name === 'Projects' && !!entry.technologies?.length && <span className="paper-project-tools"> | <em>{entry.technologies.join(', ')}</em></span>}</span>{entry.dates && <time>{entry.dates}</time>}</span>{section.name !== 'Projects' && entry.organization && <span className="paper-organization"><em>{entry.heading}</em></span>}
-        {entry.reviewItems?.length ? entry.reviewItems.map(item => selectable(item.id, entry.heading, <span className="paper-bullets">{item.bullets.map((bullet, index) => <span className="paper-bullet" key={index}>{bullet}</span>)}</span>)) : selectable(entry.id, entry.heading, entry.text && <span className="paper-bullets">{(entry.bullets ?? splitDocumentBullets(entry.text)).map((bullet, index) => <span className="paper-bullet" key={index}>{bullet}</span>)}</span>)}
-        {entry.links.map(link => <a key={link.url} href={link.url}>{link.label}</a>)}
+        <span className="draft-locked-facts"><span><strong>{section.name === 'Projects' ? entry.heading : entry.organization || entry.heading}</strong>{section.name === 'Projects' && !!entry.technologies?.length && <span className="paper-project-tools"> | <em>{entry.technologies.join(', ')}</em></span>}</span><span className="paper-heading-meta">{entry.dates && <time>{entry.dates}</time>}{section.name === 'Projects' && entry.links.map(link => <a key={link.url} href={link.url}>{link.label}</a>)}</span></span>{section.name !== 'Projects' && (entry.organization || entry.grade) && secondaryRow(entry)}
+        {entry.reviewItems?.length ? entry.reviewItems.map(item => selectable(item.id, entry.heading, <span className="paper-bullets">{item.bullets.map((bullet, index) => <span className="paper-bullet" key={index}>{bullet}</span>)}</span>)) : entry.text ? selectable(entry.id, entry.heading, <span className="paper-bullets">{(entry.bullets ?? splitDocumentBullets(entry.text)).map((bullet, index) => <span className="paper-bullet" key={index}>{bullet}</span>)}</span>) : null}
+        {section.name !== 'Projects' && entry.links.map(link => <a key={link.url} href={link.url}>{link.label}</a>)}
       </div>)}
     </section>)}
   </article>

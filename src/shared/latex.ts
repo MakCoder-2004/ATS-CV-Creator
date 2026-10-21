@@ -10,9 +10,9 @@ function link(url: string, label: string): string {
   const target = escapeLatex(new URL(url).href).replaceAll('\\textasciitilde{}', '\\string~')
   return `\\href{${target}}{\\underline{${escapeLatex(label)}}}`
 }
-const itemList = (entry: CanonicalDocumentEntry) => {
+const itemList = (entry: CanonicalDocumentEntry, includeLinks = true) => {
   const bullets = entry.bullets?.length ? entry.bullets : splitDocumentBullets(entry.text)
-  const items = [...bullets.map(bullet => `    \\resumeItem{${escapeLatex(bullet)}}`), ...(entry.links.length ? [`    \\resumeItem{${entry.links.map(value => link(value.url, value.label)).join(' \\quad ')}}`] : [])]
+  const items = [...bullets.map(bullet => `    \\resumeItem{${escapeLatex(bullet)}}`), ...(includeLinks && entry.links.length ? [`    \\resumeItem{${entry.links.map(value => link(value.url, value.label)).join(' \\quad ')}}`] : [])]
   return items.length ? `\\resumeItemListStart\n${items.join('\n')}\n\\resumeItemListEnd` : ''
 }
 /** File names and commands are application-owned; only macro argument text varies. */
@@ -35,10 +35,11 @@ export function renderLatexSections(input: CanonicalDocument): Record<'heading.t
       files['skills.tex'] = `\\section{Technical Skills}\n\\begin{itemize}[leftmargin=0.15in, label={}]\n    \\small{\\item{\n${groups}\n    }}\n\\end{itemize}\n`
     } else {
       const entries = section.entries.map(entry => {
+        const projectRight = [escapeLatex(entry.dates ?? ''), ...entry.links.map(value => link(value.url, value.label))].filter(Boolean).join(' \\quad ')
         const heading = section.name === 'Projects'
-          ? `\\resumeProjectHeading\n    {\\textbf{${escapeLatex(entry.heading)}}${entry.technologies?.length ? ` $|$ \\emph{${entry.technologies.map(escapeLatex).join(', ')}}` : ''}}{${escapeLatex(entry.dates ?? '')}}`
-          : `\\resumeSubheading\n    {${escapeLatex(entry.organization || entry.heading)}}{${escapeLatex(entry.dates ?? '')}}\n    {${escapeLatex(entry.organization ? entry.heading : '')}}{}`
-        return `${heading}\n${itemList(entry)}`
+          ? `\\${entry.links.length ? 'resumeLinkedProjectHeading' : 'resumeProjectHeading'}\n    {\\textbf{${escapeLatex(entry.heading)}}${entry.technologies?.length ? ` $|$ \\emph{${entry.technologies.map(escapeLatex).join(', ')}}` : ''}}{${projectRight}}`
+          : `\\resumeSubheading\n    {${escapeLatex(entry.organization || entry.heading)}}{${escapeLatex(entry.dates ?? '')}}\n    {${escapeLatex(entry.organization ? entry.heading : '')}}{${escapeLatex(entry.grade ?? '')}}`
+        return `${heading}\n${itemList(entry, section.name !== 'Projects')}`
       }).join('\n\n')
       files[`${section.name.toLowerCase()}.tex` as 'education.tex' | 'experience.tex' | 'projects.tex'] = `\\section{${section.name}}\n\\resumeSubHeadingListStart\n\n${entries}\n\n\\resumeSubHeadingListEnd\n`
     }

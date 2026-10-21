@@ -2,9 +2,11 @@ CV template attribution
 
 The supplied Overleaf template identifies its author as Audric Serador,
 credits inspiration to https://github.com/sb2nov/resume, and declares MIT.
-The supplied resume.tex, custom-commands.tex and section fixtures are retained
-without layout modifications. Application-generated content replaces only the
-section files. For extended Latin content, compilation selects T1 font encoding
+The supplied resume.tex, original custom commands and section fixtures retain
+their layout. An additional linked-project heading command supports the user's
+requested right-aligned project hyperlinks, wrapping long names/tools safely.
+Application-generated content replaces the section files; education CGPA uses
+the original subheading's second-row right column. For extended Latin content, compilation selects T1 font encoding
 to preserve accented characters in PDF text extraction; layout macros, margins,
 font family and document size remain those of the supplied template.
 

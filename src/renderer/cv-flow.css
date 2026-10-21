@@ -84,6 +84,10 @@
 .cv-workbench-start .draft-paper-entry { margin-bottom: 8px; }
 .cv-workbench-start .draft-locked-facts { gap: 12px; color: var(--paper-ink); line-height: 1.4; }
 .cv-workbench-start .draft-locked-facts strong { color: var(--paper-ink); }
+.cv-workbench-start .draft-locked-facts > span:first-child { min-width: 0; }
+.cv-workbench-start .paper-heading-meta { display: flex; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; gap: 8px; max-width: 45%; }
+.cv-workbench-start .paper-secondary-row { display: flex; justify-content: space-between; gap: 12px; }
+.cv-workbench-start .paper-grade { flex-shrink: 0; text-align: right; }
 .cv-workbench-start .draft-locked-facts time { flex-shrink: 0; font-size: .95em; }
 .cv-workbench-start .paper-organization { display: block; margin: 4px 0; font-size: .95em; }
 .cv-workbench-start .paper-entry--education .paper-organization { font-style: italic; }

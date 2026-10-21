@@ -2,7 +2,8 @@ import { AlignmentType, Document, ExternalHyperlink, HeadingLevel, Packer, Parag
 import JSZip from 'jszip'
 import { documentSectionDisplayName, groupedDocumentSkills, visibleDocumentSections, splitDocumentBullets, type CanonicalDocument, type CanonicalDocumentEntry } from '../shared/document'
 
-const hyperlinkParagraph = (links: CanonicalDocumentEntry['links'], alignment: 'center' | 'left' = 'left') => new Paragraph({ alignment, children: links.flatMap((link, index) => [...(index ? [new TextRun(' · ')] : []), new ExternalHyperlink({ link: link.url, children: [new TextRun({ text: link.label, style: 'Hyperlink' })] })]), spacing: { after: 60 } })
+const hyperlinkRuns = (links: CanonicalDocumentEntry['links']) => links.flatMap((link, index) => [...(index ? [new TextRun(' · ')] : []), new ExternalHyperlink({ link: link.url, children: [new TextRun({ text: link.label, style: 'Hyperlink' })] })])
+const hyperlinkParagraph = (links: CanonicalDocumentEntry['links'], alignment: 'center' | 'left' = 'left') => new Paragraph({ alignment, children: hyperlinkRuns(links), spacing: { after: 60 } })
 
 /** Builds an editable, single-column Word document from the approved canonical version. */
 export async function renderCanonicalDocx(document: CanonicalDocument): Promise<Buffer> {
@@ -16,11 +17,11 @@ export async function renderCanonicalDocx(document: CanonicalDocument): Promise<
       continue
     }
     for (const entry of section.entries) {
-      paragraphs.push(new Paragraph({ children: [new TextRun({ text: section.name === 'Projects' ? entry.heading : entry.organization || entry.heading, bold: true }), ...(section.name === 'Projects' && entry.technologies?.length ? [new TextRun({ text: ` | ${entry.technologies.join(', ')}`, italics: true })] : []), ...(entry.dates ? [new TextRun({ text: `\t${entry.dates}` })] : [])], tabStops: [{ type: 'right', position: 10800 }], spacing: { after: 30 }, keepNext: true }))
-      if (section.name !== 'Projects' && entry.organization) paragraphs.push(new Paragraph({ children: [new TextRun({ text: entry.heading, italics: true })], spacing: { after: 30 }, keepNext: Boolean(entry.text || entry.bullets?.length) }))
+      paragraphs.push(new Paragraph({ children: [new TextRun({ text: section.name === 'Projects' ? entry.heading : entry.organization || entry.heading, bold: true }), ...(section.name === 'Projects' && entry.technologies?.length ? [new TextRun({ text: ` | ${entry.technologies.join(', ')}`, italics: true })] : []), ...(entry.dates ? [new TextRun({ text: `\t${entry.dates}` })] : []), ...(section.name === 'Projects' && entry.links.length ? [new TextRun(entry.dates ? ' · ' : '\t'), ...hyperlinkRuns(entry.links)] : [])], tabStops: [{ type: 'right', position: 10800 }], spacing: { after: 30 }, keepNext: true }))
+      if (section.name !== 'Projects' && (entry.organization || entry.grade)) paragraphs.push(new Paragraph({ children: [new TextRun({ text: entry.organization ? entry.heading : '', italics: true }), ...(entry.grade ? [new TextRun({ text: `\t${entry.grade}`, italics: true })] : [])], tabStops: [{ type: 'right', position: 10800 }], spacing: { after: 30 }, keepNext: Boolean(entry.text || entry.bullets?.length) }))
       const bullets = entry.bullets?.length ? entry.bullets : splitDocumentBullets(entry.text)
       for (const bullet of bullets) paragraphs.push(new Paragraph({ text: bullet, bullet: { level: 0 }, indent: { left: 360, hanging: 180 }, spacing: { after: 30 } }))
-      if (entry.links.length) paragraphs.push(hyperlinkParagraph(entry.links))
+      if (section.name !== 'Projects' && entry.links.length) paragraphs.push(hyperlinkParagraph(entry.links))
     }
   }
   const doc = new Document({

@@ -23,11 +23,12 @@ test('visible CV creation reviews new skills, preserves profile evidence, and ex
       const contact = await window.workbench.saveContact({ fullName: 'Ada Example', headline: 'Software Engineer', email: 'ada@example.test' })
       const skill = await window.workbench.saveSkill({ name: 'Python', category: 'Programming' })
       const role = await window.workbench.saveExperience({ kind: 'employment', title: 'Software Engineer', organization: 'Example Systems', startDate: '2021-01', endDate: '2024-06', description: 'Built Python APIs and maintained Docker deployments.' })
-      const project = await window.workbench.saveProject({ name: 'Research assistant', description: 'Classified project intent with a natural-language processing pipeline.', technologies: [{ text: 'Python' }, { text: 'spaCy' }] })
+      const education = await window.workbench.saveProfileEntry({ section: 'education', title: 'B.Sc. in Computer Science (Data Science)', institution: 'Alexandria University, Egypt', startDate: '2023', endDate: '2027', description: 'CGPA: 3.3 | 2023 - 2027' })
+      const project = await window.workbench.saveProject({ name: 'Research assistant', description: 'Classified project intent with a natural-language processing pipeline.', technologies: [{ text: 'Python' }, { text: 'spaCy' }], links: [{ label: 'GitHub', url: 'https://github.com/example/research' }] })
       const job = await window.workbench.saveJob({ title: 'AI/ML Developer Level II', company: 'Northstar AI', description: 'Build Python RASA services on Google Cloud Platform. Apply spaCy NLP to product data.' })
-      return { contact, skill, role, project, job }
+      return { contact, skill, role, education, project, job }
     })
-    expect(seeded.contact.ok && seeded.skill.ok && seeded.role.ok && seeded.project.ok && seeded.job.ok).toBe(true)
+    expect(seeded.contact.ok && seeded.skill.ok && seeded.role.ok && seeded.education.ok && seeded.project.ok && seeded.job.ok).toBe(true)
     const jobId = seeded.job.ok ? seeded.job.value.id : ''
     await page.reload()
     await expect(page.locator('[data-ui-ready="true"]')).toBeVisible()
@@ -52,11 +53,14 @@ test('visible CV creation reviews new skills, preserves profile evidence, and ex
     await expect(preview).toContainText('Example Systems')
     await expect(preview).toContainText('Python')
     await expect(preview).toContainText('spaCy')
-    await expect(preview.locator('h2')).toHaveText(['Experience', 'Projects', 'Technical Skills'])
+    await expect(preview.locator('h2')).toHaveText(['Education', 'Experience', 'Projects', 'Technical Skills'])
     await expect(preview).not.toContainText('Professional summary')
     await expect(preview).not.toContainText('Certificates')
     await expect(preview).toHaveClass(/paper--letter/)
     await expect(preview).toHaveCSS('font-family', 'Lato, Arial, sans-serif')
+    await expect(preview.locator('.paper-grade')).toHaveText('CGPA: 3.3')
+    await expect(preview.locator('.paper-entry--education .paper-bullets')).toHaveCount(0)
+    await expect(preview.locator('.paper-entry--projects .paper-heading-meta').getByRole('link', { name: 'GitHub' })).toBeVisible()
     await expect.poll(() => page.evaluate(id => window.workbench.getDocumentFitReport(id).then(report => report?.actualPages ?? 0), jobId), { timeout: 45000 }).toBeGreaterThan(0)
     const draftBeforeDecisions = await page.evaluate(id => window.workbench.getDraft(id), jobId)
     const generatedDraft = draftBeforeDecisions as (NonNullable<typeof draftBeforeDecisions> & { tailoring?: { headline?: string; summary?: string } }) | null
@@ -138,7 +142,7 @@ test('visible CV creation reviews new skills, preserves profile evidence, and ex
     const pdf = await pdfjs.getDocument({ data: new Uint8Array(readFileSync(pdfPath)), useSystemFonts: true }).promise
     const pdfText = (await Promise.all(Array.from({ length: pdf.numPages }, async (_, index) => (await (await pdf.getPage(index + 1)).getTextContent()).items.flatMap(item => 'str' in item ? [item.str] : [])))).flat().join(' ')
     const docx = await extractCanonicalDocx(readFileSync(docxPath))
-    for (const text of ['Software Engineer', 'Built Python APIs and maintained reliable deployments.', 'Research assistant', 'RASA', 'Technical Skills']) {
+    for (const text of ['Software Engineer', 'Built Python APIs and maintained reliable deployments.', 'Research assistant', 'CGPA: 3.3', 'GitHub', 'RASA', 'Technical Skills']) {
       expect(pdfText).toContain(text)
       expect(docx.text.join(' ')).toContain(text)
     }

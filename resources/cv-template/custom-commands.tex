@@ -39,3 +39,11 @@
 
 \definecolor{Black}{RGB}{0, 0, 0}
 \newcommand{\seticon}[1]{\textcolor{Black}{\csname #1\endcsname}}
+
+% Project links occupy the right heading column; long names/tools wrap on the left.
+\newcommand{\resumeLinkedProjectHeading}[2]{
+    \item
+    \begin{tabularx}{0.97\textwidth}[t]{@{}>{\raggedright\arraybackslash}Xr@{}}
+      \small#1 & #2 \\
+    \end{tabularx}\vspace{-7pt}
+}

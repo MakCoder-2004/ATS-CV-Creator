@@ -84,7 +84,7 @@ test('canonical text parts reflect export reading order, visible headings and st
   ] }) as CanonicalDocument
   expect(canonicalDocumentTextParts(parityDocument)).toEqual([
     'Zoë <Candidate>', 'zoe@example.test', 'Portfolio',
-    'Projects', 'Project', '|', 'TypeScript, React', '2024', 'Original marker text', 'Project site',
+    'Projects', 'Project', '|', 'TypeScript, React', '2024', 'Project site', 'Original marker text',
     'Technical Skills', 'Languages:', 'TypeScript'
   ])
   const html = renderDocumentHtml(parityDocument)
