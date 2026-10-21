@@ -22,7 +22,7 @@ import { createHash } from 'node:crypto'
 import { z } from 'zod'
 import { analysisBudgetsSchema, analysisResultSchema, analysisUsageSchema, defaultAnalysisBudgets, generationRecoverySchema, postingAnalysisSchema, type AnalysisBudgets, type AnalysisResult, type RecoveryChoice } from '../shared/posting-analysis'
 import { pacificDay } from '../shared/pacific-day'
-import { addDraftItemInputSchema, draftCorrectionInputSchema, draftRevisionSchema, type DraftRevision } from '../shared/draft'
+import { addDraftItemInputSchema, draftCorrectionInputSchema, draftRevisionSchema, suggestedSkillDecisionSchema, draftTailoringCorrectionSchema, type DraftRevision } from '../shared/draft'
 import { CitationValidationError, runSourceLinkedGraph } from './source-linked-generation'
 import { prepareDraftInputs } from './draft-inputs'
 import { checkDraftFacts } from './factual-verification'
@@ -895,6 +895,34 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       tx()
       return { ok: false, message: next.progress, proposal: regenerationProposalSchema.parse({ ...proposal, status: 'accepted', progress: 'Proposal accepted. PDF page measurement is pending at the application boundary.' }), draft: next }
     },
+    async decideSuggestedSkill(input: { jobId: string; draftId: string; skillId: string; decision: 'pending' | 'confirmed' | 'removed' }) {
+      const parsed = suggestedSkillDecisionSchema.safeParse(input)
+      if (!parsed.success) return { ok: false, message: 'Choose a valid suggestion decision.' }
+      const prior = await this.getDraft(parsed.data.jobId)
+      if (!prior || prior.id !== parsed.data.draftId) return { ok: false, message: 'This draft changed; reopen the current draft before deciding.' }
+      const suggestions = [...(prior.suggestedSkills ?? [])], index = suggestions.findIndex(item => item.id === parsed.data.skillId)
+      if (index < 0) return { ok: false, message: 'This skill suggestion is no longer available.' }
+      suggestions[index] = { ...suggestions[index], status: parsed.data.decision, ...(parsed.data.decision === 'pending' ? { decidedAt: undefined } : { decidedAt: new Date().toISOString() }) }
+      const next = draftRevisionSchema.parse({ ...prior, id: randomUUID(), revision: prior.revision + 1, suggestedSkills: suggestions, approved: false, approval: undefined, checkReport: undefined, status: 'blocked', progress: 'Skill review decision saved. Run checks and review the current draft again.' })
+      const report = preserveKnownFindings(checkDraftFacts(next), prior)
+      const checked = draftRevisionSchema.parse({ ...next, status: report.passed && !suggestions.some(item => item.status === 'pending') ? 'unverified' : 'blocked', checkReport: report })
+      db.prepare('INSERT INTO draft_revisions (id,job_id,revision,data) VALUES (?,?,?,?)').run(checked.id, checked.jobId, checked.revision, JSON.stringify(checked))
+      db.prepare('DELETE FROM document_fit_reports WHERE job_id = ?').run(checked.jobId)
+      return { ok: true, message: 'Skill decision saved in this draft only.', draft: checked }
+    },
+    async correctDraftTailoring(input: { jobId: string; draftId: string; field: 'headline' | 'summary'; text: string }) {
+      const parsed = draftTailoringCorrectionSchema.safeParse(input)
+      if (!parsed.success || (parsed.success && parsed.data.field === 'headline' && parsed.data.text.length > 160)) return { ok: false, message: 'Enter a headline of at most 160 characters or valid summary wording.' }
+      const prior = await this.getDraft(parsed.data.jobId)
+      if (!prior || prior.id !== parsed.data.draftId || !prior.tailoring) return { ok: false, message: 'This draft changed or has no tailored narrative to edit.' }
+      const tailoring = parsed.data.field === 'headline' ? { ...prior.tailoring, headline: parsed.data.text } : { ...prior.tailoring, summary: { ...prior.tailoring.summary, text: parsed.data.text } }
+      const next = draftRevisionSchema.parse({ ...prior, id: randomUUID(), revision: prior.revision + 1, tailoring, approved: false, approval: undefined, checkReport: undefined, status: 'unverified', progress: 'Tailored narrative corrected locally. Recheck and remeasure before approval.' })
+      const report = preserveKnownFindings(checkDraftFacts(next), prior)
+      const checked = draftRevisionSchema.parse({ ...next, status: report.passed ? 'unverified' : 'blocked', checkReport: report })
+      db.prepare('INSERT INTO draft_revisions (id,job_id,revision,data) VALUES (?,?,?,?)').run(checked.id, checked.jobId, checked.revision, JSON.stringify(checked))
+      db.prepare('DELETE FROM document_fit_reports WHERE job_id = ?').run(checked.jobId)
+      return { ok: true, message: 'Tailored narrative saved as a new draft revision.', draft: checked }
+    },
     async correctDraft(input: { jobId: string; section: 'education' | 'experience' | 'projects' | 'skills' | 'certificates'; index: number; text: string }) {
       const parsed = draftCorrectionInputSchema.safeParse(input)
       if (!parsed.success) return null
@@ -952,6 +980,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
     async approveDraft(jobId: string) {
       const draft = await this.getDraft(jobId)
       if (!draft) return { ok: false, message: 'There is no saved draft to approve.' }
+      if ((draft.suggestedSkills ?? []).some(skill => skill.status === 'pending')) return { ok: false, message: 'Confirm or remove every suggested skill before approval.' }
       const savedReport = draft.checkReport
       const expectedEvidenceHash = createHash('sha256').update(JSON.stringify([...draft.evidence].sort((a, b) => a.evidenceId.localeCompare(b.evidenceId)))).digest('hex')
       const stale = currentSourceStatus(draft)
@@ -971,6 +1000,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
     async assertDraftExportable(jobId: string) {
       const draft = await this.getDraft(jobId), canonical = await this.getCanonicalDocument(jobId)
       if (!draft || !canonical || !draft.approved || !draft.approval) return { ok: false, message: 'Approve the current canonical document before export.' }
+      if ((draft.suggestedSkills ?? []).some(skill => skill.status === 'pending')) return { ok: false, message: 'Confirm or remove every suggested skill before export.' }
       const report = await this.checkDraft(jobId), fit = await this.getDocumentFitReport(jobId)
       const contentHash = createHash('sha256').update(JSON.stringify(canonical)).digest('hex')
       if (!report?.passed || !fit || fit.overflow || fit.actualPages > fit.targetPages || draft.approval.contentHash !== contentHash || draft.approval.evidenceHash !== report.evidenceRevisionHash || draft.approval.targetPages !== canonical.targetPages || draft.approval.checkHash !== createHash('sha256').update(JSON.stringify({ draftId: report.draftId, draftRevision: report.draftRevision, evidenceRevisionHash: report.evidenceRevisionHash, passed: report.passed, findings: report.findings })).digest('hex')) return { ok: false, message: 'Approval is stale or current checks/page fit no longer pass. Review and approve the current document again.' }

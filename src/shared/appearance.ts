@@ -6,7 +6,7 @@ import type { JobInput, JobRecord, JobSaveResult } from './jobs'
 import type { ProfileExchangeResult } from './profile-exchange'
 import type { OutboundConsentAction, OutboundConsentPreview } from './outbound-consent-contract'
 import type { AnalysisBudgets, AnalysisResult, AnalysisUsage, GenerationRecovery, RecoveryChoice } from './posting-analysis'
-import type { AddDraftItemInput, DraftCorrectionInput, DraftRevision } from './draft'
+import type { AddDraftItemInput, DraftCorrectionInput, DraftRevision, SuggestedSkillDecision, DraftTailoringCorrection } from './draft'
 import type { FactualCheckReport } from './factual-report'
 import type { CanonicalDocument, DocumentFitReport } from './document'
 import type { RegenerationProposal, RegenerationTarget } from './regeneration'
@@ -74,6 +74,8 @@ export interface WorkbenchAPI {
   assertDraftExportable(jobId: string): Promise<{ ok: boolean; message: string; document?: CanonicalDocument }>
   exportApprovedPdf(jobId: string): Promise<{ ok: boolean; cancelled: boolean; message: string }>
   exportDraftDocx(jobId: string): Promise<{ ok: boolean; cancelled: boolean; message: string; path?: string }>
+  decideSuggestedSkill(input: SuggestedSkillDecision): Promise<{ ok: boolean; message: string; draft?: DraftRevision }>
+  correctDraftTailoring(input: DraftTailoringCorrection): Promise<{ ok: boolean; message: string; draft?: DraftRevision }>
   correctDraft(input: DraftCorrectionInput): Promise<DraftRevision | null>
   addDraftItem(input: AddDraftItemInput): Promise<DraftRevision | null>
   getCanonicalDocument(jobId: string): Promise<CanonicalDocument | null>

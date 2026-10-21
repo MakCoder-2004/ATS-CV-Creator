@@ -22,6 +22,12 @@ export function checkDraftFacts(draft: DraftRevision) {
   const parsed = draftContentSchema.safeParse(draft.content)
   if (!parsed.success) findings.push({ code: 'schema', itemPath: 'content', message: 'Draft content does not match the required five-section schema.', correction: 'Correct the malformed section or item and rerun factual checks.' })
   const evidence = new Map(draft.evidence.map(item => [item.evidenceId, item]))
+  for (const suggestion of draft.suggestedSkills ?? []) if (suggestion.status === 'pending') findings.push({ code: 'unconfirmed-skill', itemPath: `suggestedSkills.${suggestion.id}`, message: `Skill “${suggestion.name}” must be confirmed or removed before approval.`, correction: 'Confirm this skill as your declaration or remove the suggestion.' })
+  for (const [index, citation] of (draft.tailoring?.summary.citations ?? []).entries()) {
+    const source = evidence.get(citation.evidenceId)
+    if (!source) findings.push({ code: 'foreign-citation', itemPath: `tailoring.summary[${index}]`, evidenceId: citation.evidenceId, message: 'Summary citation is outside the frozen evidence revisions.', correction: 'Use only saved evidence included in this draft.' })
+    else if (source.revision !== citation.revision) findings.push({ code: 'invalid-citation', itemPath: `tailoring.summary[${index}]`, evidenceId: citation.evidenceId, message: 'Summary citation revision does not match its frozen source.', correction: 'Use the source revision saved in this draft.' })
+  }
   const parents = new Map<string, string>()
   for (const parent of [...draft.lockedFields.experience, ...draft.lockedFields.projects]) for (const sourceId of parent.sourceIds ?? [parent.evidenceId]) parents.set(sourceId, parent.evidenceId)
   const expectedParents: Record<string, Array<{ evidenceId: string; sourceIds?: string[] }>> = { experience: draft.lockedFields.experience, projects: draft.lockedFields.projects }

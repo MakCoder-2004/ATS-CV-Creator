@@ -1,9 +1,10 @@
 import { StateGraph, Annotation, START, END, type BaseCheckpointSaver } from '@langchain/langgraph'
 import { z } from 'zod'
+import { randomUUID } from 'node:crypto'
 import { draftContentSchema, type DraftRevision } from '../shared/draft'
 
 const scoredSchema = z.object({ relevance: z.array(z.object({ index: z.number().int().nonnegative(), score: z.number().min(0).max(1), rationale: z.string().min(1).max(500) }).strict()) }).strict()
-const tailoredSchema = z.object({ education: z.array(z.object({ text: z.string(), evidence: z.array(z.number().int().nonnegative()).min(1), rationale: z.string().min(1) }).strict()), experience: z.array(z.object({ text: z.string(), evidence: z.array(z.number().int().nonnegative()).min(1), rationale: z.string().min(1) }).strict()), projects: z.array(z.object({ text: z.string(), evidence: z.array(z.number().int().nonnegative()).min(1), rationale: z.string().min(1) }).strict()), skills: z.array(z.object({ name: z.string(), evidence: z.array(z.number().int().nonnegative()).min(1), rationale: z.string().min(1) }).strict()), certificates: z.array(z.object({ text: z.string(), evidence: z.array(z.number().int().nonnegative()).min(1), rationale: z.string().min(1) }).strict()) }).strict()
+const tailoredSchema = z.object({ headline: z.string().trim().min(1).max(160), summary: z.object({ text: z.string().trim().min(1).max(1200), evidence: z.array(z.number().int().nonnegative()).min(1), rationale: z.string().min(1) }).strict(), education: z.array(z.object({ text: z.string(), evidence: z.array(z.number().int().nonnegative()).min(1), rationale: z.string().min(1) }).strict()), experience: z.array(z.object({ text: z.string(), evidence: z.array(z.number().int().nonnegative()).min(1), rationale: z.string().min(1) }).strict()), projects: z.array(z.object({ text: z.string(), evidence: z.array(z.number().int().nonnegative()).min(1), rationale: z.string().min(1) }).strict()), skills: z.array(z.object({ name: z.string(), evidence: z.array(z.number().int().nonnegative()).min(1), rationale: z.string().min(1) }).strict()), certificates: z.array(z.object({ text: z.string(), evidence: z.array(z.number().int().nonnegative()).min(1), rationale: z.string().min(1) }).strict()) }).strict()
 
 export class CitationValidationError extends Error { constructor(readonly finding: 'foreign-citation' | 'missing-citation') { super(finding) } }
 
@@ -51,8 +52,8 @@ export async function runSourceLinkedGraph(input: { job: unknown; analysis: unkn
       const selected = order.map(x => ({ ...input.items[x.index], index: x.index, rationale: x.rationale })).filter(x => x.id)
       const categories = ['education', 'experience', 'projects', 'skills', 'certificates'] as const
       const allowed = Object.fromEntries(categories.map(category => [category, selected.filter(item => item.category === category).map(item => item.index)])) as Record<typeof categories[number], number[]>
-      const prompt = `Write conservative CV wording using only selected evidence. Each output section may cite ONLY indexes from its own section in allowedEvidenceBySection. For example, skills may cite only skills indexes, never experience indexes, even when a role also demonstrates that skill. Every item needs at least one citation from its own section; leave sections with no eligible evidence empty. Do not infer absent qualifications or strengthen responsibility, scope, or certainty. Return only the requested JSON.\n${JSON.stringify({ job: input.job, analysis: input.analysis, allowedEvidenceBySection: allowed, selected: selected.map(({ index, category, text }) => ({ index, category, text })) })}`
-      const validCitations = (value: z.infer<typeof tailoredSchema>) => categories.every(category => value[category].every(entry => entry.evidence.every(index => allowed[category].includes(index))))
+      const prompt = `Write conservative, concise tailored CV wording using only selected evidence. Produce a target-role headline without seniority inflation (for example AI/ML Developer Level II may become AI/ML Engineer, not Senior Engineer) and a short evidence-grounded summary which may cite across selected categories. Historical titles, employers, institutions, project names and dates must remain unchanged. Each content section may cite ONLY indexes from its own section; every item needs a citation. Do not infer absent qualifications or strengthen responsibility, scope, or certainty. Return only requested JSON.\n${JSON.stringify({ job: input.job, analysis: input.analysis, allowedEvidenceBySection: allowed, selected: selected.map(({ index, category, text }) => ({ index, category, text })) })}`
+      const validCitations = (value: z.infer<typeof tailoredSchema>) => categories.every(category => value[category].every(entry => entry.evidence.every(index => allowed[category].includes(index)))) && value.summary.evidence.every(index => selected.some(item => item.index === index))
       let response = await input.call(prompt, tailoredSchema)
       let tailored = tailoredSchema.parse(response.value)
       let attempts = response.attempts
@@ -86,12 +87,15 @@ export async function runSourceLinkedGraph(input: { job: unknown; analysis: unkn
     const cited = itemFor(entry.evidence, category)
     return { text: input.restoreText?.(entry.text) ?? entry.text, citations: cited.map(item => ({ evidenceId: item.id, revision: item.revision })), rationale: entry.rationale }
   })
+  // Summary may cite selected evidence from multiple categories.
+  const summaryCited = result.tailored!.summary.evidence.map(index => { const item = input.items[index]; if (!item || !selectedIndices.has(index)) throw new CitationValidationError('foreign-citation'); return item })
+  const tailoring = { headline: result.tailored!.headline, summary: { text: input.restoreText?.(result.tailored!.summary.text) ?? result.tailored!.summary.text, citations: summaryCited.map(item => ({ evidenceId: item.id, revision: item.revision })), rationale: result.tailored!.summary.rationale } }
   const content = draftContentSchema.parse({
     education: buildParagraphs(result.tailored!.education, 'education'), experience: buildParagraphs(result.tailored!.experience, 'experience'), projects: buildParagraphs(result.tailored!.projects, 'projects'),
     skills: result.tailored!.skills.map(entry => { const cited = itemFor(entry.evidence, 'skills'); return { name: entry.name, citations: cited.map(item => ({ evidenceId: item.id, revision: item.revision })), rationale: entry.rationale } }),
     certificates: buildParagraphs(result.tailored!.certificates, 'certificates')
   })
-  const evidenceIds = new Set(Object.values(content).flatMap(section => section.flatMap(item => item.citations.map(c => c.evidenceId))))
+  const evidenceIds = new Set([...Object.values(content).flatMap(section => section.flatMap(item => item.citations.map(c => c.evidenceId))), ...tailoring.summary.citations.map(citation => citation.evidenceId)])
   const evidence = input.items.filter(item => evidenceIds.has(item.id)).map(item => ({ evidenceId: item.id, revision: item.revision, snapshot: item.snapshot }))
   const semanticPairs: Array<{ section: keyof DraftRevision['content']; itemPath: string; rewritten: string; evidence: string[] }> = []
   for (const section of ['education', 'experience', 'projects', 'skills', 'certificates'] as const) {
@@ -104,5 +108,9 @@ export async function runSourceLinkedGraph(input: { job: unknown; analysis: unkn
       semanticPairs.push({ section, itemPath: `${section}[${draftIndex >= 0 ? draftIndex : index}]`, rewritten, evidence: cited.map(item => item.text) })
     })
   }
-  return { draft: { ...input.identity, pageTarget: input.pageTarget ?? 1, status: 'unverified', approved: false, content, evidence, progress: `Draft generated for a ${input.pageTarget ?? 1}-page target; automated verification and human approval have not run.`, attempts: result.attempts ?? 0 }, attempts: result.attempts ?? 0, semanticPairs }
+  const analysis = input.analysis as { tools?: unknown; keywords?: unknown }
+  const terms = [...(Array.isArray(analysis?.tools) ? analysis.tools : [])].filter((term): term is string => typeof term === 'string').map(term => term.trim()).filter(Boolean)
+  const inventory = new Set(input.items.filter(item => item.category === 'skills').map(item => item.text.toLocaleLowerCase()))
+  const suggestedSkills = [...new Set(terms)].filter(term => !inventory.has(term.toLocaleLowerCase()) && !content.skills.some(skill => skill.name.toLocaleLowerCase() === term.toLocaleLowerCase())).slice(0, 100).map(name => ({ id: randomUUID(), name, postingTerm: name, sourceJobRevision: String((input.job as { revision?: string | number } | undefined)?.revision ?? '') , status: 'pending' as const }))
+  return { draft: { ...input.identity, pageTarget: input.pageTarget ?? 1, status: 'unverified', approved: false, content, tailoring, suggestedSkills, evidence, progress: `Draft generated for a ${input.pageTarget ?? 1}-page target; automated verification and human approval have not run.`, attempts: result.attempts ?? 0 }, attempts: result.attempts ?? 0, semanticPairs }
 }

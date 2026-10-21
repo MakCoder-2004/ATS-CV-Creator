@@ -23,7 +23,7 @@ test('cross-category model citations get one bounded correction request without 
     calls.push(prompt)
     if (prompt.startsWith('Score these numbered')) return { value: { relevance: items.map((_, index) => ({ index, score: 1, rationale: 'Relevant synthetic source.' })) }, attempts: 1 }
     const invalid = calls.length === 2 || !correctOnRetry
-    return { value: { education: [], experience: [{ text: 'Built TypeScript tools', evidence: [0], rationale: 'Synthetic source.' }], projects: [], skills: [{ name: 'TypeScript', evidence: invalid ? [1, 0] : [1], rationale: 'Saved skill.' }], certificates: [] }, attempts: 1 }
+    return { value: { headline: 'Engineer', summary: { text: 'Engineer with TypeScript experience.', evidence: [0], rationale: 'Synthetic source.' }, education: [], experience: [{ text: 'Built TypeScript tools', evidence: [0], rationale: 'Synthetic source.' }], projects: [], skills: [{ name: 'TypeScript', evidence: invalid ? [1, 0] : [1], rationale: 'Saved skill.' }], certificates: [] }, attempts: 1 }
   } })
   const result = await invoke()
   expect(calls).toHaveLength(3)
@@ -60,7 +60,7 @@ test('accepted frozen consent generates a batched source-linked draft that reope
     const byCategory = (category: string) => selected.filter((item: { category: string }) => item.category === category).map((item: { index: number; category: string; text: string }) => ({ text: category === 'experience' && unsupportedClaim === 'responsibility' ? 'Led a global team and owned architecture.' : category === 'experience' && unsupportedClaim === 'number' ? 'Delivered 500 percent growth.' : item.text, evidence: [item.index], rationale: 'Selected for direct relevance.' }))
     const projects = selected.filter((item: { category: string }) => item.category === 'projects')
     const projectOutput = crossParentProjectCitation && projects.length > 1 ? [{ text: 'Combined project claims.', evidence: projects.slice(0, 2).map((item: { index: number }) => item.index), rationale: 'Test invalid cross-project association.' }] : byCategory('projects')
-    return JSON.stringify({ education: byCategory('education'), experience: byCategory('experience'), projects: projectOutput, skills: selected.filter((item: { category: string }) => item.category === 'skills').map((item: { index: number; text: string }) => ({ name: JSON.parse(item.text).name, evidence: [item.index], rationale: 'Profile skill matches the posting.' })), certificates: byCategory('certificates') })
+    return JSON.stringify({ headline: 'Software Engineer', summary: { text: 'Engineer with experience building reliable services.', evidence: selected.filter((item: { category: string }) => item.category === 'experience').slice(0, 1).map((item: { index: number }) => item.index), rationale: 'Grounded in saved experience.' }, education: byCategory('education'), experience: byCategory('experience'), projects: projectOutput, skills: selected.filter((item: { category: string }) => item.category === 'skills').map((item: { index: number; text: string }) => ({ name: JSON.parse(item.text).name, evidence: [item.index], rationale: 'Profile skill matches the posting.' })), certificates: byCategory('certificates') })
   } }
   let wb = createWorkbench(dir, undefined, transport); opened.push(wb)
   const budget = await wb.api.getAnalysisUsage()
