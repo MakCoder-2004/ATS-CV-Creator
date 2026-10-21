@@ -61,6 +61,27 @@ test('public workbench analysis requires accepted preview, sends its frozen mini
   expect(await reopened.api.startAnalysis(changedConsent.token)).toMatchObject({ jobId: job.value.id, status: 'failed', attempts: 1, error: expect.stringMatching(/network/i) })
 })
 
+test('a saved analysis cannot be used to generate under a newly authorized run until that run starts analysis', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'analysis-run-scope-')); dirs.push(dir)
+  const transport: AnalysisTransport = { async generate() { return JSON.stringify({ required: ['TypeScript'], preferred: [], tools: [], responsibilities: [], keywords: ['TypeScript'] }) } }
+  const wb = createWorkbench(dir, undefined, transport); opened.push(wb)
+  const job = await wb.api.saveJob({ title: 'Developer', company: 'Local Corp', description: 'TypeScript required.' })
+  if (!job.ok) throw Error('job fixture')
+  const first = await wb.api.prepareOutboundConsent(job.value.id)
+  if (!first.ok) throw Error('preview fixture')
+  await wb.api.acceptOutboundConsent(first.token, true, true)
+  const original = await wb.api.startAnalysis(first.token)
+  expect(original.status).toBe('complete')
+  const next = await wb.api.prepareOutboundConsent(job.value.id)
+  if (!next.ok) throw Error('next preview fixture')
+  await wb.api.acceptOutboundConsent(next.token, true, true)
+  expect(await wb.api.generateDraft(next.token)).toMatchObject({ ok: false, message: expect.stringMatching(/analysis.*this run/i) })
+  expect(await wb.api.getGenerationRecovery(job.value.id)).toBeNull()
+  const cached = await wb.api.startAnalysis(next.token)
+  expect(cached).toMatchObject({ status: 'complete', cacheHit: true, runId: expect.any(String) })
+  expect(cached.runId).not.toBe(original.runId)
+})
+
 test('cancelling an in-flight public run suppresses a late response and does not cache it', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'analysis-cancel-contract-')); dirs.push(dir)
   let started!: () => void; let startedSecond!: () => void; let finish!: (value: string) => void

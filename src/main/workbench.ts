@@ -554,7 +554,8 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       const cached = db.prepare('SELECT data, run_id FROM posting_analysis_cache WHERE cache_key = ?').get(cacheKey) as { data: string; run_id: string } | undefined
       if (cached) {
         dispatcher.authorize(pending.runId, pending.consentId)
-        const value = analysisResultSchema.parse({ jobId: pending.jobId, runId: cached.run_id, status: 'complete', analysis: postingAnalysisSchema.parse(JSON.parse(cached.data)), progress: 'Loaded compatible saved analysis.', attempts: 0, cacheHit: true })
+        startedAnalysisTokens.add(token)
+        const value = analysisResultSchema.parse({ jobId: pending.jobId, runId: pending.runId, status: 'complete', analysis: postingAnalysisSchema.parse(JSON.parse(cached.data)), progress: 'Loaded compatible saved analysis.', attempts: 0, cacheHit: true })
         saveAnalysisState(value)
         return value
       }
@@ -600,6 +601,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       if (!resumeRunId && (!latestScope || prepareOutboundBundle(latestScope).scopeHash !== pending.bundle.scopeHash)) return { ok: false, message: 'Your job, profile, or model settings changed after consent. Review the outgoing data again.' }
       const analysis = frozen?.analysis ?? await this.getAnalysis(pending.jobId)
       if (!analysis || analysis.status !== 'complete' || !analysis.analysis) return { ok: false, message: 'Complete posting analysis before generating a draft.' }
+      if (!resumeRunId && (!startedAnalysisTokens.has(token) || analysis.runId !== pending.runId)) return { ok: false, message: 'Complete posting analysis for this run before generating a draft. Saved analysis can be reused without another provider request.' }
       if (activeAnalysisByJob.has(pending.jobId)) return { ok: false, message: 'Generation is already active for this saved job.' }
       const job = frozen?.job ?? await this.openJob(pending.jobId)
       if (!job) return { ok: false, message: 'The saved job is unavailable.' }
