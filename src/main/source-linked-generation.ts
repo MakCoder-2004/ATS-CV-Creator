@@ -4,13 +4,31 @@ import { randomUUID } from 'node:crypto'
 import { draftContentSchema, type DraftRevision } from '../shared/draft'
 
 const scoredSchema = z.object({ relevance: z.array(z.object({ index: z.number().int().nonnegative(), score: z.number().min(0).max(1), rationale: z.string().min(1).max(500) }).strict()) }).strict()
-const tailoredSchema = z.object({ headline: z.string().trim().min(1).max(160), summary: z.object({ text: z.string().trim().min(1).max(1200), evidence: z.array(z.number().int().nonnegative()).min(1), rationale: z.string().min(1) }).strict(), education: z.array(z.object({ text: z.string(), evidence: z.array(z.number().int().nonnegative()).min(1), rationale: z.string().min(1) }).strict()), experience: z.array(z.object({ text: z.string(), evidence: z.array(z.number().int().nonnegative()).min(1), rationale: z.string().min(1) }).strict()), projects: z.array(z.object({ text: z.string(), evidence: z.array(z.number().int().nonnegative()).min(1), rationale: z.string().min(1) }).strict()), skills: z.array(z.object({ name: z.string(), evidence: z.array(z.number().int().nonnegative()).min(1), rationale: z.string().min(1) }).strict()), certificates: z.array(z.object({ text: z.string(), evidence: z.array(z.number().int().nonnegative()).min(1), rationale: z.string().min(1) }).strict()) }).strict()
+const tailoredSchema = z.object({ education: z.array(z.object({ text: z.string().trim().min(1).max(3000), evidence: z.array(z.number().int().nonnegative()).min(1), rationale: z.string().trim().min(1).max(500) }).strict()), experience: z.array(z.object({ text: z.string().trim().min(1).max(3000), evidence: z.array(z.number().int().nonnegative()).min(1), rationale: z.string().trim().min(1).max(500) }).strict()), projects: z.array(z.object({ text: z.string().trim().min(1).max(3000), evidence: z.array(z.number().int().nonnegative()).min(1), rationale: z.string().trim().min(1).max(500) }).strict()), skills: z.array(z.object({ name: z.string().trim().min(1).max(160), evidence: z.array(z.number().int().nonnegative()).min(1), rationale: z.string().trim().min(1).max(500) }).strict()) })
 
 export class CitationValidationError extends Error { constructor(readonly finding: 'foreign-citation' | 'missing-citation') { super(finding) } }
-export class LegacyNarrativeCheckpointError extends Error { constructor() { super('This saved generation checkpoint predates the narrative fields. Start a fresh authorized generation.') } }
 
 export type GenerationItem = { id: string; revision: number; category: 'education' | 'experience' | 'projects' | 'skills' | 'certificates'; snapshot: Record<string, unknown>; text: string; chronology?: string; parentId?: string }
 const WORD_BUDGETS = { 1: { education: 105, experience: 300, projects: 135, skills: 100, certificates: 55 }, 2: { education: 190, experience: 570, projects: 260, skills: 180, certificates: 100 } } as const
+const BULLET_LIMITS = { 1: { experience: 3, projects: 2 }, 2: { experience: 4, projects: 3 } } as const
+const splitBullets = (text: string) => text.split(/\r?\n+/).map(line => line.trim().replace(/^(?:[•●▪◦‣*-]|\d+[.)])\s*/, '').trim()).filter(Boolean)
+function parentGroups(items: GenerationItem[], selected: Array<{ index: number }>, category: 'experience' | 'projects') {
+  const groups = new Map<string, number[]>()
+  for (const { index } of selected) {
+    const item = items[index]
+    if (item.category !== category) continue
+    const parent = item.parentId ?? item.id
+    groups.set(parent, [...(groups.get(parent) ?? []), index])
+  }
+  return [...groups.values()]
+}
+function mergeParentEntries(entries: Array<{ text: string; evidence: number[]; rationale: string }>, groups: number[][]) {
+  return groups.flatMap(group => {
+    const matching = entries.filter(entry => entry.evidence.length > 0 && entry.evidence.every(index => group.includes(index)))
+    if (!matching.length) return []
+    return [{ text: [...new Set(matching.flatMap(entry => splitBullets(entry.text)))].join('\n'), evidence: [...new Set(matching.flatMap(entry => entry.evidence))], rationale: matching.map(entry => entry.rationale).join(' ').slice(0, 500) }]
+  })
+}
 const wordCount = (text: string) => {
   let content = text
   try {
@@ -24,7 +42,7 @@ function selectWithinPageBudget(items: GenerationItem[], relevance: Array<{ inde
   const limit = WORD_BUDGETS[target]
   const selected: Array<{ index: number; score: number; rationale: string }> = []
   const usedByCategory = new Map<string, number>()
-  const ranked = [...relevance].filter(item => item.score > 0).sort((a, b) => b.score - a.score || a.index - b.index)
+  const ranked = [...relevance].filter(item => item.score > 0 && items[item.index]?.category !== 'certificates').sort((a, b) => b.score - a.score || a.index - b.index)
   for (const candidate of ranked) {
     const item = items[candidate.index]
     const used = usedByCategory.get(item.category) ?? 0
@@ -43,10 +61,11 @@ export async function runSourceLinkedGraph(input: { job: unknown; analysis: unkn
   const graph = new StateGraph(State)
     .addNode('batch_score', async () => {
       input.onProgress?.('Scoring eligible evidence against the parsed job.', 'score-evidence', [...completedSteps])
-      const response = await input.call(`Score these numbered eligible evidence items for relevance to the parsed job. Return one score and an inclusion rationale per item. Do not infer qualifications.\n${JSON.stringify({ job: input.job, analysis: input.analysis, items: input.items.map((item, index) => ({ index, category: item.category, text: item.text })) })}`, scoredSchema)
+      const scoreableIndices = input.items.flatMap((item, index) => item.category === 'certificates' ? [] : [index])
+      const response = await input.call(`Score these numbered eligible evidence items for relevance to the parsed job. Return one score and an inclusion rationale per item. Do not infer qualifications.\n${JSON.stringify({ job: input.job, analysis: input.analysis, items: scoreableIndices.map(index => ({ index, category: input.items[index].category, text: input.items[index].text })) })}`, scoredSchema)
       const scored = scoredSchema.parse(response.value)
       const indices = scored.relevance.map(item => item.index)
-      if (indices.some(index => index >= input.items.length) || new Set(indices).size !== indices.length || indices.length !== input.items.length) throw new Error('Batch scoring returned missing, duplicate, or foreign evidence indexes.')
+      if (indices.some(index => !scoreableIndices.includes(index)) || new Set(indices).size !== indices.length || indices.length !== scoreableIndices.length) throw new Error('Batch scoring returned missing, duplicate, or foreign evidence indexes.')
       mark('score-evidence', 'Evidence relevance scoring completed.')
       return { scored, attempts: response.attempts }
     })
@@ -56,21 +75,33 @@ export async function runSourceLinkedGraph(input: { job: unknown; analysis: unkn
       if (!order.length) throw new Error('No authorized profile evidence fits the selected page budget.')
       const selected = order.map(x => ({ ...input.items[x.index], index: x.index, rationale: x.rationale })).filter(x => x.id)
       input.onProgress?.('Tailoring selected content to the job posting.', 'tailor-paragraphs', [...completedSteps])
-      const categories = ['education', 'experience', 'projects', 'skills', 'certificates'] as const
+      const categories = ['education', 'experience', 'projects', 'skills'] as const
       const allowed = Object.fromEntries(categories.map(category => [category, selected.filter(item => item.category === category).map(item => item.index)])) as Record<typeof categories[number], number[]>
-      const prompt = `Write conservative, concise tailored CV wording using only selected evidence. Incorporate relevant posting keywords into each role or project description only when that source supports them; preserve each role/project’s own technologies and facts. Produce a target-role headline without seniority inflation (for example AI/ML Developer Level II may become AI/ML Engineer, not Senior Engineer) and a short evidence-grounded summary which may cite across selected categories. Historical titles, employers, institutions, project names and dates must remain unchanged. Each content section may cite ONLY indexes from its own section; every item needs a citation. Do not infer absent qualifications or strengthen responsibility, scope, or certainty. Return only requested JSON.\n${JSON.stringify({ job: input.job, analysis: input.analysis, allowedEvidenceBySection: allowed, selected: selected.map(({ index, category, text }) => ({ index, category, text })) })}`
-      const validCitations = (value: z.infer<typeof tailoredSchema>) => categories.every(category => value[category].every(entry => entry.evidence.every(index => allowed[category].includes(index)))) && value.summary.evidence.every(index => selected.some(item => item.index === index))
-      let response = await input.call(prompt, tailoredSchema)
-      let tailored = tailoredSchema.parse(response.value)
+      const roleGroups = parentGroups(input.items, selected, 'experience'), projectGroups = parentGroups(input.items, selected, 'projects')
+      const parentFor = (category: 'experience' | 'projects', group: number[]) => {
+        const id = input.items[group[0]]?.parentId ?? input.items[group[0]]?.id
+        if (category === 'experience') { const parent = input.identity.lockedFields.experience.find(item => item.evidenceId === id); return parent ? { title: parent.title, organization: parent.organization } : undefined }
+        const parent = input.identity.lockedFields.projects.find(item => item.evidenceId === id)
+        return parent ? { title: parent.name, organization: '' } : undefined
+      }
+      const prompt = `Write concise, content-only CV wording from selected evidence. Return education and skill items as concise entries. Return exactly one experience item per experienceGroups entry and exactly one project item per projectGroups entry, in the given order. Each role/project text is newline-separated bullets; at most ${BULLET_LIMITS[input.pageTarget ?? 1].experience} role bullets and ${BULLET_LIMITS[input.pageTarget ?? 1].projects} project bullets, each <=300 characters. Do not repeat the supplied historical title or employer at the beginning of a bullet; those are rendered separately. Cite only evidence indexes belonging to that exact parent group. Other sections cite only indexes from their own category. Preserve factual meaning, ownership, scope and certainty; do not infer or add facts. Omit certificates and all introductory headline/summary prose. Return JSON matching the requested schema only.\n${JSON.stringify({ job: input.job, analysis: input.analysis, allowedEvidenceBySection: allowed, experienceGroups: roleGroups.map((indexes, index) => ({ group: index, indexes, sources: indexes.map(sourceIndex => ({ index: sourceIndex, text: input.items[sourceIndex].text })) })), projectGroups: projectGroups.map((indexes, index) => ({ group: index, indexes, sources: indexes.map(sourceIndex => ({ index: sourceIndex, text: input.items[sourceIndex].text })) })), selected: selected.map(({ index, category, text }) => ({ index, category, text })) })}`
+      const grouped = (value: z.infer<typeof tailoredSchema>) => ({ ...value, experience: mergeParentEntries(value.experience, roleGroups), projects: mergeParentEntries(value.projects, projectGroups) })
+      const validCitations = (value: z.infer<typeof tailoredSchema>) => categories.every(category => value[category].every(entry => entry.evidence.every(index => allowed[category].includes(index)))) && roleGroups.every((group, index) => { const entry = value.experience[index]; return !!entry && entry.evidence.every(evidenceIndex => group.includes(evidenceIndex)) }) && projectGroups.every((group, index) => { const entry = value.projects[index]; return !!entry && entry.evidence.every(evidenceIndex => group.includes(evidenceIndex)) }) && value.experience.length === roleGroups.length && value.projects.length === projectGroups.length
+      const repeatsHeading = (bullet: string, heading: ReturnType<typeof parentFor>) => [heading?.title, heading?.organization].filter((label): label is string => Boolean(label)).some(label => { const prefix = bullet.slice(0, label.length); return prefix.toLocaleLowerCase() === label.toLocaleLowerCase() && (bullet.length === label.length || !/[\p{L}\p{N}]/u.test(bullet[label.length])) })
+      const validFormat = (value: z.infer<typeof tailoredSchema>) => (['experience', 'projects'] as const).every(category => value[category].every((entry, index) => { const bullets = splitBullets(entry.text), restoredBullets = splitBullets(restore(entry.text)), cap = BULLET_LIMITS[input.pageTarget ?? 1][category], group = (category === 'experience' ? roleGroups : projectGroups)[index], heading = parentFor(category, group); return bullets.length > 0 && bullets.length <= cap && restoredBullets.length === bullets.length && bullets.every(bullet => bullet.length <= 300 && !repeatsHeading(bullet, heading)) && restoredBullets.every(bullet => bullet.length <= 300 && !repeatsHeading(bullet, heading)) }))
+      const valid = (value: z.infer<typeof tailoredSchema>) => validCitations(value) && validFormat(value)
+      const request = async (extra: string) => input.call(`${prompt}${extra}`, tailoredSchema)
+      let response = await request('')
+      let tailored = grouped(tailoredSchema.parse(response.value))
       let attempts = response.attempts
-      if (!validCitations(tailored)) {
-        input.onProgress?.('Retrying draft wording with category-specific citation constraints.')
-        response = await input.call(`${prompt}\nImportant: citation indexes must come from allowedEvidenceBySection for the corresponding output section. Do not cross-cite a role in the skills section.`, tailoredSchema)
-        tailored = tailoredSchema.parse(response.value)
+      if (!valid(tailored)) {
+        input.onProgress?.('Retrying draft wording with parent-specific citations and concise bullet limits.')
+        response = await request('\nCorrection: return exactly one item per supplied parent, cite only its listed indexes, use no repeated title/employer prefix, and obey every bullet count and length limit. Do not truncate or omit unsupported facts silently.')
+        tailored = grouped(tailoredSchema.parse(response.value))
         attempts += response.attempts
       }
-      if (!validCitations(tailored)) throw new CitationValidationError('foreign-citation')
-      mark('tailor-paragraphs', 'Tailored narrative and paragraphs generated.')
+      if (!valid(tailored)) throw new CitationValidationError(validCitations(tailored) ? 'missing-citation' : 'foreign-citation')
+      mark('tailor-paragraphs', 'Tailored content generated.')
       return { tailored, attempts }
     })
     .addEdge(START, 'batch_score').addEdge('batch_score', 'tailor').addEdge('tailor', END)
@@ -94,20 +125,15 @@ export async function runSourceLinkedGraph(input: { job: unknown; analysis: unkn
     const cited = itemFor(entry.evidence, category)
     return { text: restore(entry.text), citations: cited.map(item => ({ evidenceId: item.id, revision: item.revision })), rationale: restore(entry.rationale) }
   })
-  // Summary may cite selected evidence from multiple categories.
-  if (input.resume && (!result.tailored?.headline || !result.tailored.summary)) throw new LegacyNarrativeCheckpointError()
-  const narrative = result.tailored!.summary
-  const summaryCited = narrative.evidence.map(index => { const item = input.items[index]; if (!item || !selectedIndices.has(index)) throw new CitationValidationError('foreign-citation'); return item })
-  const tailoring = { headline: restore(result.tailored!.headline), summary: { text: restore(narrative.text), citations: summaryCited.map(item => ({ evidenceId: item.id, revision: item.revision })), rationale: restore(narrative.rationale) } }
+  // Older saved graph checkpoints may still contain narrative keys; they are deliberately ignored.
   const content = draftContentSchema.parse({
     education: buildParagraphs(result.tailored!.education, 'education'), experience: buildParagraphs(result.tailored!.experience, 'experience'), projects: buildParagraphs(result.tailored!.projects, 'projects'),
-    skills: result.tailored!.skills.map(entry => { const cited = itemFor(entry.evidence, 'skills'); return { name: restore(entry.name), citations: cited.map(item => ({ evidenceId: item.id, revision: item.revision })), rationale: restore(entry.rationale) } }),
-    certificates: buildParagraphs(result.tailored!.certificates, 'certificates')
+    skills: result.tailored!.skills.map(entry => { const cited = itemFor(entry.evidence, 'skills'); return { name: restore(entry.name), citations: cited.map(item => ({ evidenceId: item.id, revision: item.revision })), rationale: restore(entry.rationale) } }), certificates: []
   })
-  const evidenceIds = new Set([...Object.values(content).flatMap(section => section.flatMap(item => item.citations.map(c => c.evidenceId))), ...tailoring.summary.citations.map(citation => citation.evidenceId)])
+  const evidenceIds = new Set(Object.values(content).flatMap(section => section.flatMap(item => item.citations.map(c => c.evidenceId))))
   const evidence = input.items.filter(item => evidenceIds.has(item.id)).map(item => ({ evidenceId: item.id, revision: item.revision, snapshot: item.snapshot }))
-  const semanticPairs: Array<{ section: keyof DraftRevision['content'] | 'summary'; itemPath: string; rewritten: string; evidence: string[] }> = []
-  for (const section of ['education', 'experience', 'projects', 'skills', 'certificates'] as const) {
+  const semanticPairs: Array<{ section: keyof DraftRevision['content']; itemPath: string; rewritten: string; evidence: string[] }> = []
+  for (const section of ['education', 'experience', 'projects', 'skills'] as const) {
     const generated = result.tailored![section]
     generated.forEach((entry, index) => {
       const rewritten = 'text' in entry ? entry.text : entry.name
@@ -117,12 +143,11 @@ export async function runSourceLinkedGraph(input: { job: unknown; analysis: unkn
       semanticPairs.push({ section, itemPath: `${section}[${draftIndex >= 0 ? draftIndex : index}]`, rewritten, evidence: cited.map(item => item.text) })
     })
   }
-  semanticPairs.push({ section: 'summary', itemPath: 'summary[0]', rewritten: narrative.text, evidence: summaryCited.map(item => item.text) })
   const analysis = input.analysis as { tools?: unknown; keywords?: unknown }
   const key = (value: string) => value.normalize('NFKC').trim().toLocaleLowerCase()
   const terms = [...new Set((Array.isArray(analysis?.tools) ? analysis.tools : []).filter((term): term is string => typeof term === 'string').map(term => restore(term).trim()).filter(term => term.length > 0 && term.length <= 160).map(term => [key(term), term] as const).filter(([termKey], index, all) => all.findIndex(([candidate]) => candidate === termKey) === index).map(([, term]) => term))]
   const inventory = new Set((input.savedSkillNames ?? input.items.filter(item => item.category === 'skills').map(item => String(item.snapshot.name ?? ''))).map(key))
   const draftedSkills = new Set(content.skills.map(skill => key(skill.name)))
   const suggestedSkills = terms.filter(term => !inventory.has(key(term)) && !draftedSkills.has(key(term))).slice(0, 100).map(name => ({ id: randomUUID(), name, postingTerm: name, sourceJobRevision: input.sourceJobRevision ?? '' , status: 'pending' as const }))
-  return { draft: { ...input.identity, pageTarget: input.pageTarget ?? 1, status: 'unverified', approved: false, content, tailoring, suggestedSkills, evidence, progress: `Draft generated for a ${input.pageTarget ?? 1}-page target; automated verification and human approval have not run.`, attempts: result.attempts ?? 0 }, attempts: result.attempts ?? 0, semanticPairs }
+  return { draft: { ...input.identity, pageTarget: input.pageTarget ?? 1, status: 'unverified', approved: false, content, suggestedSkills, evidence, progress: `Draft generated for a ${input.pageTarget ?? 1}-page target; automated verification and human approval have not run.`, attempts: result.attempts ?? 0 }, attempts: result.attempts ?? 0, semanticPairs }
 }
