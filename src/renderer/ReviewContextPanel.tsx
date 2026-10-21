@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { X } from 'lucide-react'
+import { PanelRightClose, X } from 'lucide-react'
 
 export function ReviewContextPanel({ open, onOpenChange, children, embedded = false, view = '', reveal = 0 }: { open: boolean; onOpenChange: (open: boolean) => void; children: ReactNode; embedded?: boolean; view?: string; reveal?: number }) {
   const dialog = useRef<HTMLDialogElement>(null)
@@ -18,9 +18,13 @@ export function ReviewContextPanel({ open, onOpenChange, children, embedded = fa
     if (open && !element.open) { if (wide) element.show(); else element.showModal() }
     if (open) element.scrollTop = 0
   }, [open, wide, embedded, view, reveal])
+  function closeDetails() {
+    onOpenChange(false)
+    window.requestAnimationFrame(() => document.querySelector<HTMLButtonElement>('.review-details-toggle')?.focus({ preventScroll: true }))
+  }
   if (embedded) return <>{children}</>
-  return <dialog ref={dialog} className="review-context-dialog" role={wide ? 'complementary' : 'dialog'} aria-label="Review details" onCancel={event => { event.preventDefault(); onOpenChange(false) }}>
-    <header className="review-context-heading"><div><h2>Review details</h2><p>Inspect a source or make a change.</p></div><button className="icon-button" type="button" aria-label="Close review details" onClick={() => onOpenChange(false)}><X size={20} aria-hidden="true" /></button></header>
+  return <dialog ref={dialog} className="review-context-dialog" role={wide ? 'complementary' : 'dialog'} aria-label="Review details" onCancel={event => { event.preventDefault(); closeDetails() }}>
+    <header className="review-context-heading"><h2>Review details</h2><button className="icon-button" type="button" aria-label={wide ? 'Hide review details' : 'Close review details'} title={wide ? 'Hide review details' : 'Close review details'} onClick={closeDetails}>{wide ? <PanelRightClose size={20} aria-hidden="true" /> : <X size={20} aria-hidden="true" />}</button></header>
     {children}
   </dialog>
 }

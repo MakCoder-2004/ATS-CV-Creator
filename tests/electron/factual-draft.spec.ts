@@ -39,9 +39,9 @@ test('visible failed-draft findings can be corrected and rechecked without losin
     await expect(page.getByRole('region', { name: 'New skills to review' })).toBeVisible({ timeout: 60000 })
     const pendingSkills = (await page.evaluate(id => window.workbench.getDraft(id), jobId))?.suggestedSkills?.filter(skill => skill.status === 'pending') ?? []
     for (const skill of pendingSkills) await page.getByRole('region', { name: 'New skills to review' }).getByRole('button', { name: `Remove ${skill.name}` }).click()
-    await expect(draft).toContainText('Changes needed', { timeout: 60000 })
+    await expect(draft).toContainText('Needs changes', { timeout: 60000 })
     await openReviewDetails(page, 'notes')
-    await draft.locator('details.review-findings summary').click()
+    await expect(draft.getByRole('heading', { name: /review issues? to resolve/i })).toBeVisible()
     await expect(draft).toContainText('900 percent')
     await expect(draft).toContainText('not present in the cited evidence')
     const correction = draft.getByLabel('Correct experience draft wording')
