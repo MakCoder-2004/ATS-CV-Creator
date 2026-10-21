@@ -13,6 +13,13 @@ import { factualCheckReportSchema } from '../shared/factual-report'
 import { canonicalDocumentSchema, documentFitReportSchema } from '../shared/document'
 import { regenerationProposalSchema, regenerationResultSchema, regenerationTargetSchema } from '../shared/regeneration'
 
+const workspaceResult = z.object({ ok: z.boolean(), cancelled: z.boolean(), message: z.string() }).strict()
+const restoreSelection = z.discriminatedUnion('ok', [
+  z.object({ ok: z.literal(true), preview: z.object({ token: z.string().uuid(), effects: z.array(z.object({ label: z.string(), current: z.number().int().nonnegative(), replacement: z.number().int().nonnegative() }).strict()) }).strict() }).strict(),
+  z.object({ ok: z.literal(false), cancelled: z.boolean(), message: z.string() }).strict()
+])
+const restoreDecision = z.object({ ok: z.boolean(), message: z.string() }).strict()
+
 const api: WorkbenchAPI = Object.freeze({
   async getSettings() {
     return settingsSchema.parse(await ipcRenderer.invoke('settings:get'))
@@ -40,6 +47,10 @@ const api: WorkbenchAPI = Object.freeze({
   async removeOpenRouterApiKey() {
     return settingsSchema.parse(await ipcRenderer.invoke('settings:openrouter-key:remove'))
   },
+  async exportWorkspaceBackup() { return workspaceResult.parse(await ipcRenderer.invoke('workspace:backup')) },
+  async previewWorkspaceRestore() { return restoreSelection.parse(await ipcRenderer.invoke('workspace:restore:preview')) },
+  async applyWorkspaceRestore(token: string) { return restoreDecision.parse(await ipcRenderer.invoke('workspace:restore:apply', uuidSchema.parse(token))) },
+  async cancelWorkspaceRestore(token: string) { return restoreDecision.parse(await ipcRenderer.invoke('workspace:restore:cancel', uuidSchema.parse(token))) },
   async getProfile() {
     return profileSnapshotSchema.parse(await ipcRenderer.invoke('profile:get'))
   },

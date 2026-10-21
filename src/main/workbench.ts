@@ -30,6 +30,8 @@ import { factualCheckReportSchema } from '../shared/factual-report'
 import { qualificationCoverage, supportedCoverageTerms } from './qualification-coverage'
 import { createCanonicalDocument, documentFitReportSchema, type DocumentFitReport } from '../shared/document'
 import { SqliteCheckpointSaver } from './sqlite-checkpoint'
+import { createWorkspaceBackupEngine } from './workspace-backup'
+import type { WorkspaceBackupEngine } from '../shared/workspace-backup'
 import { generationRecoverySnapshotSchema } from '../shared/generation-recovery'
 
 export interface SecureStorage {
@@ -72,7 +74,7 @@ function preserveKnownFindings(checked: ReturnType<typeof checkDraftFacts>, prio
   return factualCheckReportSchema.parse({ ...checked, passed: checked.passed && known.length === 0, findings })
 }
 
-export function createWorkbench(userData: string, secureStorage: SecureStorage = unavailableSecureStorage, scriptedTransport?: AnalysisTransport, recoveryHooks?: { beforeGraphCheckpoint?: (metadata: import('@langchain/langgraph').CheckpointMetadata) => void }): { api: WorkbenchStorageAPI; authorizeOutboundPayload<T>(runId: string, payload: T): T; close(): void } {
+export function createWorkbench(userData: string, secureStorage: SecureStorage = unavailableSecureStorage, scriptedTransport?: AnalysisTransport, recoveryHooks?: { beforeGraphCheckpoint?: (metadata: import('@langchain/langgraph').CheckpointMetadata) => void }): { api: WorkbenchStorageAPI; authorizeOutboundPayload<T>(runId: string, payload: T): T; backup: WorkspaceBackupEngine; hasActiveWork(): boolean; close(): void } {
   mkdirSync(userData, { recursive: true })
   const db = new Database(join(userData, 'workbench.sqlite'))
   db.pragma('journal_mode = WAL')
@@ -1141,5 +1143,13 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
     }
     return outboundEngine.authorizePayload(runId, consent.bundle, payload)
   }
-  return { api, authorizeOutboundPayload, close: () => db.close() }
+  const backupEngine = createWorkspaceBackupEngine(db)
+  const assertIdle = () => { if (activeAnalysisByJob.size) throw new Error('A cloud operation is active. Cancel or finish it before backing up or restoring.') }
+  const backup: WorkspaceBackupEngine = {
+    createBackup() { assertIdle(); return backupEngine.createBackup() },
+    previewRestore(input) { assertIdle(); return backupEngine.previewRestore(input) },
+    applyRestore(token, writeSafety) { assertIdle(); return backupEngine.applyRestore(token, writeSafety) },
+    cancelRestore(token) { return backupEngine.cancelRestore(token) }
+  }
+  return { api, authorizeOutboundPayload, backup, hasActiveWork: () => activeAnalysisByJob.size > 0, close: () => db.close() }
 }

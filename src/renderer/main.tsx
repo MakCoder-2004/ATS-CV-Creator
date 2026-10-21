@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import { BriefcaseBusiness, FileText, LayoutPanelLeft, Moon, Plus, Settings2, Sun, UserRound } from 'lucide-react'
 import type { Appearance } from '../shared/appearance'
 import { OpenRouterSettingsPanel } from './OpenRouterSettings'
+import { WorkspaceBackup } from './WorkspaceBackup'
 import { ProfileEditor } from './ProfileEditor'
 import { SavedJobs } from './SavedJobs'
 import { WorkbenchStart } from './WorkbenchStart'
@@ -26,6 +27,7 @@ function App() {
   const [ready, setReady] = useState(false)
   const [jobs, setJobs] = useState<JobRecord[]>([])
   const [activeJob, setActiveJob] = useState<JobRecord | null>(null)
+  const [workspaceRevision, setWorkspaceRevision] = useState(0)
   const contentRef = useRef<HTMLElement>(null)
   useEffect(() => {
     window.workbench.getSettings().then(settings => { setAppearance(settings.appearance); setReady(true) }).catch(() => setError('Could not open workspace settings. Restart the app to retry.'))
@@ -35,6 +37,13 @@ function App() {
   function keepJob(job: JobRecord) {
     setJobs(current => [job, ...current.filter(item => item.id !== job.id).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))])
     setActiveJob(job)
+  }
+  async function afterWorkspaceRestore() {
+    const [settings, savedJobs] = await Promise.all([window.workbench.getSettings(), window.workbench.listJobs()])
+    setAppearance(settings.appearance)
+    setJobs(savedJobs)
+    setActiveJob(null)
+    setWorkspaceRevision(value => value + 1)
   }
   async function activateJob(id: string) {
     try { const job = await window.workbench.openJob(id); setActiveJob(job) }
@@ -59,7 +68,7 @@ function App() {
       {error && <p role="alert" className="error">{error}</p>}
       <main id="content" ref={contentRef} tabIndex={-1}>
         {(page === 'My profile' || page === 'Settings') && <div className="title"><span className="context">Personal workspace</span><h1>{page}</h1><p>{page === 'My profile' ? 'Keep the career facts that support your CV in one place.' : 'Manage the model and credentials for future CV generation.'}</p></div>}
-        {page === 'Tailor CV' ? <WorkbenchStart activeJob={activeJob} onNavigate={setPage} /> : page === 'My profile' ? <ProfileEditor /> : page === 'Saved jobs' ? <SavedJobs jobs={jobs} activeJob={activeJob} onSaved={keepJob} onOpened={keepJob} onNavigate={setPage} /> : <div className="settings-page"><OpenRouterSettingsPanel /></div>}
+        {page === 'Tailor CV' ? <WorkbenchStart key={workspaceRevision} activeJob={activeJob} onNavigate={setPage} /> : page === 'My profile' ? <ProfileEditor key={workspaceRevision} /> : page === 'Saved jobs' ? <SavedJobs key={workspaceRevision} jobs={jobs} activeJob={activeJob} onSaved={keepJob} onOpened={keepJob} onNavigate={setPage} /> : <div className="settings-page"><OpenRouterSettingsPanel key={workspaceRevision} /><WorkspaceBackup onRestored={afterWorkspaceRestore} /></div>}
       </main>
     </div>
   </div>
