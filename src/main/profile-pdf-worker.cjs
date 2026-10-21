@@ -29,7 +29,12 @@ parentPort.on('message', async bytes => {
       lines.sort((a, b) => b.y - a.y)
       const text = lines.map(line => line.pieces.sort((a, b) => a.x - b.x).map(piece => piece.text).join(' ').replace(/[\t\u00a0]+/g, ' ').replace(/ {2,}/g, ' ').trim()).filter(Boolean).join('\n')
       const xPositions = [...new Set(items.filter(item => item.str.trim()).map(item => Math.round(item.transform[4])))].sort((a, b) => a - b)
-      const hasColumnGap = xPositions.some((x, index) => index > 0 && x - xPositions[index - 1] >= 100 && index >= 2 && xPositions.length - index >= 2)
+      let columnThreshold
+      let largestGap = 0
+      for (let index = 1; index < xPositions.length; index++) if (xPositions[index] - xPositions[index - 1] > largestGap) { largestGap = xPositions[index] - xPositions[index - 1]; columnThreshold = (xPositions[index] + xPositions[index - 1]) / 2 }
+      const leftItems = columnThreshold === undefined ? 0 : items.filter(item => item.str.trim() && item.transform[4] < columnThreshold).length
+      const rightItems = columnThreshold === undefined ? 0 : items.filter(item => item.str.trim() && item.transform[4] > columnThreshold).length
+      const hasColumnGap = largestGap >= 100 && leftItems >= 2 && rightItems >= 2
       const warnings = hasColumnGap ? ['This PDF page appears to use multiple text columns. Check the source because reading order may be ambiguous.'] : []
       const links = (await page.getAnnotations({ intent: 'display' })).flatMap(annotation => {
         if (annotation.subtype !== 'Link' || typeof annotation.url !== 'string' || !/^https?:\/\//i.test(annotation.url)) return []

@@ -334,42 +334,49 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       if (!validHash || !checked.success) return { ok: false, message: 'The reviewed CV proposals are invalid. Reopen the PDF and review them again.' }
       const proposals = checked.data
       if (proposals.contact && !proposals.contact.fullName?.trim()) return { ok: false, message: 'Add a full name to the contact proposal or skip it before applying.' }
-      const associate = (ownerId: string, ownerRevision: number, field: string) => {
-        const sourceRows = proposals.sources.filter(source => source.field === field || source.field.startsWith(`${field}.`))
+      const persistentId = (proposalRef: string) => proposals.proposalIds[proposalRef]
+      const associate = (ownerId: string, ownerRevision: number, proposalRef: string) => {
+        const proposalId = persistentId(proposalRef)
+        if (!proposalId) throw new Error('PROFILE_IMPORT_SOURCE_INVALID')
+        const sourceRows = proposals.sources.filter(source => source.proposalRef === proposalRef && source.proposalId === proposalId)
         const insert = db.prepare('INSERT OR IGNORE INTO profile_import_provenance (owner_id,owner_revision,field,source_hash,page,passage,created_at) VALUES (?,?,?,?,?,?,?)')
-        for (const source of sourceRows) insert.run(ownerId, ownerRevision, field, sourceHash, source.page, source.passage, new Date().toISOString())
+        for (const source of sourceRows) insert.run(ownerId, ownerRevision, source.field, sourceHash, source.page, source.passage, new Date().toISOString())
       }
       const tx = db.transaction(() => {
         if (profileImportBaseline() !== baseline) throw new Error('STALE_PROFILE_PREVIEW')
         if (profileRecords(readProfile(), readExperience()).length) throw new Error('PROFILE_NOT_EMPTY')
-        const contact = proposals.contact?.fullName ? contactRecordSchema.parse({ ...proposals.contact, id: randomUUID(), revision: 1 }) : null
-        const skills = proposals.skills.map(item => skillRecordSchema.parse({ ...item, id: randomUUID(), revision: 1 }))
-        const roles = proposals.experience.map(item => experienceRecordSchema.parse({ ...item, id: randomUUID(), revision: 1, factualItems: item.factualItems.map(fact => ({ ...fact, id: randomUUID(), revision: 1 })) }))
-        const entries = proposals.entries.map(item => profileEntrySchema.parse({ ...item, id: randomUUID(), revision: 1 }))
-        const projects = proposals.projects.map(item => projectRecordSchema.parse({ ...item, id: randomUUID(), revision: 1, factualItems: item.factualItems.map(fact => ({ ...fact, id: randomUUID(), revision: 1 })), technologies: item.technologies.map(technology => ({ ...technology, id: randomUUID(), revision: 1 })) }))
+        const contact = proposals.contact?.fullName ? contactRecordSchema.parse({ ...((({ proposalRef: _proposalRef, ...value }) => value)(proposals.contact)), id: persistentId(proposals.contact.proposalRef), revision: 1 }) : null
+        const skills = proposals.skills.map(item => { const { proposalRef: _proposalRef, ...value } = item; return skillRecordSchema.parse({ ...value, id: persistentId(item.proposalRef), revision: 1 }) })
+        const roles = proposals.experience.map(item => { const { proposalRef: _proposalRef, requiresDateResolution: _requiresDateResolution, ...value } = item; return experienceRecordSchema.parse({ ...value, id: persistentId(item.proposalRef), revision: 1, factualItems: item.factualItems.map(fact => ({ text: fact.text, id: persistentId(fact.proposalRef), revision: 1 })) }) })
+        const entries = proposals.entries.map(item => { const { proposalRef: _proposalRef, requiresDateResolution: _requiresDateResolution, ...value } = item; return profileEntrySchema.parse({ ...value, id: persistentId(item.proposalRef), revision: 1 }) })
+        const projects = proposals.projects.map(item => { const { proposalRef: _proposalRef, ...value } = item; return projectRecordSchema.parse({ ...value, id: persistentId(item.proposalRef), revision: 1, factualItems: item.factualItems.map(fact => ({ text: fact.text, id: persistentId(fact.proposalRef), revision: 1 })), technologies: item.technologies.map(technology => ({ text: technology.text, id: persistentId(technology.proposalRef), revision: 1 })) }) })
         if (contact) {
           db.prepare('INSERT INTO profile_contact (singleton,id,revision,data) VALUES (1,?,?,?)').run(contact.id, contact.revision, JSON.stringify(contact))
-          recordRevision(contact, 'created'); associate(contact.id, contact.revision, 'contact')
+          recordRevision(contact, 'created'); associate(contact.id, contact.revision, proposals.contact!.proposalRef)
         }
         for (const skill of skills) {
           db.prepare('INSERT INTO profile_skills (id,revision,data) VALUES (?,?,?)').run(skill.id, skill.revision, JSON.stringify(skill))
-          recordRevision(skill, 'created'); associate(skill.id, skill.revision, `skills.${skill.name}`)
+          recordRevision(skill, 'created'); associate(skill.id, skill.revision, proposals.skills.find(item => item.name === skill.name && item.category === skill.category)!.proposalRef)
         }
-        for (const role of roles) {
+        roles.forEach((role, roleIndex) => {
+          const sourceRole = proposals.experience[roleIndex]
           db.prepare('INSERT INTO profile_experience (id,revision,data) VALUES (?,?,?)').run(role.id, role.revision, JSON.stringify(role))
-          recordRevision(role, 'created'); recordItemChanges([], role.factualItems); associate(role.id, role.revision, 'experience.role')
-          role.factualItems.forEach(fact => associate(fact.id, fact.revision, 'experience.factualItem'))
-        }
-        for (const entry of entries) {
+          recordRevision(role, 'created'); recordItemChanges([], role.factualItems)
+          associate(role.id, role.revision, sourceRole.proposalRef)
+          role.factualItems.forEach((fact, index) => associate(fact.id, fact.revision, sourceRole.factualItems[index].proposalRef))
+        })
+        entries.forEach((entry, entryIndex) => {
           db.prepare('INSERT INTO profile_entries (id,section,revision,data) VALUES (?,?,?,?)').run(entry.id, entry.section, entry.revision, JSON.stringify(entry))
-          recordRevision(entry, 'created'); associate(entry.id, entry.revision, `entries.${entry.section}`)
-        }
-        for (const project of projects) {
+          recordRevision(entry, 'created'); associate(entry.id, entry.revision, proposals.entries[entryIndex].proposalRef)
+        })
+        projects.forEach((project, projectIndex) => {
+          const sourceProject = proposals.projects[projectIndex]
           db.prepare('INSERT INTO profile_projects (id,revision,data) VALUES (?,?,?)').run(project.id, project.revision, JSON.stringify(project))
-          recordRevision(project, 'created'); recordItemChanges([], project.factualItems); recordItemChanges([], project.technologies); associate(project.id, project.revision, 'projects.project'); associate(project.id, project.revision, 'projects.links')
-          project.factualItems.forEach(fact => associate(fact.id, fact.revision, 'projects.factualItem'))
-          project.technologies.forEach(technology => associate(technology.id, technology.revision, 'projects.technology'))
-        }
+          recordRevision(project, 'created'); recordItemChanges([], project.factualItems); recordItemChanges([], project.technologies)
+          associate(project.id, project.revision, sourceProject.proposalRef)
+          project.factualItems.forEach((fact, index) => associate(fact.id, fact.revision, sourceProject.factualItems[index].proposalRef))
+          project.technologies.forEach((technology, index) => associate(technology.id, technology.revision, sourceProject.technologies[index].proposalRef))
+        })
         return { profile: readProfile(), experience: readExperience() }
       })
       try { return { ok: true, message: 'Reviewed CV details were added to your profile.', ...tx() } }

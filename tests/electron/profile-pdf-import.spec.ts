@@ -3,6 +3,8 @@ import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { makeEncryptedProfilePdf } from '../fixtures/encrypted-profile-pdf'
+import { makeLayoutProfilePdf } from '../fixtures/layout-profile-pdf'
 
 function makePdf(lines: string[]) {
   const objects: string[] = []
@@ -22,7 +24,7 @@ test('imports PDF proposals through review, atomically applies supported profile
   test.setTimeout(120000)
   const root = mkdtempSync(join(tmpdir(), 'cv-tailor-pdf-import-'))
   const userData = join(root, 'workspace'), sourceFile = join(root, 'synthetic-cv.pdf'), backupFile = join(root, 'accepted-profile-backup.json'), profileJson = join(root, 'accepted-profile.json')
-  const lines = ['NAME: Ada Example', 'EMAIL: ada@example.test', 'HEADLINE: Software engineer', 'SKILLS: Python, SQL', 'EXPERIENCE: Example Labs | Engineer', 'FACT: Built a data pipeline', 'EDUCATION: BSc Computer Science | Example University | 2020-09-14 – 2024-06-20 | GPA 3.7', 'CERTIFICATE: Safety Fundamentals | Example Institute | 2022', 'SUMMARY: Curious engineer', 'SPOKEN LANGUAGES: Arabic, English', 'PROJECT: Atlas | Flask, React', 'FACT: Built a recommendation service', 'UNKNOWN: Community mentor', 'Additional source passage retained for review.']
+  const lines = ['NAME: Ada Example', 'EMAIL: ada@example.test', 'HEADLINE: Software engineer', 'CONTACT LINK: Portfolio | https://ada.example.test', 'SKILLS: Python, SQL', 'EXPERIENCE: Example Labs | Engineer', 'FACT: Built a data pipeline', 'EXPERIENCE: Northwind | Consultant', 'FACT: Led a migration', 'EDUCATION: BSc Computer Science | Example University | 2020-09-14 to 2024-06-20 | GPA 3.7', 'CERTIFICATE: Safety Fundamentals | Example Institute | 2022-05', 'SUMMARY: Curious engineer', 'SPOKEN LANGUAGES: Arabic, English', 'PROJECT: Atlas | Flask, React', 'PROJECT LINK: Repository | https://example.test/atlas', 'FACT: Built a recommendation service', 'PROJECT: Beacon | Go', 'PROJECT LINK: Service | https://example.test/beacon', 'FACT: Shipped a monitoring agent', 'UNKNOWN: Community mentor', 'Additional source passage retained for review.']
   writeFileSync(sourceFile, makePdf(lines))
   const originalPdfBytes = readFileSync(sourceFile)
   let running: ElectronApplication | undefined
@@ -38,12 +40,23 @@ test('imports PDF proposals through review, atomically applies supported profile
     await page.getByRole('button', { name: 'Upload CV' }).click()
     await expect(page.getByRole('heading', { name: 'Review proposed profile details' })).toBeVisible({ timeout: 15000 })
     const review = page.getByRole('region', { name: 'Review proposed profile details' })
+    expect(await page.evaluate(() => { const nav = document.querySelector('[aria-label="Profile sections"]')!; const review = document.querySelector('#pdf-import-title')!; return Boolean(nav.compareDocumentPosition(review) & Node.DOCUMENT_POSITION_FOLLOWING) })).toBe(true)
+    await expect(review.getByText(/Source hash/)).toHaveCount(0)
     await expect(review.getByLabel('Full name')).toHaveValue('Ada Example')
     await expect(review.getByLabel('Skill name').first()).toHaveValue('Python')
     await review.getByRole('group', { name: 'Skill 2' }).getByLabel('Include this proposal').uncheck()
     await expect(review.getByText('Built a data pipeline', { exact: true })).toBeVisible()
     await expect(review.getByText(/UNKNOWN: Community mentor/)).toBeVisible()
     await expect(review.getByText(/Date precision needs review/)).toBeVisible()
+    const educationReview = review.getByRole('group', { name: 'Education 1' })
+    await expect(educationReview.getByLabel('Include this proposal')).not.toBeChecked()
+    await educationReview.getByLabel('Start date (year or year-month)').fill('2020-09')
+    await educationReview.getByLabel('End date (year or year-month)').fill('2024-06')
+    await educationReview.getByLabel('Include this proposal').check()
+    const certificateReview = review.getByRole('group', { name: 'Certificates 2' })
+    await expect(certificateReview.getByLabel('Include this proposal')).not.toBeChecked()
+    await certificateReview.getByLabel('Year').fill('2022')
+    await certificateReview.getByLabel('Include this proposal').check()
     await page.setViewportSize({ width: 375, height: 800 })
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true)
     await page.getByRole('button', { name: 'Use dark mode' }).click()
@@ -58,14 +71,14 @@ test('imports PDF proposals through review, atomically applies supported profile
     await expect(page.getByRole('status')).toContainText('added to your profile')
     expect((await page.evaluate(() => window.workbench.getAnalysisUsage())).attempts).toBe(0)
     expect(await page.evaluate(() => window.workbench.getProfile())).toMatchObject({ contact: { fullName: 'Ada Byron Lovelace', revision: 1 }, skills: [{ name: 'Python', revision: 1 }], education: [{ title: 'BSc Computer Science', institution: 'Example University', description: 'GPA 3.7' }], certificates: [{ title: 'Safety Fundamentals', issuer: 'Example Institute', year: 2022 }], summary: [{ description: expect.stringContaining('Curious engineer') }], languages: [{ title: 'Arabic' }, { title: 'English' }] })
-    expect(await page.evaluate(() => window.workbench.getExperience())).toMatchObject({ experience: [{ title: 'Engineer', organization: 'Example Labs', factualItems: [{ text: 'Built a data pipeline' }] }], projects: [{ name: 'Atlas', technologies: [{ text: 'Flask' }, { text: 'React' }], factualItems: [{ text: 'Built a recommendation service' }] }] })
+    expect(await page.evaluate(() => window.workbench.getExperience())).toMatchObject({ experience: [{ title: 'Engineer', organization: 'Example Labs', factualItems: [{ text: 'Built a data pipeline' }] }, { title: 'Consultant', organization: 'Northwind', factualItems: [{ text: 'Led a migration' }] }], projects: [{ name: 'Atlas', technologies: [{ text: 'Flask' }, { text: 'React' }], factualItems: [{ text: 'Built a recommendation service' }] }, { name: 'Beacon', technologies: [{ text: 'Go' }], factualItems: [{ text: 'Shipped a monitoring agent' }] }] })
     await app.evaluate(({ dialog }, target) => { dialog.showSaveDialog = async () => ({ canceled: false, filePath: target }); return true }, profileJson)
     page.once('dialog', nativeDialog => nativeDialog.accept())
     await page.getByRole('button', { name: 'Export profile JSON' }).click()
     await expect(page.getByRole('status')).toContainText('Profile JSON exported')
     expect(readFileSync(sourceFile)).toEqual(originalPdfBytes)
     const profileExchange = JSON.parse(readFileSync(profileJson, 'utf8'))
-    expect(profileExchange).toMatchObject({ format: 'cv-tailor-profile', version: 1, profile: { contact: { fullName: 'Ada Byron Lovelace' }, skills: [{ name: 'Python' }], education: [{ title: 'BSc Computer Science' }], languages: [{ title: 'Arabic' }, { title: 'English' }] }, experience: { projects: [{ name: 'Atlas' }] } })
+    expect(profileExchange).toMatchObject({ format: 'cv-tailor-profile', version: 1, profile: { contact: { fullName: 'Ada Byron Lovelace' }, skills: [{ name: 'Python' }], education: [{ title: 'BSc Computer Science' }], languages: [{ title: 'Arabic' }, { title: 'English' }] }, experience: { projects: [{ name: 'Atlas' }, { name: 'Beacon' }] } })
     expect(JSON.stringify(profileExchange)).not.toContain('sourceHash')
     await app.evaluate(({ dialog }, target) => { dialog.showSaveDialog = async () => ({ canceled: false, filePath: target }); return true }, backupFile)
     await page.getByRole('button', { name: 'Settings' }).click()
@@ -73,7 +86,15 @@ test('imports PDF proposals through review, atomically applies supported profile
     await expect(page.getByRole('region', { name: 'Workspace backup' }).getByRole('status')).toContainText('Workspace backup saved')
     const backup = JSON.parse(readFileSync(backupFile, 'utf8'))
     expect(backup.tables.profile_import_provenance.rows).toEqual(expect.arrayContaining([expect.objectContaining({ owner_id: expect.any(String), owner_revision: 1, source_hash: expect.stringMatching(/^[a-f0-9]{64}$/), passage: expect.stringContaining('SKILLS: Python, SQL') })]))
+    expect(backup.tables.profile_import_provenance.rows.some((row: { passage: string; field: string }) => row.passage.includes('2020-09-14 to 2024-06-20') && row.field === 'entries.education.date')).toBe(true)
     expect(backup.tables.profile_import_provenance.rows.some((row: { passage: string }) => row.passage.startsWith('NAME:'))).toBe(false)
+    const evidenceById = new Map<string, { text?: string; title?: string; organization?: string; links?: Array<{ url: string }> }>(backup.tables.evidence_revisions.rows.map((row: { id: string; snapshot: string }) => [row.id, JSON.parse(row.snapshot) as { text?: string; title?: string; organization?: string; links?: Array<{ url: string }> }]))
+    const support = backup.tables.profile_import_provenance.rows as Array<{ owner_id: string; field: string; passage: string }>
+    expect(support.filter(row => row.field === 'experience.factualItem').every(row => { const fact = evidenceById.get(row.owner_id); return fact?.text === row.passage.replace(/^FACT: /, '') })).toBe(true)
+    expect(support.filter(row => row.field === 'experience.role').every(row => { const role = evidenceById.get(row.owner_id); return role && typeof role.title === 'string' && typeof role.organization === 'string' && row.passage.includes(role.title) && row.passage.includes(role.organization) })).toBe(true)
+    expect(support.filter(row => row.field === 'projects.technology').every(row => { const technology = evidenceById.get(row.owner_id); return technology && typeof technology.text === 'string' && row.passage.includes(technology.text) })).toBe(true)
+    expect(support.filter(row => row.field === 'projects.factualItem').every(row => { const fact = evidenceById.get(row.owner_id); return fact && typeof fact.text === 'string' && row.passage.includes(fact.text) })).toBe(true)
+    expect(support.filter(row => row.field === 'projects.links').every(row => { const project = evidenceById.get(row.owner_id); return project && Array.isArray(project.links) && project.links.some((link: { url: string }) => row.passage.includes(link.url)) })).toBe(true)
     await page.evaluate(() => window.workbench.saveSkill({ name: 'Temporary change', category: 'Other' }))
     await app.evaluate(({ dialog }, selectedPath) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selectedPath] }); return true }, backupFile)
     await page.getByRole('button', { name: 'Restore workspace' }).click()
@@ -113,9 +134,11 @@ test('profile changes during local review invalidate apply instead of overwritin
 
 test('rejects malformed and scanned-like PDFs locally without sending requests or changing profile', async () => {
   const root = mkdtempSync(join(tmpdir(), 'cv-tailor-pdf-invalid-')), userData = join(root, 'workspace')
-  const malformed = join(root, 'malformed.pdf'), scanned = join(root, 'scanned.pdf')
+  const malformed = join(root, 'malformed.pdf'), scanned = join(root, 'scanned.pdf'), encrypted = join(root, 'encrypted.pdf'), oversized = join(root, 'oversized.pdf')
   writeFileSync(malformed, '%PDF-1.4\\nnot a valid PDF object graph')
   writeFileSync(scanned, makePdf(['']))
+  writeFileSync(encrypted, makeEncryptedProfilePdf())
+  writeFileSync(oversized, Buffer.alloc(15 * 1024 * 1024 + 1))
   let running: ElectronApplication | undefined, selected = malformed
   try {
     running = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData } })
@@ -129,8 +152,44 @@ test('rejects malformed and scanned-like PDFs locally without sending requests o
     await running.evaluate(({ dialog }, selectedPath) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selectedPath] }); return true }, selected)
     await page.getByRole('button', { name: 'Upload CV' }).click()
     await expect(page.getByRole('alert')).toContainText('no usable selectable text')
+    selected = encrypted
+    await running.evaluate(({ dialog }, selectedPath) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selectedPath] }); return true }, selected)
+    await page.getByRole('button', { name: 'Upload CV' }).click()
+    await expect(page.getByRole('alert')).toContainText('Encrypted PDFs are not supported')
+    selected = oversized
+    await running.evaluate(({ dialog }, selectedPath) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selectedPath] }); return true }, selected)
+    await page.getByRole('button', { name: 'Upload CV' }).click()
+    await expect(page.getByRole('alert')).toContainText('15 MiB')
     expect(await page.evaluate(() => window.workbench.getProfile())).toMatchObject({ contact: null, skills: [] })
     expect((await page.evaluate(() => window.workbench.getAnalysisUsage())).attempts).toBe(0)
+    await running.close(); running = undefined
+  } finally { await running?.close(); await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }) }
+})
+
+test('shows ambiguous two-column order and inert hyperlinks as review-only source context', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'cv-tailor-pdf-layout-')), userData = join(root, 'workspace'), sourceFile = join(root, 'layout.pdf')
+  writeFileSync(sourceFile, makeLayoutProfilePdf())
+  const original = readFileSync(sourceFile)
+  let running: ElectronApplication | undefined
+  try {
+    running = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData } })
+    const page = await running.firstWindow()
+    await expect(page.locator('[data-ui-ready="true"]')).toBeVisible({ timeout: 15000 })
+    await running.evaluate(({ dialog }, selectedPath) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selectedPath] }); return true }, sourceFile)
+    await page.getByRole('button', { name: 'My profile' }).click()
+    await page.getByRole('button', { name: 'Upload CV' }).click()
+    await expect(page.getByRole('heading', { name: 'Review proposed profile details' })).toBeVisible({ timeout: 15000 })
+    const review = page.getByRole('region', { name: 'Review proposed profile details' })
+    await expect(review.getByText(/multiple text columns.*reading order may be ambiguous/i)).toBeVisible()
+    await expect(review.getByText(/Unassigned PDF hyperlink: Repository — https:\/\/example\.test\/repository/)).toBeVisible()
+    await expect(review.getByRole('group', { name: 'Experience 1' }).getByLabel(/Source factual item/)).toHaveCount(0)
+    await expect(review.getByRole('group', { name: 'Experience 2' }).getByLabel(/Source factual item/)).toHaveCount(0)
+    page.once('dialog', nativeDialog => nativeDialog.accept())
+    await review.getByRole('button', { name: 'Discard review' }).click()
+    await expect(review).toHaveCount(0)
+    expect(readFileSync(sourceFile)).toEqual(original)
+    expect((await page.evaluate(() => window.workbench.getAnalysisUsage())).attempts).toBe(0)
+    expect(await page.evaluate(() => window.workbench.getProfile())).toMatchObject({ contact: null, skills: [] })
     await running.close(); running = undefined
   } finally { await running?.close(); await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }) }
 })

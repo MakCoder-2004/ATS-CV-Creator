@@ -2,6 +2,7 @@ import { afterEach, expect, test } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { randomUUID } from 'node:crypto'
 import { createWorkbench } from '../src/main/workbench'
 import { mapProfilePdfPages } from '../src/shared/profile-pdf-import'
 
@@ -12,7 +13,10 @@ test('restores a pre-provenance workspace backup as empty provenance while retai
   const directory = mkdtempSync(join(tmpdir(), 'cv-tailor-legacy-pdf-backup-')); directories.push(directory)
   const workbench = createWorkbench(directory); instances.push(workbench)
   const sourceHash = 'a'.repeat(64), baseline = await workbench.api.getProfileImportBaseline()
-  const proposals = mapProfilePdfPages([{ page: 1, text: 'NAME: Ada Example\nSKILLS: TypeScript' }])
+  const draft = mapProfilePdfPages([{ page: 1, text: 'NAME: Ada Example\nSKILLS: TypeScript' }])
+  const refs = [draft.contact?.proposalRef, ...draft.skills.map(item => item.proposalRef), ...draft.sources.map(source => source.proposalRef)].filter((ref): ref is string => Boolean(ref))
+  const proposalIds = Object.fromEntries([...new Set(refs)].map(ref => [ref, randomUUID()]))
+  const proposals = { ...draft, proposalIds, sources: draft.sources.map(source => ({ ...source, proposalId: proposalIds[source.proposalRef] })) }
   const imported = await workbench.api.importEmptyProfilePdf(sourceHash, baseline, proposals)
   expect(imported.ok).toBe(true)
   const legacy = JSON.parse(workbench.backup.createBackup())
