@@ -95,7 +95,7 @@ test('visible CV creation reviews new skills, preserves profile evidence, and ex
     expect(await page.evaluate(id => window.workbench.assertDraftExportable(id), jobId)).toMatchObject({ ok: true })
 
     await page.getByRole('button', { name: 'Back to review' }).click()
-    await preview.getByRole('button', { name: 'Review sources for professional summary' }).click()
+    await page.getByRole('article', { name: 'Approved CV preview' }).getByRole('button', { name: 'Review sources for professional summary' }).click()
     const wordingInspector = page.getByRole('region', { name: 'Selected wording and sources' })
     await wordingInspector.getByRole('button', { name: 'Edit wording' }).click()
     await wordingInspector.getByRole('textbox', { name: 'Wording for this CV' }).fill('A revised, evidence-grounded summary.')

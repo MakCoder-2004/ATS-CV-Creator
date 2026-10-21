@@ -5,6 +5,7 @@ import type { OutboundConsentPreview } from '../shared/outbound-consent-contract
 import type { CanonicalDocument, DocumentFitReport } from '../shared/document'
 import { WorkbenchStageLayout, type WorkbenchSources } from './WorkbenchStageLayout'
 import './workbench-start.css'
+import './cv-flow.css'
 
 type LocalSources = WorkbenchSources
 
@@ -14,6 +15,7 @@ export function WorkbenchStart({ activeJob, onNavigate }: { activeJob: JobRecord
   const [attempt, setAttempt] = useState(0)
   const [review, setReview] = useState<Extract<OutboundConsentPreview, { ok: true }> | null>(null)
   const [consentAccepted, setConsentAccepted] = useState(false)
+  const [reviewApprovedDraft, setReviewApprovedDraft] = useState(false)
   const [authorizedRunId, setAuthorizedRunId] = useState<string | null>(null)
   const [newRun, setNewRun] = useState(false)
   const [termsAcknowledged, setTermsAcknowledged] = useState(false)
@@ -38,11 +40,18 @@ export function WorkbenchStart({ activeJob, onNavigate }: { activeJob: JobRecord
   const selectedJob = useRef(activeJob?.id)
   selectedJob.current = activeJob?.id
   useEffect(() => {
+    setAnalysis(null); setRecovery(null); setReviewApprovedDraft(false)
     setReview(null); setConsentAccepted(false); setAuthorizedRunId(null); setNewRun(false); setTermsAcknowledged(false); setConsentError(''); setDraft(null); setCanonical(null); setFitReport(null); setAcceptedCuts([]); setDraftError(''); setDraftBusy(false)
     if (activeJob) {
-      void window.workbench.getDraft(activeJob.id).then(async value => { setDraft(value); if (value) { setCanonical(await window.workbench.getCanonicalDocument(activeJob.id)); setFitReport(await window.workbench.getDocumentFitReport(activeJob.id)) } }).catch(() => setDraftError('Saved draft could not be opened offline.'))
-      void window.workbench.getAnalysis(activeJob.id).then(value => { if (value) setAnalysis(value) }).catch(() => {})
-      void window.workbench.getGenerationRecovery(activeJob.id).then(setRecovery).catch(() => setDraftError('Saved run recovery state could not be read.'))
+      const jobId = activeJob.id
+      void window.workbench.getDraft(jobId).then(async value => {
+        if (selectedJob.current !== jobId || !value) return
+        const [document, fit] = await Promise.all([window.workbench.getCanonicalDocument(jobId), window.workbench.getDocumentFitReport(jobId)])
+        if (selectedJob.current !== jobId) return
+        setDraft(value); setPageTarget(value.pageTarget); setCanonical(document); setFitReport(fit)
+      }).catch(() => { if (selectedJob.current === jobId) setDraftError('Saved draft could not be opened offline.') })
+      void window.workbench.getAnalysis(jobId).then(value => { if (selectedJob.current === jobId) setAnalysis(value) }).catch(() => {})
+      void window.workbench.getGenerationRecovery(jobId).then(value => { if (selectedJob.current === jobId) setRecovery(value) }).catch(() => { if (selectedJob.current === jobId) setDraftError('Saved run recovery state could not be read.') })
     } else { setAnalysis(null); setRecovery(null) }
     return () => {
       const token = pendingToken.current
@@ -92,24 +101,42 @@ export function WorkbenchStart({ activeJob, onNavigate }: { activeJob: JobRecord
     catch { setDraftError('Saved generation could not be cancelled. Try again.') }
     finally { setRecoveryBusy(false) }
   }
+  async function analyzeAuthorizedRun(token: string, runId: string | undefined, jobId: string) {
+    setAnalysis({ jobId, runId, status: 'running', analysis: null, progress: 'Analyzing the authorized posting…', attempts: 0, cacheHit: false, generationStep: 'parse-posting', completedSteps: [] })
+    try {
+      const result = await window.workbench.startAnalysis(token)
+      if (selectedJob.current !== jobId || pendingToken.current !== token) return
+      setAnalysis(result); setUsage(await window.workbench.getAnalysisUsage())
+    } catch (failure) {
+      if (selectedJob.current !== jobId || pendingToken.current !== token) return
+      setAnalysis(null); setConsentError(failure instanceof Error ? failure.message : 'Analysis could not start. Check Settings and try again.')
+    }
+  }
   async function startAnalysis() {
-    const token = pendingToken.current
-    if (!token || consentBusy || !consentAccepted) return
+    const token = pendingToken.current, jobId = activeJob?.id
+    if (!token || !jobId || consentBusy || !consentAccepted) return
     setConsentBusy(true); setConsentError('')
-    setAnalysis({ jobId: activeJob!.id, runId: authorizedRunId ?? undefined, status: 'running', analysis: null, progress: 'Analyzing the authorized posting…', attempts: 0, cacheHit: false })
-    try { setAnalysis(await window.workbench.startAnalysis(token)); setUsage(await window.workbench.getAnalysisUsage()) }
-    catch (failure) { setAnalysis(null); setConsentError(failure instanceof Error ? failure.message : 'Analysis could not start. Check Settings and try again.') }
-    finally { setConsentBusy(false) }
+    try { await analyzeAuthorizedRun(token, authorizedRunId ?? undefined, jobId) }
+    finally { if (selectedJob.current === jobId) setConsentBusy(false) }
   }
   async function generateDraft() {
     const token = pendingToken.current, jobId = activeJob?.id
     if (!token || !consentAccepted || draftBusy || !jobId) return
     setDraftBusy(true); setDraftError('')
-    setAnalysis({ jobId, runId: authorizedRunId ?? undefined, status: 'running', analysis: analysis?.analysis ?? null, progress: `Selecting content for a ${pageTarget}-page target…`, attempts: analysis?.attempts ?? 0, cacheHit: false })
+    setAnalysis({ jobId, runId: authorizedRunId ?? undefined, status: 'running', analysis: analysis?.analysis ?? null, progress: 'Finding the most relevant career facts…', attempts: analysis?.attempts ?? 0, cacheHit: false, generationStep: 'score-evidence', completedSteps: ['parse-posting'] })
     try {
       const result = await window.workbench.generateDraft(token, pageTarget)
       if (selectedJob.current !== jobId) return
-      if (result.ok && result.draft && result.draft.jobId === jobId) { setDraft(result.draft); setCanonical(await window.workbench.getCanonicalDocument(jobId)); setFitReport(null); setNewRun(false) }
+      if (result.ok && result.draft && result.draft.jobId === jobId) {
+        const document = await window.workbench.getCanonicalDocument(jobId)
+        if (selectedJob.current !== jobId) return
+        setDraft(result.draft); setCanonical(document); setFitReport(null); setReviewApprovedDraft(false); setFitBusy(true)
+        try {
+          const fit = await window.workbench.measureDocument(jobId)
+          if (selectedJob.current === jobId) setFitReport(fit)
+        } catch { if (selectedJob.current === jobId) setDraftError('Your draft is saved, but page length could not be checked. Retry Check page length before approval.') }
+        finally { if (selectedJob.current === jobId) { setFitBusy(false); setNewRun(false) } }
+      }
       else if (!result.ok) setDraftError(result.message)
       const latest = await window.workbench.getAnalysis(jobId)
       if (latest && selectedJob.current === jobId) setAnalysis(latest)
@@ -149,10 +176,48 @@ export function WorkbenchStart({ activeJob, onNavigate }: { activeJob: JobRecord
     finally { setDocxBusy(false) }
   }
   async function approveCurrentDraft() {
-    if (!activeJob) return
-    const result = await window.workbench.approveDraft(activeJob.id)
-    if (result.draft) setDraft(result.draft)
-    setDraftError(result.ok ? 'Your CV is approved. You can save it now.' : result.message)
+    if (!activeJob || draftBusy) return
+    const jobId = activeJob.id
+    setDraftBusy(true)
+    try {
+      const result = await window.workbench.approveDraft(jobId)
+      if (selectedJob.current !== jobId) return
+      if (result.draft) setDraft(result.draft)
+      if (result.ok) setReviewApprovedDraft(false)
+      setDraftError(result.ok ? 'Your CV is approved. You can export it now.' : result.message)
+    } catch { if (selectedJob.current === jobId) setDraftError('Approval could not be saved. Review your CV and try again.') }
+    finally { if (selectedJob.current === jobId) setDraftBusy(false) }
+  }
+  async function decideSuggestedSkill(skillId: string, decision: 'pending' | 'confirmed' | 'removed') {
+    if (!activeJob || !draft || draftBusy) return
+    const jobId = activeJob.id
+    setDraftBusy(true); setDraftError('')
+    try {
+      const result = await window.workbench.decideSuggestedSkill({ jobId, draftId: draft.id, skillId, decision })
+      if (selectedJob.current !== jobId) return
+      if (!result.ok || !result.draft) { setDraftError(result.message); return }
+      const document = await window.workbench.getCanonicalDocument(jobId)
+      if (selectedJob.current !== jobId) return
+      setDraft(result.draft); setCanonical(document); setFitReport(null); setAcceptedCuts([]); setReviewApprovedDraft(true)
+      setDraftError('Skill decision saved for this CV only. Check the updated wording and page length before approval.')
+    } catch { if (selectedJob.current === jobId) setDraftError('Your skill decision could not be saved. Try again.') }
+    finally { if (selectedJob.current === jobId) setDraftBusy(false) }
+  }
+  async function correctDraftTailoring(field: 'headline' | 'summary', text: string) {
+    if (!activeJob || !draft || draftBusy) return false
+    const jobId = activeJob.id
+    setDraftBusy(true); setDraftError('')
+    try {
+      const result = await window.workbench.correctDraftTailoring({ jobId, draftId: draft.id, field, text })
+      if (selectedJob.current !== jobId) return false
+      if (!result.ok || !result.draft) { setDraftError(result.message); return false }
+      const document = await window.workbench.getCanonicalDocument(jobId)
+      if (selectedJob.current !== jobId) return false
+      setDraft(result.draft); setCanonical(document); setFitReport(null); setReviewApprovedDraft(true)
+      setDraftError('Wording saved. Check your CV and page length again before approval.')
+      return true
+    } catch { if (selectedJob.current === jobId) setDraftError('Wording could not be saved. Your original CV is unchanged.'); return false }
+    finally { if (selectedJob.current === jobId) setDraftBusy(false) }
   }
   async function correctDraft(section: 'education' | 'experience' | 'projects' | 'skills' | 'certificates', index: number, text: string, editIntent: 'wording-only' | 'new-fact' = 'wording-only') {
     if (!activeJob || !draft) return false
@@ -168,9 +233,10 @@ export function WorkbenchStart({ activeJob, onNavigate }: { activeJob: JobRecord
   async function measurePageFit() {
     if (!activeJob || fitBusy) return
     setFitBusy(true); setDraftError(''); setAcceptedCuts([])
-    try { const report = await window.workbench.measureDocument(activeJob.id); setFitReport(report) }
-    catch (failure) { setDraftError(failure instanceof Error ? failure.message : 'The real PDF page measurement failed.') }
-    finally { setFitBusy(false) }
+    const jobId = activeJob.id
+    try { const report = await window.workbench.measureDocument(jobId); if (selectedJob.current === jobId) setFitReport(report) }
+    catch (failure) { if (selectedJob.current === jobId) setDraftError(failure instanceof Error ? failure.message : 'The real PDF page measurement failed.') }
+    finally { if (selectedJob.current === jobId) setFitBusy(false) }
   }
   async function applyPageCuts() {
     if (!activeJob || !fitReport || !acceptedCuts.length) return
@@ -201,9 +267,11 @@ export function WorkbenchStart({ activeJob, onNavigate }: { activeJob: JobRecord
     try {
       const result = await window.workbench.acceptOutboundConsent(token, true, true)
       if (!result.ok) { setConsentError(result.message); return }
+      const jobId = activeJob?.id
+      if (!jobId || selectedJob.current !== jobId || pendingToken.current !== token) return
       setAuthorizedRunId(result.runId ?? null)
       setConsentAccepted(true)
-      setUsage(await window.workbench.getAnalysisUsage())
+      await analyzeAuthorizedRun(token, result.runId, jobId)
     } catch { setConsentError('Consent could not be saved. Review the data and try again.') }
     finally { setConsentBusy(false) }
   }
@@ -236,7 +304,7 @@ export function WorkbenchStart({ activeJob, onNavigate }: { activeJob: JobRecord
     { label: 'Education', count: outgoing.profile.education.length, unit: 'record' },
     { label: 'Certificates', count: outgoing.profile.certificates.length, unit: 'record' }
   ].filter(item => item.count > 0) : []
-  const activePhase: 1 | 2 | 3 | 4 | 5 = newRun && review ? consentAccepted ? 3 : 2 : draft?.approved ? 5 : draft ? 4 : consentAccepted ? 3 : review ? 2 : 1
+  const activePhase: 1 | 2 | 3 | 4 | 5 = newRun && review ? consentAccepted ? 3 : 2 : draft?.approved && !reviewApprovedDraft ? 5 : draft ? 4 : consentAccepted ? 3 : review ? 2 : 1
   const displayedAnalysis = newRun && consentAccepted && analysis?.runId !== authorizedRunId ? null : analysis
   return <WorkbenchStageLayout
     activeJob={activeJob} onNavigate={page => onNavigate(page)} error={error} retry={() => setAttempt(value => value + 1)} activePhase={activePhase}
@@ -244,6 +312,7 @@ export function WorkbenchStart({ activeJob, onNavigate }: { activeJob: JobRecord
     analysis={displayedAnalysis} recovery={recovery} recoveryBusy={recoveryBusy} resumeSavedGeneration={resumeSavedGeneration} cancelSavedGeneration={cancelSavedGeneration} draft={draft} canonical={canonical} fitReport={fitReport} fitBusy={fitBusy} acceptedCuts={acceptedCuts} setAcceptedCuts={setAcceptedCuts} draftBusy={draftBusy} draftError={draftError}
     pageTarget={pageTarget} setPageTarget={setPageTarget} usage={usage} addSection={addSection} setAddSection={setAddSection} addEvidence={addEvidence} setAddEvidence={setAddEvidence} sources={sources} outgoingProfileCounts={outgoingProfileCounts}
     inspectOutgoing={inspectOutgoing} cancelOutgoing={cancelOutgoing} authorizeOutgoing={authorizeOutgoing} startAnalysis={startAnalysis} generateDraft={generateDraft} cancelAnalysis={async () => { if (activeJob) setAnalysis(await window.workbench.cancelAnalysis(activeJob.id)) }}
+    returnToReview={() => setReviewApprovedDraft(true)} decideSuggestedSkill={decideSuggestedSkill} correctDraftTailoring={correctDraftTailoring}
     measurePageFit={measurePageFit} applyPageCuts={applyPageCuts} addDraftItem={addDraftItem} correctDraft={correctDraft} checkDraftNow={checkDraftNow} approveCurrentDraft={approveCurrentDraft} exportDocx={exportDocx} docxBusy={docxBusy}
     onProposalAccepted={(next, document, fit) => { setDraft(next); setCanonical(document); setFitReport(fit); setAcceptedCuts([]) }}
   />

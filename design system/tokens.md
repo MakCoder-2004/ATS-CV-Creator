@@ -58,7 +58,7 @@ Semantic status must never rely on color alone. Pair with a plain-language label
 
 - **Application body/UI:** Manrope Variable, local font asset; 14px root, weight 450 regular / 650 emphasis.
 - **Display/headings:** Sora Variable, local font asset; use only for brand and page/section headings, typically 700–750.
-- **CV artifact:** Arial, 11.5px at 1.4 line-height in the prototype paper; content is left-aligned and document-like.
+- **CV artifact:** Arial, 11pt at 1.4 line-height in the exported A4 document. The responsive review paper scales body text from 11.5px toward an 11pt equivalent at full width; it keeps a 210:297 paper aspect ratio without clipping overflowing content. Name is visually prominent; section headings are restrained, ruled and sentence case. Content is left-aligned and document-like, with only identity/contact metadata centered. Paper-only selection and pending-skill annotations use the existing light selected/warning artifact palette regardless of app theme; those annotations never enter exports.
 - **Body line height:** 1.55 (21.7px at 14px). Dense supporting text 1.5–1.65. Do not use below 1.4 for readable text.
 - **Type scale:** page title 23–30px responsive, weight 750, tracking `-0.04em`; section title 16–17px, weight 700; body/control 14px; labels and metadata 12–13px; fine metadata 10–11px only for nonessential supporting details. Never use 10–11px for instructions, validation, or primary content.
 - Sentence case throughout. Headings and body are left-aligned; center alignment is reserved for concise empty states or centered document metadata. Do not justify text.

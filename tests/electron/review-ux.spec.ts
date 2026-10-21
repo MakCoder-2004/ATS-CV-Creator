@@ -58,6 +58,8 @@ test('review centers the CV and reveals only the selected wording and human-read
     await page.screenshot({ path: 'test-results/review-ux-dark-narrow.png', fullPage: true })
     await page.setViewportSize({ width: 375, height: 812 })
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+    expect(await page.locator('.paper').evaluate(element => element.scrollHeight <= element.clientHeight + 1), 'Narrow CV content must expand the paper instead of being clipped').toBe(true)
+    expect(await page.evaluate(() => document.querySelector('.page-fit-controls')!.getBoundingClientRect().top >= document.querySelector('.paper')!.getBoundingClientRect().bottom), 'Page controls must stay below the entire CV').toBe(true)
     await expect(page.getByRole('button', { name: 'Check CV for issues' })).toBeVisible()
     const mobileEntry = paper.getByRole('button', { name: /Review sources for Engineer/ }).first()
     await mobileEntry.click()

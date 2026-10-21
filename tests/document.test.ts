@@ -1,4 +1,6 @@
 import { expect, test } from 'vitest'
+import { draftRevisionSchema } from '../src/shared/draft'
+import { profileSnapshotSchema } from '../src/shared/profile'
 import { canonicalDocumentSchema, canonicalDocumentTextParts, createCanonicalDocument, renderDocumentHtml, splitDocumentBullets, type CanonicalDocument } from '../src/shared/document'
 
 const document = canonicalDocumentSchema.parse({ version: 1, draftId: '11111111-1111-4111-8111-111111111111', jobId: '22222222-2222-4222-8222-222222222222', revision: 3, targetPages: 1, identity: { name: 'Zoë <Candidate>', headline: 'Engineer', contact: ['zoe@example.test'], links: [{ label: 'Portfolio', url: 'https://example.test/portfolio' }] }, sections: [{ name: 'Experience', entries: [{ id: 'experience-0', heading: 'Engineer', organization: 'Example', dates: '2020 – Present', text: 'Built Unicode résumé tools.', bullets: ['Built Unicode résumé tools.'], links: [] }] }], style: { fontFamily: 'Arial', bodyPt: 11, pageSize: 'A4', background: '#ffffff' } })
@@ -68,6 +70,24 @@ test('description segmentation preserves wording and the HTML renderer safely es
   const html = renderDocumentHtml({ ...document, identity: { ...document.identity, summary: '<script>alert("x")</script>' } })
   expect(html).toContain('&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;')
   expect(html).not.toContain('<script>')
+})
+
+test('echoed source objects never become serialized document prose', () => {
+  const citation = { evidenceId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', revision: 1 }
+  const draft = draftRevisionSchema.parse({ id: document.draftId, jobId: document.jobId, revision: 1, pageTarget: 1, status: 'unverified', approved: false, createdAt: new Date(0).toISOString(), progress: 'Ready', attempts: 0,
+    lockedFields: { fullName: 'Candidate', education: [{ evidenceId: citation.evidenceId, title: 'BSc Computer Science', institution: 'Example University' }], experience: [], projects: [], certificates: [] },
+    content: { education: [{ text: JSON.stringify({ title: 'BSc Computer Science', institution: 'Example University', id: 'INTERNAL_DO_NOT_PRINT' }), citations: [citation], rationale: 'Saved education' }], experience: [], projects: [], skills: [], certificates: [] },
+    tailoring: { headline: 'Engineer', summary: { text: JSON.stringify({ description: 'Builds Python APIs.' }), citations: [citation], rationale: 'Profile introduction' } },
+    evidence: [{ ...citation, snapshot: {} }]
+  })
+  const profile = profileSnapshotSchema.parse({ contact: null, skills: [], education: [], certificates: [], summary: [], languages: [], extras: [] })
+  const canonical = createCanonicalDocument(draft, profile, { experience: [], projects: [] })
+  expect(canonical.identity.summary).toBe('Builds Python APIs.')
+  expect(canonical.sections[0].entries[0].text).toBe('')
+  const html = renderDocumentHtml(canonical)
+  expect(html).toContain('BSc Computer Science')
+  expect(html).not.toContain('INTERNAL_DO_NOT_PRINT')
+  expect(html).not.toContain('&quot;title&quot;')
 })
 
 test('canonical preview rejects any added or reordered output section', () => {

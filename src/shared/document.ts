@@ -16,7 +16,15 @@ export type DocumentFitReport = z.infer<typeof documentFitReportSchema>
 const monthYear = (date?: string) => date?.replace(/^(\d{4})-(\d{2})$/, (_, year, month) => `${month}/${year}`) ?? date
 const dateRange = (start?: string, end?: string) => [monthYear(start), monthYear(end)].filter(Boolean).join(' – ') || undefined
 const documentText = (text: string) => {
-  try { const parsed = JSON.parse(text); if (typeof parsed?.description === 'string') return parsed.description } catch { /* Ordinary generated paragraph. */ }
+  try {
+    const parsed: unknown = JSON.parse(text)
+    if (typeof parsed === 'string') return parsed
+    if (parsed && typeof parsed === 'object') {
+      const record = parsed as Record<string, unknown>
+      // An echoed source object is metadata, not CV prose. Never expose serialized records.
+      return typeof record.description === 'string' ? record.description : typeof record.text === 'string' ? record.text : ''
+    }
+  } catch { /* Ordinary generated paragraph. */ }
   return text
 }
 /** Splits authored/generated descriptions into readable bullets without changing their wording. */
@@ -59,7 +67,7 @@ export function createCanonicalDocument(draft: DraftRevision, profile: ProfileSn
     { name: 'Education', entries: paragraphEntries('education') }, { name: 'Experience', entries: paragraphEntries('experience') }, { name: 'Projects', entries: paragraphEntries('projects') }, { name: 'Skills', entries: skills }, { name: 'Certificates', entries: paragraphEntries('certificates') }
   ]
   const sections = allSections.filter(section => section.entries.length > 0)
-  return canonicalDocumentSchema.parse({ version: 1, draftId: draft.id, jobId: draft.jobId, revision: draft.revision, targetPages: draft.pageTarget, identity: { name: contact?.fullName ?? draft.lockedFields.fullName, ...(draft.tailoring?.headline ? { headline: draft.tailoring.headline } : contact?.headline ?? draft.lockedFields.headline ? { headline: contact?.headline ?? draft.lockedFields.headline } : {}), ...(draft.tailoring?.summary?.text ? { summary: draft.tailoring.summary.text } : {}), contact: [contact?.email, contact?.phone, contact?.location].filter((value): value is string => Boolean(value)), links: contact?.links ?? [] }, sections, style: { fontFamily: 'Arial', bodyPt: 11, pageSize: 'A4', background: '#ffffff' } })
+  return canonicalDocumentSchema.parse({ version: 1, draftId: draft.id, jobId: draft.jobId, revision: draft.revision, targetPages: draft.pageTarget, identity: { name: contact?.fullName ?? draft.lockedFields.fullName, ...(draft.tailoring?.headline ? { headline: draft.tailoring.headline } : contact?.headline ?? draft.lockedFields.headline ? { headline: contact?.headline ?? draft.lockedFields.headline } : {}), ...(draft.tailoring?.summary?.text ? { summary: documentText(draft.tailoring.summary.text) } : {}), contact: [contact?.email, contact?.phone, contact?.location].filter((value): value is string => Boolean(value)), links: contact?.links ?? [] }, sections, style: { fontFamily: 'Arial', bodyPt: 11, pageSize: 'A4', background: '#ffffff' } })
 }
 
 export function escapeHtml(value: string): string { return value.replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]!) }
