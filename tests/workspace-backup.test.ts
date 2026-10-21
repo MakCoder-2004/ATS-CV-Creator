@@ -2,6 +2,7 @@ import { afterEach, expect, test } from 'vitest'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { createHash } from 'node:crypto'
 import { createWorkbench } from '../src/main/workbench'
 import Database from 'better-sqlite3'
 import type { AnalysisTransport } from '../src/main/posting-analysis'
@@ -15,6 +16,10 @@ afterEach(() => {
 })
 const scripted: AnalysisTransport = { async generate({ prompt }) {
   if (prompt.includes('Extract only explicit qualifications')) return JSON.stringify({ required: ['TypeScript'], preferred: [], tools: ['TypeScript'], responsibilities: [], keywords: ['TypeScript'] })
+  if (prompt.startsWith('Propose conservative replacement wording')) {
+    const { sourcesByItem } = JSON.parse(prompt.slice(prompt.indexOf('{')))
+    return JSON.stringify({ items: sourcesByItem.map(() => ({ text: 'TypeScript', rationale: 'Retains cited saved evidence.' })) })
+  }
   if (prompt.startsWith('Score these numbered')) {
     const { items } = JSON.parse(prompt.slice(prompt.indexOf('{')))
     return JSON.stringify({ relevance: items.map((item: { index: number }) => ({ index: item.index, score: 1, rationale: 'Relevant profile source.' })) })
@@ -56,8 +61,20 @@ test('complete workspace backup restores draft revisions, evidence, posting, pre
   expect(generated.ok).toBe(true)
   const original = generated.draft!
   expect(original.evidence.length).toBeGreaterThan(0)
+  expect(await active.api.checkDraft(job.value.id)).toMatchObject({ passed: true })
+  const document = await active.api.getCanonicalDocument(job.value.id)
+  if (!document) throw Error('document fixture failed')
+  await active.api.saveDocumentFitReport(job.value.id, { documentHash: createHash('sha256').update(JSON.stringify(document)).digest('hex'), targetPages: document.targetPages, actualPages: document.targetPages, extractedText: ['CV'], linkTargets: [], links: [], overflow: false, proposedCuts: [], measuredAt: new Date().toISOString() })
+  expect(await active.api.approveDraft(job.value.id)).toMatchObject({ ok: true })
+  const approved = await active.api.getDraft(job.value.id)
+  const nextConsent = await active.api.prepareOutboundConsent(job.value.id)
+  if (!nextConsent.ok) throw Error('regeneration fixture failed')
+  await active.api.acceptOutboundConsent(nextConsent.token, true, true)
+  const proposal = await active.api.regenerateDraft(nextConsent.token, { kind: 'section', section: 'skills' })
+  expect(proposal).toMatchObject({ ok: true, proposal: { status: 'pending' } })
   const backup = active.backup.createBackup()
-  expect(JSON.parse(backup).tables.draft_revisions.rows).toHaveLength(1)
+  expect(JSON.parse(backup).tables.draft_revisions.rows.length).toBeGreaterThan(0)
+  expect(JSON.parse(backup).tables.langgraph_checkpoints.rows.length).toBeGreaterThan(0)
   expect(backup).not.toContain('encrypted_credentials')
   const later = await active.api.saveSkill({ name: 'New later evidence', category: 'Technical' })
   expect(later.ok).toBe(true)
@@ -72,10 +89,15 @@ test('complete workspace backup restores draft revisions, evidence, posting, pre
   expect((await reopened.api.listJobs()).map(item => item.title)).toEqual(['Engineer'])
   expect((await reopened.api.getDraft(job.value.id))?.id).toBe(original.id)
   expect((await reopened.api.getDraft(job.value.id))?.evidence).toEqual(original.evidence)
+  expect((await reopened.api.getDraft(job.value.id))?.checkReport).toEqual(approved?.checkReport)
+  expect((await reopened.api.getDraft(job.value.id))?.approval).toEqual(approved?.approval)
+  expect(await reopened.api.getRegenerationProposal(job.value.id)).toMatchObject({ id: proposal.proposal!.id, status: 'pending' })
+  expect(JSON.parse(reopened.backup.createBackup()).tables.langgraph_checkpoints.rows).toEqual(JSON.parse(backup).tables.langgraph_checkpoints.rows)
   expect((await reopened.api.getAnalysisUsage()).attempts).toBeGreaterThan(0)
   expect((await reopened.api.getAnalysisUsage()).minimumSpacingMs).toBe(0)
   expect(requests.length).toBe(attemptsBeforeReopen)
   expect(await reopened.api.getAnalysis(job.value.id)).toMatchObject({ status: 'complete' })
+  expect(await reopened.api.assertDraftExportable(job.value.id)).toMatchObject({ ok: true })
   await expect(reopened.api.startAnalysis(consent.token)).rejects.toThrow()
   expect(requests.length).toBe(attemptsBeforeReopen)
 })
