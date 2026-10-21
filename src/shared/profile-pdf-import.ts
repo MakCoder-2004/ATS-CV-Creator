@@ -23,7 +23,7 @@ export const profilePdfApplyResultSchema = z.discriminatedUnion('ok', [
 export type ProfilePdfProposal = z.infer<typeof profilePdfProposalSchema>
 export type ProfilePdfPreview = z.infer<typeof profilePdfPreviewSchema>
 
-const sectionNames = new Set(['experience', 'employment', 'work experience', 'training', 'education', 'skills', 'technical skills', 'summary', 'projects', 'certificates', 'languages'])
+const sectionNames = new Set(['experience', 'employment', 'work experience', 'training', 'education', 'skills', 'technical skills', 'programming languages', 'tools', 'concepts', 'summary', 'projects', 'certificates', 'languages'])
 const source = (line: string, page: number, field: string) => ({ page, passage: line.slice(0, 4000), field })
 const splitParts = (value: string) => value.split(/\s+[|]\s+/).map(part => part.trim())
 
@@ -44,8 +44,9 @@ export function mapProfilePdfPages(pages: Array<{ page: number; text: string; li
       }
       const header = line.match(/^([A-Z][A-Z ]{2,}):\s*(.*)$/)
       if (!header) {
-        if (section === 'skills') {
-          for (const name of line.split(/[,;|•]/).map(value => value.trim()).filter(Boolean)) { skills.push({ name, category: 'Technical' }); sources.push(source(line, page.page, `skills.${name}`)) }
+        if (['skills', 'programming languages', 'tools', 'concepts'].includes(section)) {
+          const category = section === 'programming languages' ? 'Languages' : section === 'tools' ? 'Tools' : section === 'concepts' ? 'Domain' : 'Technical'
+          for (const name of line.split(/[,;|•]/).map(value => value.trim()).filter(Boolean)) { skills.push({ name, category }); sources.push(source(line, page.page, `skills.${name}`)) }
         } else if (section === 'summary') { summaryText = [summaryText, line].filter(Boolean).join('\n'); sources.push(source(line, page.page, 'entries.summary')) }
         else if (currentRole && ['experience', 'employment', 'work experience', 'training'].includes(section)) { currentRole.factualItems.push({ text: line }); sources.push(source(line, page.page, 'experience.factualItem')) }
         else unmapped.push({ page: page.page, text: line })
@@ -58,9 +59,10 @@ export function mapProfilePdfPages(pages: Array<{ page: number; text: string; li
       if (key === 'phone' && /^[+()\d][+()\d .-]{5,}$/.test(value)) { contact.phone = value; sources.push(source(line, page.page, 'contact.phone')); continue }
       if (key === 'contact link' && value) { const [label, url] = splitParts(value); if (label && url && /^https?:\/\//i.test(url)) { const links = Array.isArray(contact.links) ? contact.links as Array<{ label: string; url: string }> : []; links.push({ label, url }); contact.links = links; sources.push(source(line, page.page, 'contact.links')) } else unmapped.push({ page: page.page, text: line }); continue }
       if (key === 'project link' && currentProject && value) { const [label, url] = splitParts(value); if (label && url && /^https?:\/\//i.test(url)) { currentProject.links.push({ label, url }); sources.push(source(line, page.page, 'projects.links')) } else unmapped.push({ page: page.page, text: line }); continue }
-      if (key === 'skills' || key === 'technical skills') {
-        section = 'skills'
-        for (const name of value.split(/[,;|•]/).map(item => item.trim()).filter(Boolean)) { skills.push({ name, category: 'Technical' }); sources.push(source(line, page.page, `skills.${name}`)) }
+      if (['skills', 'technical skills', 'programming languages', 'tools', 'concepts'].includes(key)) {
+        section = key === 'programming languages' ? 'programming languages' : key === 'tools' ? 'tools' : key === 'concepts' ? 'concepts' : 'skills'
+        const category = section === 'programming languages' ? 'Languages' : section === 'tools' ? 'Tools' : section === 'concepts' ? 'Domain' : 'Technical'
+        for (const name of value.split(/[,;|•]/).map(item => item.trim()).filter(Boolean)) { skills.push({ name, category }); sources.push(source(line, page.page, `skills.${name}`)) }
         continue
       }
       if (key === 'experience' || key === 'employment' || key === 'work experience' || key === 'training') {
@@ -70,8 +72,11 @@ export function mapProfilePdfPages(pages: Array<{ page: number; text: string; li
         const organization = roleParts[0]?.trim(), title = roleParts[1]?.trim(), dateText = roleParts.slice(2).join(' | ').trim()
         currentProject = undefined
         if (organization && title) {
-          const dates = dateText ? dateText.split(/\s+[–—]\s+/) : []
-          currentRole = { kind: key === 'training' ? 'training' : 'employment', organization, title, description: line, factualItems: [], ...(dates[0] ? { startDate: dates[0] } : {}), ...(dates[1] ? { endDate: dates[1] } : {}) }
+          const dates = dateText ? dateText.split(/\s+[–—-]\s+/) : []
+          const startDate = dates[0] && dates[0].length <= 80 ? dates[0] : undefined
+          const endDate = dates[1] && dates[1].length <= 80 ? dates[1] : undefined
+          if (dates.some(date => date.length > 80)) unmapped.push({ page: page.page, text: `Experience date needs review because it exceeds the structured field limit: ${line}` })
+          currentRole = { kind: key === 'training' ? 'training' : 'employment', organization, title, description: line, factualItems: [], ...(startDate ? { startDate } : {}), ...(endDate ? { endDate } : {}) }
           experience.push(currentRole); sources.push(source(line, page.page, 'experience.role'))
         } else { currentRole = undefined; unmapped.push({ page: page.page, text: line }) }
         continue
@@ -99,9 +104,11 @@ export function mapProfilePdfPages(pages: Array<{ page: number; text: string; li
         currentRole = undefined; currentProject = undefined; continue
       }
       if (key === 'certificate' && value) {
-        const parts = splitParts(value), year = parts.find(part => /^\d{4}$/.test(part))
+        const parts = splitParts(value), year = parts.find(part => /^\d{4}$/.test(part)), dateText = parts.find(part => /\d{4}/.test(part))
         entries.push({ section: 'certificates', title: parts[0] ?? '', ...(parts[1] ? { issuer: parts[1] } : {}), ...(year ? { year: Number(year) } : {}) })
-        sources.push(source(line, page.page, 'entries.certificates')); currentRole = undefined; currentProject = undefined; continue
+        sources.push(source(line, page.page, 'entries.certificates'))
+        if (dateText && !year) unmapped.push({ page: page.page, text: `Certificate date precision needs review: ${line}` })
+        currentRole = undefined; currentProject = undefined; continue
       }
       if (key === 'summary' && value) { section = 'summary'; summaryText = [summaryText, value].filter(Boolean).join('\n'); sources.push(source(line, page.page, 'entries.summary')); currentRole = undefined; currentProject = undefined; continue }
       if (key === 'spoken languages' && value) { for (const title of value.split(/[,;]+/).map(item => item.trim()).filter(Boolean)) entries.push({ section: 'languages', title }); sources.push(source(line, page.page, 'entries.languages')); currentRole = undefined; currentProject = undefined; continue }

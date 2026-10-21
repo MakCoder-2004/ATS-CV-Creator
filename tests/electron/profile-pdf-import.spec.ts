@@ -109,3 +109,24 @@ test('profile changes during local review invalidate apply instead of overwritin
     await running.close(); running = undefined
   } finally { await running?.close(); await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }) }
 })
+
+test('rolls back a conflicting proposal batch without partially writing contact or profile facts', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'cv-tailor-pdf-rollback-')), userData = join(root, 'workspace'), sourceFile = join(root, 'cv.pdf')
+  writeFileSync(sourceFile, makePdf(['NAME: Ada Example', 'SKILLS: Python, SQL', 'A sufficiently long source paragraph keeps this synthetic document above the text minimum.']))
+  let running: ElectronApplication | undefined
+  try {
+    running = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData } })
+    const page = await running.firstWindow()
+    await expect(page.locator('[data-ui-ready="true"]')).toBeVisible({ timeout: 15000 })
+    await running.evaluate(({ dialog }, selectedPath) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selectedPath] }); return true }, sourceFile)
+    const preview = await page.evaluate(() => window.workbench.previewProfilePdfImport())
+    if (!preview.ok) throw new Error(preview.message)
+    const duplicate = structuredClone(preview.proposals)
+    duplicate.skills[1].name = duplicate.skills[0].name
+    const result = await page.evaluate(async ({ token, proposals }) => window.workbench.applyProfilePdfImport(token, proposals), { token: preview.token, proposals: duplicate })
+    expect(result.ok).toBe(false)
+    expect(await page.evaluate(() => window.workbench.getProfile())).toMatchObject({ contact: null, skills: [], education: [], certificates: [], summary: [], languages: [], extras: [] })
+    expect(await page.evaluate(() => window.workbench.getExperience())).toEqual({ experience: [], projects: [] })
+    await running.close(); running = undefined
+  } finally { await running?.close(); await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }) }
+})

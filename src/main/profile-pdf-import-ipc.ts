@@ -7,22 +7,24 @@ import { extractProfilePdf, profilePdfLimits } from './profile-pdf-intake'
 
 /** Native-picker only; renderer never supplies a filesystem path. Proposals live only in memory until apply/cancel. */
 export function registerProfilePdfImportIpc(getWindow: () => BrowserWindow, getStorage: () => WorkbenchStorageAPI, trusted: (event: IpcMainInvokeEvent) => void) {
-  const pending = new Map<string, { sourceHash: string; baseline: string; proposals: ReturnType<typeof profilePdfProposalSchema.parse> }>()
+  const pending = new Map<string, { sourceHash: string; baseline: string; proposals: ReturnType<typeof profilePdfProposalSchema.parse>; timer: NodeJS.Timeout }>()
+  const discard = (token: string) => { const active = pending.get(token); if (!active) return false; clearTimeout(active.timer); pending.delete(token); return true }
   ipcMain.handle('profile:pdf-import:preview', async (event, ...args: unknown[]) => {
     trusted(event); if (args.length) throw new Error('Unexpected arguments')
     try {
       const selection = await dialog.showOpenDialog(getWindow(), { title: 'Choose a text PDF CV', properties: ['openFile'], filters: [{ name: 'PDF document', extensions: ['pdf'] }] })
       if (selection.canceled || !selection.filePaths[0]) return profilePdfPreviewSchema.parse({ ok: false, cancelled: true, message: 'CV upload cancelled.' })
       const path = selection.filePaths[0]
+      const baseline = await getStorage().getProfileImportBaseline()
       const info = await lstat(path)
       if (!info.isFile() || info.isSymbolicLink() || info.size < 1 || info.size > profilePdfLimits.bytes) return profilePdfPreviewSchema.parse({ ok: false, cancelled: false, message: 'Choose a regular PDF file smaller than 15 MiB.' })
       const capturedBytes = await readFile(path)
       if (capturedBytes.length !== info.size) return profilePdfPreviewSchema.parse({ ok: false, cancelled: false, message: 'The selected file changed while it was being read. Choose it again.' })
       const extracted = await extractProfilePdf(capturedBytes)
       const proposals = profilePdfProposalSchema.parse(mapProfilePdfPages(extracted.pages))
-      const baseline = await getStorage().getProfileImportBaseline()
       const token = randomUUID()
-      pending.set(token, { sourceHash: extracted.sha256, baseline, proposals })
+      const timer = setTimeout(() => pending.delete(token), 15 * 60_000); timer.unref()
+      pending.set(token, { sourceHash: extracted.sha256, baseline, proposals, timer })
       return profilePdfPreviewSchema.parse({ ok: true, token, sourceHash: extracted.sha256, proposals })
     } catch (error) {
       return profilePdfPreviewSchema.parse({ ok: false, cancelled: false, message: error instanceof Error ? error.message : 'The selected PDF could not be read.' })
@@ -30,11 +32,11 @@ export function registerProfilePdfImportIpc(getWindow: () => BrowserWindow, getS
   })
   ipcMain.handle('profile:pdf-import:cancel', (event, ...args: unknown[]) => {
     trusted(event); if (args.length !== 1 || typeof args[0] !== 'string') throw new Error('Expected preview token')
-    return pending.delete(args[0]) ? { ok: true, message: 'CV review discarded. No profile data was changed.' } : { ok: false, message: 'This CV review has expired.' }
+    return discard(args[0]) ? { ok: true, message: 'CV review discarded. No profile data was changed.' } : { ok: false, message: 'This CV review has expired.' }
   })
   ipcMain.handle('profile:pdf-import:apply', async (event, ...args: unknown[]) => {
     trusted(event); if (args.length !== 2 || typeof args[0] !== 'string') throw new Error('Expected preview token and reviewed proposals')
-    const saved = pending.get(args[0]); pending.delete(args[0])
+    const saved = pending.get(args[0])
     if (!saved) return profilePdfApplyResultSchema.parse({ ok: false, message: 'This CV review expired. Select the PDF again.' })
     const proposals = profilePdfProposalSchema.safeParse(args[1])
     if (!proposals.success) return profilePdfApplyResultSchema.parse({ ok: false, message: 'Resolve invalid proposal fields or skip them before applying.' })
@@ -54,7 +56,9 @@ export function registerProfilePdfImportIpc(getWindow: () => BrowserWindow, getS
       if (group === 'entries') return unchanged('entries')
       return false
     })
-    return profilePdfApplyResultSchema.parse(await getStorage().importEmptyProfilePdf(saved.sourceHash, saved.baseline, { ...proposals.data, sources: acceptedSources }))
+    const result = profilePdfApplyResultSchema.parse(await getStorage().importEmptyProfilePdf(saved.sourceHash, saved.baseline, { ...proposals.data, sources: acceptedSources }))
+    if (result.ok || /profile changed|profile is no longer empty/i.test(result.message)) discard(args[0])
+    return result
   })
-  return { clear() { pending.clear() } }
+  return { clear() { for (const token of pending.keys()) discard(token) } }
 }

@@ -263,7 +263,7 @@ nav button:hover, nav button[aria-current=page] { background: var(--raised); col
 .pdf-proposal { min-width: 0; display: grid; gap: 12px; padding: 16px; border: 1px solid var(--line); border-radius: 6px; }
 .pdf-proposal legend { padding: 0 6px; font-weight: 700; }
 .pdf-proposal label:not(.pdf-include) { display: grid; gap: 6px; font-size: 13px; font-weight: 650; }
-.pdf-proposal input:not([type=checkbox]), .pdf-proposal textarea { width: 100%; min-height: 44px; padding: 10px 12px; color: var(--ink); background: var(--canvas); border: 1px solid var(--control-border); border-radius: 6px; font: inherit; font-weight: 450; }
+.pdf-proposal input:not([type=checkbox]), .pdf-proposal select, .pdf-proposal textarea { width: 100%; min-height: 44px; padding: 10px 12px; color: var(--ink); background: var(--canvas); border: 1px solid var(--control-border); border-radius: 6px; font: inherit; font-weight: 450; }
 .pdf-proposal blockquote { margin: 0; padding: 10px 12px; border-left: 3px solid var(--link); background: var(--raised); overflow-wrap: anywhere; }
 .pdf-proposal blockquote small { color: var(--muted); font-size: 12px; }
 .pdf-include { display: flex; gap: 8px; align-items: center; min-height: 40px; font-weight: 650; }

@@ -14,6 +14,11 @@ test('automatically organizes marker-led PDF facts into profile-shaped, source-b
   expect(result.unmapped).toContainEqual({ page: 1, text: 'UNKNOWN: Community mentor' })
 })
 
+test('maps programming languages, tools, and concepts into their distinct profile skill categories', () => {
+  const result = mapProfilePdfPages([{ page: 3, text: ['PROGRAMMING LANGUAGES: Python, Java', 'TOOLS: React, Git', 'CONCEPTS: Distributed systems'].join('\n') }])
+  expect(result.skills).toEqual([{ name: 'Python', category: 'Languages' }, { name: 'Java', category: 'Languages' }, { name: 'React', category: 'Tools' }, { name: 'Git', category: 'Tools' }, { name: 'Distributed systems', category: 'Domain' }])
+})
+
 test('maps spoken languages separately from programming skills and preserves source date precision', () => {
   const exactEducation = 'EDUCATION: BSc Computer Science | Example University | 2020-09-14 – 2024-06-20 | GPA 3.7'
   const result = mapProfilePdfPages([{ page: 2, text: ['SPOKEN LANGUAGES: Arabic, English', 'TECHNICAL SKILLS: Python', exactEducation, 'PROJECT: Atlas | Python, Flask', 'PROJECT LINK: Repository | https://example.test/atlas', 'FACT: Built a recommendation service'].join('\n') }])
