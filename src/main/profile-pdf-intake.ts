@@ -10,7 +10,7 @@ export const profilePdfLimits = Object.freeze({
   timeoutMs: 5_000
 })
 
-export type PdfSourcePage = { page: number; text: string; links: Array<{ label: string; url: string }> }
+export type PdfSourcePage = { page: number; text: string; links: Array<{ label: string; url: string }>; warnings?: string[] }
 export type PdfIntake = { sha256: string; pages: PdfSourcePage[]; characterCount: number }
 type WorkerResult = { ok: true; value: PdfIntake } | { ok: false; message: string }
 

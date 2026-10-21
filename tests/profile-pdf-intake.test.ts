@@ -41,6 +41,10 @@ test('extracts selectable text from a synthetic PDF and binds it to captured byt
   expect(result.sha256).toBe((await extractProfilePdf(bytes)).sha256)
 })
 
+test('rejects PDFs beyond the accepted page ceiling', async () => {
+  await expect(extractProfilePdf(makePdf(Array(31).fill('Synthetic selectable page content')))).rejects.toThrow('1–30 pages')
+})
+
 test('rejects blank/scanned-like PDFs instead of returning an empty profile source', async () => {
   await expect(extractProfilePdf(makePdf(['   ']))).rejects.toThrow('no usable selectable text')
 })

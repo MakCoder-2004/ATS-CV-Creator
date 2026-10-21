@@ -259,6 +259,16 @@ nav button:hover, nav button[aria-current=page] { background: var(--raised); col
 :root[data-appearance=dark] .profile-message.error { color: #ffdce0; background: #4a2029; border-color: #9b4551; }
 .profile-message button { color: inherit; }
 .profile-panel[role=status] { color: var(--muted); }
+.pdf-import-review { display: grid; gap: 18px; }
+.pdf-proposal { min-width: 0; display: grid; gap: 12px; padding: 16px; border: 1px solid var(--line); border-radius: 6px; }
+.pdf-proposal legend { padding: 0 6px; font-weight: 700; }
+.pdf-proposal label:not(.pdf-include) { display: grid; gap: 6px; font-size: 13px; font-weight: 650; }
+.pdf-proposal input:not([type=checkbox]), .pdf-proposal textarea { width: 100%; min-height: 44px; padding: 10px 12px; color: var(--ink); background: var(--canvas); border: 1px solid var(--control-border); border-radius: 6px; font: inherit; font-weight: 450; }
+.pdf-proposal blockquote { margin: 0; padding: 10px 12px; border-left: 3px solid var(--link); background: var(--raised); overflow-wrap: anywhere; }
+.pdf-proposal blockquote small { color: var(--muted); font-size: 12px; }
+.pdf-include { display: flex; gap: 8px; align-items: center; min-height: 40px; font-weight: 650; }
+.pdf-import-review details { padding: 12px; border: 1px solid var(--line); border-radius: 6px; }
+.pdf-import-review li { overflow-wrap: anywhere; }
 :root[data-appearance=dark] .field-error, :root[data-appearance=dark] .destructive { color: #ffb9c1; }
 :root[data-appearance=dark] .form-grid [aria-invalid=true], :root[data-appearance=dark] .link-row [aria-invalid=true] { border-color: #ffb9c1; }
 @media (max-width: 1200px) {

@@ -13,6 +13,7 @@ import { factualCheckReportSchema } from '../shared/factual-report'
 import { canonicalDocumentSchema, documentFitReportSchema, documentPdfSchema } from '../shared/document'
 import { regenerationProposalSchema, regenerationResultSchema, regenerationTargetSchema } from '../shared/regeneration'
 import { mutateDraftRecordInputSchema } from '../shared/draft-records'
+import { profilePdfApplyResultSchema, profilePdfPreviewSchema, profilePdfProposalSchema } from '../shared/profile-pdf-import'
 
 const workspaceResult = z.object({ ok: z.boolean(), cancelled: z.boolean(), message: z.string() }).strict()
 const restoreSelection = z.discriminatedUnion('ok', [
@@ -55,6 +56,9 @@ const api: WorkbenchAPI = Object.freeze({
   async getProfile() {
     return profileSnapshotSchema.parse(await ipcRenderer.invoke('profile:get'))
   },
+  async previewProfilePdfImport() { return profilePdfPreviewSchema.parse(await ipcRenderer.invoke('profile:pdf-import:preview')) },
+  async cancelProfilePdfImport(token: string) { return z.object({ ok: z.boolean(), message: z.string() }).strict().parse(await ipcRenderer.invoke('profile:pdf-import:cancel', uuidSchema.parse(token))) },
+  async applyProfilePdfImport(token: string, proposals: import('../shared/profile-pdf-import').ProfilePdfProposal) { return profilePdfApplyResultSchema.parse(await ipcRenderer.invoke('profile:pdf-import:apply', uuidSchema.parse(token), profilePdfProposalSchema.parse(proposals))) },
   async exportProfile() { return await ipcRenderer.invoke('profile:export') },
   async previewProfileImport() { return profileExchangeResultSchema.parse(await ipcRenderer.invoke('profile:import:preview')) },
   async applyProfileImport(token: string) { return await ipcRenderer.invoke('profile:import:apply', uuidSchema.parse(token)) },

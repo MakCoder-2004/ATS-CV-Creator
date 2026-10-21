@@ -17,7 +17,19 @@ parentPort.on('message', async bytes => {
       const page = await document.getPage(pageNumber)
       const content = await page.getTextContent({ includeMarkedContent: false })
       const items = content.items.filter(item => typeof item.str === 'string' && Array.isArray(item.transform) && typeof item.width === 'number' && typeof item.height === 'number')
-      const text = items.map(item => item.str).join(' ').replace(/[\t\u00a0]+/g, ' ').replace(/ {2,}/g, ' ').trim()
+      const ordered = [...items].sort((a, b) => Math.abs(a.transform[5] - b.transform[5]) > 2 ? b.transform[5] - a.transform[5] : a.transform[4] - b.transform[4])
+      const lines = []
+      for (const item of ordered) {
+        const y = item.transform[5]
+        let line = lines.find(candidate => Math.abs(candidate.y - y) <= 2)
+        if (!line) { line = { y, x: item.transform[4], pieces: [] }; lines.push(line) }
+        line.pieces.push({ x: item.transform[4], text: item.str })
+      }
+      lines.sort((a, b) => b.y - a.y)
+      const text = lines.map(line => line.pieces.sort((a, b) => a.x - b.x).map(piece => piece.text).join(' ').replace(/[\t\u00a0]+/g, ' ').replace(/ {2,}/g, ' ').trim()).filter(Boolean).join('\n')
+      const xPositions = [...new Set(items.filter(item => item.str.trim()).map(item => Math.round(item.transform[4])))].sort((a, b) => a - b)
+      const hasColumnGap = xPositions.some((x, index) => index > 0 && x - xPositions[index - 1] >= 100 && index >= 2 && xPositions.length - index >= 2)
+      const warnings = hasColumnGap ? ['This PDF page appears to use multiple text columns. Check the source because reading order may be ambiguous.'] : []
       const links = (await page.getAnnotations({ intent: 'display' })).flatMap(annotation => {
         if (annotation.subtype !== 'Link' || typeof annotation.url !== 'string' || !/^https?:\/\//i.test(annotation.url)) return []
         const [x0, y0, x1, y1] = annotation.rect
@@ -26,7 +38,7 @@ parentPort.on('message', async bytes => {
       })
       characterCount += [...text].length
       if (characterCount > 500_000) throw new Error('PDF text exceeds the 500,000 character limit.')
-      pages.push({ page: pageNumber, text, links })
+      pages.push({ page: pageNumber, text, links, warnings })
     }
     if (pages.reduce((sum, page) => sum + [...page.text].filter(character => !/\s/u.test(character)).length, 0) < 100) throw new Error('This PDF has no usable selectable text. Scanned PDFs and OCR are not supported.')
     parentPort.postMessage({ ok: true, value: { sha256: createHash('sha256').update(capturedBytes).digest('hex'), pages, characterCount } })
