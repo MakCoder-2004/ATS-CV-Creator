@@ -15,11 +15,12 @@ test('cross-category model citations get one bounded correction request without 
   const experienceId = randomUUID(), skillId = randomUUID()
   const items = [
     { id: experienceId, revision: 1, category: 'experience' as const, snapshot: {}, text: '{"title":"Engineer","description":"Built TypeScript tools"}' },
-    { id: skillId, revision: 1, category: 'skills' as const, snapshot: {}, text: '{"name":"TypeScript","category":"Programming"}' }
+    { id: skillId, revision: 1, category: 'skills' as const, snapshot: { name: 'TypeScript' }, text: '{"name":"TypeScript","category":"Programming"}' }
   ]
   const calls: string[] = []
+  const progress: Array<{ step?: string; completed?: string[] }> = []
   let correctOnRetry = true
-  const invoke = () => runSourceLinkedGraph({ job: { title: 'Engineer' }, analysis: {}, items, identity: { id: randomUUID(), jobId: randomUUID(), revision: 1, createdAt: new Date().toISOString(), lockedFields: { fullName: 'Synthetic Candidate', experience: [], education: [], projects: [], certificates: [] } }, call: async prompt => {
+  const invoke = () => runSourceLinkedGraph({ onProgress: (_message, step, completed) => progress.push({ step, completed }), job: { title: 'Engineer' }, sourceJobRevision: 'job-revision-2', analysis: { tools: ['TypeScript', 'Rust'], keywords: ['Senior'] }, items, identity: { id: randomUUID(), jobId: randomUUID(), revision: 1, createdAt: new Date().toISOString(), lockedFields: { fullName: 'Synthetic Candidate', experience: [], education: [], projects: [], certificates: [] } }, call: async prompt => {
     calls.push(prompt)
     if (prompt.startsWith('Score these numbered')) return { value: { relevance: items.map((_, index) => ({ index, score: 1, rationale: 'Relevant synthetic source.' })) }, attempts: 1 }
     const invalid = calls.length === 2 || !correctOnRetry
@@ -30,6 +31,10 @@ test('cross-category model citations get one bounded correction request without 
   expect(calls[1]).toContain('allowedEvidenceBySection')
   expect(result.draft.attempts).toBe(3)
   expect(result.draft.content.skills[0].citations).toEqual([{ evidenceId: skillId, revision: 1 }])
+  expect(progress.map(item => item.step)).toEqual(expect.arrayContaining(['score-evidence', 'select-content', 'tailor-paragraphs']))
+  expect(progress.at(-1)?.completed).toEqual(expect.arrayContaining(['parse-posting', 'score-evidence', 'select-content', 'tailor-paragraphs']))
+  expect(result.draft.suggestedSkills).toEqual([expect.objectContaining({ name: 'Rust', sourceJobRevision: 'job-revision-2', status: 'pending' })])
+  expect(result.draft.suggestedSkills?.some(skill => skill.name === 'Senior')).toBe(false)
   calls.length = 0; correctOnRetry = false
   await expect(invoke()).rejects.toBeInstanceOf(CitationValidationError)
   expect(calls).toHaveLength(3)
@@ -211,9 +216,14 @@ test('accepted frozen consent generates a batched source-linked draft that reope
   wb.close(); opened.pop()
   wb = createWorkbench(dir, undefined, { async generate() { throw Error('offline') } }); opened.push(wb)
   const reopened = await wb.api.getDraft(job.value.id)
+  if (!reopened) throw new Error('reopened draft fixture')
   expect(reopened).toEqual(originalDraft)
   expect(await wb.api.getDraft(secondJob.value.id)).toEqual(secondDraft.draft)
-  expect(await wb.api.getAnalysis(job.value.id)).toMatchObject({ status: 'complete', progress: expect.stringContaining('Draft generated'), attempts: 4, runId: expect.any(String) })
+  expect(await wb.api.getAnalysis(job.value.id)).toMatchObject({ status: 'complete', progress: expect.stringContaining('Draft generated'), attempts: 4, runId: expect.any(String), generationStep: 'check-document', completedSteps: ['parse-posting', 'score-evidence', 'select-content', 'tailor-paragraphs', 'verify-claims', 'check-document'] })
+  const staleNarrative = await wb.api.correctDraftTailoring({ jobId: job.value.id, draftId: '00000000-0000-4000-8000-000000000000', field: 'summary', text: 'Revenue grew 500 percent.' })
+  expect(staleNarrative).toMatchObject({ ok: false })
+  const correctedNarrative = await wb.api.correctDraftTailoring({ jobId: job.value.id, draftId: reopened.id, field: 'summary', text: 'Revenue grew 500 percent.' })
+  expect(correctedNarrative).toMatchObject({ ok: true, draft: { checkReport: { passed: false, findings: expect.arrayContaining([expect.objectContaining({ code: 'unsupported-number', itemPath: 'tailoring.summary' })]) } } })
 }, 20000)
 
 test('cancellation during the shared semantic batch suppresses its late response and draft persistence', async () => {
@@ -232,7 +242,7 @@ test('cancellation during the shared semantic batch suppresses its late response
       return JSON.stringify({ relevance: items.map((item: { index: number }) => ({ index: item.index, score: 1, rationale: 'Relevant.' })) })
     }
     const { selected } = JSON.parse(prompt.slice(prompt.indexOf('{')))
-    return JSON.stringify({ education: [], experience: selected.filter((item: { category: string }) => item.category === 'experience').map((item: { index: number; text: string }) => ({ text: item.text, evidence: [item.index], rationale: 'Relevant.' })), projects: [], skills: [], certificates: [] })
+    return JSON.stringify({ headline: 'Engineer', summary: { text: 'Experienced engineer.', evidence: selected.filter((item: { category: string }) => item.category === 'experience').slice(0, 1).map((item: { index: number }) => item.index), rationale: 'Based on saved role evidence.' }, education: [], experience: selected.filter((item: { category: string }) => item.category === 'experience').map((item: { index: number; text: string }) => ({ text: item.text, evidence: [item.index], rationale: 'Relevant.' })), projects: [], skills: [], certificates: [] })
   } }
   const wb = createWorkbench(dir, undefined, transport); opened.push(wb)
   const usage = await wb.api.getAnalysisUsage()

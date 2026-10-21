@@ -40,7 +40,7 @@ describe('SQLite LangGraph checkpoints', () => {
       const reopened = await runSourceLinkedGraph({ ...base, resume: true, checkpointer: new SqliteCheckpointSaver(database), call: async (prompt: string) => {
         if (prompt.startsWith('Score these')) { scores++; throw new Error('confirmed scoring step replayed') }
         tailorCalls++
-        return { value: { education: [], experience: [{ text: 'Built backend services.', evidence: [0], rationale: 'Relevant.' }], projects: [], skills: [], certificates: [] }, attempts: 1 }
+        return { value: { headline: 'Engineer', summary: { text: 'Engineer with backend experience.', evidence: [0], rationale: 'Selected source.' }, education: [], experience: [{ text: 'Built backend services.', evidence: [0], rationale: 'Relevant.' }], projects: [], skills: [], certificates: [] }, attempts: 1 }
       } })
       expect(reopened.draft.content.experience).toHaveLength(1)
       expect(scores).toBe(1)

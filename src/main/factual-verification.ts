@@ -17,12 +17,16 @@ function numericExpressions(text: string): string[] {
   return [...text.matchAll(pattern)].map(match => normalized(match[0]))
 }
 
-export function checkDraftFacts(draft: DraftRevision) {
+export function checkDraftFacts(draft: DraftRevision, options: { includeSkillDecisions?: boolean } = {}) {
   const findings: FactualFinding[] = []
   const parsed = draftContentSchema.safeParse(draft.content)
   if (!parsed.success) findings.push({ code: 'schema', itemPath: 'content', message: 'Draft content does not match the required five-section schema.', correction: 'Correct the malformed section or item and rerun factual checks.' })
   const evidence = new Map(draft.evidence.map(item => [item.evidenceId, item]))
-  for (const suggestion of draft.suggestedSkills ?? []) if (suggestion.status === 'pending') findings.push({ code: 'unconfirmed-skill', itemPath: `suggestedSkills.${suggestion.id}`, message: `Skill “${suggestion.name}” must be confirmed or removed before approval.`, correction: 'Confirm this skill as your declaration or remove the suggestion.' })
+  for (const suggestion of options.includeSkillDecisions !== false ? draft.suggestedSkills ?? [] : []) if (suggestion.status === 'pending') findings.push({ code: 'unconfirmed-skill', itemPath: `suggestedSkills.${suggestion.id}`, message: `Skill “${suggestion.name}” must be confirmed or removed before approval.`, correction: 'Confirm this skill as your declaration or remove the suggestion.' })
+  const summaryText = draft.tailoring?.summary.text ?? ''
+  const summaryCitedText = (draft.tailoring?.summary.citations ?? []).flatMap(citation => { const source = evidence.get(citation.evidenceId); return source ? strings(source.snapshot) : [] }).join(' ')
+  const summaryNumbers = new Set(numericExpressions(summaryCitedText))
+  for (const expression of numericExpressions(summaryText)) if (!summaryNumbers.has(expression)) findings.push({ code: 'unsupported-number', itemPath: 'tailoring.summary', evidenceId: draft.tailoring?.summary.citations[0]?.evidenceId, message: `Summary quantity “${expression}” is not present in its cited evidence.`, correction: 'Use the cited source’s exact supported quantity or remove the number.' })
   for (const [index, citation] of (draft.tailoring?.summary.citations ?? []).entries()) {
     const source = evidence.get(citation.evidenceId)
     if (!source) findings.push({ code: 'foreign-citation', itemPath: `tailoring.summary[${index}]`, evidenceId: citation.evidenceId, message: 'Summary citation is outside the frozen evidence revisions.', correction: 'Use only saved evidence included in this draft.' })

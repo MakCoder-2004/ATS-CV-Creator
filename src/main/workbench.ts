@@ -218,7 +218,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
     try { key = readStoredOpenRouterKey() }
     catch { throw Object.assign(new Error('OpenRouter API key is unavailable.'), { status: 401 }) }
     return createOpenRouterAnalysisTransport(key).generate(input)
-  } }, onAttempt: (timestamp, runId) => { previousAttempts.push(timestamp); const dispatchedAt = new Date(timestamp).toISOString(); db.prepare('INSERT INTO analysis_attempts (run_id, attempted_at) VALUES (?, ?)').run(runId, dispatchedAt); db.prepare('INSERT INTO provider_attempt_outcomes (run_id, dispatched_at, outcome) VALUES (?, ?, \'dispatched\')').run(runId, dispatchedAt) }, onAttemptComplete: (runId, succeeded) => { if (succeeded) db.prepare(`UPDATE provider_attempt_outcomes SET outcome='response', settled_at=? WHERE id=(SELECT id FROM provider_attempt_outcomes WHERE run_id=? AND outcome='dispatched' AND checkpointed_at IS NULL ORDER BY id DESC LIMIT 1)`).run(new Date().toISOString(), runId) }, onProgress: (runId, jobId, progress, attempts) => { const observed = (db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id = ?').get(runId) as { count: number }).count; saveAnalysisState({ jobId, runId, status: 'running', analysis: null, progress, attempts: observed || attempts, cacheHit: false }) } })
+  } }, onAttempt: (timestamp, runId) => { previousAttempts.push(timestamp); const dispatchedAt = new Date(timestamp).toISOString(); db.prepare('INSERT INTO analysis_attempts (run_id, attempted_at) VALUES (?, ?)').run(runId, dispatchedAt); db.prepare('INSERT INTO provider_attempt_outcomes (run_id, dispatched_at, outcome) VALUES (?, ?, \'dispatched\')').run(runId, dispatchedAt) }, onAttemptComplete: (runId, succeeded) => { if (succeeded) db.prepare(`UPDATE provider_attempt_outcomes SET outcome='response', settled_at=? WHERE id=(SELECT id FROM provider_attempt_outcomes WHERE run_id=? AND outcome='dispatched' AND checkpointed_at IS NULL ORDER BY id DESC LIMIT 1)`).run(new Date().toISOString(), runId) }, onProgress: (runId, jobId, progress, attempts) => { const observed = (db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id = ?').get(runId) as { count: number }).count; const prior = currentAnalysis.get(jobId); saveAnalysisState({ jobId, runId, status: 'running', analysis: prior?.analysis ?? null, progress, attempts: observed || attempts, cacheHit: prior?.cacheHit ?? false, ...(prior?.generationStep ? { generationStep: prior.generationStep } : {}), ...(prior?.completedSteps ? { completedSteps: prior.completedSteps } : {}) }) } })
   const currentConsentSource = (jobId: string): ConsentSource | null => {
     const job = db.prepare('SELECT data FROM jobs WHERE id = ?').get(jobId) as { data: string } | undefined
     if (!job) return null
@@ -555,7 +555,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       if (cached) {
         dispatcher.authorize(pending.runId, pending.consentId)
         startedAnalysisTokens.add(token)
-        const value = analysisResultSchema.parse({ jobId: pending.jobId, runId: pending.runId, status: 'complete', analysis: postingAnalysisSchema.parse(JSON.parse(cached.data)), progress: 'Loaded compatible saved analysis.', attempts: 0, cacheHit: true })
+        const value = analysisResultSchema.parse({ jobId: pending.jobId, runId: pending.runId, status: 'complete', analysis: postingAnalysisSchema.parse(JSON.parse(cached.data)), progress: 'Loaded compatible saved analysis.', attempts: 0, cacheHit: true, generationStep: 'parse-posting', completedSteps: ['parse-posting'] })
         saveAnalysisState(value)
         return value
       }
@@ -581,7 +581,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       if (activeAnalysisByJob.get(pending.jobId) === pending.runId) activeAnalysisByJob.delete(pending.jobId)
       db.prepare('INSERT OR REPLACE INTO posting_analysis_cache (cache_key, job_id, run_id, data) VALUES (?, ?, ?, ?)').run(cacheKey, pending.jobId, pending.runId, JSON.stringify(result.analysis))
       db.prepare('UPDATE provider_attempt_outcomes SET checkpointed_at=? WHERE run_id=? AND checkpointed_at IS NULL').run(new Date().toISOString(), pending.runId)
-      const value = analysisResultSchema.parse({ jobId: pending.jobId, runId: pending.runId, status: 'complete', analysis: result.analysis, progress: 'Posting analysis complete.', attempts: result.usage.attempts, cacheHit: false })
+      const value = analysisResultSchema.parse({ jobId: pending.jobId, runId: pending.runId, status: 'complete', analysis: result.analysis, progress: 'Posting analysis complete.', attempts: result.usage.attempts, cacheHit: false, generationStep: 'parse-posting', completedSteps: ['parse-posting'] })
       saveAnalysisState(value)
       return value
     },
@@ -641,7 +641,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       }
       else db.prepare("UPDATE generation_recovery SET status='running',updated_at=? WHERE run_id=?").run(new Date().toISOString(), resumeRunId)
       try {
-        const result = await runSourceLinkedGraph({ job: approvedPayload.job, analysis: analysis.analysis, items: safeItems, pageTarget, restoreText: pending.bundle.restoreIdentifiers, checkpointer: graphCheckpointer, threadId: pending.runId, resume: Boolean(resumeRunId), onProgress: progress => { const observed = (db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id = ?').get(pending.runId) as { count: number }).count; saveAnalysisState({ jobId: pending.jobId, runId: pending.runId, status: 'running', analysis: analysis.analysis, progress, attempts: observed, cacheHit: analysis.cacheHit }) }, identity: failedDraftIdentity, call: async (prompt, responseSchema) => {
+        const result = await runSourceLinkedGraph({ job: approvedPayload.job, analysis: analysis.analysis, items: safeItems, savedSkillNames: profile.skills.map(skill => skill.name), sourceJobRevision: pending.source.job.revision, pageTarget, restoreText: pending.bundle.restoreIdentifiers, checkpointer: graphCheckpointer, threadId: pending.runId, resume: Boolean(resumeRunId), onProgress: (progress, generationStep, completedSteps) => { const observed = (db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id = ?').get(pending.runId) as { count: number }).count; saveAnalysisState({ jobId: pending.jobId, runId: pending.runId, status: 'running', analysis: analysis.analysis, progress, attempts: observed, cacheHit: analysis.cacheHit, generationStep, completedSteps }) }, identity: failedDraftIdentity, call: async (prompt, responseSchema) => {
           authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
           const generated = await dispatcher.generate({ runId: pending.runId, jobId: pending.jobId, model: openRouterModelSchema.parse(pending.source.model.name), prompt, consentId: pending.consentId!, responseSchema })
           authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
@@ -649,7 +649,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
         } })
         authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
         const repairSchema = z.object({ corrections: z.array(z.object({ section: z.enum(['education', 'experience', 'projects', 'skills', 'certificates']), index: z.number().int().nonnegative(), text: z.string().trim().min(1).max(3000), citations: z.array(z.object({ evidenceId: uuidSchema, revision: z.number().int().positive() }).strict()).min(1) }).strict()).max(1) }).strict()
-        let report = checkDraftFacts(result.draft)
+        let report = checkDraftFacts(result.draft, { includeSkillDecisions: false })
         let repairAttempts = 0
         for (let cycle = 0; cycle < 2 && !report.passed; cycle++) {
           const failedItems = report.findings.map(finding => {
@@ -670,8 +670,10 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
             result.draft.content = { ...result.draft.content, [correction.section]: section }
           }
           result.draft.attempts += repair.attempts
-          report = checkDraftFacts(result.draft)
+          report = checkDraftFacts(result.draft, { includeSkillDecisions: false })
         }
+        const saveGenerationStep = (step: 'verify-claims' | 'check-document', progress: string, completed: string[]) => { const observed = (db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id = ?').get(pending.runId) as { count: number }).count; saveAnalysisState({ jobId: pending.jobId, runId: pending.runId, status: 'running', analysis: analysis.analysis, progress, attempts: observed, cacheHit: analysis.cacheHit, generationStep: step, completedSteps: completed }) }
+        saveGenerationStep('verify-claims', 'Checking generated claims against frozen evidence.', ['parse-posting', 'score-evidence', 'select-content', 'tailor-paragraphs'])
         let coverageRepairAttempts = 0
         if (report.passed) {
           const opportunities = supportedCoverageTerms(analysis.analysis, result.draft)
@@ -698,11 +700,11 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
               result.draft.content = { ...result.draft.content, [eligible.section]: section }
             }
             result.draft.attempts += coverageRepair.attempts
-            report = checkDraftFacts(result.draft)
+            report = checkDraftFacts(result.draft, { includeSkillDecisions: false })
           }
         }
         const coverage = { ...qualificationCoverage(analysis.runId ?? analysis.jobId, analysis.analysis, result.draft), repairAttempts: coverageRepairAttempts }
-        const finalSemanticPairs = (['education', 'experience', 'projects', 'skills', 'certificates'] as const).flatMap(section => result.draft.content[section].map((item, index) => {
+        const finalSemanticPairs: Array<{ section: keyof DraftRevision['content'] | 'summary'; itemPath: string; rewritten: string; evidence: string[] }> = (['education', 'experience', 'projects', 'skills', 'certificates'] as const).flatMap(section => result.draft.content[section].map((item, index) => {
           const citations = item.citations
           const citedSources = citations.flatMap(citation => {
             const frozen = result.draft.evidence.find(evidence => evidence.evidenceId === citation.evidenceId && evidence.revision === citation.revision)
@@ -711,6 +713,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
           })
           return { section, itemPath: `${section}[${index}]`, rewritten: minimizeRestoredText('text' in item ? item.text : item.name), evidence: citedSources }
         }))
+        if (result.draft.tailoring) finalSemanticPairs.push({ section: 'summary', itemPath: 'summary[0]', rewritten: minimizeRestoredText(result.draft.tailoring.summary.text), evidence: result.draft.tailoring.summary.citations.flatMap(citation => safeItems.filter(source => source.id === citation.evidenceId && source.revision === citation.revision).map(source => source.text)) })
         const findingOrigin = { originDraftId: result.draft.id, originDraftRevision: result.draft.revision, originEvidenceRevisionHash: report.evidenceRevisionHash, historical: false }
         const semanticFindings: ReturnType<typeof factualCheckReportSchema.parse>['findings'] = []
         let semanticAttempts = 0
@@ -731,7 +734,9 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
               for (const finding of parsed.results.filter(item => !item.supported)) {
                 const pair = finalSemanticPairs.find(item => item.itemPath === finding.itemPath)!
                 const index = Number(/\[(\d+)\]/.exec(finding.itemPath)?.[1] ?? -1)
-                semanticFindings.push({ code: 'semantic-unsupported', itemPath: finding.itemPath, evidenceId: result.draft.content[pair.section][index]?.citations[0]?.evidenceId, ...findingOrigin, message: `Second-opinion faithfulness check: ${finding.explanation}`, correction: 'Correct or remove this wording, then obtain a new authorized faithfulness check. This result is not proof and does not replace human review.' })
+                const summaryCitation = pair.section === 'summary' ? result.draft.tailoring?.summary.citations[0] : undefined
+                const contentCitation = pair.section === 'summary' ? undefined : result.draft.content[pair.section][index]?.citations[0]
+                semanticFindings.push({ code: 'semantic-unsupported', itemPath: finding.itemPath, evidenceId: summaryCitation?.evidenceId ?? contentCitation?.evidenceId, ...findingOrigin, message: `Second-opinion faithfulness check: ${finding.explanation}`, correction: 'Correct or remove this wording, then obtain a new authorized faithfulness check. This result is not proof and does not replace human review.' })
               }
             } catch (error) {
               if (error instanceof AnalysisError && error.code === 'CANCELLED') throw error
@@ -742,6 +747,8 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
             }
           }
         }
+        saveGenerationStep('check-document', 'Checking draft structure and document readiness.', ['parse-posting', 'score-evidence', 'select-content', 'tailor-paragraphs', 'verify-claims'])
+        report = checkDraftFacts(result.draft)
         const findings = [...report.findings, ...semanticFindings]
         const totalAttempts = result.attempts + repairAttempts + coverageRepairAttempts + semanticAttempts
         const mergedReport = factualCheckReportSchema.parse({ ...report, passed: findings.length === 0, findings })
@@ -756,7 +763,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
         const tx = db.transaction(() => { db.prepare('INSERT INTO draft_revisions (id,job_id,revision,data) VALUES (?,?,?,?)').run(result.draft.id, result.draft.jobId, result.draft.revision, JSON.stringify(result.draft)); db.prepare('UPDATE provider_attempt_outcomes SET checkpointed_at=? WHERE run_id=? AND checkpointed_at IS NULL').run(new Date().toISOString(), pending.runId); db.prepare("UPDATE generation_recovery SET status='complete',updated_at=? WHERE run_id=?").run(new Date().toISOString(), pending.runId) })
         tx()
         if (activeAnalysisByJob.get(pending.jobId) === pending.runId) activeAnalysisByJob.delete(pending.jobId)
-        saveAnalysisState({ jobId: pending.jobId, runId: pending.runId, status: 'complete', analysis: analysis.analysis, progress: result.draft.progress, attempts: analysis.attempts + totalAttempts, cacheHit: analysis.cacheHit })
+        saveAnalysisState({ jobId: pending.jobId, runId: pending.runId, status: 'complete', analysis: analysis.analysis, progress: result.draft.progress, attempts: analysis.attempts + totalAttempts, cacheHit: analysis.cacheHit, generationStep: 'check-document', completedSteps: ['parse-posting', 'score-evidence', 'select-content', 'tailor-paragraphs', 'verify-claims', 'check-document'] })
         return { ok: true, message: result.draft.status === 'blocked' ? 'Draft saved locally, editable, and blocked by factual findings.' : 'Draft saved locally. It is unverified and unapproved.', draft: result.draft }
       } catch (error) {
         if (activeAnalysisByJob.get(pending.jobId) === pending.runId) activeAnalysisByJob.delete(pending.jobId)
@@ -770,7 +777,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
           const report = factualCheckReportSchema.parse({ ...checkDraftFacts(failed), passed: false, findings: [{ code, itemPath: 'generation', message: code === 'foreign-citation' ? 'The response referenced evidence outside the selected authorized sources. Model output was discarded.' : 'The tailored response did not match the required structured schema. Model output was discarded.', correction: 'Author or correct draft wording using the saved evidence revisions, then run factual checks.' }] })
           const blocked = draftRevisionSchema.parse({ ...failed, checkReport: report })
           db.prepare('INSERT INTO draft_revisions (id,job_id,revision,data) VALUES (?,?,?,?)').run(blocked.id, blocked.jobId, blocked.revision, JSON.stringify(blocked))
-          saveAnalysisState({ jobId: pending.jobId, runId: pending.runId, status: 'complete', analysis: analysis.analysis, progress: blocked.progress, attempts: observedAttempts, cacheHit: analysis.cacheHit })
+          saveAnalysisState({ jobId: pending.jobId, runId: pending.runId, status: 'complete', analysis: analysis.analysis, progress: blocked.progress, attempts: observedAttempts, cacheHit: analysis.cacheHit, generationStep: 'check-document', completedSteps: ['parse-posting', 'score-evidence', 'select-content', 'tailor-paragraphs', 'verify-claims', 'check-document'] })
           return { ok: true, message: 'A blocked draft was saved; no invalid model output was retained.', draft: blocked }
         }
         const paused = error instanceof AnalysisError && ['BUDGET','TIMEOUT','OFFLINE','PROVIDER','INVALID_KEY'].includes(error.code)
@@ -904,8 +911,12 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       if (index < 0) return { ok: false, message: 'This skill suggestion is no longer available.' }
       suggestions[index] = { ...suggestions[index], status: parsed.data.decision, ...(parsed.data.decision === 'pending' ? { decidedAt: undefined } : { decidedAt: new Date().toISOString() }) }
       const next = draftRevisionSchema.parse({ ...prior, id: randomUUID(), revision: prior.revision + 1, suggestedSkills: suggestions, approved: false, approval: undefined, checkReport: undefined, status: 'blocked', progress: 'Skill review decision saved. Run checks and review the current draft again.' })
-      const report = preserveKnownFindings(checkDraftFacts(next), prior)
+      let report = preserveKnownFindings(checkDraftFacts(next), prior)
+      const stale = currentSourceStatus(next)
+      if (stale.length) report = factualCheckReportSchema.parse({ ...report, passed: false, findings: [...report.findings, ...stale.map(evidenceId => ({ code: 'stale-source' as const, itemPath: 'sources', evidenceId, message: 'A cited profile source changed or was deleted after this draft was created.', correction: 'Review current evidence and create a draft from its current revision.' }))] })
       const checked = draftRevisionSchema.parse({ ...next, status: report.passed && !suggestions.some(item => item.status === 'pending') ? 'unverified' : 'blocked', checkReport: report })
+      const latest = db.prepare('SELECT id FROM draft_revisions WHERE job_id = ? ORDER BY revision DESC LIMIT 1').get(checked.jobId) as { id: string } | undefined
+      if (latest?.id !== parsed.data.draftId) return { ok: false, message: 'This draft changed while the decision was being saved. Reopen the current draft.' }
       db.prepare('INSERT INTO draft_revisions (id,job_id,revision,data) VALUES (?,?,?,?)').run(checked.id, checked.jobId, checked.revision, JSON.stringify(checked))
       db.prepare('DELETE FROM document_fit_reports WHERE job_id = ?').run(checked.jobId)
       return { ok: true, message: 'Skill decision saved in this draft only.', draft: checked }
@@ -917,8 +928,12 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       if (!prior || prior.id !== parsed.data.draftId || !prior.tailoring) return { ok: false, message: 'This draft changed or has no tailored narrative to edit.' }
       const tailoring = parsed.data.field === 'headline' ? { ...prior.tailoring, headline: parsed.data.text } : { ...prior.tailoring, summary: { ...prior.tailoring.summary, text: parsed.data.text } }
       const next = draftRevisionSchema.parse({ ...prior, id: randomUUID(), revision: prior.revision + 1, tailoring, approved: false, approval: undefined, checkReport: undefined, status: 'unverified', progress: 'Tailored narrative corrected locally. Recheck and remeasure before approval.' })
-      const report = preserveKnownFindings(checkDraftFacts(next), prior)
+      let report = preserveKnownFindings(checkDraftFacts(next), prior)
+      const stale = currentSourceStatus(next)
+      if (stale.length) report = factualCheckReportSchema.parse({ ...report, passed: false, findings: [...report.findings, ...stale.map(evidenceId => ({ code: 'stale-source' as const, itemPath: 'sources', evidenceId, message: 'A cited profile source changed or was deleted after this draft was created.', correction: 'Review current evidence and create a draft from its current revision.' }))] })
       const checked = draftRevisionSchema.parse({ ...next, status: report.passed ? 'unverified' : 'blocked', checkReport: report })
+      const latest = db.prepare('SELECT id FROM draft_revisions WHERE job_id = ? ORDER BY revision DESC LIMIT 1').get(checked.jobId) as { id: string } | undefined
+      if (latest?.id !== parsed.data.draftId) return { ok: false, message: 'This draft changed while the correction was being saved. Reopen the current draft.' }
       db.prepare('INSERT INTO draft_revisions (id,job_id,revision,data) VALUES (?,?,?,?)').run(checked.id, checked.jobId, checked.revision, JSON.stringify(checked))
       db.prepare('DELETE FROM document_fit_reports WHERE job_id = ?').run(checked.jobId)
       return { ok: true, message: 'Tailored narrative saved as a new draft revision.', draft: checked }
