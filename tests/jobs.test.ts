@@ -8,7 +8,7 @@ import Database from 'better-sqlite3'
 import { createWorkbench } from '../src/main/workbench'
 
 const directories: string[] = []
-afterEach(async () => { for (const directory of directories.splice(0)) await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) })
+afterEach(async () => { for (const directory of directories.splice(0)) await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) }, 30_000)
 function open(transport?: Parameters<typeof createWorkbench>[2]) {
   const directory = mkdtempSync(join(tmpdir(), 'cv-tailor-jobs-'))
   directories.push(directory)
@@ -36,7 +36,7 @@ test('reviewed link imports save atomically with immutable source provenance and
   const directory = mkdtempSync(join(tmpdir(), 'cv-tailor-reviewed-import-'))
   directories.push(directory)
   const calls: string[] = []
-  const description = `Responsibilities\n${'The fictional engineering team builds reliable software and maintains dependable systems with careful collaboration. '.repeat(4)}\nRequirements\n• Build reliable services with the fictional team.`
+  const description = `Responsibilities\n${'The fictional engineering team builds reliable software and maintains dependable systems with careful collaboration. '.repeat(400)}\nRequirements\n• Build reliable services with the fictional team.`
   const responseBody = JSON.stringify({ id: 'review-save-1', text: 'Source Engineer', company: 'Example Source Co', descriptionPlain: description, lists: [{ text: 'Responsibilities', content: '<li>Build reliable services with the fictional team.</li>' }] })
   const imported = createWorkbench(directory, undefined, undefined, undefined, { lookup: async () => [{ address: '8.8.8.8', family: 4 }], request: async url => { calls.push(url.href); return { status: 200, headers: { 'content-type': 'application/json' }, body: Buffer.from(responseBody) } } })
   let importedClosed = false
@@ -46,6 +46,7 @@ test('reviewed link imports save atomically with immutable source provenance and
     for (let attempt = 0; attempt < 50 && state.status === 'fetching'; attempt++) { await new Promise(resolve => setTimeout(resolve, 2)); state = await imported.api.readPostingPreview(token) }
     expect(state.status).toBe('ready')
     if (state.status !== 'ready') throw Error('Synthetic source was not ready')
+    expect(Array.from(state.preview.description).length).toBeGreaterThan(30000)
     const reviewedDescription = `${state.preview.description}\nReviewed clarification: include the fictional on-call rotation.`
     const database = new Database(join(directory, 'workbench.sqlite'))
     database.exec("CREATE TRIGGER refuse_import BEFORE INSERT ON jobs BEGIN SELECT RAISE(ABORT, 'simulated import transaction failure'); END")
@@ -525,6 +526,29 @@ test('aggregate backup guard blocks model dispatch before accounting can overrun
     expect(Buffer.byteLength(workbench.backup.createBackup(), 'utf8')).toBeLessThanOrEqual(maxBytes)
   } finally { workbench.close() }
 })
+
+test('measures a saved-job write with a sizable bounded SQLite workspace', async () => {
+  const { directory, workbench } = open()
+  try {
+    const backup = JSON.parse(workbench.backup.createBackup())
+    const createdAt = new Date().toISOString()
+    backup.tables.jobs.rows = Array.from({ length: 300 }, (_, index) => {
+      const id = `00000000-0000-4000-8000-${index.toString(16).padStart(12, '0')}`
+      const description = `${'Bounded synthetic posting context. '.repeat(30)} requirement ${index}.`
+      const value = { id, title: `Synthetic role ${index}`, company: 'Benchmark Systems', description, createdAt, updatedAt: createdAt, provenance: 'manual', sourceSnapshot: null, revisions: [{ title: `Synthetic role ${index}`, company: 'Benchmark Systems', description, revision: 1, acceptedAt: createdAt, provenance: 'manual' }] }
+      return { id, created_at: createdAt, updated_at: createdAt, data: JSON.stringify(value) }
+    })
+    const restore = workbench.backup.previewRestore(JSON.stringify(backup))
+    workbench.backup.applyRestore(restore.token, safety => safety)
+    const started = performance.now()
+    const final = await workbench.api.saveJob({ title: 'Synthetic role 300', company: 'Benchmark Systems', description: 'A measurable final bounded posting.' })
+    const elapsedMs = performance.now() - started
+    expect(final.ok).toBe(true)
+    expect(elapsedMs).toBeLessThan(5_000)
+    console.info(`backupability preflight save over 300 SQLite jobs: ${elapsedMs.toFixed(1)}ms`)
+    expect(Buffer.byteLength(workbench.backup.createBackup(), 'utf8')).toBeLessThan(64 * 1024 * 1024)
+  } finally { workbench.close() }
+}, 30_000)
 
 test('backupability guard rolls back non-job profile writes at the aggregate boundary', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'cv-tailor-nonjob-backup-capacity-'))

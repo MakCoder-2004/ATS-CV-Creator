@@ -1839,16 +1839,29 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
     if (db.inTransaction || checkingBackupCapacity) return nativeExec(source)
     return nativeTransaction(() => { const result = nativeExec(source); assertBackupable(); return result })()
   }
+  const wrapStatement = (statement: Database.Statement, mutating: boolean): Database.Statement => new Proxy(statement, { get(target, property) {
+    if (property === 'run' || property === 'get' || property === 'all') return (...args: any[]) => {
+      const execute = () => (target[property as 'run' | 'get' | 'all'] as (...values: any[]) => any)(...args)
+      if (!mutating || db.inTransaction || checkingBackupCapacity) return execute()
+      return nativeTransaction(() => { const result = execute(); assertBackupable(); return result })()
+    }
+    if (property === 'iterate' && mutating) return (...args: any[]) => {
+      const rows = !db.inTransaction && !checkingBackupCapacity
+        ? nativeTransaction(() => { const result = target.all(...args); assertBackupable(); return result })()
+        : target.all(...args)
+      return rows[Symbol.iterator]()
+    }
+    const value = Reflect.get(target, property, target)
+    if (typeof value !== 'function') return value
+    return (...args: any[]) => {
+      const next = Reflect.apply(value, target, args) as unknown
+      const statementResult = next && typeof next === 'object' && typeof (next as Database.Statement).run === 'function' ? next as Database.Statement : null
+      return statementResult ? wrapStatement(statementResult, mutating) : next
+    }
+  } })
   guardedDb.prepare = (source: string) => {
     const statement = nativePrepare(source)
-    return new Proxy(statement, { get(target, property) {
-      if (property === 'run') return (...args: any[]) => {
-        if (db.inTransaction || checkingBackupCapacity) return target.run(...args)
-        return nativeTransaction(() => { const result = target.run(...args); assertBackupable(); return result })()
-      }
-      const value = Reflect.get(target, property, target)
-      return typeof value === 'function' ? value.bind(target) : value
-    } })
+    return wrapStatement(statement, !statement.readonly)
   }
   return { api, authorizeOutboundPayload, backup, hasActiveWork: () => activeAnalysisByJob.size > 0 || activeProfileAiRuns.size > 0 || [...postingFetches.values()].some(fetch => fetch.state.status === 'fetching'), close: () => { for (const fetch of postingFetches.values()) fetch.controller.abort(); postingFetches.clear(); db.close() } }
 }
