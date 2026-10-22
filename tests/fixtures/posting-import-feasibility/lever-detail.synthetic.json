@@ -1,0 +1,28 @@
+{
+  "id": "synthetic-posting-0001",
+  "text": "Synthetic Platform Engineer",
+  "categories": {
+    "location": "Example City",
+    "commitment": "Full-time",
+    "team": "Example Team",
+    "department": "Engineering",
+    "allLocations": ["Example City"]
+  },
+  "country": "XX",
+  "opening": "<p>Build reliable example systems.</p>",
+  "openingPlain": "Build reliable example systems.",
+  "description": "<p>Build reliable example systems.</p><h2>Responsibilities</h2><ul><li>Design safe interfaces.</li><li>Document decisions.</li></ul><h2>Requirements</h2><ul><li>Experience with testing.</li></ul>",
+  "descriptionPlain": "Build reliable example systems.\nResponsibilities\nDesign safe interfaces.\nDocument decisions.\nRequirements\nExperience with testing.",
+  "descriptionBody": "<h2>Responsibilities</h2><ul><li>Design safe interfaces.</li><li>Document decisions.</li></ul><h2>Requirements</h2><ul><li>Experience with testing.</li></ul>",
+  "descriptionBodyPlain": "Responsibilities\nDesign safe interfaces.\nDocument decisions.\nRequirements\nExperience with testing.",
+  "lists": [
+    { "text": "Responsibilities", "content": "<li>Design safe interfaces.</li><li>Document decisions.</li>" },
+    { "text": "Requirements", "content": "<li>Experience with testing.</li>" }
+  ],
+  "additional": "<p>Example closing note.</p>",
+  "additionalPlain": "Example closing note.",
+  "hostedUrl": "https://jobs.lever.co/leverdemo/synthetic-posting-0001",
+  "applyUrl": "https://jobs.lever.co/leverdemo/synthetic-posting-0001/apply",
+  "workplaceType": "remote",
+  "salaryRange": null
+}
