@@ -59,32 +59,50 @@ function listItems(content, remaining) {
 
 function extractHtml(text) {
   const document = parse5.parse(text)
-  const elements = []
-  const visit = node => { if (node.tagName) elements.push(node); for (const child of node.childNodes || []) visit(child) }
-  visit(document)
-  if (elements.length > 100_000) throw new Error('The posting page contains too much markup to review safely.')
+  const elements = [], stack = [{ node: document, depth: 0 }]
+  while (stack.length) {
+    const { node, depth } = stack.pop()
+    if (depth > 256) throw new Error('The posting page markup is nested too deeply to review safely.')
+    if (node.tagName) {
+      elements.push(node)
+      if (elements.length > 100_000) throw new Error('The posting page contains too much markup to review safely.')
+    }
+    for (let index = (node.childNodes || []).length - 1; index >= 0; index--) stack.push({ node: node.childNodes[index], depth: depth + 1 })
+  }
   const attr = (node, name) => node.attrs?.find(value => value.name === name)?.value || ''
   const textContent = node => (node.childNodes || []).map(child => child.nodeName === '#text' ? child.value : textContent(child)).join('')
+  const collectJobPostings = (value, depth = 0) => {
+    if (depth > 64) throw new Error('The structured posting data exceeds the safe nesting limit.')
+    if (Array.isArray(value)) return value.flatMap(item => collectJobPostings(item, depth + 1))
+    if (!value || typeof value !== 'object') return []
+    if (value['@type'] === 'JobPosting' || Array.isArray(value['@type']) && value['@type'].includes('JobPosting')) return [value]
+    return Array.isArray(value['@graph']) ? value['@graph'].flatMap(item => collectJobPostings(item, depth + 1)) : []
+  }
   const jsonBlocks = elements.filter(node => node.tagName === 'script' && attr(node, 'type').toLowerCase() === 'application/ld+json').flatMap(node => {
-    try { const value = JSON.parse(textContent(node)); return Array.isArray(value) ? value : [value] } catch { throw new Error('The page contains malformed structured posting data; use the manual text fallback.') }
-  }).filter(value => value && typeof value === 'object' && (value['@type'] === 'JobPosting' || Array.isArray(value['@type']) && value['@type'].includes('JobPosting')))
-  if (jsonBlocks.length !== 1) throw new Error(jsonBlocks.length ? 'The page describes multiple roles and cannot be selected safely.' : 'The page has no supported structured job posting; use the manual text fallback.')
-  const posting = jsonBlocks[0]
-  const articles = elements.filter(node => node.tagName === 'article' && (attr(node, 'class').split(/\s+/).includes('posting') || attr(node, 'id') === 'posting'))
+    try { return collectJobPostings(JSON.parse(textContent(node))) } catch { throw new Error('The page contains malformed structured posting data; use the manual text fallback.') }
+  })
+  if (jsonBlocks.length > 1) throw new Error('The page describes multiple roles and cannot be selected safely.')
+  const posting = jsonBlocks[0] || null
+  const articles = elements.filter(node => node.tagName === 'article' && (['posting','job-description'].some(name => attr(node, 'class').split(/\s+/).includes(name)) || attr(node, 'id') === 'posting'))
   const visibleArticle = articles.length === 1 ? articles[0] : null
-  const visible = node => { if (['script','style','nav','footer','aside','form','button'].includes(node.tagName)) return ''; if (node.tagName === 'h1' || /^h[2-6]$/.test(node.tagName)) return `\n\n${textContent(node)}\n`; if (node.tagName === 'li') return `\n• ${textContent(node)}`; if (['p','div','section','article','br'].includes(node.tagName)) return `${(node.childNodes || []).map(visible).join('')}\n`; return (node.childNodes || []).map(visible).join('') }
-  const title = typeof posting.title === 'string' ? posting.title.trim() : ''
-  const company = typeof posting.hiringOrganization?.name === 'string' ? posting.hiringOrganization.name.trim() : null
-  const structured = typeof posting.description === 'string' ? textContent(parse5.parseFragment(posting.description)).replace(/\s+/g,' ').trim() : ''
-  const description = visibleArticle ? visible(visibleArticle).replace(/[ \t]+/g,' ').replace(/\n{3,}/g,'\n\n').trim() : ''
-  if (!title || !company || !description || [...description].length < 100) throw new Error('The posting page is incomplete or only contains a teaser; review it manually instead.')
-  const h1 = elements.find(node => node.tagName === 'h1')
-  const visibleTitle = h1 ? textContent(h1).trim() : ''
+  const visible = node => { if (node.nodeName === '#text') return node.value; if (['script','style','nav','footer','aside','form','button'].includes(node.tagName)) return ''; if (node.tagName === 'h1' || /^h[2-6]$/.test(node.tagName)) return `\n\n${textContent(node)}\n`; if (node.tagName === 'li') return `\n• ${textContent(node)}`; if (['p','div','section','article','br'].includes(node.tagName)) return `${(node.childNodes || []).map(visible).join('')}\n`; return (node.childNodes || []).map(visible).join('') }
+  const visibleTitleNode = elements.find(node => node.tagName === 'h1')
   const visibleCompanyNode = elements.find(node => attr(node, 'class').split(/\s+/).includes('company'))
-  const visibleCompany = visibleCompanyNode ? textContent(visibleCompanyNode).trim() : ''
-  const notices = ['Extracted from inert Lever-hosted page HTML; scripts and linked content were not executed or fetched. Review all wording; completeness and vacancy status are not guaranteed.']
-  if ((visibleTitle && visibleTitle !== title) || (visibleCompany && visibleCompany !== company) || (structured && structured !== description.replace(/• /g,'').replace(/\s+/g,' ').trim())) notices.push('Structured posting metadata differs from readable page fields; verify the source values before saving.')
-  return { title, company, description, notices, extractionMethod: 'lever-html-jsonld-v1' }
+  const visibleTitleValue = visibleTitleNode ? textContent(visibleTitleNode).trim() : ''
+  const visibleCompanyValue = visibleCompanyNode ? textContent(visibleCompanyNode).trim() : ''
+  const title = (typeof posting?.title === 'string' ? posting.title.trim() : '') || visibleTitleValue
+  const company = (typeof posting?.hiringOrganization?.name === 'string' ? posting.hiringOrganization.name.trim() : '') || visibleCompanyValue || null
+  const structured = typeof posting?.description === 'string' ? textContent(parse5.parseFragment(posting.description)).replace(/\s+/g,' ').trim() : ''
+  const description = visibleArticle ? visible(visibleArticle).replace(/[ \t]+/g,' ').replace(/\n{3,}/g,'\n\n').trim() : ''
+  if (!visibleArticle || !title || !company || !description || [...description].length < 100) throw new Error('The page is incomplete or lacks the supported single-posting detail shape; use the manual text fallback.')
+  const notices = [`Extracted from ${posting ? 'inert Lever-hosted JobPosting JSON-LD and readable static text' : 'the supported Lever-hosted static posting article'}; scripts and linked content were not executed or fetched. Review all wording; completeness and vacancy status are not guaranteed.`]
+  const conflicts = []
+  if (posting && visibleTitleValue && visibleTitleValue !== title) conflicts.push('title')
+  if (posting && visibleCompanyValue && visibleCompanyValue !== company) conflicts.push('company')
+  const normalizeWording = value => value.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '')
+  if (structured && normalizeWording(structured) !== normalizeWording(description)) conflicts.push('description')
+  if (conflicts.length) notices.push(`Unresolved source conflict: structured metadata and readable page disagree on ${conflicts.join(', ')}. Paste or correct the posting text manually; it cannot be saved as-is.`)
+  return { title, company, description, notices, extractionMethod: posting ? 'lever-html-jsonld-v1' : 'lever-html-static-v1' }
 }
 
 function extract(text, expectedId) {

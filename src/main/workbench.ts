@@ -800,7 +800,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       void fetchLeverPosting(input, { ...safePostingFetchOptions, signal: controller.signal }).then(preview => {
         const current = postingFetches.get(token)
         if (!current || current.controller.signal.aborted) return
-        const incomplete = preview.notices.some(notice => notice.includes('preview is incomplete')) || !preview.title || !preview.company || !preview.description
+        const incomplete = preview.notices.some(notice => notice.includes('preview is incomplete') || notice.startsWith('Unresolved source conflict:')) || !preview.title || !preview.company || !preview.description
         current.state = incomplete ? { status: 'incomplete', preview } : { status: 'ready', preview }
       }).catch(error => {
         const current = postingFetches.get(token)
@@ -829,7 +829,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       if (!pending) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'This reviewed posting preview is unavailable, incomplete, cancelled, or already used. Fetch it again before saving.' } })
       const pendingState = pending.state
       const companyOnlyIncomplete = pendingState.status === 'incomplete' && pendingState.preview.title.trim().length > 0 && pendingState.preview.description.trim().length > 0 && pendingState.preview.company === null && pendingState.preview.notices.every(notice => /employer name was not provided|extraction cannot guarantee posting completeness or that the role remains open/i.test(notice))
-      if (pendingState.status !== 'ready' && !companyOnlyIncomplete) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'This reviewed posting preview is incomplete, cancelled, or already used. Resolve missing source content before saving.' } })
+      if (pendingState.status !== 'ready' && !companyOnlyIncomplete) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: pendingState.status === 'incomplete' && pendingState.preview.notices.some(notice => notice.startsWith('Unresolved source conflict:')) ? 'Source values disagree. Resolve the conflict before saving, or use Paste posting text instead.' : 'This reviewed posting preview is incomplete, cancelled, or already used. Resolve missing source content before saving.' } })
       const parsed = jobInputSchema.safeParse(input)
       if (!parsed.success) {
         const fieldErrors: Record<string, string> = {}
@@ -839,7 +839,10 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       const source = pendingState.status === 'ready' || pendingState.status === 'incomplete' ? pendingState.preview : null
       if (!source) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'This posting preview is no longer saveable. Fetch it again before saving.' } })
       if (companyOnlyIncomplete && (parsed.data.title !== source.title || parsed.data.description !== source.description)) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'This source only allows a reviewed employer-name correction; its incomplete posting content cannot be replaced here.' } })
-      const sourceIdentity = new URL(source.finalUrl).pathname
+      const submittedSource = new URL(source.submittedUrl)
+      const sourceParts = submittedSource.pathname.split('/').filter(Boolean)
+      const postingIdentity = submittedSource.hostname === 'api.lever.co' ? `${sourceParts[2]}/${sourceParts[3]}` : `${sourceParts[0]}/${sourceParts[1]}`
+      const sourceIdentity = `lever:${postingIdentity}`
       const known = (db.prepare('SELECT data FROM jobs').all() as { data: string }[]).map(row => jobRecordSchema.parse(JSON.parse(row.data)))
       if (known.some(job => job.sourceSnapshot?.sourceIdentity === sourceIdentity || job.sourceSnapshot?.finalUrl === source.finalUrl)) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'This exact source is already saved. Open the existing posting instead; no duplicate was created.' } })
       const hash = (value: string) => createHash('sha256').update(value, 'utf8').digest('hex')

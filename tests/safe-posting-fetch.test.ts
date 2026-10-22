@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { fetchLeverPosting, isPublicAddress, validateLeverPostingUrl } from '../src/main/safe-posting-fetch'
 
-const url = 'https://jobs.lever.co/acme/role-123'
+const url = 'https://api.lever.co/v0/postings/acme/role-123'
 const headers = { 'content-type': 'application/json' }
 const response = (body: unknown, status = 200) => ({ status, headers, body: Buffer.from(JSON.stringify({ id: 'role-123', ...body as object })) })
 const lookup = vi.fn(async () => [{ address: '8.8.8.8', family: 4 }])
@@ -17,7 +17,7 @@ describe('bounded Lever posting fetch', () => {
     expect(request).toHaveBeenCalledTimes(1)
     expect(preview).toMatchObject({ title: 'Engineer', company: null, description: 'Build systems\nOwn reliability', submittedUrl: url })
     expect(preview.notices).toContainEqual(expect.stringContaining('Employer name'))
-    expect(preview.finalUrl).toBe('https://jobs.lever.co/acme/role-123')
+    expect(preview.finalUrl).toBe('https://api.lever.co/v0/postings/acme/role-123')
   })
   it('rejects private DNS answers before requesting and never follows external redirects', async () => {
     const request = vi.fn()
