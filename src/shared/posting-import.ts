@@ -1,6 +1,6 @@
 import { z } from 'zod'
 
-export const postingPreviewSchema = z.object({ title: z.string(), company: z.string().nullable(), description: z.string(), submittedUrl: z.string().url(), finalUrl: z.string().url(), notices: z.array(z.string()) }).strict()
+export const postingPreviewSchema = z.object({ title: z.string(), company: z.string().nullable(), description: z.string(), submittedUrl: z.string().url(), finalUrl: z.string().url(), notices: z.array(z.string()), extractionMethod: z.enum(['lever-json-v1', 'lever-html-jsonld-v1']) }).strict()
 export type PostingPreview = z.infer<typeof postingPreviewSchema>
 export const postingFetchStateSchema = z.discriminatedUnion('status', [
   z.object({ status: z.literal('fetching') }).strict(),

@@ -1,4 +1,5 @@
 const { parentPort, workerData } = require('node:worker_threads')
+const parse5 = require('parse5')
 
 function htmlToText(html) {
   const parts = []
@@ -56,7 +57,38 @@ function listItems(content, remaining) {
   return items
 }
 
+function extractHtml(text) {
+  const document = parse5.parse(text)
+  const elements = []
+  const visit = node => { if (node.tagName) elements.push(node); for (const child of node.childNodes || []) visit(child) }
+  visit(document)
+  if (elements.length > 100_000) throw new Error('The posting page contains too much markup to review safely.')
+  const attr = (node, name) => node.attrs?.find(value => value.name === name)?.value || ''
+  const textContent = node => (node.childNodes || []).map(child => child.nodeName === '#text' ? child.value : textContent(child)).join('')
+  const jsonBlocks = elements.filter(node => node.tagName === 'script' && attr(node, 'type').toLowerCase() === 'application/ld+json').flatMap(node => {
+    try { const value = JSON.parse(textContent(node)); return Array.isArray(value) ? value : [value] } catch { throw new Error('The page contains malformed structured posting data; use the manual text fallback.') }
+  }).filter(value => value && typeof value === 'object' && (value['@type'] === 'JobPosting' || Array.isArray(value['@type']) && value['@type'].includes('JobPosting')))
+  if (jsonBlocks.length !== 1) throw new Error(jsonBlocks.length ? 'The page describes multiple roles and cannot be selected safely.' : 'The page has no supported structured job posting; use the manual text fallback.')
+  const posting = jsonBlocks[0]
+  const articles = elements.filter(node => node.tagName === 'article' && (attr(node, 'class').split(/\s+/).includes('posting') || attr(node, 'id') === 'posting'))
+  const visibleArticle = articles.length === 1 ? articles[0] : null
+  const visible = node => { if (['script','style','nav','footer','aside','form','button'].includes(node.tagName)) return ''; if (node.tagName === 'h1' || /^h[2-6]$/.test(node.tagName)) return `\n\n${textContent(node)}\n`; if (node.tagName === 'li') return `\n• ${textContent(node)}`; if (['p','div','section','article','br'].includes(node.tagName)) return `${(node.childNodes || []).map(visible).join('')}\n`; return (node.childNodes || []).map(visible).join('') }
+  const title = typeof posting.title === 'string' ? posting.title.trim() : ''
+  const company = typeof posting.hiringOrganization?.name === 'string' ? posting.hiringOrganization.name.trim() : null
+  const structured = typeof posting.description === 'string' ? textContent(parse5.parseFragment(posting.description)).replace(/\s+/g,' ').trim() : ''
+  const description = visibleArticle ? visible(visibleArticle).replace(/[ \t]+/g,' ').replace(/\n{3,}/g,'\n\n').trim() : ''
+  if (!title || !company || !description || [...description].length < 100) throw new Error('The posting page is incomplete or only contains a teaser; review it manually instead.')
+  const h1 = elements.find(node => node.tagName === 'h1')
+  const visibleTitle = h1 ? textContent(h1).trim() : ''
+  const visibleCompanyNode = elements.find(node => attr(node, 'class').split(/\s+/).includes('company'))
+  const visibleCompany = visibleCompanyNode ? textContent(visibleCompanyNode).trim() : ''
+  const notices = ['Extracted from inert Lever-hosted page HTML; scripts and linked content were not executed or fetched. Review all wording; completeness and vacancy status are not guaranteed.']
+  if ((visibleTitle && visibleTitle !== title) || (visibleCompany && visibleCompany !== company) || (structured && structured !== description.replace(/• /g,'').replace(/\s+/g,' ').trim())) notices.push('Structured posting metadata differs from readable page fields; verify the source values before saving.')
+  return { title, company, description, notices, extractionMethod: 'lever-html-jsonld-v1' }
+}
+
 function extract(text, expectedId) {
+  if (workerData.mode === 'html') return extractHtml(text)
   let depth = 0, quoted = false, escaped = false
   for (const char of text) {
     if (quoted) {
@@ -133,7 +165,7 @@ function extract(text, expectedId) {
     [...description].length < 200 || (!hasStructuredSections && !hasSectionHeadings) ? 'The response lacks enough posting-detail structure to establish complete source text; this preview is incomplete.' : ''
   ].filter(Boolean)
   notices.push('Extraction cannot guarantee posting completeness or that the role remains open. Review the full source before relying on it.')
-  return { title, company, description, notices }
+  return { title, company, description, notices, extractionMethod: 'lever-json-v1' }
 }
 
 try {

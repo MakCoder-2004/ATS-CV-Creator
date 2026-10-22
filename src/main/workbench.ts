@@ -846,7 +846,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       const sourceSnapshot = {
         title: source.title, company: source.company, description: source.description,
         submittedUrl: source.submittedUrl, finalUrl: source.finalUrl, sourceIdentity, capturedAt: new Date().toISOString(),
-        extractionMethod: 'lever-json-v1' as const, extractionVersion: 1 as const,
+        extractionMethod: source.extractionMethod, extractionVersion: 1 as const,
         hashes: { title: hash(source.title), company: source.company === null ? null : hash(source.company), description: hash(source.description) },
         fieldOrigins: { title: parsed.data.title === source.title ? 'source' as const : 'user-correction' as const, company: source.company !== null && parsed.data.company === source.company ? 'source' as const : 'user-correction' as const, description: parsed.data.description === source.description ? 'source' as const : 'user-correction' as const }
       }

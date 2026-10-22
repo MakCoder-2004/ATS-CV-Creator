@@ -8,7 +8,7 @@ import { join } from 'node:path'
 import { URL } from 'node:url'
 import { isIP } from 'node:net'
 
-export type PostingPreview = { title: string; company: string | null; description: string; submittedUrl: string; finalUrl: string; notices: string[] }
+export type PostingPreview = { title: string; company: string | null; description: string; submittedUrl: string; finalUrl: string; notices: string[]; extractionMethod: 'lever-json-v1' | 'lever-html-jsonld-v1' }
 export type Address = { address: string; family: number }
 export type SafePostingFetchOptions = {
   lookup?: (hostname: string) => Promise<Address[]>
@@ -24,7 +24,7 @@ const MAX_COMPRESSED = 2 * 1024 * 1024
 const MAX_DECOMPRESSED = 8 * 1024 * 1024
 const TOTAL_TIMEOUT_MS = 30_000
 const HOST = 'api.lever.co'
-const REQUEST_HEADERS = Object.freeze({ Accept: 'application/json', 'Accept-Encoding': 'identity', 'User-Agent': 'CV-Tailor/1.0' })
+const REQUEST_HEADERS = Object.freeze({ Accept: 'application/json,text/html;q=0.9', 'Accept-Encoding': 'identity', 'User-Agent': 'CV-Tailor/1.0' })
 function textFromHtml(value: string): string {
   return value.replace(/<h[1-6][^>]*>/gi, '\n\n').replace(/<\/h[1-6]\s*>/gi, '\n').replace(/<li[^>]*>/gi, '\n• ').replace(/<\/li\s*>/gi, '').replace(/<\/(p|div|section|article)\s*>/gi, '\n').replace(/<br\s*\/?\s*>/gi, '\n').replace(/<[^>]*>/g, '').replace(/&nbsp;|&#160;/gi, ' ').replace(/&amp;/gi, '&').replace(/&lt;/gi, '<').replace(/&gt;/gi, '>').replace(/&quot;/gi, '"').replace(/&#39;|&apos;/gi, "'").replace(/[ \t]+/g, ' ').replace(/\n[ \t]+/g, '\n').replace(/\n{3,}/g, '\n\n').trim()
 }
@@ -62,14 +62,14 @@ export function isPublicAddress(address: string, family: number): boolean {
   return true
 }
 
-function parseSubmitted(value: string): { submitted: URL; api: URL } {
+function parseSubmitted(value: string): { submitted: URL; api: URL; html: boolean } {
   if (typeof value !== 'string' || Buffer.byteLength(value, 'utf8') > MAX_URL_BYTES) throw new Error('The link is invalid or longer than 2,048 bytes.')
   let submitted: URL
   try { submitted = new URL(value) } catch { throw new Error('Enter a valid Lever posting link.') }
   if (submitted.protocol !== 'https:' || submitted.username || submitted.password || submitted.port || submitted.hash || submitted.search) throw new Error('Only public HTTPS Lever posting links without credentials, query strings, or fragments are supported.')
   if (submitted.hostname !== 'jobs.lever.co' || submitted.pathname.split('/').length !== 3 || !/^\/[A-Za-z0-9_-]{1,100}\/[A-Za-z0-9_-]{1,150}$/.test(submitted.pathname)) throw new Error('Only a named Lever job-detail link is supported. Paste posting text instead for other sources.')
   const [, site, id] = submitted.pathname.split('/')
-  return { submitted, api: new URL(`https://${HOST}/v0/postings/${site}/${id}`) }
+  return { submitted, api: new URL(`https://${HOST}/v0/postings/${site}/${id}`), html: submitted.hostname === 'jobs.lever.co' }
 }
 
 const defaultLookup: Lookup = async hostname => (await dnsLookup(hostname, { all: true, verbatim: true })).map(x => ({ address: x.address, family: x.family }))
@@ -90,19 +90,19 @@ async function decodeBounded(body: Buffer, encoding: string, signal: AbortSignal
   finally { signal.removeEventListener('abort', abort) }
   return Buffer.concat(output, bytes)
 }
-type ExtractedPosting = { title: string; company: string | null; description: string; notices: string[] }
+type ExtractedPosting = { title: string; company: string | null; description: string; notices: string[]; extractionMethod: 'lever-json-v1' | 'lever-html-jsonld-v1' }
 async function extractPostingBounded(text: string, expectedId: string, signal: AbortSignal): Promise<ExtractedPosting> {
-  const worker = new Worker(join(__dirname, 'posting-extraction-worker.cjs'), { workerData: { text, expectedId } })
+  const worker = new Worker(join(__dirname, 'posting-extraction-worker.cjs'), { workerData: { text, expectedId, mode: expectedId === '__html__' ? 'html' : 'json' } })
   return await new Promise((resolve, reject) => {
     const finish = () => { clearTimeout(timer); signal.removeEventListener('abort', cancel); void worker.terminate() }
     const timer = setTimeout(() => { finish(); reject(new Error('Posting parsing and extraction exceeded the 2-second budget.')) }, 2_000)
     const cancel = () => { finish(); reject(new Error('Fetch cancelled.')) }
     if (signal.aborted) return cancel()
     signal.addEventListener('abort', cancel, { once: true })
-    worker.once('message', (result: { value?: ExtractedPosting; error?: string }) => {
+    worker.once('message', (result: { value?: ExtractedPosting & { extractionMethod?: 'lever-json-v1' | 'lever-html-jsonld-v1' }; error?: string }) => {
       finish()
       if (result.error || !result.value) reject(new Error(result.error ?? 'The source posting could not be extracted.'))
-      else resolve(result.value)
+      else resolve({ ...result.value, extractionMethod: result.value.extractionMethod ?? 'lever-json-v1' })
     })
     worker.once('error', error => { finish(); reject(error) })
   })
@@ -142,18 +142,18 @@ const defaultRequest: Request = (url, address, signal, headers) => new Promise((
 })
 
 export async function fetchLeverPosting(input: string, options: SafePostingFetchOptions & { signal?: AbortSignal } = {}): Promise<PostingPreview> {
-  const { submitted, api } = parseSubmitted(input)
+  const { submitted, api, html } = parseSubmitted(input)
   const controller = new AbortController()
   const abort = () => controller.abort(options.signal?.reason)
   options.signal?.addEventListener('abort', abort, { once: true })
   const timeout = setTimeout(() => controller.abort(new Error('Fetch exceeded the 30-second deadline.')), TOTAL_TIMEOUT_MS)
   const lookup = options.lookup ?? defaultLookup, request = options.request ?? defaultRequest, wait = options.wait ?? defaultWait, now = options.now ?? Date.now
   try {
-    let current = api, response: Awaited<ReturnType<Request>> | undefined
+    let current = html ? submitted : api, response: Awaited<ReturnType<Request>> | undefined
     const visited = new Set<string>()
     for (let hop = 0; hop <= 3; hop++) {
       if (controller.signal.aborted) throw options.signal?.aborted ? new Error('Fetch cancelled.') : controller.signal.reason instanceof Error ? controller.signal.reason : new Error('Fetch timed out.')
-      if (current.protocol !== 'https:' || current.hostname !== HOST || current.port || current.pathname !== api.pathname || current.search || current.hash || current.username || current.password) throw new Error('The posting redirected outside the approved Lever detail source.')
+      if (current.protocol !== 'https:' || current.hostname !== (html ? 'jobs.lever.co' : HOST) || current.port || current.pathname !== (html ? submitted.pathname : api.pathname) || current.search || current.hash || current.username || current.password) throw new Error('The posting redirected outside the approved Lever detail source.')
       if (visited.has(current.href)) throw new Error('The posting response contained a redirect loop.')
       visited.add(current.href)
       const addresses = await bounded(lookup(current.hostname), 5_000, controller.signal, 'Source DNS resolution exceeded 5 seconds.', () => controller.abort(new Error('Source DNS resolution exceeded 5 seconds.')))
@@ -196,7 +196,8 @@ export async function fetchLeverPosting(input: string, options: SafePostingFetch
     try { body = await decodeBounded(response.body, String(response.headers['content-encoding'] ?? 'identity').toLowerCase(), controller.signal) }
     catch (error) { throw error instanceof Error && error.message === 'oversized' ? new Error('The posting response exceeded the 8 MiB expanded limit.') : error }
     if (body.length > MAX_DECOMPRESSED) throw new Error('The posting response exceeded the 8 MiB expanded limit.')
-    if (!String(response.headers['content-type'] ?? '').toLowerCase().includes('json')) {
+    const contentType = String(response.headers['content-type'] ?? '').toLowerCase()
+    if (!contentType.includes('json') && !(html && contentType.includes('text/html'))) {
       const sample = response.body.subarray(0, 64 * 1024).toString('utf8').toLowerCase()
       if (/captcha|verify you are human|sign in|log in|paywall/.test(sample)) throw new Error('The source requires sign-in or presents a CAPTCHA/paywall. Access will not be bypassed; open the posting or paste its text instead.')
       throw new Error('The source returned a webpage instead of the supported posting-detail JSON. Script-rendered and generic pages are not supported; paste posting text instead.')
@@ -204,7 +205,7 @@ export async function fetchLeverPosting(input: string, options: SafePostingFetch
     let jsonText: string
     try { jsonText = new TextDecoder('utf-8', { fatal: true }).decode(body) } catch { throw new Error('The posting response was not valid UTF-8 JSON.') }
     const expectedId = api.pathname.split('/').at(-1) ?? ''
-    const extracted = await extractPostingBounded(jsonText, expectedId, controller.signal)
+    const extracted = await extractPostingBounded(jsonText, contentType.includes('json') ? expectedId : '__html__', controller.signal)
     if (controller.signal.aborted) throw new Error(options.signal?.aborted ? 'Fetch cancelled.' : 'Fetch exceeded the 30-second deadline.')
     return { ...extracted, submittedUrl: submitted.href, finalUrl: current.href }
   } finally { clearTimeout(timeout); options.signal?.removeEventListener('abort', abort) }

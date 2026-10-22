@@ -17,7 +17,7 @@ describe('bounded Lever posting fetch', () => {
     expect(request).toHaveBeenCalledTimes(1)
     expect(preview).toMatchObject({ title: 'Engineer', company: null, description: 'Build systems\nOwn reliability', submittedUrl: url })
     expect(preview.notices).toContainEqual(expect.stringContaining('Employer name'))
-    expect(preview.finalUrl).toBe('https://api.lever.co/v0/postings/acme/role-123')
+    expect(preview.finalUrl).toBe('https://jobs.lever.co/acme/role-123')
   })
   it('rejects private DNS answers before requesting and never follows external redirects', async () => {
     const request = vi.fn()

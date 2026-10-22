@@ -55,7 +55,7 @@ test('reviewed link imports save atomically with immutable source provenance and
     database.exec('DROP TRIGGER refuse_import')
     database.close()
     const result = await imported.api.acceptPostingImport(token, { title: 'Reviewed Engineer', company: 'Corrected Example Co', description: reviewedDescription })
-    expect(result).toMatchObject({ ok: true, value: { title: 'Reviewed Engineer', company: 'Corrected Example Co', provenance: 'imported', sourceSnapshot: { title: 'Source Engineer', company: 'Example Source Co', submittedUrl: 'https://jobs.lever.co/example-board/review-save-1', finalUrl: 'https://api.lever.co/v0/postings/example-board/review-save-1', extractionMethod: 'lever-json-v1', fieldOrigins: { title: 'user-correction', company: 'user-correction', description: 'user-correction' } }, revisions: [{ title: 'Reviewed Engineer', company: 'Corrected Example Co', revision: 1, provenance: 'imported' }] } })
+    expect(result).toMatchObject({ ok: true, value: { title: 'Reviewed Engineer', company: 'Corrected Example Co', provenance: 'imported', sourceSnapshot: { title: 'Source Engineer', company: 'Example Source Co', submittedUrl: 'https://jobs.lever.co/example-board/review-save-1', finalUrl: 'https://jobs.lever.co/example-board/review-save-1', extractionMethod: 'lever-json-v1', fieldOrigins: { title: 'user-correction', company: 'user-correction', description: 'user-correction' } }, revisions: [{ title: 'Reviewed Engineer', company: 'Corrected Example Co', revision: 1, provenance: 'imported' }] } })
     if (!result.ok) throw Error(result.error.message)
     expect(result.value.sourceSnapshot?.description).not.toBe(result.value.description)
     const backup = imported.backup.createBackup()
@@ -136,7 +136,7 @@ test('posting fetch previews run through the public application contract and sta
     let state = await workbench.api.readPostingPreview(started.token)
     for (let attempt = 0; attempt < 200 && state.status === 'fetching'; attempt++) { await new Promise(resolve => setTimeout(resolve, 10)); state = await workbench.api.readPostingPreview(started.token) }
     expect(calls).toHaveLength(1)
-    expect(calls[0]).toEqual({ url: 'https://api.lever.co/v0/postings/example-board/synthetic-123', address: '8.8.8.8', headers: { Accept: 'application/json', 'Accept-Encoding': 'identity', 'User-Agent': 'CV-Tailor/1.0' } })
+    expect(calls[0]).toEqual({ url: 'https://jobs.lever.co/example-board/synthetic-123', address: '8.8.8.8', headers: { Accept: 'application/json,text/html;q=0.9', 'Accept-Encoding': 'identity', 'User-Agent': 'CV-Tailor/1.0' } })
     expect(state).toMatchObject({ status: 'incomplete', preview: { title: 'Synthetic Platform Engineer', company: null, description: expect.stringContaining('• Experience with testing.') } })
     expect(await workbench.api.listJobs()).toEqual([])
     expect((await workbench.api.getAnalysisUsage()).attempts).toBe(0)
@@ -144,6 +144,38 @@ test('posting fetch previews run through the public application contract and sta
     reopened = createWorkbench(directory)
     expect(await reopened.api.listJobs()).toEqual([])
     expect(await reopened.api.readPostingPreview(started.token)).toEqual({ status: 'failed', message: 'This temporary preview is no longer available.' })
+  } finally { workbench.close(); reopened?.close() }
+})
+
+test('Lever hosted HTML preview preserves JSON-LD provenance and static posting text through save and offline reopen', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'cv-tailor-hosted-html-'))
+  directories.push(directory)
+  const { readFileSync } = await import('node:fs')
+  const html = readFileSync(new URL('./fixtures/posting-import-feasibility/lever-hosted-page-jsonld.synthetic.html', import.meta.url))
+  let calls = 0
+  const workbench = createWorkbench(directory, undefined, undefined, undefined, {
+    lookup: async () => [{ address: '8.8.8.8', family: 4 }],
+    request: async url => { calls++; expect(url.href).toBe('https://jobs.lever.co/example-board/hosted'); return { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' }, body: html } },
+    wait: async () => {}, now: () => Date.now()
+  })
+  let reopened: ReturnType<typeof createWorkbench> | undefined
+  try {
+    const { token } = await workbench.api.startPostingFetch('https://jobs.lever.co/example-board/hosted')
+    let state = await workbench.api.readPostingPreview(token)
+    for (let attempt = 0; attempt < 200 && state.status === 'fetching'; attempt++) { await new Promise(resolve => setTimeout(resolve, 10)); state = await workbench.api.readPostingPreview(token) }
+    expect(calls).toBe(1)
+    expect(state).toMatchObject({ status: 'ready', preview: { extractionMethod: 'lever-html-jsonld-v1', title: 'Synthetic Platform Engineer', company: 'Example Systems Ltd.' } })
+    if (state.status !== 'ready') throw new Error(JSON.stringify(state))
+    expect(state.preview.description).toContain('Responsibilities')
+    expect(state.preview.description).toContain('• Design safe interfaces.')
+    expect(state.preview.description).not.toContain('Example navigation')
+    expect(state.preview.description).not.toContain('Apply now')
+    expect(state.preview.notices.join(' ')).toMatch(/differs from readable page fields/)
+    const saved = await workbench.api.acceptPostingImport(token, { title: state.preview.title, company: state.preview.company!, description: state.preview.description })
+    expect(saved).toMatchObject({ ok: true, value: { sourceSnapshot: { extractionMethod: 'lever-html-jsonld-v1', finalUrl: 'https://jobs.lever.co/example-board/hosted' } } })
+    workbench.close()
+    reopened = createWorkbench(directory)
+    expect((await reopened.api.listJobs()).find(job => job.id === (saved.ok ? saved.value.id : ''))).toMatchObject({ sourceSnapshot: { extractionMethod: 'lever-html-jsonld-v1' }, description: state.preview.description })
   } finally { workbench.close(); reopened?.close() }
 })
 
