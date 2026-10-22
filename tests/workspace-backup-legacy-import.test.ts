@@ -105,6 +105,27 @@ test('merges updated experience and project records while preserving unrelated n
   expect(afterProvenance).toHaveLength(beforeProvenance.length)
 })
 
+test('rejects provenance attached to another owner type or field before workspace restore', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'cv-tailor-forged-provenance-')); directories.push(directory)
+  const workbench = createWorkbench(directory); instances.push(workbench)
+  const baseline = await workbench.api.getProfileImportBaseline()
+  const draft = mapProfilePdfPages([{ page: 1, text: 'NAME: Ada Example\nSKILLS: TypeScript' }])
+  const refs = [draft.contact!.proposalRef, ...draft.skills.map(item => item.proposalRef), ...draft.sources.map(source => source.proposalRef)]
+  const proposalIds = Object.fromEntries([...new Set(refs)].map(ref => [ref, randomUUID()]))
+  const proposal = { ...draft, proposalIds, sources: draft.sources.map(source => ({ ...source, proposalId: proposalIds[source.proposalRef] })) }
+  expect((await workbench.api.importEmptyProfilePdf('e'.repeat(64), baseline, proposal)).ok).toBe(true)
+  const valid = workbench.backup.createBackup()
+  expect(() => workbench.backup.previewRestore(valid)).not.toThrow()
+  const before = await workbench.api.getProfile()
+  for (const forgedField of ['projects.project', 'contact.links']) {
+    const forged = JSON.parse(valid)
+    const support = forged.tables.profile_import_provenance.rows.find((row: { field: string }) => row.field === 'contact.fullName')
+    support.field = forgedField
+    expect(() => workbench.backup.previewRestore(JSON.stringify(forged))).toThrow('profile_import_provenance')
+    expect(await workbench.api.getProfile()).toEqual(before)
+  }
+})
+
 test('restores a pre-provenance workspace backup as empty provenance while retaining profile and evidence history', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'cv-tailor-legacy-pdf-backup-')); directories.push(directory)
   const workbench = createWorkbench(directory); instances.push(workbench)
