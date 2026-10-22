@@ -86,6 +86,67 @@ test('maps ordinary headings and unlabeled CV patterns from DOCX through the pub
   } finally { await running?.close(); await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }) }
 })
 
+test('maps a section-based PDF through visible review and requires a record type before applying', async () => {
+  test.setTimeout(90_000)
+  const root = mkdtempSync(join(tmpdir(), 'cv-tailor-sectioned-pdf-')), userData = join(root, 'workspace'), sourceFile = join(root, 'sectioned-cv.pdf')
+  const lines = [
+    'Ada Example', 'Machine Learning Engineer', '0123456789 | ada@example.test | Egypt',
+    'Education', '- BSc Computer Science 2020 - 2024', 'Example University, Egypt CGPA: 3.8',
+    'Experience', '- Machine Learning Engineer Remote', 'Example Labs June 2022 - Present', 'Built a recommendation service for customer support.',
+    '- Data Science Trainee Online', 'Sample Institute Jan - Apr 2021', 'Completed a hands-on machine learning program.',
+    'Projects', '- Transit Insights GitHub', 'Built a route-planning dashboard with live transit data.',
+    'Skills', 'ML Engineering: Machine Learning, Deep Learning, Feature', 'Engineering, Model Evaluation', 'Languages: Python, SQL',
+    'Certificates', '- Applied ML Certificate - Example Institute View Certificate'
+  ]
+  writeFileSync(sourceFile, makePdf(lines, [{ line: 14, url: 'https://github.com/ada/transit-insights' }, { line: 2, url: 'https://www.linkedin.com/in/ada-example' }, { line: 21, url: 'https://example.test/certificate' }]))
+  const original = readFileSync(sourceFile)
+  let running: ElectronApplication | undefined
+  try {
+    running = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData } })
+    const page = await running.firstWindow()
+    await expect(page.locator('[data-ui-ready="true"]')).toBeVisible({ timeout: 15000 })
+    await page.getByRole('button', { name: 'My profile' }).click()
+    await running.evaluate(({ dialog }, selectedPath) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selectedPath] }); return true }, sourceFile)
+    await page.getByRole('button', { name: 'Upload CV' }).click()
+    const review = page.getByRole('region', { name: 'Review proposed profile details' })
+    await expect(review).toBeVisible({ timeout: 15000 })
+    await expect(review.getByLabel('Full name')).toHaveValue('Ada Example')
+    const skillNames = await review.getByLabel('Skill name').evaluateAll(inputs => inputs.map(input => (input as HTMLInputElement).value))
+    expect(skillNames).toContain('Feature Engineering')
+    expect(skillNames).not.toContain('Feature')
+    expect(skillNames).not.toContain('Engineering')
+    await expect(review.getByText(/Text not mapped to a profile field/)).toHaveCount(0)
+    await expect(review.getByLabel('Certificate link')).toHaveValue('https://example.test/certificate')
+    const roleCards = review.locator('fieldset.pdf-proposal').filter({ has: page.locator('select[aria-label="Record type"]') })
+    await expect(roleCards).toHaveCount(2)
+    await expect(roleCards.nth(0).getByRole('checkbox', { name: 'Include this proposal' })).not.toBeChecked()
+    await expect(roleCards.nth(1).getByRole('checkbox', { name: 'Include this proposal' })).not.toBeChecked()
+    expect(await page.evaluate(() => window.workbench.getProfile())).toMatchObject({ contact: null, skills: [] })
+    await roleCards.nth(0).getByLabel('Include this proposal').check()
+    await review.getByRole('button', { name: 'Apply accepted details' }).click()
+    await expect(review.getByText('Choose Employment or Training for each included experience record.')).toBeVisible()
+    expect(await page.evaluate(() => window.workbench.getProfile())).toMatchObject({ contact: null, skills: [] })
+    await roleCards.nth(0).getByLabel('Record type').selectOption('employment')
+    await roleCards.nth(0).getByLabel('Include this proposal').check()
+    await roleCards.nth(1).getByLabel('Record type').selectOption('training')
+    await roleCards.nth(1).getByLabel('Include this proposal').check()
+    await review.getByRole('button', { name: 'Apply accepted details' }).click()
+    await expect(page.getByRole('status')).toContainText('added to your profile')
+    expect(await page.evaluate(() => window.workbench.getProfile())).toMatchObject({
+      contact: { fullName: 'Ada Example', headline: 'Machine Learning Engineer', email: 'ada@example.test', phone: '0123456789', location: 'Egypt', links: [{ label: 'LinkedIn', url: 'https://www.linkedin.com/in/ada-example' }] },
+      skills: expect.arrayContaining([expect.objectContaining({ name: 'Feature Engineering' }), expect.objectContaining({ name: 'Python', category: 'Languages' })]),
+      education: [expect.objectContaining({ title: 'BSc Computer Science', institution: 'Example University, Egypt', startDate: '2020', endDate: '2024', description: 'CGPA: 3.8' })],
+      certificates: [expect.objectContaining({ title: 'Applied ML Certificate', issuer: 'Example Institute', link: 'https://example.test/certificate' })]
+    })
+    expect(await page.evaluate(() => window.workbench.getExperience())).toMatchObject({
+      experience: expect.arrayContaining([expect.objectContaining({ kind: 'employment', title: 'Machine Learning Engineer', organization: 'Example Labs', factualItems: expect.arrayContaining([expect.objectContaining({ text: 'Built a recommendation service for customer support.' })]) }), expect.objectContaining({ kind: 'training', title: 'Data Science Trainee', organization: 'Sample Institute' })]),
+      projects: [expect.objectContaining({ name: 'Transit Insights', factualItems: expect.arrayContaining([expect.objectContaining({ text: 'Built a route-planning dashboard with live transit data.' })]), links: [{ label: 'GitHub', url: 'https://github.com/ada/transit-insights' }] })]
+    })
+    expect(readFileSync(sourceFile)).toEqual(original)
+    expect((await page.evaluate(() => window.workbench.getAnalysisUsage())).attempts).toBe(0)
+  } finally { await running?.close(); await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }) }
+})
+
 test('imports DOCX proposals through visible review and applies them to the existing profile contract', async () => {
   test.setTimeout(60000)
   const root = mkdtempSync(join(tmpdir(), 'cv-tailor-docx-import-')), userData = join(root, 'workspace'), sourceFile = join(root, 'synthetic-cv.docx'), backupFile = join(root, 'accepted-docx-backup.json')
