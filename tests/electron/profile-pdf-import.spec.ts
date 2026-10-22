@@ -16,19 +16,75 @@ async function makeDocx() {
   return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' })
 }
 
-function makePdf(lines: string[]) {
+async function makeOrdinaryDocx() {
+  const zip = new JSZip()
+  zip.file('[Content_Types].xml', '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>')
+  zip.file('_rels/.rels', '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>')
+  const lines = ['Work Experience', 'Software Engineer | Example Labs | 2021 to 2023', 'Built the internal reporting service', 'Projects', 'Atlas | React, SQLite', 'Added offline support', 'Technical Skills', 'TypeScript, SQL', 'Community mentor']
+  zip.file('word/document.xml', `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${lines.map(line => `<w:p><w:r><w:t>${line}</w:t></w:r></w:p>`).join('')}</w:body></w:document>`)
+  return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' })
+}
+
+function makePdf(lines: string[], links: Array<{ line: number; url: string }> = []) {
   const objects: string[] = []
   const add = (value: string) => { objects.push(value); return objects.length }
   add(''); const pages = add(''); const font = add('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>')
   const commands = `BT /F1 10 Tf\n${lines.map((line, index) => `1 0 0 1 36 ${760 - index * 18} Tm (${line.replace(/[()\\]/g, '\\$&')}) Tj`).join('\n')}\nET`
   const content = add(`<< /Length ${commands.length} >>\nstream\n${commands}\nendstream`)
-  const page = add(`<< /Type /Page /Parent ${pages} 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 ${font} 0 R >> >> /Contents ${content} 0 R >>`)
+  const annotations = links.map(link => add(`<< /Type /Annot /Subtype /Link /Rect [34 ${758 - link.line * 18} 280 ${774 - link.line * 18}] /Border [0 0 0] /A << /S /URI /URI (${link.url}) >> >>`))
+  const annotationRefs = annotations.length ? ` /Annots [${annotations.map(id => `${id} 0 R`).join(' ')}]` : ''
+  const page = add(`<< /Type /Page /Parent ${pages} 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 ${font} 0 R >> >> /Contents ${content} 0 R${annotationRefs} >>`)
   objects[0] = `<< /Type /Catalog /Pages ${pages} 0 R >>`; objects[pages - 1] = `<< /Type /Pages /Kids [${page} 0 R] /Count 1 >>`
   let pdf = Buffer.from('%PDF-1.4\n'), offsets = [0]
   objects.forEach((object, index) => { offsets.push(pdf.length); pdf = Buffer.concat([pdf, Buffer.from(`${index + 1} 0 obj\n${object}\nendobj\n`)]) })
   const xref = pdf.length; let table = `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`; offsets.slice(1).forEach(offset => { table += `${String(offset).padStart(10, '0')} 00000 n \n` })
   return Buffer.concat([pdf, Buffer.from(`${table}trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`)])
 }
+
+test('imports real PDF hyperlink targets through the public preview and SQLite apply seam', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'cv-tailor-pdf-links-')), userData = join(root, 'workspace'), sourceFile = join(root, 'linked-cv.pdf')
+  const lines = ['NAME: Ada Example', 'EMAIL: ada@example.test', 'LinkedIn', 'Work Experience', 'Software Engineer | Example Labs | 2021 to 2023', 'Built the internal reporting service', 'Projects', 'Atlas | React, SQLite', 'Repository', 'Added offline support', 'Technical Skills', 'TypeScript, SQL']
+  writeFileSync(sourceFile, makePdf(lines, [{ line: 2, url: 'https://www.linkedin.com/in/ada-example' }, { line: 8, url: 'https://github.com/ada/atlas' }]))
+  let running: ElectronApplication | undefined
+  try {
+    running = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], timeout: 15000, env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData } })
+    const page = await running.firstWindow({ timeout: 15000 })
+    await expect(page.locator('[data-ui-ready="true"]')).toBeVisible({ timeout: 15000 })
+    await running.evaluate(({ dialog }, selectedPath) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selectedPath] }); return true }, sourceFile)
+    const preview = await page.evaluate(() => window.workbench.previewProfilePdfImport())
+    expect(preview.ok).toBe(true)
+    if (!preview.ok) throw new Error(preview.message)
+    expect(preview.proposals.contact?.links).toEqual([{ label: 'LinkedIn', url: 'https://www.linkedin.com/in/ada-example' }])
+    expect(preview.proposals.projects[0]?.links).toEqual([{ label: 'Repository', url: 'https://github.com/ada/atlas' }])
+    expect(preview.proposals.experience).toMatchObject([{ title: 'Software Engineer', organization: 'Example Labs', factualItems: [{ text: 'Built the internal reporting service' }] }])
+    expect(preview.proposals.projects[0]?.factualItems).toEqual([{ text: 'Added offline support', proposalRef: expect.any(String) }])
+    expect(preview.proposals.unmapped).toEqual([])
+    const result = await page.evaluate(async ({ token, proposals }) => window.workbench.applyProfilePdfImport(token, proposals), { token: preview.token, proposals: preview.proposals })
+    expect(result).toMatchObject({ ok: true })
+    expect(await page.evaluate(() => window.workbench.getProfile())).toMatchObject({ contact: { links: [{ label: 'LinkedIn', url: 'https://www.linkedin.com/in/ada-example' }] } })
+    expect(await page.evaluate(() => window.workbench.getExperience())).toMatchObject({ projects: [{ name: 'Atlas', links: [{ label: 'Repository', url: 'https://github.com/ada/atlas' }] }] })
+  } finally { await running?.close(); await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }) }
+})
+
+test('maps ordinary headings and unlabeled CV patterns from DOCX through the public preload seam', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'cv-tailor-docx-ordinary-')), userData = join(root, 'workspace'), sourceFile = join(root, 'ordinary-cv.docx')
+  writeFileSync(sourceFile, await makeOrdinaryDocx())
+  let running: ElectronApplication | undefined
+  try {
+    running = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], timeout: 15000, env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData } })
+    const page = await running.firstWindow({ timeout: 15000 })
+    await expect(page.locator('[data-ui-ready="true"]')).toBeVisible({ timeout: 15000 })
+    await running.evaluate(({ dialog }, selectedPath) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selectedPath] }); return true }, sourceFile)
+    const preview = await page.evaluate(() => window.workbench.previewProfileDocxImport())
+    expect(preview.ok).toBe(true)
+    if (!preview.ok) throw new Error(preview.message)
+    expect(preview.proposals.experience).toMatchObject([{ title: 'Software Engineer', organization: 'Example Labs', startDate: '2021', endDate: '2023', factualItems: [{ text: 'Built the internal reporting service' }] }])
+    expect(preview.proposals.projects).toMatchObject([{ name: 'Atlas', technologies: [{ text: 'React' }, { text: 'SQLite' }], factualItems: [{ text: 'Added offline support' }] }])
+    expect(preview.proposals.skills.map(skill => skill.name)).toEqual(['TypeScript', 'SQL'])
+    expect(preview.proposals.unmapped).toContainEqual({ page: 1, text: 'Community mentor' })
+    expect(await page.evaluate(() => window.workbench.getProfile())).toMatchObject({ contact: null, skills: [] })
+  } finally { await running?.close(); await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }) }
+})
 
 test('imports DOCX proposals through visible review and applies them to the existing profile contract', async () => {
   test.setTimeout(60000)
