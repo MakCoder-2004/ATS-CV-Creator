@@ -83,6 +83,7 @@ export interface WorkbenchAPI {
   resumeGeneration(runId: string, choice?: RecoveryChoice): Promise<{ ok: boolean; message: string }>
   cancelGenerationRecovery(runId: string): Promise<{ ok: boolean; message: string }>
   generateDraft(consentToken: string, pageTarget?: 1 | 2): Promise<{ ok: boolean; message: string; draft?: DraftRevision }>
+  renewDraftReview(jobId: string): Promise<{ ok: boolean; message: string; draft?: DraftRevision }>
   regenerateDraft(consentToken: string, target: RegenerationTarget): Promise<{ ok: boolean; message: string; proposal?: RegenerationProposal }>
   getRegenerationProposal(jobId: string): Promise<RegenerationProposal | null>
   resolveRegenerationProposal(jobId: string, proposalId: string, decision: 'accept' | 'reject'): Promise<{ ok: boolean; message: string; draft?: DraftRevision; proposal?: RegenerationProposal }>

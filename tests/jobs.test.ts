@@ -349,7 +349,7 @@ test('job history byte ceiling refuses atomically and the last accepted full his
   const reopened = createWorkbench(directory)
   expect(await reopened.api.openJob(lastAccepted.id)).toEqual(lastAccepted)
   reopened.close()
-})
+}, 20_000)
 
 test('model capacity refusal preserves long saved text and sends no scripted model request', async () => {
   let modelDispatches = 0

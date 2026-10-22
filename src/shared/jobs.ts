@@ -34,4 +34,9 @@ export const jobSaveResultSchema = z.discriminatedUnion('ok', [
 ])
 export type JobInput = z.infer<typeof jobInputSchema>
 export type JobRecord = z.infer<typeof jobRecordSchema>
+/** Keep an unbound historical draft at the oldest accepted target we can prove; use current only when history has no baseline. */
+export function legacyDraftTargetBaseline(job: Pick<JobRecord, 'createdAt' | 'updatedAt' | 'revisions'>): string | undefined {
+  if (job.revisions.length) return job.revisions[0].acceptedAt
+  return job.createdAt === job.updatedAt ? job.updatedAt : undefined
+}
 export type JobSaveResult = z.infer<typeof jobSaveResultSchema>

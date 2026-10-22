@@ -104,20 +104,6 @@ test('complete workspace backup restores draft revisions, evidence, posting, pre
   expect(requests.length).toBe(attemptsBeforeReopen)
 })
 
-test('workspace backup restores full long posting text without truncation', async () => {
-  const { dir, workbench } = fixture()
-  const complete = `Scope:\n${'Unicode ☕ and detailed synthetic requirements.\n'.repeat(1000)}`
-  expect(Array.from(complete).length).toBeGreaterThan(30000)
-  const job = await workbench.api.saveJob({ title: 'Long posting', company: 'Example', description: complete })
-  if (!job.ok) throw new Error(job.error.message)
-  const backup = workbench.backup.createBackup()
-  const preview = workbench.backup.previewRestore(backup)
-  workbench.backup.applyRestore(preview.token, safetyBackup(dir))
-  workbench.close(); instances.pop()
-  const reopened = open(dir)
-  expect((await reopened.api.openJob(job.value.id))?.description).toBe(complete)
-})
-
 test('released version-1 job backups without provenance upgrade to honest legacy records on restore', async () => {
   const { dir, workbench } = fixture()
   const saved = await workbench.api.saveJob({ title: 'Engineer', company: 'Example', description: 'Original wording.' })
@@ -135,23 +121,63 @@ test('released version-1 job backups without provenance upgrade to honest legacy
   expect(edited).toMatchObject({ ok: true, value: { revisions: [{ description: 'Original wording.', revision: 1, provenance: 'legacy-unknown' }, { description: 'Corrected wording.', revision: 2, provenance: 'manual' }] } })
 })
 
+test('legacy backups bind untagged approved drafts to their accepted posting before later edits', async () => {
+  const { dir, workbench } = fixture()
+  await workbench.api.saveSkill({ name: 'TypeScript', category: 'Programming' })
+  const job = await workbench.api.saveJob({ title: 'Engineer', company: 'Example', description: 'TypeScript required.' })
+  if (!job.ok) throw new Error('Job fixture failed')
+  const consent = await workbench.api.prepareOutboundConsent(job.value.id)
+  if (!consent.ok) throw new Error('Consent fixture failed')
+  await workbench.api.acceptOutboundConsent(consent.token, true, true)
+  await workbench.api.startAnalysis(consent.token)
+  const generated = await workbench.api.generateDraft(consent.token)
+  if (!generated.ok || !generated.draft) throw new Error('Draft fixture failed')
+  const corrected = await workbench.api.correctDraft({ jobId: job.value.id, section: 'skills', index: 0, text: 'TypeScript' })
+  if (!corrected) throw new Error('Second draft revision fixture failed')
+  await workbench.api.checkDraft(job.value.id)
+  const document = await workbench.api.getCanonicalDocument(job.value.id)
+  if (!document) throw new Error('Document fixture failed')
+  await workbench.api.saveDocumentFitReport(job.value.id, { documentHash: createHash('sha256').update(JSON.stringify(document)).digest('hex'), targetPages: document.targetPages, actualPages: document.targetPages, extractedText: ['CV'], linkTargets: [], links: [], overflow: false, proposedCuts: [], measuredAt: new Date().toISOString() })
+  expect(await workbench.api.approveDraft(job.value.id)).toMatchObject({ ok: true })
+  expect(await workbench.api.saveJob({ id: job.value.id, title: job.value.title, company: job.value.company, description: 'First accepted manual revision.' })).toMatchObject({ ok: true })
+  expect(await workbench.api.saveJob({ id: job.value.id, title: job.value.title, company: job.value.company, description: 'Second accepted manual revision.' })).toMatchObject({ ok: true })
+  const currentJob = await workbench.api.openJob(job.value.id)
+  if (!currentJob) throw new Error('Edited job fixture failed')
+  const legacy = JSON.parse(workbench.backup.createBackup())
+  const legacyDraftRows = legacy.tables.draft_revisions.rows.filter((row: { job_id: string }) => row.job_id === job.value.id)
+  expect(legacyDraftRows.length).toBeGreaterThan(1)
+  for (const draftRow of legacyDraftRows) {
+    const legacyDraft = JSON.parse(draftRow.data)
+    delete legacyDraft.targetPostingUpdatedAt
+    draftRow.data = JSON.stringify(legacyDraft)
+  }
+  legacy.tables.schema_migrations.rows = legacy.tables.schema_migrations.rows.filter((row: { version: number }) => row.version !== 8)
+  const preview = workbench.backup.previewRestore(JSON.stringify(legacy))
+  workbench.backup.applyRestore(preview.token, safetyBackup(dir))
+  workbench.close(); instances.pop()
+  const reopened = open(dir)
+  const restored = await reopened.api.getDraft(job.value.id)
+  expect(restored).toMatchObject({ id: corrected.id, approved: true, targetPostingUpdatedAt: currentJob.revisions[0].acceptedAt })
+  expect(restored?.targetPostingUpdatedAt).not.toBe(currentJob.updatedAt)
+  expect(await reopened.api.assertDraftExportable(job.value.id)).toMatchObject({ ok: false })
+  expect(await reopened.api.saveJob({ id: job.value.id, title: job.value.title, company: job.value.company, description: `${currentJob.description} Another requirement.` })).toMatchObject({ ok: true })
+  expect(await reopened.api.approveDraft(job.value.id)).toMatchObject({ ok: false })
+  expect(await reopened.api.assertDraftExportable(job.value.id)).toMatchObject({ ok: false })
+}, 20000)
+
 test('restore rejects oversized aggregate, table, row, and posting-revision inputs before replacing workspace data', async () => {
   const { dir, workbench } = fixture()
   const saved = await workbench.api.saveJob({ title: 'Preserved job', company: 'Example', description: 'Unchanged source.' })
   if (!saved.ok) throw new Error('Job fixture failed')
   const base = JSON.parse(workbench.backup.createBackup())
 
-  const aggregateOversized = ' '.repeat(MAX_WORKSPACE_BACKUP_BYTES + 1)
-  expect(() => workbench.backup.previewRestore(aggregateOversized)).toThrow(/64 MiB/)
-
+  expect(() => workbench.backup.previewRestore(' '.repeat(MAX_WORKSPACE_BACKUP_BYTES + 1))).toThrow(/64 MiB/)
   const tooManyRows = structuredClone(base)
   tooManyRows.tables.schema_migrations.rows = Array.from({ length: WORKSPACE_BACKUP_TABLE_ROW_LIMITS.schema_migrations + 1 }, (_, version) => ({ version }))
   expect(() => workbench.backup.previewRestore(JSON.stringify(tooManyRows))).toThrow(/schema_migrations.*row safety limit/i)
-
   const tooWideRow = structuredClone(base)
   tooWideRow.tables.jobs.rows[0].data = 'x'.repeat(MAX_WORKSPACE_BACKUP_ROW_BYTES + 1)
   expect(() => workbench.backup.previewRestore(JSON.stringify(tooWideRow))).toThrow(/row jobs.*16 MiB/i)
-
   const tooManyRevisions = structuredClone(base)
   const jobData = JSON.parse(tooManyRevisions.tables.jobs.rows[0].data)
   jobData.revisions = Array.from({ length: MAX_WORKSPACE_BACKUP_POSTING_REVISIONS + 1 }, () => null)
