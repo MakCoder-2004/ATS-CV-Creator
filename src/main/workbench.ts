@@ -845,6 +845,42 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       fetch.state = { status: 'cancelled' }
       return { ok: true }
     },
+    async acceptPostingImport(token: string, input) {
+      const checkedToken = uuidSchema.safeParse(token)
+      const pending = checkedToken.success ? postingFetches.get(checkedToken.data) : undefined
+      if (!pending) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'This reviewed posting preview is unavailable, incomplete, cancelled, or already used. Fetch it again before saving.' } })
+      const pendingState = pending.state
+      const companyOnlyIncomplete = pendingState.status === 'incomplete' && pendingState.preview.title.trim().length > 0 && pendingState.preview.description.trim().length > 0 && pendingState.preview.company === null && pendingState.preview.notices.every(notice => /employer name was not provided|extraction cannot guarantee posting completeness or that the role remains open/i.test(notice))
+      if (pendingState.status !== 'ready' && !companyOnlyIncomplete) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'This reviewed posting preview is incomplete, cancelled, or already used. Resolve missing source content before saving.' } })
+      const parsed = jobInputSchema.safeParse(input)
+      if (!parsed.success) {
+        const fieldErrors: Record<string, string> = {}
+        for (const issue of parsed.error.issues) fieldErrors[issue.path.length ? issue.path.join('.') : '_'] = issue.message
+        return jobSaveResultSchema.parse({ ok: false, error: { code: 'VALIDATION_ERROR', message: 'Review a title, company, and complete posting description before saving.', fieldErrors } })
+      }
+      const source = pendingState.status === 'ready' || pendingState.status === 'incomplete' ? pendingState.preview : null
+      if (!source) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'This posting preview is no longer saveable. Fetch it again before saving.' } })
+      if (companyOnlyIncomplete && (parsed.data.title !== source.title || parsed.data.description !== source.description)) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'This source only allows a reviewed employer-name correction; its incomplete posting content cannot be replaced here.' } })
+      const sourceIdentity = new URL(source.finalUrl).pathname
+      const known = (db.prepare('SELECT data FROM jobs').all() as { data: string }[]).map(row => jobRecordSchema.parse(JSON.parse(row.data)))
+      if (known.some(job => job.sourceSnapshot?.sourceIdentity === sourceIdentity || job.sourceSnapshot?.finalUrl === source.finalUrl)) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'This exact source is already saved. Open the existing posting instead; no duplicate was created.' } })
+      const hash = (value: string) => createHash('sha256').update(value, 'utf8').digest('hex')
+      const sourceSnapshot = {
+        title: source.title, company: source.company, description: source.description,
+        submittedUrl: source.submittedUrl, finalUrl: source.finalUrl, sourceIdentity, capturedAt: new Date().toISOString(),
+        extractionMethod: 'lever-json-v1' as const, extractionVersion: 1 as const,
+        hashes: { title: hash(source.title), company: source.company === null ? null : hash(source.company), description: hash(source.description) },
+        fieldOrigins: { title: parsed.data.title === source.title ? 'source' as const : 'user-correction' as const, company: source.company !== null && parsed.data.company === source.company ? 'source' as const : 'user-correction' as const, description: parsed.data.description === source.description ? 'source' as const : 'user-correction' as const }
+      }
+      const now = new Date().toISOString(), id = randomUUID()
+      const record = jobRecordSchema.parse({ ...parsed.data, id, createdAt: now, updatedAt: now, provenance: 'imported', sourceSnapshot, revisions: [{ ...parsed.data, revision: 1, acceptedAt: now, provenance: 'imported' }] })
+      try {
+        const tx = db.transaction(() => db.prepare('INSERT INTO jobs (id, created_at, updated_at, data) VALUES (?, ?, ?, ?)').run(record.id, now, now, JSON.stringify(record)))
+        tx()
+        pending.state = { status: 'cancelled' }
+        return jobSaveResultSchema.parse({ ok: true, value: record })
+      } catch { return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'The reviewed posting could not be saved. No partial job history was retained.' } }) }
+    },
     async saveJob(input) {
       const { id: _id, ...jobInput } = input
       const parsed = jobInputSchema.safeParse(jobInput)

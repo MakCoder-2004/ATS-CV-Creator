@@ -1,12 +1,14 @@
 import { afterEach, expect, test, vi } from 'vitest'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync } from 'node:fs'
+import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { gzipSync } from 'node:zlib'
+import Database from 'better-sqlite3'
 import { createWorkbench } from '../src/main/workbench'
 
 const directories: string[] = []
-afterEach(() => { for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true }) })
+afterEach(async () => { for (const directory of directories.splice(0)) await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) })
 function open(transport?: Parameters<typeof createWorkbench>[2]) {
   const directory = mkdtempSync(join(tmpdir(), 'cv-tailor-jobs-'))
   directories.push(directory)
@@ -28,6 +30,96 @@ test('saved jobs preserve original posting text, have stable IDs, and reopen aft
   expect(await reopened.api.openJob(id)).toEqual(saved.value)
   expect(await reopened.api.listJobs()).toEqual([saved.value])
   reopened.close()
+})
+
+test('reviewed link imports save atomically with immutable source provenance and reopen offline', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'cv-tailor-reviewed-import-'))
+  directories.push(directory)
+  const calls: string[] = []
+  const description = `Responsibilities\n${'The fictional engineering team builds reliable software and maintains dependable systems with careful collaboration. '.repeat(4)}\nRequirements\n• Build reliable services with the fictional team.`
+  const responseBody = JSON.stringify({ id: 'review-save-1', text: 'Source Engineer', company: 'Example Source Co', descriptionPlain: description, lists: [{ text: 'Responsibilities', content: '<li>Build reliable services with the fictional team.</li>' }] })
+  const imported = createWorkbench(directory, undefined, undefined, undefined, { lookup: async () => [{ address: '8.8.8.8', family: 4 }], request: async url => { calls.push(url.href); return { status: 200, headers: { 'content-type': 'application/json' }, body: Buffer.from(responseBody) } } })
+  let importedClosed = false
+  try {
+    const { token } = await imported.api.startPostingFetch('https://jobs.lever.co/example-board/review-save-1')
+    let state = await imported.api.readPostingPreview(token)
+    for (let attempt = 0; attempt < 50 && state.status === 'fetching'; attempt++) { await new Promise(resolve => setTimeout(resolve, 2)); state = await imported.api.readPostingPreview(token) }
+    expect(state.status).toBe('ready')
+    if (state.status !== 'ready') throw Error('Synthetic source was not ready')
+    const reviewedDescription = `${state.preview.description}\nReviewed clarification: include the fictional on-call rotation.`
+    const database = new Database(join(directory, 'workbench.sqlite'))
+    database.exec("CREATE TRIGGER refuse_import BEFORE INSERT ON jobs BEGIN SELECT RAISE(ABORT, 'simulated import transaction failure'); END")
+    const failedAcceptance = await imported.api.acceptPostingImport(token, { title: 'Reviewed Engineer', company: 'Corrected Example Co', description: reviewedDescription })
+    expect(failedAcceptance).toMatchObject({ ok: false, error: { code: 'CONFLICT' } })
+    expect(await imported.api.listJobs()).toEqual([])
+    database.exec('DROP TRIGGER refuse_import')
+    database.close()
+    const result = await imported.api.acceptPostingImport(token, { title: 'Reviewed Engineer', company: 'Corrected Example Co', description: reviewedDescription })
+    expect(result).toMatchObject({ ok: true, value: { title: 'Reviewed Engineer', company: 'Corrected Example Co', provenance: 'imported', sourceSnapshot: { title: 'Source Engineer', company: 'Example Source Co', submittedUrl: 'https://jobs.lever.co/example-board/review-save-1', finalUrl: 'https://api.lever.co/v0/postings/example-board/review-save-1', extractionMethod: 'lever-json-v1', fieldOrigins: { title: 'user-correction', company: 'user-correction', description: 'user-correction' } }, revisions: [{ title: 'Reviewed Engineer', company: 'Corrected Example Co', revision: 1, provenance: 'imported' }] } })
+    if (!result.ok) throw Error(result.error.message)
+    expect(result.value.sourceSnapshot?.description).not.toBe(result.value.description)
+    const backup = imported.backup.createBackup()
+    expect(backup).toContain('Source Engineer')
+    expect(backup).toContain(result.value.sourceSnapshot!.hashes.description)
+    const unrelated = await imported.api.saveJob({ title: 'Another role', company: 'Fictional Co', description: 'Separate manual posting.' })
+    expect(unrelated.ok).toBe(true)
+    const restore = imported.backup.previewRestore(backup)
+    imported.backup.applyRestore(restore.token, safety => safety)
+    const repeatedFetch = await imported.api.startPostingFetch('https://jobs.lever.co/example-board/review-save-1')
+    let repeatedState = await imported.api.readPostingPreview(repeatedFetch.token)
+    for (let attempt = 0; attempt < 300 && repeatedState.status === 'fetching'; attempt++) { await new Promise(resolve => setTimeout(resolve, 10)); repeatedState = await imported.api.readPostingPreview(repeatedFetch.token) }
+    if (repeatedState.status !== 'ready') throw Error('Repeated synthetic source was not ready')
+    const repeated = await imported.api.acceptPostingImport(repeatedFetch.token, { title: 'Reviewed Engineer', company: 'Corrected Example Co', description: reviewedDescription })
+    expect(repeated).toMatchObject({ ok: false, error: { code: 'CONFLICT', message: expect.stringMatching(/already saved|Open the existing/i) } })
+    expect(await imported.api.listJobs()).toHaveLength(1)
+    expect((await imported.api.getAnalysisUsage()).attempts).toBe(0)
+    const id = result.value.id
+    imported.close(); importedClosed = true
+    const reopened = createWorkbench(directory)
+    try {
+      const restored = await reopened.api.openJob(id)
+      expect(restored).toEqual(result.value)
+      expect(restored?.sourceSnapshot?.hashes).toEqual(result.value.sourceSnapshot?.hashes)
+      expect(restored?.sourceSnapshot?.description).toBe(state.preview.description)
+      expect(restored?.description).toBe(reviewedDescription)
+      expect(calls).toHaveLength(2)
+    } finally { reopened.close() }
+  } finally { if (!importedClosed) imported.close() }
+})
+
+test('a source-missing company can be supplied deliberately while incomplete posting text remains blocked', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'cv-tailor-import-corrections-'))
+  directories.push(directory)
+  const body = JSON.stringify({ id: 'company-omitted', text: 'Source Engineer', descriptionPlain: `Responsibilities\n${'Build and maintain fictional software with a cross-functional example team. '.repeat(5)}\nRequirements\nCareful testing and documentation.`, lists: [{ text: 'Requirements', content: '<li>Careful testing and documentation.</li>' }] })
+  const wb = createWorkbench(directory, undefined, undefined, undefined, { lookup: async () => [{ address: '8.8.8.8', family: 4 }], request: async () => ({ status: 200, headers: { 'content-type': 'application/json' }, body: Buffer.from(body) }) })
+  try {
+    const started = await wb.api.startPostingFetch('https://jobs.lever.co/example-board/company-omitted')
+    let state = await wb.api.readPostingPreview(started.token)
+    for (let attempt = 0; attempt < 300 && state.status === 'fetching'; attempt++) { await new Promise(resolve => setTimeout(resolve, 10)); state = await wb.api.readPostingPreview(started.token) }
+    expect(state).toMatchObject({ status: 'incomplete', preview: { company: null } })
+    if (state.status !== 'incomplete') throw Error('Expected the source to omit its employer name')
+    expect(await wb.api.acceptPostingImport(started.token, { title: state.preview.title, company: 'User-reviewed Example Employer', description: 'A replacement description cannot bypass incomplete source notices.' })).toMatchObject({ ok: false, error: { code: 'CONFLICT' } })
+    const accepted = await wb.api.acceptPostingImport(started.token, { title: state.preview.title, company: 'User-reviewed Example Employer', description: state.preview.description })
+    if (!accepted.ok) throw new Error(`Company correction rejected: ${accepted.error.message}`)
+    expect(accepted).toMatchObject({ ok: true, value: { company: 'User-reviewed Example Employer', sourceSnapshot: { company: null, hashes: { company: null }, fieldOrigins: { company: 'user-correction' } } } })
+    expect(await wb.api.acceptPostingImport(started.token, { title: state.preview.title, company: 'Another Guess', description: state.preview.description })).toMatchObject({ ok: false, error: { code: 'CONFLICT' } })
+  } finally { wb.close() }
+})
+
+test('an incomplete teaser cannot be accepted by supplying missing fields alone', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'cv-tailor-import-teaser-'))
+  directories.push(directory)
+  const body = JSON.stringify({ id: 'teaser', text: 'Source Engineer', descriptionPlain: 'A short teaser.' })
+  const wb = createWorkbench(directory, undefined, undefined, undefined, { lookup: async () => [{ address: '8.8.8.8', family: 4 }], request: async () => ({ status: 200, headers: { 'content-type': 'application/json' }, body: Buffer.from(body) }) })
+  try {
+    const started = await wb.api.startPostingFetch('https://jobs.lever.co/example-board/teaser')
+    let state = await wb.api.readPostingPreview(started.token)
+    for (let attempt = 0; attempt < 300 && state.status === 'fetching'; attempt++) { await new Promise(resolve => setTimeout(resolve, 10)); state = await wb.api.readPostingPreview(started.token) }
+    expect(state).toMatchObject({ status: 'incomplete', preview: { company: null } })
+    expect(await wb.api.acceptPostingImport(started.token, { title: 'Engineer', company: 'User-reviewed Example', description: 'A complete posting description supplied by the caller cannot override source teaser warnings by itself.' })).toMatchObject({ ok: false, error: { code: 'CONFLICT' } })
+    expect(await wb.api.acceptPostingImport(started.token, { title: 'Engineer', company: 'Example', description: 'I supplied a replacement but no full posting.' })).toMatchObject({ ok: false, error: { code: 'CONFLICT' } })
+    expect(await wb.api.listJobs()).toEqual([])
+  } finally { wb.close() }
 })
 
 test('posting fetch previews run through the public application contract and stay ephemeral', async () => {
@@ -99,6 +191,7 @@ test('posting fetch rejects unsupported links before contacting a source and can
     await startedRequest
     expect(await apiWorkbench.api.cancelPostingFetch(active.token)).toEqual({ ok: true })
     expect(await apiWorkbench.api.readPostingPreview(active.token)).toEqual({ status: 'cancelled' })
+    expect(await apiWorkbench.api.acceptPostingImport(active.token, { title: 'Ignored Engineer', company: 'Example', description: 'This cancelled preview cannot be accepted.' })).toMatchObject({ ok: false, error: { code: 'CONFLICT' } })
     resolveLate({ status: 200, headers: { 'content-type': 'application/json' }, body: Buffer.from(JSON.stringify({ id: 'cancel-me', text: 'Late response', company: 'Example', descriptionPlain: 'This response arrived only after cancellation.' })) })
     await new Promise(resolve => setTimeout(resolve, 0))
     expect(await apiWorkbench.api.readPostingPreview(active.token)).toEqual({ status: 'cancelled' })
