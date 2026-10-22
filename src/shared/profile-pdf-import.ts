@@ -25,11 +25,18 @@ const proposalRefs = (proposal: z.infer<typeof profilePdfProposalDraftSchema>) =
   ...proposal.projects.flatMap(item => [item.proposalRef, ...item.factualItems.map(fact => fact.proposalRef), ...item.technologies.map(technology => technology.proposalRef)]),
   ...proposal.entries.map(item => item.proposalRef)
 ]
-export const profilePdfProposalSchema = z.object({ ...proposalShape, sources: z.array(sourceSchema).max(15_000), proposalIds: z.record(z.string(), uuidSchema).refine(ids => Object.keys(ids).length <= 15_000) }).strict().superRefine((proposal, context) => {
+const mergeDecisionSchema = z.object({ action: z.enum(['add', 'update', 'skip']), targetId: uuidSchema.optional() }).strict().refine(value => value.action === 'update' ? Boolean(value.targetId) : !value.targetId, 'Choose an existing record only for an update.')
+export const profilePdfProposalSchema = z.object({ ...proposalShape, sources: z.array(sourceSchema).max(15_000), proposalIds: z.record(z.string(), uuidSchema).refine(ids => Object.keys(ids).length <= 15_000), decisions: z.record(proposalRef, mergeDecisionSchema).optional() }).strict().superRefine((proposal, context) => {
   const refs = new Set(proposalRefs(proposal))
   if (refs.size !== proposalRefs(proposal).length) context.addIssue({ code: 'custom', path: ['proposalIds'], message: 'Proposal source references must be unique.' })
   if (new Set(Object.values(proposal.proposalIds)).size !== Object.keys(proposal.proposalIds).length) context.addIssue({ code: 'custom', path: ['proposalIds'], message: 'Proposal identities must be unique.' })
   for (const ref of refs) if (!proposal.proposalIds[ref]) context.addIssue({ code: 'custom', path: ['proposalIds', ref], message: 'Proposal source identity is missing.' })
+  if (proposal.decisions) {
+    const rootRefs = [ ...(proposal.contact ? [proposal.contact.proposalRef] : []), ...proposal.skills.map(item => item.proposalRef), ...proposal.experience.map(item => item.proposalRef), ...proposal.projects.map(item => item.proposalRef), ...proposal.entries.map(item => item.proposalRef) ]
+    const nestedRefs = [...proposal.experience.flatMap(item => item.factualItems.map(fact => fact.proposalRef)), ...proposal.projects.flatMap(item => [...item.factualItems, ...item.technologies].map(child => child.proposalRef))]
+    for (const ref of [...rootRefs, ...nestedRefs]) if (!proposal.decisions[ref]) context.addIssue({ code: 'custom', path: ['decisions', ref], message: 'Choose add, update, or skip for every proposed profile detail.' })
+    for (const ref of Object.keys(proposal.decisions)) if (![...rootRefs, ...nestedRefs].includes(ref)) context.addIssue({ code: 'custom', path: ['decisions', ref], message: 'Merge decisions must target a proposed profile detail.' })
+  }
   for (const source of proposal.sources) if (!proposal.proposalIds[source.proposalRef] || proposal.proposalIds[source.proposalRef] !== source.proposalId) context.addIssue({ code: 'custom', path: ['sources'], message: 'A source reference is not associated with this review.' })
 })
 export const profilePdfPreviewSchema = z.discriminatedUnion('ok', [

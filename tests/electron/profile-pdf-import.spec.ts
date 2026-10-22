@@ -76,6 +76,102 @@ test('imports DOCX proposals through visible review and applies them to the exis
   } finally { await running?.close(); await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }) }
 })
 
+test('visible populated DOCX review updates a chosen role, adds a new skill, and preserves skipped duplicates', async () => {
+  test.setTimeout(120000)
+  const root = mkdtempSync(join(tmpdir(), 'cv-tailor-docx-merge-')), userData = join(root, 'workspace'), sourceFile = join(root, 'cv.docx')
+  writeFileSync(sourceFile, await makeDocx())
+  let running: ElectronApplication | undefined
+  try {
+    running = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], timeout: 15000, env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData } })
+    const page = await running.firstWindow({ timeout: 15000 })
+    await expect(page.locator('[data-ui-ready="true"]')).toBeVisible({ timeout: 15000 })
+    await page.getByRole('button', { name: 'My profile' }).click()
+    const before = await page.evaluate(async () => {
+      await window.workbench.saveContact({ fullName: 'Ada Example', email: 'previous@example.test' })
+      await window.workbench.saveSkill({ name: 'Python', category: 'Technical' })
+      await window.workbench.saveSkill({ name: 'SQLite', category: 'Tools' })
+      await window.workbench.saveExperience({ kind: 'employment', title: 'Engineer', organization: 'Example Labs', description: 'Current role', startDate: '2020-01', endDate: '2022-03', factualItems: [{ text: 'Built accessible software for customers across multiple teams' }] })
+      await window.workbench.saveProject({ name: 'Atlas', description: 'Current Atlas project', factualItems: [{ text: 'Built the dashboard' }], technologies: [{ text: 'Python' }], links: [{ label: 'Repository', url: 'https://atlas.example.test' }] })
+      return { profile: await window.workbench.getProfile(), experience: await window.workbench.getExperience() }
+    })
+    await running.evaluate(({ dialog }, selectedPath) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selectedPath] }); return true }, sourceFile)
+    await page.getByRole('button', { name: 'Upload Word CV' }).click()
+    const review = page.getByRole('region', { name: 'Review proposed profile details' })
+    await expect(review).toBeVisible({ timeout: 15000 })
+    const contact = review.getByRole('group', { name: 'Contact details' })
+    await expect(contact.getByText(/Current: previous@example.test/)).toBeVisible()
+    await contact.getByLabel('Update', { exact: true }).check()
+    await expect(review.getByRole('group', { name: 'Skill 1' }).getByLabel('Skip', { exact: true })).toBeChecked()
+    await expect(review.getByRole('group', { name: 'Skill 2' }).getByLabel('Add', { exact: true })).toBeChecked()
+    const role = review.getByRole('group', { name: 'Experience 1' })
+    await expect(role.getByText(/Current: Example Labs.*Current role/)).toBeVisible()
+    await role.locator(':scope > .pdf-merge-choice').getByLabel('Update', { exact: true }).check()
+    await expect(role.locator('.pdf-nested-proposal').first().getByLabel('Skip', { exact: true })).toBeChecked()
+    const project = review.getByRole('group', { name: 'Project 1' })
+    await project.locator(':scope > .pdf-merge-choice').getByLabel('Update', { exact: true }).check()
+    await review.getByRole('button', { name: 'Apply accepted details' }).click()
+    await expect(page.getByRole('status')).toContainText('decisions were applied')
+    const after = await page.evaluate(async () => ({ profile: await window.workbench.getProfile(), experience: await window.workbench.getExperience() }))
+    expect(after.profile.contact).toMatchObject({ id: before.profile.contact!.id, revision: 2, email: 'ada@example.test' })
+    expect(after.profile.skills).toContainEqual(expect.objectContaining({ id: before.profile.skills.find(skill => skill.name === 'Python')!.id, revision: 1, name: 'Python' }))
+    expect(after.profile.skills).toContainEqual(expect.objectContaining({ id: before.profile.skills.find(skill => skill.name === 'SQLite')!.id, revision: 1, name: 'SQLite' }))
+    expect(after.profile.skills.filter(skill => skill.name === 'SQL')).toHaveLength(1)
+    expect(after.experience.experience).toHaveLength(1)
+    expect(after.experience.experience[0]).toMatchObject({ id: before.experience.experience[0].id, revision: 2, factualItems: [{ id: before.experience.experience[0].factualItems[0].id, revision: 1, text: 'Built accessible software for customers across multiple teams' }] })
+    expect(after.experience.projects).toHaveLength(1)
+    expect(after.experience.projects[0]).toMatchObject({ id: before.experience.projects[0].id, revision: 2, factualItems: [{ text: 'Built the dashboard' }], technologies: [{ text: 'Python' }], links: [{ url: 'https://atlas.example.test' }] })
+    await running.close(); running = undefined
+  } finally { await running?.close(); await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }) }
+})
+
+test('visible populated DOCX review applies explicit updates and additions while preserving skipped facts', async () => {
+  test.setTimeout(120000)
+  const root = mkdtempSync(join(tmpdir(), 'cv-tailor-docx-merge-')), userData = join(root, 'workspace'), sourceFile = join(root, 'cv.docx')
+  writeFileSync(sourceFile, await makeDocx())
+  let running: ElectronApplication | undefined
+  try {
+    running = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], timeout: 15000, env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData } })
+    const page = await running.firstWindow({ timeout: 15000 })
+    await expect(page.locator('[data-ui-ready="true"]')).toBeVisible({ timeout: 15000 })
+    await page.getByRole('button', { name: 'My profile' }).click()
+    const before = await page.evaluate(async () => {
+      await window.workbench.saveContact({ fullName: 'Ada Example', email: 'previous@example.test' })
+      await window.workbench.saveSkill({ name: 'Python', category: 'Technical' })
+      await window.workbench.saveSkill({ name: 'SQLite', category: 'Tools' })
+      await window.workbench.saveExperience({ kind: 'employment', title: 'Engineer', organization: 'Example Labs', description: 'Current role', startDate: '2020-01', endDate: '2022-03', factualItems: [{ text: 'Built accessible software for customers across multiple teams' }] })
+      await window.workbench.saveProject({ name: 'Atlas', description: 'Current Atlas project', factualItems: [{ text: 'Built the dashboard' }], technologies: [{ text: 'Python' }], links: [{ label: 'Repository', url: 'https://atlas.example.test' }] })
+      return { profile: await window.workbench.getProfile(), experience: await window.workbench.getExperience() }
+    })
+    await running.evaluate(({ dialog }, selectedPath) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selectedPath] }); return true }, sourceFile)
+    await page.getByRole('button', { name: 'Upload Word CV' }).click()
+    const review = page.getByRole('region', { name: 'Review proposed profile details' })
+    await expect(review).toBeVisible({ timeout: 15000 })
+    const contact = review.getByRole('group', { name: 'Contact details' })
+    await expect(contact.getByText(/Current: previous@example.test/)).toBeVisible()
+    await contact.getByLabel('Update', { exact: true }).check()
+    await expect(review.getByRole('group', { name: 'Skill 1' }).getByLabel('Skip', { exact: true })).toBeChecked()
+    await expect(review.getByRole('group', { name: 'Skill 2' }).getByLabel('Add', { exact: true })).toBeChecked()
+    const role = review.getByRole('group', { name: 'Experience 1' })
+    await expect(role.getByText(/Current: Example Labs.*Current role/)).toBeVisible()
+    await role.locator(':scope > .pdf-merge-choice').getByLabel('Update', { exact: true }).check()
+    await expect(role.locator('.pdf-nested-proposal').first().getByLabel('Skip', { exact: true })).toBeChecked()
+    const project = review.getByRole('group', { name: 'Project 1' })
+    await project.locator(':scope > .pdf-merge-choice').getByLabel('Update', { exact: true }).check()
+    await review.getByRole('button', { name: 'Apply accepted details' }).click()
+    await expect(page.getByRole('status')).toContainText('decisions were applied')
+    const after = await page.evaluate(async () => ({ profile: await window.workbench.getProfile(), experience: await window.workbench.getExperience() }))
+    expect(after.profile.contact).toMatchObject({ id: before.profile.contact!.id, revision: 2, email: 'ada@example.test' })
+    expect(after.profile.skills).toContainEqual(expect.objectContaining({ id: before.profile.skills.find(skill => skill.name === 'Python')!.id, revision: 1, name: 'Python' }))
+    expect(after.profile.skills).toContainEqual(expect.objectContaining({ id: before.profile.skills.find(skill => skill.name === 'SQLite')!.id, revision: 1, name: 'SQLite' }))
+    expect(after.profile.skills.filter(skill => skill.name === 'SQL')).toHaveLength(1)
+    expect(after.experience.experience).toHaveLength(1)
+    expect(after.experience.experience[0]).toMatchObject({ id: before.experience.experience[0].id, revision: 2, factualItems: [{ id: before.experience.experience[0].factualItems[0].id, revision: 1, text: 'Built accessible software for customers across multiple teams' }] })
+    expect(after.experience.projects).toHaveLength(1)
+    expect(after.experience.projects[0]).toMatchObject({ id: before.experience.projects[0].id, revision: 2, factualItems: [{ text: 'Built the dashboard' }], technologies: [{ text: 'Python' }], links: [{ url: 'https://atlas.example.test' }] })
+    await running.close(); running = undefined
+  } finally { await running?.close(); await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }) }
+})
+
 test('imports PDF proposals through review, atomically applies supported profile sections, then backs up/restores and reopens SQLite', async () => {
   test.setTimeout(120000)
   const root = mkdtempSync(join(tmpdir(), 'cv-tailor-pdf-import-'))
@@ -166,6 +262,102 @@ test('imports PDF proposals through review, atomically applies supported profile
     await reopenedPage.getByRole('button', { name: 'My profile' }).click()
     expect(await reopenedPage.evaluate(() => window.workbench.getProfile())).toMatchObject({ contact: { fullName: 'Ada Byron Lovelace' }, skills: [{ name: 'Python' }], education: [{ title: 'BSc Computer Science' }], summary: [{ description: expect.stringContaining('Curious engineer') }], languages: [{ title: 'Arabic' }, { title: 'English' }] })
     await reopened.close(); running = undefined
+  } finally { await running?.close(); await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }) }
+})
+
+test('visible populated-profile review applies explicit contact update, duplicate skip, and new skill add', async () => {
+  test.setTimeout(120000)
+  const root = mkdtempSync(join(tmpdir(), 'cv-tailor-pdf-merge-')), userData = join(root, 'workspace'), sourceFile = join(root, 'cv.pdf')
+  writeFileSync(sourceFile, makePdf(['NAME: Ada Lovelace', 'EMAIL: ada@example.test', 'SKILLS: TypeScript, Python', 'EXPERIENCE: Example Labs | Engineer', 'FACT: Maintained the internal API', 'FACT: Built a data pipeline', 'PROJECT: Atlas | React', 'FACT: Added offline support', 'This synthetic CV contains enough selectable source text for the local PDF intake threshold and profile review workflow.']))
+  let running: ElectronApplication | undefined
+  try {
+    running = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], timeout: 15000, env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData } })
+    running.process().stderr?.on('data', data => console.log(`Electron stderr: ${String(data)}`))
+    const page = await running.firstWindow({ timeout: 15000 })
+    await expect(page.locator('[data-ui-ready="true"]')).toBeVisible({ timeout: 15000 })
+    await page.getByRole('button', { name: 'My profile' }).click()
+    const before = await page.evaluate(async () => {
+      await window.workbench.saveContact({ fullName: 'Ada Lovelace', email: 'old@example.test' })
+      await window.workbench.saveSkill({ name: 'TypeScript', category: 'Technical' })
+      await window.workbench.saveSkill({ name: 'SQLite', category: 'Tools' })
+      await window.workbench.saveExperience({ kind: 'employment', title: 'Engineer', organization: 'Example Labs', description: 'Current role details', factualItems: [{ text: 'Maintained the internal API' }] })
+      await window.workbench.saveProject({ name: 'Atlas', description: 'Current project details', factualItems: [{ text: 'Built the dashboard' }], technologies: [{ text: 'TypeScript' }], links: [{ label: 'Current repository', url: 'https://example.test/atlas' }] })
+      return window.workbench.getProfile()
+    })
+    await running.evaluate(({ dialog }, selectedPath) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selectedPath] }); return true }, sourceFile)
+    await page.getByRole('button', { name: 'Upload CV' }).click()
+    const review = page.getByRole('region', { name: 'Review proposed profile details' })
+    await expect(review.getByRole('heading', { name: 'Review proposed profile details' })).toBeVisible({ timeout: 15000 })
+    const contact = review.getByRole('group', { name: 'Contact details' })
+    await expect(contact.getByText(/Current: old@example.test/)).toBeVisible()
+    await contact.getByLabel('Update', { exact: true }).check()
+    const typescript = review.getByRole('group', { name: 'Skill 1' })
+    await expect(typescript.getByText(/Current: Technical/)).toBeVisible()
+    await expect(typescript.getByLabel('Skip', { exact: true })).toBeChecked()
+    await expect(review.getByRole('group', { name: 'Skill 2' }).getByLabel('Add', { exact: true })).toBeChecked()
+    const role = review.getByRole('group', { name: 'Experience 1' })
+    await expect(role.getByText(/Current: Example Labs.*Current role details.*Maintained the internal API/)).toBeVisible()
+    await role.locator(':scope > .pdf-merge-choice').getByLabel('Update', { exact: true }).check()
+    await expect(role.getByText(/Current: Maintained the internal API/)).toBeVisible()
+    await expect(role.locator('.pdf-nested-proposal').nth(0).getByLabel('Skip', { exact: true })).toBeChecked()
+    await expect(role.locator('.pdf-nested-proposal').nth(1).getByLabel('Add', { exact: true })).toBeChecked()
+    const project = review.getByRole('group', { name: 'Project 1' })
+    await expect(project.getByText(/Current: Current project details/)).toBeVisible()
+    await project.locator(':scope > .pdf-merge-choice').getByLabel('Update', { exact: true }).check()
+    await review.getByRole('button', { name: 'Apply accepted details' }).click()
+    await expect(page.getByRole('status')).toContainText('decisions were applied')
+    const after = await page.evaluate(() => window.workbench.getProfile())
+    expect(after.contact).toMatchObject({ id: before.contact!.id, revision: 2, email: 'ada@example.test' })
+    expect(after.skills).toContainEqual(expect.objectContaining({ id: before.skills.find(skill => skill.name === 'TypeScript')!.id, revision: 1, name: 'TypeScript' }))
+    expect(after.skills).toContainEqual(expect.objectContaining({ id: before.skills.find(skill => skill.name === 'SQLite')!.id, revision: 1, name: 'SQLite' }))
+    expect(after.skills.filter(skill => skill.name === 'Python')).toHaveLength(1)
+    const experience = await page.evaluate(() => window.workbench.getExperience())
+    expect(experience.experience).toHaveLength(1)
+    expect(experience.experience[0]).toMatchObject({ id: expect.any(String), revision: 2, factualItems: [{ text: 'Maintained the internal API', revision: 1 }, { text: 'Built a data pipeline' }] })
+    expect(experience.projects).toHaveLength(1)
+    expect(experience.projects[0]).toMatchObject({ name: 'Atlas', revision: 2, technologies: [{ text: 'TypeScript', revision: 1 }, { text: 'React' }], links: [{ url: 'https://example.test/atlas' }], factualItems: [{ text: 'Built the dashboard' }, { text: 'Added offline support' }] })
+  } finally { await running?.close(); await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }) }
+})
+
+test('rejects a forged nested update from another role and rolls back profile and provenance atomically', async () => {
+  test.setTimeout(120000)
+  const root = mkdtempSync(join(tmpdir(), 'cv-tailor-wrong-parent-')), userData = join(root, 'workspace'), sourceFile = join(root, 'cv.pdf'), backupFile = join(root, 'workspace-backup.json')
+  writeFileSync(sourceFile, makePdf(['NAME: Ada Lovelace', 'EMAIL: new@example.test', 'EXPERIENCE: Example Labs | Engineer', 'FACT: Improved the parser', 'FACT: Added a second parser behavior', 'This synthetic CV includes enough selectable detail to support a local source-backed profile import review.']))
+  let running: ElectronApplication | undefined
+  try {
+    running = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], timeout: 15000, env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData } })
+    const page = await running.firstWindow({ timeout: 15000 })
+    await expect(page.locator('[data-ui-ready="true"]')).toBeVisible({ timeout: 15000 })
+    const seeded = await page.evaluate(async () => {
+      const contact = await window.workbench.saveContact({ fullName: 'Ada Lovelace', email: 'old@example.test' })
+      const firstRole = await window.workbench.saveExperience({ kind: 'employment', title: 'Engineer', organization: 'Example Labs', description: 'Existing role', factualItems: [{ text: 'Maintained the parser' }] })
+      const otherRole = await window.workbench.saveExperience({ kind: 'employment', title: 'Consultant', organization: 'Northwind', description: 'Separate role', factualItems: [{ text: 'Migrated reports' }] })
+      if (!contact.ok || !firstRole.ok || !otherRole.ok) throw new Error('Could not seed the cross-parent test profile')
+      return { contact: contact.value.contact!, firstRole: firstRole.value.experience.find(item => item.title === 'Engineer')!, otherFactId: otherRole.value.experience.find(item => item.title === 'Consultant')!.factualItems[0].id }
+    })
+    const beforeProfile = await page.evaluate(() => window.workbench.getProfile())
+    const beforeExperience = await page.evaluate(() => window.workbench.getExperience())
+    await running.evaluate(({ dialog }, selectedPath) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selectedPath] }); return true }, sourceFile)
+    const preview = await page.evaluate(() => window.workbench.previewProfilePdfImport())
+    if (!preview.ok) throw new Error(preview.message)
+    const role = preview.proposals.experience[0], fact = role.factualItems[0], contactProposal = preview.proposals.contact
+    if (!contactProposal) throw new Error('The synthetic PDF contact proposal was not mapped')
+    const proposals = { ...preview.proposals, decisions: { [contactProposal.proposalRef]: { action: 'update' as const, targetId: seeded.contact.id }, [role.proposalRef]: { action: 'update' as const, targetId: seeded.firstRole.id }, ...Object.fromEntries(role.factualItems.map(item => [item.proposalRef, item.proposalRef === fact.proposalRef ? { action: 'update' as const, targetId: seeded.otherFactId } : { action: 'skip' as const }])) } }
+    const result = await page.evaluate(async ({ token, proposals }) => window.workbench.applyProfilePdfImport(token, proposals), { token: preview.token, proposals })
+    expect(result).toMatchObject({ ok: false, message: expect.stringContaining('parent') })
+    expect(await page.evaluate(() => window.workbench.getProfile())).toEqual(beforeProfile)
+    expect(await page.evaluate(() => window.workbench.getExperience())).toEqual(beforeExperience)
+    const repeatedPreview = await page.evaluate(() => window.workbench.previewProfilePdfImport())
+    if (!repeatedPreview.ok) throw new Error(repeatedPreview.message)
+    const duplicateRole = repeatedPreview.proposals.experience[0]
+    const duplicateDecisions = { [repeatedPreview.proposals.contact!.proposalRef]: { action: 'update' as const, targetId: seeded.contact.id }, [duplicateRole.proposalRef]: { action: 'update' as const, targetId: seeded.firstRole.id }, ...Object.fromEntries(duplicateRole.factualItems.map(item => [item.proposalRef, { action: 'update' as const, targetId: seeded.firstRole.factualItems[0].id }])) }
+    const duplicateResult = await page.evaluate(async ({ token, proposals }) => window.workbench.applyProfilePdfImport(token, proposals), { token: repeatedPreview.token, proposals: { ...repeatedPreview.proposals, decisions: duplicateDecisions } })
+    expect(duplicateResult).toMatchObject({ ok: false, message: expect.stringContaining('parent') })
+    expect(await page.evaluate(() => window.workbench.getProfile())).toEqual(beforeProfile)
+    expect(await page.evaluate(() => window.workbench.getExperience())).toEqual(beforeExperience)
+    await running.evaluate(({ dialog }, target) => { dialog.showSaveDialog = async () => ({ canceled: false, filePath: target }); return true }, backupFile)
+    expect(await page.evaluate(() => window.workbench.exportWorkspaceBackup())).toMatchObject({ ok: true })
+    expect(JSON.parse(readFileSync(backupFile, 'utf8')).tables.profile_import_provenance.rows).toEqual([])
   } finally { await running?.close(); await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }) }
 })
 
