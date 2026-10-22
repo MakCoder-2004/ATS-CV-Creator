@@ -5,7 +5,7 @@ import type { ZodTypeAny } from 'zod'
 export { postingAnalysisSchema }
 export type { PostingAnalysis }
 export interface AnalysisTransport {
-  generate(input: { model: OpenRouterModel; prompt: string; signal: AbortSignal; responseSchema: ZodTypeAny }): Promise<string>
+  generate(input: { model: OpenRouterModel; prompt: string; signal: AbortSignal; responseSchema: ZodTypeAny; maxTokens?: number; maxResponseChars?: number }): Promise<string>
 }
 export interface AnalysisInput { runId: string; jobId: string; prompt: string; model: OpenRouterModel }
 export interface AnalysisUsage { runId: string; jobId: string; attempts: number; status: 'complete' | 'failed' | 'cancelled'; startedAt: number; finishedAt: number }
@@ -124,7 +124,7 @@ export function createAnalysisDispatcher(options: Options) {
       throw failure
     } finally { clearTimeout(deadlineTimer); usage.finishedAt = now(); if (active.get(input.runId) === controller) active.delete(input.runId) }
   }
-  async function generate(input: AnalysisInput & { consentId: string; responseSchema: ZodTypeAny }): Promise<{ text: string; attempts: number }> {
+  async function generate(input: AnalysisInput & { consentId: string; responseSchema: ZodTypeAny; retryProviderFailures?: boolean; maxTokens?: number; maxResponseChars?: number }): Promise<{ text: string; attempts: number }> {
     if (!authorizations.has(input.runId) || authorizations.get(input.runId) !== input.consentId) throw new AnalysisError('PROVIDER', 'Generation requires accepted outgoing-data consent.')
     if (cancelled.has(input.runId)) throw cancelledError()
     const startedAt = runStartedAt.get(input.runId) ?? now(); runStartedAt.set(input.runId, startedAt)
@@ -147,7 +147,7 @@ export function createAnalysisDispatcher(options: Options) {
           const timestamp = now(); dispatched.push(timestamp); attempts++; attemptCounts.set(input.runId, (attemptCounts.get(input.runId) ?? 0) + 1); options.onAttempt?.(timestamp, input.runId)
           options.onProgress?.(input.runId, input.jobId, `Sending source-linked generation request ${attempts} within the shared run budget.`, attempts)
           try {
-            const response = await options.transport.generate({ model: input.model, prompt: input.prompt, signal: controller.signal, responseSchema: input.responseSchema })
+            const response = await options.transport.generate({ model: input.model, prompt: input.prompt, signal: controller.signal, responseSchema: input.responseSchema, ...(input.maxTokens ? { maxTokens: input.maxTokens } : {}), ...(input.maxResponseChars !== undefined ? { maxResponseChars: input.maxResponseChars } : {}) })
             options.onAttemptComplete?.(input.runId, true)
             return response
           } catch (error) { options.onAttemptComplete?.(input.runId, false); throw error }
@@ -159,7 +159,7 @@ export function createAnalysisDispatcher(options: Options) {
           if (controller.signal.aborted || cancelled.has(input.runId)) throw cancelledError()
           if (error instanceof AnalysisError) throw error
           const failure = providerError(error, now)
-          if (!failure.retry) throw new AnalysisError(failure.kind, failure.kind === 'INVALID_KEY' ? 'OpenRouter rejected the API key. Check the saved key in Settings.' : failure.kind === 'OFFLINE' ? 'The network is unavailable. Check the connection, then start a new authorized run.' : 'OpenRouter could not complete generation. Check the model ID, model availability or credits in Settings.')
+          if (!failure.retry || input.retryProviderFailures === false) throw new AnalysisError(failure.kind, failure.kind === 'INVALID_KEY' ? 'OpenRouter rejected the API key. Check the saved key in Settings.' : failure.kind === 'OFFLINE' ? 'The network is unavailable. Check the connection, then start a new authorized run.' : input.retryProviderFailures === false ? 'OpenRouter did not confirm whether the request completed. No automatic retry was sent; a retry could incur another charge.' : 'OpenRouter could not complete generation. Check the model ID, model availability or credits in Settings.')
           const delay = failure.delay ?? Math.min(30000, 1000 * (2 ** Math.max(0, attempts - 1))) * (0.75 + random() * 0.5)
           await sleep(Math.min(delay, Math.max(0, runBudgets.runTimeLimitMs - (now() - startedAt))), controller.signal)
         }

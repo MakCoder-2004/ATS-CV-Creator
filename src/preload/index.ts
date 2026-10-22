@@ -14,6 +14,7 @@ import { canonicalDocumentSchema, documentFitReportSchema, documentPdfSchema } f
 import { regenerationProposalSchema, regenerationResultSchema, regenerationTargetSchema } from '../shared/regeneration'
 import { mutateDraftRecordInputSchema } from '../shared/draft-records'
 import { profilePdfApplyResultSchema, profilePdfPreviewSchema, profilePdfProposalSchema } from '../shared/profile-pdf-import'
+import { profileAiConsentActionSchema, profileAiConsentPreviewSchema, profileAiRunResultSchema } from '../shared/profile-ai-structuring'
 
 const workspaceResult = z.object({ ok: z.boolean(), cancelled: z.boolean(), message: z.string() }).strict()
 const restoreSelection = z.discriminatedUnion('ok', [
@@ -62,6 +63,10 @@ const api: WorkbenchAPI = Object.freeze({
   async previewProfileDocxImport() { return profilePdfPreviewSchema.parse(await ipcRenderer.invoke('profile:docx-import:preview')) },
   async cancelProfileDocxImport(token: string) { return z.object({ ok: z.boolean(), message: z.string() }).strict().parse(await ipcRenderer.invoke('profile:docx-import:cancel', uuidSchema.parse(token))) },
   async applyProfileDocxImport(token: string, proposals: import('../shared/profile-pdf-import').ProfilePdfProposal) { return profilePdfApplyResultSchema.parse(await ipcRenderer.invoke('profile:docx-import:apply', uuidSchema.parse(token), profilePdfProposalSchema.parse(proposals))) },
+  async previewProfileAiStructuring(importToken: string) { return profileAiConsentPreviewSchema.parse(await ipcRenderer.invoke('profile:ai:preview', uuidSchema.parse(importToken))) },
+  async consentProfileAiStructuring(token: string, accepted: boolean) { if (typeof accepted !== 'boolean') throw new Error('Choose whether to send this CV text.'); return profileAiConsentActionSchema.parse(await ipcRenderer.invoke('profile:ai:consent', uuidSchema.parse(token), accepted)) },
+  async runProfileAiStructuring(token: string) { return profileAiRunResultSchema.parse(await ipcRenderer.invoke('profile:ai:run', uuidSchema.parse(token))) },
+  async cancelProfileAiStructuring(token: string) { return z.object({ ok: z.boolean(), message: z.string() }).strict().parse(await ipcRenderer.invoke('profile:ai:cancel', uuidSchema.parse(token))) },
   async exportProfile() { return await ipcRenderer.invoke('profile:export') },
   async previewProfileImport() { return profileExchangeResultSchema.parse(await ipcRenderer.invoke('profile:import:preview')) },
   async applyProfileImport(token: string) { return await ipcRenderer.invoke('profile:import:apply', uuidSchema.parse(token)) },
