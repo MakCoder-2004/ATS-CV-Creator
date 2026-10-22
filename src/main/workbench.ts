@@ -1705,7 +1705,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       const checked = draftRevisionSchema.parse({ ...next, status: report.passed ? 'unverified' : 'blocked', checkReport: report, progress: report.findings.some(finding => finding.itemPath === 'generation') ? 'Correction saved, but the known generation failure remains unresolved. Only a new authorized generation that passes validation can resolve it.' : report.passed ? 'Correction passes deterministic checks; semantic truth still requires human review. Wording-only versus new-fact is user-declared and cannot be inferred perfectly.' : `Blocked by ${report.findings.length} factual finding(s). Use the correction guidance below.` })
       db.prepare('INSERT INTO draft_revisions (id,job_id,revision,data) VALUES (?,?,?,?)').run(checked.id, checked.jobId, checked.revision, JSON.stringify(checked))
       db.prepare('DELETE FROM document_fit_reports WHERE job_id = ?').run(checked.jobId)
-      return checked
+      return (await this.getDraft(checked.jobId)) ?? checked
     },
     async addDraftItem(input: { jobId: string; section: 'education' | 'experience' | 'projects' | 'skills' | 'certificates'; text: string; citation: { evidenceId: string; revision: number } }) {
       const parsed = addDraftItemInputSchema.safeParse(input)
@@ -1784,9 +1784,9 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       // Advisory local comparison is refreshed without a provider request or mutation of historical drafts.
       const analysis = await this.getAnalysis(jobId)
       if (!analysis?.analysis) return draft
-      if (analysis.status === 'stale') return draftRevisionSchema.parse({ ...draft, coverage: draft.coverage ? { ...draft.coverage, stale: true } : undefined })
       const sources = prepareDraftInputs(readProfile(), readExperience()).items.map(item => ({ evidenceId: item.id, revision: item.revision, snapshot: item.snapshot }))
       const coverage = qualificationCoverage(draft.coverage?.analysisId ?? analysis.runId ?? jobId, analysis.displayAnalysis ?? analysis.analysis, draft, sources)
+      if (analysis.status === 'stale') return draftRevisionSchema.parse({ ...draft, coverage: { ...coverage, stale: true, repairAttempts: draft.coverage?.repairAttempts ?? 0, factualChecksRerun: draft.coverage?.factualChecksRerun ?? !!draft.checkReport } })
       return draftRevisionSchema.parse({ ...draft, coverage: { ...coverage, stale: false, repairAttempts: draft.coverage?.repairAttempts ?? 0, factualChecksRerun: draft.coverage?.factualChecksRerun ?? !!draft.checkReport } })
     },
     async getCanonicalDocument(jobId: string) {
