@@ -111,6 +111,17 @@ test('fails closed for unknown capacity and requests that exceed metadata output
   expect(await oversized.validateCapacity!({ runId: 'run-oversized', model, prompt: 'X'.repeat(6000), responseSchema: input.responseSchema, maxTokens: 2048, signal: input.signal })).toMatchObject({ fits: false })
 })
 
+test('uses endpoint max_prompt_tokens when it is more restrictive than the shared context window', async () => {
+  const model = input.model
+  const fetcher = vi.fn(async (url: unknown) => new Response(JSON.stringify(String(url).includes('/endpoints')
+    ? { data: { id: model, endpoints: [{ context_length: 100_000, max_prompt_tokens: 2048, max_completion_tokens: 4096, tag: 'provider-a' }] } }
+    : { data: [{ id: model, context_length: 100_000, architecture: { tokenizer: 'GPT' }, top_provider: { context_length: 100_000, max_completion_tokens: 4096 } }] }), { status: 200 })) as unknown as typeof fetch
+  const transport = createOpenRouterAnalysisTransport('no-key-on-catalog', fetcher)
+  const checked = await transport.validateCapacity!({ runId: 'endpoint-prompt-ceiling', model, prompt: 'P'.repeat(4000), responseSchema: input.responseSchema, maxTokens: 1024, signal: input.signal })
+  expect(checked).toMatchObject({ fits: false })
+  expect(fetcher).toHaveBeenCalledTimes(2)
+})
+
 test('rejects the complete request above the hard transport byte ceiling before any model POST', async () => {
   const model = input.model
   const metadata = { data: [{ id: model, context_length: 20_000_000, architecture: { tokenizer: 'GPT' }, top_provider: { context_length: 20_000_000, max_completion_tokens: 4096 } }] }

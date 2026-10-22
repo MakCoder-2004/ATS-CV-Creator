@@ -13,7 +13,7 @@ export function serializeOpenRouterRequestBody(input: { model: string; prompt: s
 const modelCatalogEndpoint = 'https://openrouter.ai/api/v1/models'
 type Capacity = { contextLength: number; maxCompletionTokens: number; providers: string[] }
 const catalogSchema = z.object({ data: z.array(z.object({ id: z.string(), context_length: z.number().int().positive(), architecture: z.object({ tokenizer: z.string().nullable() }).passthrough(), top_provider: z.object({ context_length: z.number().int().positive(), max_completion_tokens: z.number().int().positive() }).passthrough() }).passthrough()) }).passthrough()
-const endpointCatalogSchema = z.object({ data: z.object({ id: z.string(), endpoints: z.array(z.object({ context_length: z.number().int().positive(), max_completion_tokens: z.number().int().positive(), tag: z.string().min(1) }).passthrough()) }).passthrough() }).passthrough()
+const endpointCatalogSchema = z.object({ data: z.object({ id: z.string(), endpoints: z.array(z.object({ context_length: z.number().int().positive(), max_prompt_tokens: z.number().int().positive().nullable().optional(), max_completion_tokens: z.number().int().positive(), tag: z.string().min(1) }).passthrough()) }).passthrough() }).passthrough()
 const capacityCache = new Map<string, Map<string, Capacity | null>>()
 async function fetchCapacity(model: string, runId: string, signal: AbortSignal, fetcher: typeof fetch): Promise<Capacity | null> {
   let runCache = capacityCache.get(runId)
@@ -37,7 +37,7 @@ async function fetchCapacity(model: string, runId: string, signal: AbortSignal, 
     const endpoints = endpointParsed.success && endpointParsed.data.data.id === model ? endpointParsed.data.data.endpoints : []
     if (!endpoints.length) { runCache.set(model, null); return null }
     const capacity = {
-      contextLength: Math.min(entry.context_length, entry.top_provider.context_length, ...endpoints.map(item => item.context_length)),
+      contextLength: Math.min(entry.context_length, entry.top_provider.context_length, ...endpoints.map(item => Math.min(item.context_length, item.max_prompt_tokens ?? item.context_length))),
       maxCompletionTokens: Math.min(entry.top_provider.max_completion_tokens, ...endpoints.map(item => item.max_completion_tokens)),
       providers: [...new Set(endpoints.map(item => item.tag))].sort()
     }
