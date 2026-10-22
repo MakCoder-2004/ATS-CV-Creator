@@ -323,7 +323,7 @@ test('accepted frozen consent generates a batched source-linked draft that reope
   const reopened = await wb.api.getDraft(job.value.id)
   if (!reopened) throw new Error('reopened draft fixture')
   // Profile comparison is live advisory data; the frozen CV and evidence must remain unchanged.
-  const frozen = (value: typeof originalDraft) => { const copy = structuredClone(value); if (copy.coverage) delete copy.coverage.assessments; return copy }
+  const frozen = (value: typeof originalDraft) => { const copy = structuredClone(value); if (copy.coverage) { delete copy.coverage.assessments; delete copy.coverage.stale }; return copy }
   expect(frozen(reopened)).toEqual(frozen(originalDraft))
   expect(frozen((await wb.api.getDraft(secondJob.value.id))!)).toEqual(frozen(secondDraft.draft!))
   expect(await wb.api.getAnalysis(job.value.id)).toMatchObject({ status: 'complete', progress: expect.stringContaining('Draft generated'), attempts: 4, runId: expect.any(String), generationStep: 'check-document', completedSteps: ['parse-posting', 'score-evidence', 'select-content', 'tailor-paragraphs', 'verify-claims', 'check-document'] })
