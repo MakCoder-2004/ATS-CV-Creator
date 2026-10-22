@@ -6,6 +6,8 @@ const optionalPostingFieldSchema = z.object({ value: z.string().max(20_000).null
 const unknownPostingField = { value: null, origin: 'unknown', source: null, uncertainty: 'none' } as const
 const optionalPostingDetailsInputSchema = z.object(Object.fromEntries(postingOptionalFieldNames.map(name => [name, optionalPostingFieldSchema.optional()])) as Record<typeof postingOptionalFieldNames[number], ReturnType<typeof optionalPostingFieldSchema.optional>>).strict().default({})
 export const postingOptionalDetailsSchema = optionalPostingDetailsInputSchema.transform(details => Object.fromEntries(postingOptionalFieldNames.map(name => [name, details[name] ?? unknownPostingField])) as Record<typeof postingOptionalFieldNames[number], z.infer<typeof optionalPostingFieldSchema>>)
+const postingOptionalFieldOriginSchema = z.enum(['source', 'user-correction', 'unknown'])
+const postingOptionalOriginsSchema = z.object(Object.fromEntries(postingOptionalFieldNames.map(name => [name, postingOptionalFieldOriginSchema.optional()])) as Record<typeof postingOptionalFieldNames[number], ReturnType<typeof postingOptionalFieldOriginSchema.optional>>).strict().default({})
 export type PostingOptionalDetails = z.infer<typeof postingOptionalDetailsSchema>
 export const emptyPostingOptionalDetails = (): PostingOptionalDetails => postingOptionalDetailsSchema.parse({})
 export const jobInputSchema = z.object({
@@ -27,7 +29,7 @@ export const postingSourceSnapshotSchema = z.object({
   extractionMethod: z.literal('lever-json-v1'), extractionVersion: z.literal(1),
   optionalDetails: postingOptionalDetailsSchema,
   hashes: z.object({ title: z.string().length(64), company: z.string().length(64).nullable(), description: z.string().length(64) }).strict(),
-  fieldOrigins: z.object({ title: z.enum(['source', 'user-correction']), company: z.enum(['source', 'user-correction']), description: z.enum(['source', 'user-correction']), optionalDetails: z.record(z.string(), z.enum(['source', 'user-correction', 'unknown'])).default({}) }).strict()
+  fieldOrigins: z.object({ title: z.enum(['source', 'user-correction']), company: z.enum(['source', 'user-correction']), description: z.enum(['source', 'user-correction']), optionalDetails: postingOptionalOriginsSchema }).strict()
 }).strict()
 export const jobRecordSchema = jobInputSchema.extend({
   optionalDetails: postingOptionalDetailsSchema,
