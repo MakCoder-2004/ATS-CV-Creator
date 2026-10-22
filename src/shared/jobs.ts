@@ -4,7 +4,7 @@ const requiredText = (max: number) => z.string().max(max).refine(value => value.
 export const jobInputSchema = z.object({
   title: requiredText(200),
   company: requiredText(200),
-  description: requiredText(100000)
+  description: requiredText(30000)
 }).strict()
 export const jobSaveInputSchema = jobInputSchema.extend({ id: z.string().uuid().optional() }).strict()
 export const postingRevisionSchema = jobInputSchema.extend({

@@ -41,7 +41,7 @@ test('job validation is actionable and invalid records do not mutate storage', a
 })
 
 test('opening another job returns only its posting and updating one keeps its identity', async () => {
-  const { workbench } = open()
+  const { directory, workbench } = open()
   const first = await workbench.api.saveJob({ title: 'Engineer', company: 'Northwind', description: 'Design compiler tools.' })
   const second = await workbench.api.saveJob({ title: 'Analyst', company: 'Contoso', description: 'Review fictional datasets.' })
   if (!first.ok || !second.ok) throw Error('Fixture save failed')
@@ -52,5 +52,20 @@ test('opening another job returns only its posting and updating one keeps its id
   expect(await workbench.api.openJob(first.value.id)).toMatchObject({ revisions: [{ description: 'Design compiler tools.' }, { description: 'Design compiler tools with a fictional team.' }] })
   expect(await workbench.api.listJobs()).toHaveLength(2)
   expect(await workbench.api.openJob(second.value.id)).toEqual(second.value)
+  workbench.close()
+  const reopened = createWorkbench(directory)
+  expect(await reopened.api.openJob(first.value.id)).toMatchObject({ id: first.value.id, createdAt: first.value.createdAt, description: 'Design compiler tools with a fictional team.', revisions: [{ description: 'Design compiler tools.' }, { description: 'Design compiler tools with a fictional team.' }] })
+  reopened.close()
+})
+
+test('manual posting text remains within the established safe limit and rejects overflow without mutation', async () => {
+  const { workbench } = open()
+  const exact = await workbench.api.saveJob({ title: 'Engineer', company: 'Example', description: 'x'.repeat(30000) })
+  expect(exact.ok).toBe(true)
+  const oversized = await workbench.api.saveJob({ title: 'Engineer', company: 'Example', description: 'x'.repeat(30001) })
+  expect(oversized).toMatchObject({ ok: false, error: { code: 'VALIDATION_ERROR', fieldErrors: { description: expect.any(String) } } })
+  expect(await workbench.api.listJobs()).toHaveLength(1)
+  if (!exact.ok) throw Error('exact-limit posting rejected')
+  expect((await workbench.api.openJob(exact.value.id))?.description).toHaveLength(30000)
   workbench.close()
 })

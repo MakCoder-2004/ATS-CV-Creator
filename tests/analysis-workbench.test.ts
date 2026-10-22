@@ -165,6 +165,33 @@ test('compatible persisted posting analysis is readable offline after restart wi
   expect(await reopened.api.getAnalysis(job.value.id)).toMatchObject({ jobId: job.value.id, runId: expect.any(String), status: 'complete', cacheHit: false, progress: 'Posting analysis complete.', analysis: { required: ['TypeScript'] } })
 })
 
+test('accepted target edits expose prior posting analysis as stale until explicit reassessment', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'analysis-target-stale-')); dirs.push(dir)
+  const requests: string[] = []
+  const transport: AnalysisTransport = { async generate(input) { requests.push(input.prompt); return JSON.stringify({ required: [input.prompt.includes('Rust required') ? 'Rust' : 'TypeScript'], preferred: [], tools: [], responsibilities: [], keywords: [] }) } }
+  const wb = createWorkbench(dir, undefined, transport); opened.push(wb)
+  await wb.api.setAnalysisBudgets({ ...analysisBudgetValues(await wb.api.getAnalysisUsage()), minimumSpacingMs: 0 })
+  const job = await wb.api.saveJob({ title: 'Developer', company: 'Local Corp', description: 'TypeScript required.' })
+  if (!job.ok) throw Error('job fixture')
+  const preview = await wb.api.prepareOutboundConsent(job.value.id)
+  if (!preview.ok) throw Error('preview fixture')
+  await wb.api.acceptOutboundConsent(preview.token, true, true)
+  expect(await wb.api.startAnalysis(preview.token)).toMatchObject({ status: 'complete', analysis: { required: ['TypeScript'] } })
+  const saved = await wb.api.openJob(job.value.id)
+  if (!saved) throw Error('saved job missing')
+  expect((await wb.api.saveJob({ id: saved.id, title: saved.title, company: saved.company, description: 'Rust required.' })).ok).toBe(true)
+  expect(await wb.api.getAnalysis(job.value.id)).toMatchObject({ status: 'stale', analysis: { required: ['TypeScript'] }, progress: expect.stringMatching(/earlier accepted posting/i) })
+  expect(requests).toHaveLength(1)
+  wb.close(); opened.splice(opened.indexOf(wb), 1)
+  const reopened = createWorkbench(dir, undefined, transport); opened.push(reopened)
+  expect(await reopened.api.getAnalysis(job.value.id)).toMatchObject({ status: 'stale', analysis: { required: ['TypeScript'] } })
+  const fresh = await reopened.api.prepareOutboundConsent(job.value.id)
+  if (!fresh.ok) throw Error('fresh target preview')
+  await reopened.api.acceptOutboundConsent(fresh.token, true, true)
+  expect(await reopened.api.startAnalysis(fresh.token)).toMatchObject({ status: 'complete', analysis: { required: ['Rust'] } })
+  expect(requests).toHaveLength(2)
+})
+
 test('warns before a run when remaining configured daily attempts may be insufficient', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'analysis-pre-run-warning-contract-')); dirs.push(dir)
   const wb = createWorkbench(dir); opened.push(wb)
