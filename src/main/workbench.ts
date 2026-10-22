@@ -217,12 +217,13 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
     try { return secureStorage.decryptString(Buffer.from(row.ciphertext, 'base64')) }
     catch { throw new Error('The saved key could not be decrypted on this device.') }
   }
+  const activeProfileAiRuns = new Set<string>()
   const dispatcher = createAnalysisDispatcher({ ...readAnalysisBudgets(), maxAttempts: readAnalysisBudgets().runLimit, maxElapsedMs: readAnalysisBudgets().runTimeLimitMs, maxDailyAttempts: readAnalysisBudgets().configuredDailyLimit, observedAttempts: previousAttempts, observedRunAttempts: persistedRunCounts, observedRunStartedAt: persistedRunStarts, transport: scriptedTransport ?? { generate: async input => {
     let key: string
     try { key = readStoredOpenRouterKey() }
     catch { throw Object.assign(new Error('OpenRouter API key is unavailable.'), { status: 401 }) }
     return createOpenRouterAnalysisTransport(key).generate(input)
-  } }, onAttempt: (timestamp, runId) => { previousAttempts.push(timestamp); const dispatchedAt = new Date(timestamp).toISOString(); db.prepare('INSERT INTO analysis_attempts (run_id, attempted_at) VALUES (?, ?)').run(runId, dispatchedAt); db.prepare('INSERT INTO provider_attempt_outcomes (run_id, dispatched_at, outcome) VALUES (?, ?, \'dispatched\')').run(runId, dispatchedAt) }, onAttemptComplete: (runId, succeeded) => { if (succeeded) db.prepare(`UPDATE provider_attempt_outcomes SET outcome='response', settled_at=? WHERE id=(SELECT id FROM provider_attempt_outcomes WHERE run_id=? AND outcome='dispatched' AND checkpointed_at IS NULL ORDER BY id DESC LIMIT 1)`).run(new Date().toISOString(), runId) }, onProgress: (runId, jobId, progress, attempts) => { const observed = (db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id = ?').get(runId) as { count: number }).count; const prior = currentAnalysis.get(jobId), sameRun = prior?.runId === runId; saveAnalysisState({ jobId, runId, status: 'running', analysis: sameRun ? prior.analysis : null, progress, attempts: observed || attempts, cacheHit: sameRun ? prior.cacheHit : false, ...(sameRun && prior.generationStep ? { generationStep: prior.generationStep } : {}), ...(sameRun && prior.completedSteps ? { completedSteps: prior.completedSteps } : {}) }) } })
+  } }, onAttempt: (timestamp, runId) => { previousAttempts.push(timestamp); const dispatchedAt = new Date(timestamp).toISOString(); db.prepare('INSERT INTO analysis_attempts (run_id, attempted_at) VALUES (?, ?)').run(runId, dispatchedAt); db.prepare('INSERT INTO provider_attempt_outcomes (run_id, dispatched_at, outcome) VALUES (?, ?, \'dispatched\')').run(runId, dispatchedAt) }, onAttemptComplete: (runId, succeeded) => { if (succeeded) db.prepare(`UPDATE provider_attempt_outcomes SET outcome='response', settled_at=? WHERE id=(SELECT id FROM provider_attempt_outcomes WHERE run_id=? AND outcome='dispatched' AND checkpointed_at IS NULL ORDER BY id DESC LIMIT 1)`).run(new Date().toISOString(), runId) }, onProgress: (runId, jobId, progress, attempts) => { if (jobId.startsWith('profile-import:')) return; const observed = (db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id = ?').get(runId) as { count: number }).count; const prior = currentAnalysis.get(jobId), sameRun = prior?.runId === runId; saveAnalysisState({ jobId, runId, status: 'running', analysis: sameRun ? prior.analysis : null, progress, attempts: observed || attempts, cacheHit: sameRun ? prior.cacheHit : false, ...(sameRun && prior.generationStep ? { generationStep: prior.generationStep } : {}), ...(sameRun && prior.completedSteps ? { completedSteps: prior.completedSteps } : {}) }) } })
   const currentConsentSource = (jobId: string): ConsentSource | null => {
     const job = db.prepare('SELECT data FROM jobs WHERE id = ?').get(jobId) as { data: string } | undefined
     if (!job) return null
@@ -327,6 +328,22 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       return this.getSettings()
     },
     async getProfile() { return readProfile() },
+    async authorizeProfileImportAi(runId: string) {
+      if (!/^profile-import:[0-9a-f-]{36}$/.test(runId)) throw new Error('Profile import operation identity is invalid.')
+      if (!scriptedTransport) readStoredOpenRouterKey()
+      dispatcher.authorize(runId, runId)
+    },
+    async generateProfileImportAi(runId: string, model: string, prompt: string, responseSchema: import('zod').ZodTypeAny) {
+      if (!/^profile-import:[0-9a-f-]{36}$/.test(runId) || prompt.length > 24_000) throw new Error('Profile import request is invalid or exceeds the local input limit.')
+      if (activeProfileAiRuns.has(runId)) throw new Error('This profile import request is already running.')
+      const settings = db.prepare('SELECT value FROM settings WHERE key = ?').get('openrouter-model') as { value: string } | undefined
+      const selectedModel = openRouterModelSchema.parse(model)
+      if (selectedModel !== openRouterModelSchema.parse(settings?.value ?? defaultOpenRouterModel)) throw new Error('The OpenRouter model changed after consent. Review the outgoing text and authorize a fresh request.')
+      activeProfileAiRuns.add(runId)
+      try { return await dispatcher.generate({ runId, jobId: runId, model: selectedModel, prompt, consentId: runId, responseSchema, retryProviderFailures: false, maxTokens: 2048, maxResponseChars: 500_000 }) }
+      finally { activeProfileAiRuns.delete(runId) }
+    },
+    cancelProfileImportAi(runId: string) { dispatcher.cancel(runId) },
     async getProfileImportBaseline() { return profileImportBaseline() },
     async importEmptyProfilePdf(sourceHash: string, baseline: string, input: ProfilePdfProposal) {
       const validHash = /^[a-f0-9]{64}$/.test(sourceHash)
@@ -1437,5 +1454,5 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
     applyRestore(token, writeSafety) { assertIdle(); return backupEngine.applyRestore(token, writeSafety) },
     cancelRestore(token) { return backupEngine.cancelRestore(token) }
   }
-  return { api, authorizeOutboundPayload, backup, hasActiveWork: () => activeAnalysisByJob.size > 0, close: () => db.close() }
+  return { api, authorizeOutboundPayload, backup, hasActiveWork: () => activeAnalysisByJob.size > 0 || activeProfileAiRuns.size > 0, close: () => db.close() }
 }

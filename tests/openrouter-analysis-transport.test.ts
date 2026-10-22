@@ -26,6 +26,15 @@ test('never exposes provider error body or key, and passes status and retry-afte
   await expect(createOpenRouterAnalysisTransport('private-key-canary', fetcher).generate(input)).rejects.not.toThrow(/private-provider-canary|private-key-canary/)
 })
 
+test('applies explicit response token and byte ceilings for CV structuring', async () => {
+  const fetcher = vi.fn(async (_url: unknown, options: unknown) => {
+    const body = JSON.parse((options as { body: string }).body)
+    expect(body.max_tokens).toBe(2048)
+    return new Response(JSON.stringify({ choices: [{ message: { content: 'x'.repeat(100) } }] }), { status: 200 })
+  }) as unknown as typeof fetch
+  await expect(createOpenRouterAnalysisTransport('test-key', fetcher).generate({ ...input, maxTokens: 2048, maxResponseChars: 10 })).rejects.toThrow('OpenRouter returned no usable JSON response.')
+})
+
 test('rejects missing or unusable completion without returning raw provider data', async () => {
   const fetcher = vi.fn(async () => new Response(JSON.stringify({ choices: [{ message: { content: null } }] }), { status: 200 })) as unknown as typeof fetch
   await expect(createOpenRouterAnalysisTransport('private-key', fetcher).generate(input)).rejects.toThrow('OpenRouter returned no usable JSON response.')
