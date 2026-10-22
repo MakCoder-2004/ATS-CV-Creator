@@ -4,7 +4,7 @@ import type { JobInput, JobRecord } from '../shared/jobs'
 import type { DraftRevision } from '../shared/draft'
 import './jobs.css'
 
-type DraftLabel = 'No draft' | 'Needs review' | 'Blocked' | 'Approved'
+type DraftLabel = 'No draft' | 'Needs review' | 'Earlier target' | 'Blocked' | 'Approved'
 
 export function SavedJobs({ jobs, activeJob, onSaved, onOpened, onNavigate }: { jobs: JobRecord[]; activeJob: JobRecord | null; onSaved: (job: JobRecord) => void; onOpened: (job: JobRecord) => void; onNavigate: (page: 'Tailor CV') => void }) {
   const [input, setInput] = useState<JobInput>({ title: '', company: '', description: '' })
@@ -48,7 +48,7 @@ export function SavedJobs({ jobs, activeJob, onSaved, onOpened, onNavigate }: { 
     Promise.all(jobs.map(async job => {
       try {
         const draft: DraftRevision | null = await window.workbench.getDraft(job.id)
-        const label: DraftLabel = !draft ? 'No draft' : draft.approved ? 'Approved' : draft.status === 'blocked' ? 'Blocked' : 'Needs review'
+        const label: DraftLabel = !draft ? 'No draft' : draft.targetPostingUpdatedAt !== job.updatedAt ? 'Earlier target' : draft.approved ? 'Approved' : draft.status === 'blocked' ? 'Blocked' : 'Needs review'
         return [job.id, label] as const
       } catch { return [job.id, 'No draft' as DraftLabel] as const }
     })).then(entries => { if (current) setDraftLabels(Object.fromEntries(entries)) })
