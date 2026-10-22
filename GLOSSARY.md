@@ -43,3 +43,27 @@ _Avoid_: CV (the profile is source material, not the tailored document)
 **Source**:
 The original record or passage from which a career fact or job requirement is drawn.
 _Avoid_: Citation (unless a formal citation is actually provided)
+
+**Posting source snapshot**:
+The job-posting wording captured from a source at a particular time, kept distinct from the person's later corrections.
+_Avoid_: Current posting (the source may have changed since capture), Verified posting
+
+**Posting import preview**:
+The extracted job-posting details and any corrections the person is considering before choosing to save them as a saved job.
+_Avoid_: Saved job (until saving is confirmed), Approved posting (CV approval is a different decision)
+
+**Posting revision**:
+A retained version of a saved job's reviewed details, distinct from earlier versions and from the wording captured in a posting source snapshot.
+_Avoid_: Latest source (the person may have corrected the details), CV revision
+
+**Working posting**:
+The person's currently accepted wording and details for a saved job, which may include explicit corrections to the captured source.
+_Avoid_: Original posting (when corrections have been made), Source snapshot
+
+**Profile import proposal**:
+A suggested career fact or change derived from a source that the person has not yet accepted into their profile.
+_Avoid_: Evidence (until accepted), Confirmed fact
+
+**Profile import preview**:
+The organized profile import proposals and selected changes the person reviews before applying them to their profile.
+_Avoid_: Profile (until changes are applied), JSON replacement (a separate exchange workflow)
