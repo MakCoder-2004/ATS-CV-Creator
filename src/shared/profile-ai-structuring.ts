@@ -54,6 +54,7 @@ export function validateProfileAiDraft(current: ProfilePdfProposal, draft: Profi
   const authorized = current.sources.map(source => ({ key: `${source.page}|${source.passage}`, parent: source.proposalRef.replace(/:(?:fact|technology):\d+$/, '') }))
   const unmapped = new Set(current.unmapped.map(source => `${source.page}|${source.text}`))
   for (const source of draft.sources) if (!authorized.some(item => item.key === `${source.page}|${source.passage}`) && !unmapped.has(`${source.page}|${source.passage}`)) throw new Error('The model cited text outside this CV review. Keep the local proposals and review them manually.')
+  for (const item of draft.unmapped) if (![...current.sources.map(source => ({ page: source.page, text: source.passage })), ...current.unmapped].some(source => source.page === item.page && source.text.includes(item.text))) throw new Error('The model returned unmapped text outside this CV review.')
   const citedParents = new Map<string, Set<string>>()
   for (const source of draft.sources) {
     const key = `${source.page}|${source.passage}`
@@ -74,13 +75,14 @@ export function validateProfileAiDraft(current: ProfilePdfProposal, draft: Profi
   for (const project of draft.projects) for (const item of [...project.factualItems, ...project.technologies]) {
     if (parentFor(project.proposalRef) !== parentFor(item.proposalRef)) throw new Error('A project fact cites a different project than its parent. Keep the local proposals and review them manually.')
   }
-  const refs = new Set<string>()
-  if (draft.contact) refs.add(draft.contact.proposalRef)
-  for (const item of draft.skills) refs.add(item.proposalRef)
-  for (const item of draft.experience) { refs.add(item.proposalRef); item.factualItems.forEach(fact => refs.add(fact.proposalRef)) }
-  for (const item of draft.projects) { refs.add(item.proposalRef); item.factualItems.forEach(fact => refs.add(fact.proposalRef)); item.technologies.forEach(fact => refs.add(fact.proposalRef)) }
-  for (const item of draft.entries) refs.add(item.proposalRef)
+  const refs = new Set<string>(), fieldPrefixes = new Map<string, string[]>()
+  if (draft.contact) { refs.add(draft.contact.proposalRef); fieldPrefixes.set(draft.contact.proposalRef, ['contact.']) }
+  for (const item of draft.skills) { refs.add(item.proposalRef); fieldPrefixes.set(item.proposalRef, ['skills.']) }
+  for (const item of draft.experience) { refs.add(item.proposalRef); fieldPrefixes.set(item.proposalRef, ['experience.role']); for (const fact of item.factualItems) { refs.add(fact.proposalRef); fieldPrefixes.set(fact.proposalRef, ['experience.factualItem']) } }
+  for (const item of draft.projects) { refs.add(item.proposalRef); fieldPrefixes.set(item.proposalRef, ['projects.project', 'projects.links']); for (const fact of item.factualItems) { refs.add(fact.proposalRef); fieldPrefixes.set(fact.proposalRef, ['projects.factualItem']) }; for (const fact of item.technologies) { refs.add(fact.proposalRef); fieldPrefixes.set(fact.proposalRef, ['projects.technology']) } }
+  for (const item of draft.entries) { refs.add(item.proposalRef); fieldPrefixes.set(item.proposalRef, [`entries.${item.section}`]) }
   if (draft.sources.some(source => !refs.has(source.proposalRef))) throw new Error('The model cited a proposal that is not in its result.')
+  if (draft.sources.some(source => !fieldPrefixes.get(source.proposalRef)?.some(prefix => source.field.startsWith(prefix)))) throw new Error('The model associated a source with the wrong profile field.')
   const citedRefs = new Set(draft.sources.map(source => source.proposalRef))
   if ([...refs].some(ref => !citedRefs.has(ref))) throw new Error('The model returned a proposal without source support. Keep the local proposals and review them manually.')
   const proposalIds = Object.fromEntries([...refs].map(ref => [ref, current.proposalIds[ref] ?? newId()]))
