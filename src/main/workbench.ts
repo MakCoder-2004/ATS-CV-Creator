@@ -787,6 +787,9 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
         const record = jobRecordSchema.parse({ ...parsed.data, id: input.id ?? randomUUID(), createdAt: existingRow?.created_at ?? now, updatedAt: changed ? now : prior!.updatedAt, provenance: changed ? 'manual' : prior?.provenance ?? 'manual', sourceSnapshot: prior?.sourceSnapshot ?? null, revisions })
         db.prepare('INSERT INTO jobs (id, created_at, updated_at, data) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET updated_at=excluded.updated_at, data=excluded.data').run(record.id, record.createdAt, record.updatedAt, JSON.stringify(record))
         if (changed && prior) {
+          const unresolved = (db.prepare('SELECT COUNT(*) AS count FROM provider_attempt_outcomes WHERE checkpointed_at IS NULL AND run_id IN (SELECT run_id FROM generation_recovery WHERE job_id = ?)').get(record.id) as { count: number }).count
+          db.prepare("UPDATE outbound_consents SET revoked = 1 WHERE run_id IN (SELECT run_id FROM generation_recovery WHERE job_id = ? AND status IN ('running','paused')) OR run_id = (SELECT run_id FROM analysis_run_state WHERE job_id = ?)").run(record.id, record.id)
+          db.prepare("UPDATE generation_recovery SET status = 'cancelled', updated_at = ? WHERE job_id = ? AND status IN ('running','paused')").run(now, record.id)
           for (const [token, pending] of pendingOutbound) if (pending.jobId === record.id) {
             if (pending.consentId) {
               outboundEngine.revoke(pending.consentId)
@@ -796,7 +799,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
           }
           const analysisRow = db.prepare('SELECT data FROM analysis_run_state WHERE job_id = ?').get(record.id) as { data: string } | undefined
           const earlierAnalysis = currentAnalysis.get(record.id) ?? (analysisRow ? analysisResultSchema.parse(JSON.parse(analysisRow.data)) : undefined)
-          if (earlierAnalysis?.analysis) saveAnalysisState({ ...earlierAnalysis, status: 'stale', targetPostingUpdatedAt: prior.updatedAt, progress: 'This posting analysis is retained for history but targets an earlier accepted posting. Review outgoing data and explicitly reassess the current posting.' })
+          if (earlierAnalysis?.analysis) saveAnalysisState({ ...earlierAnalysis, status: 'stale', targetPostingUpdatedAt: prior.updatedAt, progress: `This posting analysis is retained for history but targets an earlier accepted posting. ${unresolved ? `${unresolved} provider request outcome(s) from the cancelled run may be uncertain; this old run cannot resume. ` : ''}Review outgoing data and explicitly reassess the current posting.` })
           // Retain historical CV content, but revoke the current document's readiness immediately.
           const drafts = db.prepare('SELECT id, revision, data FROM draft_revisions WHERE job_id = ? ORDER BY revision DESC').all(record.id) as Array<{ id: string; revision: number; data: string }>
           if (drafts[0]) {

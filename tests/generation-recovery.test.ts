@@ -37,7 +37,7 @@ function recoveryTransport(onTailor?: () => Promise<string>): AnalysisTransport 
   } }
 }
 
-test('public recovery restores frozen consent and resumes a confirmed checkpoint after workspace reopen', async () => {
+test('accepted target edits after restart revoke paused recovery consent without dispatching stale inputs', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'cv-tailor-public-recovery-')); dirs.push(directory)
   let offlineOnce = true
   const prompts: string[] = []
@@ -59,20 +59,18 @@ test('public recovery restores frozen consent and resumes a confirmed checkpoint
   expect(prompts).toHaveLength(3)
   const changedJob = await workspace.api.saveJob({ id: jobId, title: 'Changed target', company: 'New company', description: 'Changed posting must not replace frozen inputs.' })
   expect(changedJob.ok).toBe(true)
+  expect(await workspace.api.getAnalysis(jobId)).toMatchObject({ status: 'stale', progress: expect.stringMatching(/may be uncertain.*cannot resume/i) })
   const savedBudget = await workspace.api.getAnalysisUsage()
   await workspace.api.setAnalysisBudgets({ ...analysisBudgetValues(savedBudget), runLimit: 4 })
+  const requestsBeforeResume = prompts.length
+  const attemptsBeforeResume = (await workspace.api.getAnalysisUsage()).attempts
   const resumed = await workspace.api.resumeGeneration(recovery!.runId, 'retry-uncertain')
-  expect(resumed.ok).toBe(true)
-  expect((await workspace.api.getDraft(jobId))?.content.experience).toHaveLength(1)
-  expect(prompts.filter(prompt => prompt.startsWith('Score these numbered'))).toHaveLength(1)
-  expect(prompts.at(-1)).toContain('Original posting wording.')
-  expect(prompts.join('\n')).not.toContain('Changed posting must not replace frozen inputs.')
+  expect(resumed).toMatchObject({ ok: false, message: expect.stringMatching(/no longer resumable|no recoverable|consent.*revoked/i) })
+  expect(prompts).toHaveLength(requestsBeforeResume)
+  expect((await workspace.api.getAnalysisUsage()).attempts).toBe(attemptsBeforeResume)
   expect(await workspace.api.getGenerationRecovery(jobId)).toBeNull()
+  expect(await workspace.api.getDraft(jobId)).toBeNull()
   workspace.close(); opened.pop()
-  const extensionDb = new Database(join(directory, 'workbench.sqlite'))
-  expect(extensionDb.prepare('SELECT prior_run_limit,new_run_limit FROM generation_recovery_extensions WHERE run_id=?').get(recovery!.runId)).toEqual({ prior_run_limit: 3, new_run_limit: 4 })
-  expect(extensionDb.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id=?').get(recovery!.runId)).toMatchObject({ count: 4 })
-  extensionDb.close()
 }, 20000)
 
 test('a provider response without its graph checkpoint remains uncertain after restart', async () => {
