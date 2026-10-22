@@ -167,6 +167,48 @@ test('visible populated-profile review applies explicit contact update, duplicat
   } finally { await running?.close(); await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }) }
 })
 
+test('rejects a forged nested update from another role and rolls back profile and provenance atomically', async () => {
+  test.setTimeout(120000)
+  const root = mkdtempSync(join(tmpdir(), 'cv-tailor-wrong-parent-')), userData = join(root, 'workspace'), sourceFile = join(root, 'cv.pdf'), backupFile = join(root, 'workspace-backup.json')
+  writeFileSync(sourceFile, makePdf(['NAME: Ada Lovelace', 'EMAIL: new@example.test', 'EXPERIENCE: Example Labs | Engineer', 'FACT: Improved the parser', 'FACT: Added a second parser behavior', 'This synthetic CV includes enough selectable detail to support a local source-backed profile import review.']))
+  let running: ElectronApplication | undefined
+  try {
+    running = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], timeout: 15000, env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData } })
+    const page = await running.firstWindow({ timeout: 15000 })
+    await expect(page.locator('[data-ui-ready="true"]')).toBeVisible({ timeout: 15000 })
+    const seeded = await page.evaluate(async () => {
+      const contact = await window.workbench.saveContact({ fullName: 'Ada Lovelace', email: 'old@example.test' })
+      const firstRole = await window.workbench.saveExperience({ kind: 'employment', title: 'Engineer', organization: 'Example Labs', description: 'Existing role', factualItems: [{ text: 'Maintained the parser' }] })
+      const otherRole = await window.workbench.saveExperience({ kind: 'employment', title: 'Consultant', organization: 'Northwind', description: 'Separate role', factualItems: [{ text: 'Migrated reports' }] })
+      if (!contact.ok || !firstRole.ok || !otherRole.ok) throw new Error('Could not seed the cross-parent test profile')
+      return { contact: contact.value.contact!, firstRole: firstRole.value.experience.find(item => item.title === 'Engineer')!, otherFactId: otherRole.value.experience.find(item => item.title === 'Consultant')!.factualItems[0].id }
+    })
+    const beforeProfile = await page.evaluate(() => window.workbench.getProfile())
+    const beforeExperience = await page.evaluate(() => window.workbench.getExperience())
+    await running.evaluate(({ dialog }, selectedPath) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selectedPath] }); return true }, sourceFile)
+    const preview = await page.evaluate(() => window.workbench.previewProfilePdfImport())
+    if (!preview.ok) throw new Error(preview.message)
+    const role = preview.proposals.experience[0], fact = role.factualItems[0], contactProposal = preview.proposals.contact
+    if (!contactProposal) throw new Error('The synthetic PDF contact proposal was not mapped')
+    const proposals = { ...preview.proposals, decisions: { [contactProposal.proposalRef]: { action: 'update' as const, targetId: seeded.contact.id }, [role.proposalRef]: { action: 'update' as const, targetId: seeded.firstRole.id }, ...Object.fromEntries(role.factualItems.map(item => [item.proposalRef, item.proposalRef === fact.proposalRef ? { action: 'update' as const, targetId: seeded.otherFactId } : { action: 'skip' as const }])) } }
+    const result = await page.evaluate(async ({ token, proposals }) => window.workbench.applyProfilePdfImport(token, proposals), { token: preview.token, proposals })
+    expect(result).toMatchObject({ ok: false, message: expect.stringContaining('parent') })
+    expect(await page.evaluate(() => window.workbench.getProfile())).toEqual(beforeProfile)
+    expect(await page.evaluate(() => window.workbench.getExperience())).toEqual(beforeExperience)
+    const repeatedPreview = await page.evaluate(() => window.workbench.previewProfilePdfImport())
+    if (!repeatedPreview.ok) throw new Error(repeatedPreview.message)
+    const duplicateRole = repeatedPreview.proposals.experience[0]
+    const duplicateDecisions = { [repeatedPreview.proposals.contact!.proposalRef]: { action: 'update' as const, targetId: seeded.contact.id }, [duplicateRole.proposalRef]: { action: 'update' as const, targetId: seeded.firstRole.id }, ...Object.fromEntries(duplicateRole.factualItems.map(item => [item.proposalRef, { action: 'update' as const, targetId: seeded.firstRole.factualItems[0].id }])) }
+    const duplicateResult = await page.evaluate(async ({ token, proposals }) => window.workbench.applyProfilePdfImport(token, proposals), { token: repeatedPreview.token, proposals: { ...repeatedPreview.proposals, decisions: duplicateDecisions } })
+    expect(duplicateResult).toMatchObject({ ok: false, message: expect.stringContaining('parent') })
+    expect(await page.evaluate(() => window.workbench.getProfile())).toEqual(beforeProfile)
+    expect(await page.evaluate(() => window.workbench.getExperience())).toEqual(beforeExperience)
+    await running.evaluate(({ dialog }, target) => { dialog.showSaveDialog = async () => ({ canceled: false, filePath: target }); return true }, backupFile)
+    expect(await page.evaluate(() => window.workbench.exportWorkspaceBackup())).toMatchObject({ ok: true })
+    expect(JSON.parse(readFileSync(backupFile, 'utf8')).tables.profile_import_provenance.rows).toEqual([])
+  } finally { await running?.close(); await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }) }
+})
+
 test('profile changes during local review invalidate apply instead of overwriting facts', async () => {
   const root = mkdtempSync(join(tmpdir(), 'cv-tailor-pdf-stale-')), userData = join(root, 'workspace'), sourceFile = join(root, 'cv.pdf')
   writeFileSync(sourceFile, makePdf(['NAME: Ada Example', 'SKILLS: Python', 'This synthetic paragraph contains enough selectable characters to exceed the local text threshold safely.', 'Additional readable career source wording keeps this sample above one hundred useful characters.']))

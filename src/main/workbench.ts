@@ -385,6 +385,16 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
             }
             return merged
           }
+          const validateNestedUpdateTargets = (parentOperation: 'add' | 'update' | 'skip', ownerExists: boolean, proposed: Array<{ proposalRef: string }>, prior: Array<{ id: string }>) => {
+            const used = new Set<string>()
+            for (const item of proposed) {
+              const decision = decisionFor(item.proposalRef)
+              if (decision.action !== 'update') continue
+              const targetId = decision.targetId
+              if (parentOperation !== 'update' || !ownerExists || !targetId || !prior.some(value => value.id === targetId) || used.has(targetId)) throw new Error('PROFILE_MERGE_TARGET_INVALID')
+              used.add(targetId)
+            }
+          }
           const updateEntry = (item: typeof proposals.entries[number]) => {
             const decision = decisionFor(item.proposalRef)
             if (decision.action === 'skip') return
@@ -431,6 +441,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
             const target = decision.action === 'update' ? currentExperience.experience.find(record => record.id === decision.targetId) : undefined
             if (decision.action === 'update' && !target) throw new Error('PROFILE_MERGE_TARGET_INVALID')
             const { proposalRef: _ref, requiresDateResolution: _dateResolution, factualItems, ...fields } = item
+            validateNestedUpdateTargets(decision.action, Boolean(target), factualItems, target?.factualItems ?? [])
             const facts = factualItems.flatMap(({ proposalRef, ...fact }) => {
               const choice = decisionFor(proposalRef)
               return choice.action === 'skip' ? [] : [{ ...fact, ...(choice.action === 'update' ? { id: choice.targetId } : {}) }]
@@ -460,6 +471,8 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
             const target = decision.action === 'update' ? currentExperience.projects.find(record => record.id === decision.targetId) : undefined
             if (decision.action === 'update' && !target) throw new Error('PROFILE_MERGE_TARGET_INVALID')
             const { proposalRef: _ref, factualItems, technologies, ...fields } = item
+            validateNestedUpdateTargets(decision.action, Boolean(target), factualItems, target?.factualItems ?? [])
+            validateNestedUpdateTargets(decision.action, Boolean(target), technologies, target?.technologies ?? [])
             const facts = factualItems.flatMap(({ proposalRef, ...fact }) => { const choice = decisionFor(proposalRef); return choice.action === 'skip' ? [] : [{ ...fact, ...(choice.action === 'update' ? { id: choice.targetId } : {}) }] })
             const tools = technologies.flatMap(({ proposalRef, ...technology }) => { const choice = decisionFor(proposalRef); return choice.action === 'skip' ? [] : [{ ...technology, ...(choice.action === 'update' ? { id: choice.targetId } : {}) }] })
             const preserve = (incoming: typeof facts, old: Array<{ id: string; revision?: number; text: string }>) => mergeNested(old.map(({ id, text }) => ({ id, revision: 1, text })), incoming)
@@ -526,7 +539,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
         return { profile: readProfile(), experience: readExperience() }
       })
       try { return { ok: true, message: mergingProfile ? 'Reviewed CV decisions were applied. Accepted additions and updates were saved; skipped records were preserved.' : 'Reviewed CV details were added to your profile.', ...tx() } }
-      catch (error) { return { ok: false, message: error instanceof Error && error.message === 'STALE_PROFILE_PREVIEW' ? 'Your profile changed after this CV was reviewed. Nothing was applied; review the PDF again.' : error instanceof Error && error.message === 'PROFILE_NOT_EMPTY' ? 'This profile is no longer empty. Nothing was applied; use the separate profile editor to preserve existing facts.' : error instanceof Error && error.message === 'PROFILE_MERGE_DECISIONS_REQUIRED' ? 'Choose add, update, or skip for every proposed record before applying.' : error instanceof Error && error.message === 'PROFILE_MERGE_TARGET_INVALID' ? 'One of the records selected for update changed or belongs to a different section. Nothing was applied; review the current profile.' : error instanceof Error && error.message === 'PROFILE_MERGE_INVALID' ? 'One or more selected proposals are invalid. Correct or skip them before applying.' : 'The reviewed CV could not be applied. No profile changes were made.' } }
+      catch (error) { return { ok: false, message: error instanceof Error && error.message === 'STALE_PROFILE_PREVIEW' ? 'Your profile changed after this CV was reviewed. Nothing was applied; review the PDF again.' : error instanceof Error && error.message === 'PROFILE_NOT_EMPTY' ? 'This profile is no longer empty. Nothing was applied; use the separate profile editor to preserve existing facts.' : error instanceof Error && error.message === 'PROFILE_MERGE_DECISIONS_REQUIRED' ? 'Choose add, update, or skip for every proposed record before applying.' : error instanceof Error && error.message === 'PROFILE_MERGE_TARGET_INVALID' ? 'A selected record or nested detail no longer belongs to the chosen section or parent. Nothing was applied; review the current profile and choose its current matching record.' : error instanceof Error && error.message === 'PROFILE_MERGE_INVALID' ? 'One or more selected proposals are invalid. Correct or skip them before applying.' : 'The reviewed CV could not be applied. No profile changes were made.' } }
     },
     async validateProfileImport(input: string) {
       const result = validateProfileImport(input)
