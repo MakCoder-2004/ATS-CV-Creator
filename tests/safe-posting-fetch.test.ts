@@ -26,6 +26,14 @@ describe('bounded Lever posting fetch', () => {
     expect(request).not.toHaveBeenCalled()
     await expect(fetchLeverPosting(url, { lookup, request: async () => ({ status: 302, headers: {}, body: Buffer.alloc(0), location: 'https://evil.test/path' }) })).rejects.toThrow('outside the approved')
   })
+  it('single-request release validation never retries or follows redirects', async () => {
+    const retryResponse = vi.fn(async () => ({ status: 503, headers: {}, body: Buffer.alloc(0) }))
+    await expect(fetchLeverPosting(url, { lookup, request: retryResponse, singleRequest: true })).rejects.toThrow(/HTTP 503/)
+    expect(retryResponse).toHaveBeenCalledTimes(1)
+    const redirectResponse = vi.fn(async () => ({ status: 302, headers: {}, body: Buffer.alloc(0), location: 'https://api.lever.co/v0/postings/acme/role-123' }))
+    await expect(fetchLeverPosting(url, { lookup, request: redirectResponse, singleRequest: true })).rejects.toThrow(/single-request/i)
+    expect(redirectResponse).toHaveBeenCalledTimes(1)
+  })
   it('rejects adversarially deep HTML safely instead of recursing through the tree', async () => {
     const html = `${'<div>'.repeat(300)}<h1>Deep role</h1>${'</div>'.repeat(300)}`
     await expect(fetchLeverPosting('https://jobs.lever.co/acme/deep', { lookup, request: async () => ({ status: 200, headers: { 'content-type': 'text/html' }, body: Buffer.from(html) }) })).rejects.toThrow(/nested too deeply/)

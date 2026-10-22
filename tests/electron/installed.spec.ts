@@ -1,5 +1,5 @@
 import { test, expect, _electron as electron } from '@playwright/test'
-import { existsSync, mkdtempSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -16,12 +16,73 @@ test('installed app opens and writes SQLite across reopen', async () => {
     await expect(page.locator('[data-ui-ready="true"]')).toBeVisible()
     await page.getByRole('button', { name: 'Use dark mode' }).click()
     await expect(page.getByRole('button', { name: 'Use dark mode' })).toHaveAttribute('aria-pressed', 'true')
+    await page.getByRole('button', { name: 'Settings', exact: true }).click()
+    const model = page.getByRole('textbox', { name: 'OpenRouter model ID' })
+    await expect(model).toHaveValue('xingchen-agi/xing4.0-29b-a4b:free')
+    await model.fill('openai/gpt-4o-mini')
+    await page.getByRole('button', { name: 'Save model' }).click()
+    await expect(page.getByText(/OpenRouter model saved/)).toBeVisible()
     await first.close()
     expect(existsSync(join(directory, 'workbench.sqlite'))).toBe(true)
     const reopened = await launch()
-    await expect((await reopened.firstWindow()).getByRole('button', { name: 'Use dark mode' })).toHaveAttribute('aria-pressed', 'true')
+    const reopenedPage = await reopened.firstWindow()
+    await expect(reopenedPage.getByRole('button', { name: 'Use dark mode' })).toHaveAttribute('aria-pressed', 'true')
+    await reopenedPage.getByRole('button', { name: 'Settings', exact: true }).click()
+    await expect(reopenedPage.getByRole('textbox', { name: 'OpenRouter model ID' })).toHaveValue('openai/gpt-4o-mini')
     await reopened.close()
   } finally {
+    await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 })
+  }
+})
+
+test('installed app upgrades released v1 and v2 backups and restores v3 without resuming work', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'cv-tailor-installed-backup-upgrade-'))
+  const backupFile = join(directory, 'baseline-v3.json')
+  const v1File = join(directory, 'released-v1.json')
+  const v2File = join(directory, 'released-v2.json')
+  const userData = join(directory, 'workspace')
+  let app: Awaited<ReturnType<typeof electron.launch>> | undefined
+  try {
+    app = await electron.launch({ executablePath, args: [`--user-data-dir=${userData}`] })
+    const page = await app.firstWindow()
+    await expect(page.locator('[data-ui-ready="true"]')).toBeVisible()
+    const saved = await page.evaluate(() => window.workbench.saveJob({ title: 'Installed backup role', company: 'Example', description: 'Complete installed backup wording.' }))
+    if (!saved.ok) throw new Error(saved.error.message)
+    await page.getByRole('button', { name: 'Settings', exact: true }).click()
+    await app.evaluate(({ dialog }, file) => { dialog.showSaveDialog = async () => ({ canceled: false, filePath: file }) }, backupFile)
+    await page.getByRole('button', { name: 'Back up workspace' }).click()
+    await expect(page.getByText(/Workspace backup saved/i)).toBeVisible()
+    const v3 = JSON.parse(readFileSync(backupFile, 'utf8'))
+    expect(v3.version).toBe(3)
+    const v1 = structuredClone(v3)
+    v1.version = 1
+    v1.tables.schema_migrations.rows = v1.tables.schema_migrations.rows.filter((row: { version: number }) => row.version !== 7)
+    v1.tables.jobs.rows[0].data = JSON.stringify({ id: saved.value.id, title: 'Installed backup role', company: 'Example', description: 'Complete installed backup wording.', createdAt: saved.value.createdAt, updatedAt: saved.value.updatedAt })
+    writeFileSync(v1File, JSON.stringify(v1))
+    const v2 = structuredClone(v3)
+    v2.version = 2
+    for (const row of v2.tables.jobs.rows) {
+      const job = JSON.parse(row.data)
+      delete job.optionalDetails
+      for (const revision of job.revisions) delete revision.optionalDetails
+      if (job.sourceSnapshot) { delete job.sourceSnapshot.optionalDetails; delete job.sourceSnapshot.fieldOrigins.optionalDetails }
+      row.data = JSON.stringify(job)
+    }
+    writeFileSync(v2File, JSON.stringify(v2))
+    const restore = async (file: string) => {
+      await app!.evaluate(({ dialog }, selected) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selected] }) }, file)
+      await page.getByRole('button', { name: 'Restore workspace' }).click()
+      await page.getByRole('button', { name: 'Confirm workspace replacement' }).click()
+      await expect(page.getByText(/Workspace restored/i)).toBeVisible()
+    }
+    await restore(v1File)
+    expect(await page.evaluate(async id => { const job = await window.workbench.openJob(id); return job && { provenance: job.provenance, sourceSnapshot: job.sourceSnapshot, revisions: job.revisions.length } }, saved.value.id)).toEqual({ provenance: 'legacy-unknown', sourceSnapshot: null, revisions: 0 })
+    await restore(v2File)
+    expect(await page.evaluate(async id => { const job = await window.workbench.openJob(id); return job && { location: job.optionalDetails.location, revisionLocation: job.revisions[0]?.optionalDetails.location } }, saved.value.id)).toEqual({ location: { value: null, origin: 'unknown', source: null, uncertainty: 'none' }, revisionLocation: { value: null, origin: 'unknown', source: null, uncertainty: 'none' } })
+    await restore(backupFile)
+    expect(await page.evaluate(async id => { const job = await window.workbench.openJob(id); return job && { description: job.description, provenance: job.provenance, revisionCount: job.revisions.length } }, saved.value.id)).toMatchObject({ description: 'Complete installed backup wording.', provenance: 'manual', revisionCount: 1 })
+  } finally {
+    await app?.close()
     await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 })
   }
 })

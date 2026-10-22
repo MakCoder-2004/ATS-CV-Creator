@@ -36,7 +36,7 @@ test('visible OpenRouter settings save non-secret preferences and explain privac
     await expect(page.getByText(/sends requests to third-party model providers/i)).toBeVisible()
     await expect(page.getByText(/LLM check is not proof/i)).toBeVisible()
     await expect(page.getByRole('link', { name: 'OpenRouter privacy policy' })).toHaveAttribute('href', 'https://openrouter.ai/privacy')
-    await expect(page.getByRole('textbox', { name: 'OpenRouter model ID' })).toHaveValue('minimax/minimax-m3.1-flash:free')
+    await expect(page.getByRole('textbox', { name: 'OpenRouter model ID' })).toHaveValue('xingchen-agi/xing4.0-29b-a4b:free')
     await expect(page.getByRole('textbox', { name: 'OpenRouter model ID' })).toHaveCSS('border-top-style', 'solid')
     await expect(page.getByRole('spinbutton', { name: 'Minimum spacing (milliseconds)' })).toHaveValue('5000')
     await expect(page.getByRole('spinbutton', { name: 'Attempts per rate window' })).toHaveValue('12')

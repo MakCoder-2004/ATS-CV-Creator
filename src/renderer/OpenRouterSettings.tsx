@@ -67,7 +67,7 @@ export function OpenRouterSettingsPanel() {
     <div className="settings-grid">
       <section className="settings-block" aria-labelledby="model-heading">
         <div className="settings-block-heading"><span className="settings-block-icon"><Sparkles size={18} aria-hidden="true" /></span><div><h2 id="model-heading">Model preference</h2><p>Enter an OpenRouter model ID for future runs.</p></div></div>
-        <form className="profile-form" onSubmit={event => void saveModel(event)}><label className="form-field">OpenRouter model ID<input value={model} onChange={event => setModel(event.target.value)} placeholder="minimax/minimax-m3.1-flash:free" spellCheck={false} autoCapitalize="off" autoComplete="off" required /></label><div className="form-actions"><button className="primary-button" type="submit" disabled={busy || !settings || model === settings.model}>Save model</button></div></form>
+        <form className="profile-form" onSubmit={event => void saveModel(event)}><label className="form-field">OpenRouter model ID<input value={model} onChange={event => setModel(event.target.value)} placeholder="xingchen-agi/xing4.0-29b-a4b:free" spellCheck={false} autoCapitalize="off" autoComplete="off" required /></label><div className="form-actions"><button className="primary-button" type="submit" disabled={busy || !settings || model === settings.model}>Save model</button></div></form>
         <p className="settings-helper">Availability, pricing and JSON reliability vary by model. Saving a model sends no request.</p>
       </section>
       <section className="settings-block credential-panel" aria-labelledby="credential-heading">

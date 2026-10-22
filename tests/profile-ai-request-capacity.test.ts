@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
 import { createWorkbench } from '../src/main/workbench'
+import { defaultOpenRouterModel } from '../src/shared/openrouter-settings'
 import type { AnalysisTransport } from '../src/main/posting-analysis'
 
 const directories: string[] = []
@@ -18,7 +19,7 @@ test('oversized complete serialized schema is rejected before the shared dispatc
   const workspace = createWorkbench(directory, undefined, transport); opened.push(workspace)
   const runId = `profile-import:${randomUUID()}`
   workspace.api.authorizeProfileImportAi(runId)
-  await expect(workspace.api.generateProfileImportAi(runId, 'minimax/minimax-m3.1-flash:free', 'small authorized input', z.string().describe('oversized schema context '.repeat(5_000)))).rejects.toThrow(/complete AI request.*64 KiB/)
+  await expect(workspace.api.generateProfileImportAi(runId, defaultOpenRouterModel, 'small authorized input', z.string().describe('oversized schema context '.repeat(5_000)))).rejects.toThrow(/complete AI request.*64 KiB/)
   expect(calls).toBe(0)
   expect(await workspace.api.getAnalysisUsage()).toMatchObject({ attempts: 0 })
 })

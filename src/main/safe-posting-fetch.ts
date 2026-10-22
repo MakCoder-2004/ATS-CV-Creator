@@ -15,6 +15,10 @@ export type SafePostingFetchOptions = {
   request?: (url: URL, address: Address, signal: AbortSignal, headers: Readonly<Record<string, string>>) => Promise<{ status: number; headers: IncomingMessage['headers']; body: Buffer; location?: string }>
   wait?: (milliseconds: number, signal: AbortSignal) => Promise<void>
   now?: () => number
+  /** Restrict a separately authorized release check to one physical HTTP request. */
+  singleRequest?: boolean
+  onRequestStarted?: () => void
+  onRequestCompleted?: (status: number) => void
 }
 type Lookup = NonNullable<SafePostingFetchOptions['lookup']>
 type Request = NonNullable<SafePostingFetchOptions['request']>
@@ -164,24 +168,28 @@ export async function fetchLeverPosting(input: string, options: SafePostingFetch
       const addresses = await bounded(lookup(current.hostname), 5_000, controller.signal, 'Source DNS resolution exceeded 5 seconds.', () => controller.abort(new Error('Source DNS resolution exceeded 5 seconds.')))
       if (!addresses.length || addresses.some(a => !isPublicAddress(a.address, a.family))) throw new Error('The source resolved to a non-public network address.')
       let lastError: unknown
-      for (let attempt = 0; attempt < 2; attempt++) {
+      for (let attempt = 0; attempt < (options.singleRequest ? 1 : 2); attempt++) {
         if (controller.signal.aborted) throw options.signal?.aborted ? new Error('Fetch cancelled.') : controller.signal.reason instanceof Error ? controller.signal.reason : new Error('Fetch timed out.')
         const elapsed = now() - (lastRequestAt.get(current.hostname) ?? 0)
         if (lastRequestAt.has(current.hostname) && elapsed < 2_000) await wait(2_000 - elapsed, controller.signal)
         lastRequestAt.set(current.hostname, now())
-        try { response = await bounded(request(current, addresses[0], controller.signal, html ? HTML_HEADERS : JSON_HEADERS), 15_000, controller.signal, 'Source response exceeded 15 seconds.', () => controller.abort(new Error('Source response exceeded 15 seconds.'))) }
+        try {
+          options.onRequestStarted?.()
+          response = await bounded(request(current, addresses[0], controller.signal, html ? HTML_HEADERS : JSON_HEADERS), 15_000, controller.signal, 'Source response exceeded 15 seconds.', () => controller.abort(new Error('Source response exceeded 15 seconds.')))
+          options.onRequestCompleted?.(response.status)
+        }
         catch (error) {
           lastError = error
           const code = typeof error === 'object' && error !== null && 'code' in error ? String((error as { code: unknown }).code) : ''
           const retryable = ['ECONNRESET', 'ETIMEDOUT', 'EAI_AGAIN', 'ECONNREFUSED'].includes(code)
-          if (attempt === 0 && retryable && !controller.signal.aborted) { await wait(Math.max(0, 2_000 - (now() - lastRequestAt.get(current.hostname)!)), controller.signal); continue }
+          if (attempt === 0 && retryable && !controller.signal.aborted && !options.singleRequest) { await wait(Math.max(0, 2_000 - (now() - lastRequestAt.get(current.hostname)!)), controller.signal); continue }
           if (controller.signal.aborted) throw options.signal?.aborted ? new Error('Fetch cancelled.') : controller.signal.reason instanceof Error ? controller.signal.reason : new Error('Fetch timed out.')
           if (code.startsWith('ERR_TLS') || code.startsWith('CERT_')) throw new Error('The source TLS certificate could not be verified. No insecure connection was attempted.')
           if (['ENOTFOUND', 'EAI_AGAIN'].includes(code)) throw new Error('The supported source hostname could not be resolved.')
           throw new Error('The source connection failed or timed out. Open the original posting or paste its text instead.')
         }
         if (response.body.length > MAX_COMPRESSED) throw new Error('Response exceeded the 2 MiB download limit.')
-        if (![408, 429, 500, 502, 503, 504].includes(response.status) || attempt > 0) break
+        if (![408, 429, 500, 502, 503, 504].includes(response.status) || attempt > 0 || options.singleRequest) break
         const retryAfter = response.headers['retry-after']
         const seconds = retryAfter ? Number(retryAfter) : Number.NaN
         const retryDate = retryAfter && !Number.isFinite(seconds) ? Date.parse(retryAfter) : Number.NaN
@@ -191,6 +199,7 @@ export async function fetchLeverPosting(input: string, options: SafePostingFetch
       }
       if (!response) throw lastError instanceof Error ? lastError : new Error('The posting request failed.')
       if ([301,302,303,307,308].includes(response.status) && response.location) {
+        if (options.singleRequest) throw new Error('The single-request release check will not follow redirects.')
         if (hop === 3) throw new Error('The posting exceeded the three-redirect limit.')
         current = new URL(response.location, current); continue
       }

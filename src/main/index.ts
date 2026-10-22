@@ -27,7 +27,7 @@ import { addDraftItemInputSchema, draftCorrectionInputSchema, draftGenerationSch
 import { factualCheckReportSchema } from '../shared/factual-report'
 import { regenerationProposalSchema, regenerationResultSchema, regenerationTargetSchema } from '../shared/regeneration'
 import { mutateDraftRecordInputSchema } from '../shared/draft-records'
-import { validateLeverPostingUrl } from './safe-posting-fetch'
+import { validateLeverPostingUrl, type SafePostingFetchOptions } from './safe-posting-fetch'
 import { postingPreviewEditSchema, postingReviewSchema } from '../shared/posting-import'
 
 let window: BrowserWindow | undefined
@@ -133,9 +133,18 @@ app.whenReady().then(() => {
       return { status: 200, headers: { 'content-type': 'application/json' }, body: Buffer.from(JSON.stringify(posting)) }
     }
   } : undefined
-  workspace = createWorkbench(app.getPath('userData'), safeStorage, scriptedAnalysis, undefined, scriptedPostingFetch)
+  const singleRequestReleaseCheck = process.env.CV_TAILOR_SINGLE_POSTING_REQUEST === '1'
+  const postingFetchOptions: SafePostingFetchOptions = {
+    ...scriptedPostingFetch,
+    ...(singleRequestReleaseCheck ? {
+      singleRequest: true,
+      onRequestStarted: () => console.info('[LINK37_SINGLE_REQUEST] request=1 started'),
+      onRequestCompleted: status => console.info(`[LINK37_SINGLE_REQUEST] request=1 completed status=${status}`)
+    } : {})
+  }
+  workspace = createWorkbench(app.getPath('userData'), safeStorage, scriptedAnalysis, undefined, postingFetchOptions)
   registerWorkspaceBackupIpc(() => window!, () => workspace!, () => {
-    const reopened = createWorkbench(app.getPath('userData'), safeStorage, scriptedAnalysis, undefined, scriptedPostingFetch)
+    const reopened = createWorkbench(app.getPath('userData'), safeStorage, scriptedAnalysis, undefined, postingFetchOptions)
     const previous = workspace!
     workspace = reopened
     previous.close()

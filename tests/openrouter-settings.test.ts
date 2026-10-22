@@ -23,7 +23,7 @@ test('credentials are encrypted before persistence and never returned through se
   const dir = workspace()
   const app = createWorkbench(dir, fakeSecureStorage)
   const canary = 'secret-canary-gemini-key'
-  expect(await app.api.getSettings()).toEqual({ appearance: 'light', openRouter: { model: 'minimax/minimax-m3.1-flash:free', faithfulnessCheck: false, credential: { configured: false, secureStorageAvailable: true } } })
+  expect(await app.api.getSettings()).toEqual({ appearance: 'light', openRouter: { model: defaultOpenRouterModel, faithfulnessCheck: false, credential: { configured: false, secureStorageAvailable: true } } })
   const saved = await app.api.saveOpenRouterApiKey(canary)
   expect(saved.openRouter.credential).toEqual({ configured: true, secureStorageAvailable: true })
   expect(JSON.stringify(saved)).not.toContain(canary)
@@ -94,6 +94,6 @@ test('an existing Gemini key is not reused as an OpenRouter credential', async (
 test('invalid models are rejected without changing the saved model', async () => {
   const app = createWorkbench(workspace(), fakeSecureStorage)
   await expect(app.api.setOpenRouterModel('arbitrary-model' as never)).rejects.toThrow()
-  expect((await app.api.getSettings()).openRouter.model).toBe('minimax/minimax-m3.1-flash:free')
+  expect((await app.api.getSettings()).openRouter.model).toBe(defaultOpenRouterModel)
   app.close()
 })

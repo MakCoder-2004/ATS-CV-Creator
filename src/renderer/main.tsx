@@ -87,7 +87,7 @@ function App() {
       <header className="header"><span className="breadcrumb">Workspace <span aria-hidden="true">/</span> {page}</span><AppearanceControls className="header-appearance" appearance={appearance} change={value => void changeAppearance(value)} /></header>
       {error && <p role="alert" className="error">{error}</p>}
       {backupStatus && !backupStatus.backupable && <aside className="backup-capacity-warning" role="status" aria-label="Workspace backup limits">
-        <AlertTriangle size={20} aria-hidden="true" /><div><p><strong>This workspace is above its backup safety limits.</strong></p><p>Saved data remains intact. Backups and changes that increase stored size are blocked; no history is deleted. You can try shortening an existing working posting to reduce the workspace size.</p></div>
+        <AlertTriangle size={20} aria-hidden="true" /><div><p><strong>This workspace is above its backup safety limits.</strong></p><p>Saved data remains intact. Backups and changes that increase stored size are blocked; no history is deleted. A shorter working posting helps only if the complete saved record becomes smaller.</p></div>
         <button type="button" className="secondary-button" onClick={() => setPage('Saved jobs')}>Review saved postings</button>
       </aside>}
       <main id="content" ref={contentRef} tabIndex={-1}>
