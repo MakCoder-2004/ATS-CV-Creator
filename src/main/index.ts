@@ -27,9 +27,13 @@ import { addDraftItemInputSchema, draftCorrectionInputSchema, draftGenerationSch
 import { factualCheckReportSchema } from '../shared/factual-report'
 import { regenerationProposalSchema, regenerationResultSchema, regenerationTargetSchema } from '../shared/regeneration'
 import { mutateDraftRecordInputSchema } from '../shared/draft-records'
+import { fetchLeverPosting, validateLeverPostingUrl } from './safe-posting-fetch'
+import { postingPreviewSchema } from '../shared/posting-import'
 
 let window: BrowserWindow | undefined
 let workspace: ReturnType<typeof createWorkbench> | undefined
+const postingPreviews = new Map<string, Awaited<ReturnType<typeof fetchLeverPosting>>>()
+const postingFetches = new Map<string, AbortController>()
 
 function invalidProfileInput(error: ZodError, kind: string) {
   const fieldErrors: Record<string, string> = {}
@@ -253,6 +257,32 @@ app.whenReady().then(() => {
     trusted(event)
     if (args.length) throw new Error('Unexpected arguments')
     return jobRecordSchema.array().parse(await workspace!.api.listJobs())
+  })
+  ipcMain.handle('posting-import:fetch', async (event, ...args: unknown[]) => {
+    trusted(event)
+    if (args.length !== 1 || typeof args[0] !== 'string' || !validateLeverPostingUrl(args[0])) throw new Error('Only a named HTTPS Lever job-detail link is supported.')
+    const token = randomUUID(), controller = new AbortController()
+    postingFetches.set(token, controller)
+    try {
+      const preview = await fetchLeverPosting(args[0], { signal: controller.signal })
+      if (controller.signal.aborted) throw new Error('Fetch cancelled.')
+      postingPreviews.set(token, preview)
+      return { token, preview: postingPreviewSchema.parse(preview) }
+    } finally { postingFetches.delete(token) }
+  })
+  ipcMain.handle('posting-import:read', (event, ...args: unknown[]) => {
+    trusted(event); if (args.length !== 1) throw new Error('Expected preview token')
+    return postingPreviewSchema.nullable().parse(postingPreviews.get(uuidSchema.parse(args[0])) ?? null)
+  })
+  ipcMain.handle('posting-import:cancel', (event, ...args: unknown[]) => {
+    trusted(event); if (args.length > 1) throw new Error('Expected optional fetch token')
+    if (args.length === 0) for (const controller of postingFetches.values()) controller.abort()
+    else { const token = uuidSchema.parse(args[0]); postingFetches.get(token)?.abort(); postingPreviews.delete(token) }
+    return { ok: true }
+  })
+  ipcMain.handle('posting-import:open-source', async (event, ...args: unknown[]) => {
+    trusted(event); if (args.length !== 1 || typeof args[0] !== 'string' || !validateLeverPostingUrl(args[0])) throw new Error('Only a validated HTTPS Lever posting can be opened.')
+    await shell.openExternal(args[0]); return { ok: true, message: 'Opened the posting in your default browser.' }
   })
   ipcMain.handle('consent:outbound:preview', async (event, ...args: unknown[]) => {
     trusted(event); if (args.length !== 1) throw new Error('Expected saved job ID')

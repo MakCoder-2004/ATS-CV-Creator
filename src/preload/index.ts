@@ -15,6 +15,7 @@ import { regenerationProposalSchema, regenerationResultSchema, regenerationTarge
 import { mutateDraftRecordInputSchema } from '../shared/draft-records'
 import { profilePdfApplyResultSchema, profilePdfPreviewSchema, profilePdfProposalSchema } from '../shared/profile-pdf-import'
 import { profileAiConsentActionSchema, profileAiConsentPreviewSchema, profileAiRunResultSchema } from '../shared/profile-ai-structuring'
+import { postingPreviewSchema } from '../shared/posting-import'
 
 const workspaceResult = z.object({ ok: z.boolean(), cancelled: z.boolean(), message: z.string() }).strict()
 const restoreSelection = z.discriminatedUnion('ok', [
@@ -118,6 +119,14 @@ const api: WorkbenchAPI = Object.freeze({
     const job = await ipcRenderer.invoke('jobs:open', uuidSchema.parse(id))
     return job === null ? null : jobRecordSchema.parse(job)
   },
+  async fetchPostingPreview(url: string) {
+    if (typeof url !== 'string' || Buffer.byteLength(url, 'utf8') > 2048) throw new Error('The posting link is invalid or too long.')
+    const result = z.object({ token: uuidSchema, preview: postingPreviewSchema }).strict().parse(await ipcRenderer.invoke('posting-import:fetch', url))
+    return result
+  },
+  async readPostingPreview(token: string) { const value = await ipcRenderer.invoke('posting-import:read', uuidSchema.parse(token)); return value === null ? null : postingPreviewSchema.parse(value) },
+  async cancelPostingFetch(token?: string) { return z.object({ ok: z.boolean() }).strict().parse(token === undefined ? await ipcRenderer.invoke('posting-import:cancel') : await ipcRenderer.invoke('posting-import:cancel', uuidSchema.parse(token))) },
+  async openPostingSource(url: string) { return z.object({ ok: z.boolean(), message: z.string() }).strict().parse(await ipcRenderer.invoke('posting-import:open-source', url)) },
   async prepareOutboundConsent(jobId: string) {
     return outboundConsentPreviewSchema.parse(await ipcRenderer.invoke('consent:outbound:preview', uuidSchema.parse(jobId)))
   },

@@ -15,6 +15,11 @@ export function SavedJobs({ jobs, activeJob, onSaved, onOpened, onNavigate }: { 
   const [busy, setBusy] = useState(false)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [draftLabels, setDraftLabels] = useState<Record<string, DraftLabel>>({})
+  const [captureMode, setCaptureMode] = useState<'manual' | 'link'>('manual')
+  const [sourceUrl, setSourceUrl] = useState('')
+  const [fetching, setFetching] = useState(false)
+  const [fetchToken, setFetchToken] = useState<string>()
+  const [preview, setPreview] = useState<import('../shared/posting-import').PostingPreview | null>(null)
   const dialogRef = useRef<HTMLDialogElement>(null)
   const titleRef = useRef<HTMLInputElement>(null)
 
@@ -48,7 +53,13 @@ export function SavedJobs({ jobs, activeJob, onSaved, onOpened, onNavigate }: { 
     return () => { current = false }
   }, [jobs])
 
-  function closeDialog() { setDialogOpen(false); setErrors({}); setMessage(''); setMessageError(false) }
+  function closeDialog() { if (fetchToken) void window.workbench.cancelPostingFetch(fetchToken); setFetching(false); setFetchToken(undefined); setPreview(null); setSourceUrl(''); setCaptureMode('manual'); setDialogOpen(false); setErrors({}); setMessage(''); setMessageError(false) }
+  async function fetchPosting() {
+    setFetching(true); setPreview(null); setMessage('Fetching one Lever job detail…'); setMessageError(false)
+    try { const result = await window.workbench.fetchPostingPreview(sourceUrl); setFetchToken(result.token); setPreview(await window.workbench.readPostingPreview(result.token)); setMessage('Temporary preview loaded. Nothing has been saved.'); setMessageError(false) }
+    catch (error) { setMessage(error instanceof Error ? error.message : 'Fetch failed. Open the source or paste posting text instead.'); setMessageError(true) }
+    finally { setFetching(false) }
+  }
   function newJob() {
     const hasUnfinishedEntry = !editingId && Object.values(input).some(value => value.trim())
     setEditingId(undefined)
@@ -108,10 +119,10 @@ export function SavedJobs({ jobs, activeJob, onSaved, onOpened, onNavigate }: { 
     {(jobs.length > 0 || dialogOpen) && <dialog ref={dialogRef} className="job-dialog" aria-labelledby="job-dialog-title" onCancel={event => { event.preventDefault(); closeDialog() }} onClose={() => setDialogOpen(false)}>
       <header className="job-dialog-heading"><div><p className="context">{editingId ? 'Saved job' : 'New job'}</p><h2 id="job-dialog-title">{editingId ? 'Edit job posting' : 'Add a job posting'}</h2></div><button type="button" className="icon-button" aria-label="Close job form" onClick={closeDialog}>×</button></header>
       <form className="job-dialog-form" onSubmit={event => void save(event)} noValidate>
-        {renderFields()}
-        <p className="job-form-guidance">Job postings are saved on this device.</p>
-        {message && dialogOpen && <p className={`saved-jobs-message${messageError ? ' is-error' : ''}`} role={messageError ? 'alert' : 'status'}>{message}</p>}
-        <footer className="job-dialog-actions"><button className="secondary-button" type="button" onClick={closeDialog}>Cancel</button><button className="primary-button" type="submit" disabled={busy}>{busy ? 'Saving…' : editingId ? 'Save changes' : 'Save job'}</button></footer>
+        {!editingId && <fieldset><legend>Choose how to add a posting</legend><div className="job-dialog-actions"><button type="button" className="secondary-button" aria-pressed={captureMode === 'link'} onClick={() => setCaptureMode('link')}>Import from link</button><button type="button" className="secondary-button" aria-pressed={captureMode === 'manual'} onClick={() => setCaptureMode('manual')}>Paste posting text instead</button></div></fieldset>}
+        {!editingId && captureMode === 'link' && <section aria-label="Import from link"><label htmlFor="posting-source-url">Public Lever posting link</label><input id="posting-source-url" type="url" value={sourceUrl} onChange={event => setSourceUrl(event.target.value)} placeholder="https://jobs.lever.co/company/posting-id" /><p>Supported source: named Lever job-detail links only. Fetch contacts the source and exposes your normal network address and request metadata. No profile or model data is sent.</p><div className="job-dialog-actions"><button type="button" className="primary-button" disabled={fetching || !sourceUrl.trim()} onClick={() => void fetchPosting()}>{fetching ? 'Fetching…' : 'Fetch posting'}</button>{fetching && <button type="button" className="secondary-button" onClick={() => { void window.workbench.cancelPostingFetch(); setFetching(false); setPreview(null); setMessage('Fetch cancelled.'); setFetchToken(undefined) }}>Cancel fetch</button>}<button type="button" className="secondary-button" onClick={() => void window.workbench.openPostingSource(sourceUrl).catch(error => { setMessage(String(error)); setMessageError(true) })}>Open original posting</button></div>{message && dialogOpen && <p className={`saved-jobs-message${messageError ? ' is-error' : ''}`} role={messageError ? 'alert' : 'status'}>{message}</p>}{preview && <section aria-label="Posting import preview"><h3>Temporary posting import preview</h3><p>Submitted: {preview.submittedUrl}</p><p>Fetched from: {preview.finalUrl}</p><label>Job title<input readOnly value={preview.title} /></label><label>Company<input readOnly value={preview.company ?? 'Unknown — review required'} /></label><label>Complete posting text<textarea readOnly rows={12} value={preview.description} /></label>{preview.notices.map(notice => <p role="status" key={notice}>{notice}</p>)}<p>This is a temporary read-only preview. Saving is not available yet; use manual entry to create a saved job.</p></section>}</section>}
+        {(captureMode === 'manual' || editingId) && renderFields()}
+        {(captureMode === 'manual' || editingId) && <><p className="job-form-guidance">Job postings are saved on this device.</p>{message && dialogOpen && <p className={`saved-jobs-message${messageError ? ' is-error' : ''}`} role={messageError ? 'alert' : 'status'}>{message}</p>}<footer className="job-dialog-actions"><button className="secondary-button" type="button" onClick={closeDialog}>Cancel</button><button className="primary-button" type="submit" disabled={busy}>{busy ? 'Saving…' : editingId ? 'Save changes' : 'Save job'}</button></footer></>}
       </form>
     </dialog>}
   </div>
