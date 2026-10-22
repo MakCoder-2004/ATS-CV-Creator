@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 test('saved jobs follow the design-system list, support editing, and reopen for tailoring', async () => {
+  test.setTimeout(60_000)
   const userData = mkdtempSync(join(tmpdir(), 'cv-tailor-jobs-'))
   let running: ElectronApplication | undefined
   const launch = async () => {
@@ -35,14 +36,23 @@ test('saved jobs follow the design-system list, support editing, and reopen for 
     await expect(page.getByRole('heading', { name: 'Temporary posting import preview' })).toBeVisible({ timeout: 10000 })
     await expect(page.getByLabel('Job title')).toHaveValue('Synthetic Reliability Engineer')
     await expect(page.getByLabel('Company')).toHaveValue('Example Research')
-    await expect(page.getByText(/Saving is not available yet/)).toBeVisible()
-    await expect(page.locator('.saved-job-row')).toHaveCount(0)
+    await expect(page.getByText(/Saving does not contact the source or start model analysis/)).toBeVisible()
+    await page.getByLabel('Job title').fill('Reviewed Synthetic Reliability Engineer')
+    await page.getByLabel('Company').fill('Reviewed Example Research')
+    await page.getByLabel('Posting and requirements').fill(`${await page.getByLabel('Posting and requirements').inputValue()}\\nReviewed correction: preserve this complete posting.`)
     await page.setViewportSize({ width: 375, height: 812 })
     const narrowIntake = await page.locator('.saved-jobs-page').evaluate(element => ({ scrollWidth: element.scrollWidth, clientWidth: element.clientWidth }))
     expect(narrowIntake.scrollWidth).toBeLessThanOrEqual(narrowIntake.clientWidth)
     await expect(page.getByRole('button', { name: 'Paste posting text instead' })).toBeVisible()
     await page.setViewportSize({ width: 1280, height: 900 })
-    await page.getByRole('button', { name: 'Paste posting text instead' }).click()
+    await page.getByRole('button', { name: 'Save job' }).click()
+    await expect(page.locator('.saved-job-row')).toContainText('Reviewed Synthetic Reliability Engineer')
+    await expect(page.locator('.saved-jobs-intake')).toHaveCount(0)
+    await page.locator('.saved-job-row').getByRole('button', { name: 'Edit Reviewed Synthetic Reliability Engineer posting' }).click()
+    await expect(page.getByRole('region', { name: 'Posting source and revision history' })).toContainText('Captured source wording is retained.')
+    await expect(page.getByRole('region', { name: 'Posting source and revision history' }).locator('pre').first()).toContainText('Synthetic Reliability Engineer')
+    await page.getByRole('button', { name: 'Cancel' }).click()
+    await page.locator('.saved-jobs-heading').getByRole('button', { name: 'New job' }).click()
     await expect(page.locator('.saved-jobs-intake')).toBeVisible()
     await page.getByRole('button', { name: 'Save job' }).click()
     await expect(page.getByRole('alert')).toContainText(/blank|title/i)

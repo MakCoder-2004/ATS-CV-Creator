@@ -67,6 +67,7 @@ export interface WorkbenchAPI {
   saveProject(input: ProjectInput & { id?: string }): Promise<ExperienceMutationResult>
   deleteProject(id: string): Promise<ExperienceMutationResult>
   saveJob(input: JobInput & { id?: string }): Promise<JobSaveResult>
+  acceptPostingImport(token: string, input: JobInput): Promise<JobSaveResult>
   listJobs(): Promise<JobRecord[]>
   openJob(id: string): Promise<JobRecord | null>
   startPostingFetch(url: string): Promise<{ token: string }>

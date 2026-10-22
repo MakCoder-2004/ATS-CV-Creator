@@ -1,12 +1,13 @@
 import { afterEach, expect, test, vi } from 'vitest'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync } from 'node:fs'
+import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { gzipSync } from 'node:zlib'
 import { createWorkbench } from '../src/main/workbench'
 
 const directories: string[] = []
-afterEach(() => { for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true }) })
+afterEach(async () => { for (const directory of directories.splice(0)) await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) })
 function open() {
   const directory = mkdtempSync(join(tmpdir(), 'cv-tailor-jobs-'))
   directories.push(directory)
@@ -30,6 +31,39 @@ test('saved jobs preserve original posting text, have stable IDs, and reopen aft
   reopened.close()
 })
 
+test('reviewed link imports save atomically with immutable source provenance and reopen offline', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'cv-tailor-reviewed-import-'))
+  directories.push(directory)
+  const calls: string[] = []
+  const description = `Responsibilities\n${'The fictional engineering team builds reliable software and maintains dependable systems with careful collaboration. '.repeat(4)}\nRequirements\n• Build reliable services with the fictional team.`
+  const responseBody = JSON.stringify({ id: 'review-save-1', text: 'Source Engineer', company: 'Example Source Co', descriptionPlain: description, lists: [{ text: 'Responsibilities', content: '<li>Build reliable services with the fictional team.</li>' }] })
+  const imported = createWorkbench(directory, undefined, undefined, undefined, { lookup: async () => [{ address: '8.8.8.8', family: 4 }], request: async url => { calls.push(url.href); return { status: 200, headers: { 'content-type': 'application/json' }, body: Buffer.from(responseBody) } } })
+  let importedClosed = false
+  try {
+    const { token } = await imported.api.startPostingFetch('https://jobs.lever.co/example-board/review-save-1')
+    let state = await imported.api.readPostingPreview(token)
+    for (let attempt = 0; attempt < 50 && state.status === 'fetching'; attempt++) { await new Promise(resolve => setTimeout(resolve, 2)); state = await imported.api.readPostingPreview(token) }
+    expect(state.status).toBe('ready')
+    if (state.status !== 'ready') throw Error('Synthetic source was not ready')
+    const reviewedDescription = `${state.preview.description}\nReviewed clarification: include the fictional on-call rotation.`
+    const result = await imported.api.acceptPostingImport(token, { title: 'Reviewed Engineer', company: 'Corrected Example Co', description: reviewedDescription })
+    expect(result).toMatchObject({ ok: true, value: { title: 'Reviewed Engineer', company: 'Corrected Example Co', provenance: 'imported', sourceSnapshot: { title: 'Source Engineer', company: 'Example Source Co', submittedUrl: 'https://jobs.lever.co/example-board/review-save-1', finalUrl: 'https://api.lever.co/v0/postings/example-board/review-save-1', extractionMethod: 'lever-json-v1', fieldOrigins: { title: 'user-correction', company: 'user-correction', description: 'user-correction' } }, revisions: [{ title: 'Reviewed Engineer', company: 'Corrected Example Co', revision: 1, provenance: 'imported' }] } })
+    if (!result.ok) throw Error(result.error.message)
+    expect(result.value.sourceSnapshot?.description).not.toBe(result.value.description)
+    const repeated = await imported.api.acceptPostingImport(token, { title: 'Reviewed Engineer', company: 'Corrected Example Co', description: reviewedDescription })
+    expect(repeated).toMatchObject({ ok: false, error: { code: 'CONFLICT' } })
+    expect(await imported.api.listJobs()).toHaveLength(1)
+    expect((await imported.api.getAnalysisUsage()).attempts).toBe(0)
+    const id = result.value.id
+    imported.close(); importedClosed = true
+    const reopened = createWorkbench(directory)
+    try {
+      expect(await reopened.api.openJob(id)).toEqual(result.value)
+      expect(calls).toHaveLength(1)
+    } finally { reopened.close() }
+  } finally { if (!importedClosed) imported.close() }
+})
+
 test('posting fetch previews run through the public application contract and stay ephemeral', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'cv-tailor-safe-fetch-'))
   directories.push(directory)
@@ -42,7 +76,7 @@ test('posting fetch previews run through the public application contract and sta
     expect(await workbench.api.listJobs()).toEqual([])
     const started = await workbench.api.startPostingFetch('https://jobs.lever.co/example-board/synthetic-123')
     let state = await workbench.api.readPostingPreview(started.token)
-    for (let attempt = 0; attempt < 20 && state.status === 'fetching'; attempt++) { await new Promise(resolve => setTimeout(resolve, 1)); state = await workbench.api.readPostingPreview(started.token) }
+    for (let attempt = 0; attempt < 200 && state.status === 'fetching'; attempt++) { await new Promise(resolve => setTimeout(resolve, 10)); state = await workbench.api.readPostingPreview(started.token) }
     expect(calls).toHaveLength(1)
     expect(calls[0]).toEqual({ url: 'https://api.lever.co/v0/postings/example-board/synthetic-123', address: '8.8.8.8', headers: { Accept: 'application/json', 'Accept-Encoding': 'identity', 'User-Agent': 'CV-Tailor/1.0' } })
     expect(state).toMatchObject({ status: 'incomplete', preview: { title: 'Synthetic Platform Engineer', company: null, description: expect.stringContaining('• Experience with testing.') } })

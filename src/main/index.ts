@@ -16,7 +16,7 @@ import { appearanceSchema } from '../shared/appearance'
 import { openRouterKeyInputSchema, openRouterModelSchema } from '../shared/openrouter-settings'
 import { contactSaveInputSchema, evidenceRevisionSchema, profileEntrySaveSchema, profileMutationResultSchema, profileSnapshotSchema, skillSaveInputSchema, uuidSchema } from '../shared/profile'
 import { experienceSaveInputSchema, experienceSnapshotSchema, experienceMutationResultSchema, projectSaveInputSchema } from '../shared/experience'
-import { jobRecordSchema, jobSaveInputSchema, jobSaveResultSchema } from '../shared/jobs'
+import { jobInputSchema, jobRecordSchema, jobSaveInputSchema, jobSaveResultSchema } from '../shared/jobs'
 import { registerProfileExchangeIpc } from './profile-exchange-ipc'
 import { registerProfilePdfImportIpc } from './profile-pdf-import-ipc'
 import { registerProfileDocxImportIpc } from './profile-docx-import-ipc'
@@ -269,6 +269,16 @@ app.whenReady().then(() => {
     trusted(event)
     if (args.length) throw new Error('Unexpected arguments')
     return jobRecordSchema.array().parse(await workspace!.api.listJobs())
+  })
+  ipcMain.handle('posting-import:accept', async (event, ...args: unknown[]) => {
+    trusted(event); if (args.length !== 2) throw new Error('Expected preview token and reviewed posting')
+    const input = jobInputSchema.safeParse(args[1])
+    if (!input.success) {
+      const fieldErrors: Record<string, string> = {}
+      for (const issue of input.error.issues) fieldErrors[issue.path.length ? issue.path.join('.') : '_'] = issue.message
+      return jobSaveResultSchema.parse({ ok: false, error: { code: 'VALIDATION_ERROR', message: 'Review a title, company, and complete posting description before saving.', fieldErrors } })
+    }
+    return jobSaveResultSchema.parse(await workspace!.api.acceptPostingImport(uuidSchema.parse(args[0]), input.data))
   })
   ipcMain.handle('posting-import:start', async (event, ...args: unknown[]) => {
     trusted(event); if (args.length !== 1 || typeof args[0] !== 'string') throw new Error('Expected a posting link')

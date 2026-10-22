@@ -4,7 +4,7 @@ import { appearanceSchema, settingsSchema, type Appearance, type WorkbenchAPI } 
 import { openRouterKeyInputSchema, openRouterModelSchema, type OpenRouterModel } from '../shared/openrouter-settings'
 import { evidenceRevisionSchema, profileEntryInputSchema, profileMutationResultSchema, profileSnapshotSchema, uuidSchema, type ContactInput, type ProfileEntryInput, type SkillInput } from '../shared/profile'
 import { experienceSnapshotSchema, experienceMutationResultSchema, type ExperienceInput, type ProjectInput } from '../shared/experience'
-import { jobRecordSchema, jobSaveResultSchema, type JobInput } from '../shared/jobs'
+import { jobInputSchema, jobRecordSchema, jobSaveResultSchema, type JobInput } from '../shared/jobs'
 import { profileExchangeResultSchema } from '../shared/profile-exchange'
 import { outboundConsentActionSchema, outboundConsentPreviewSchema } from '../shared/outbound-consent-contract'
 import { analysisBudgetsSchema, analysisIdSchema, analysisResultSchema, analysisUsageSchema, generationRecoverySchema, recoveryChoiceSchema, type AnalysisBudgets, type AnalysisResult, type RecoveryChoice } from '../shared/posting-analysis'
@@ -123,6 +123,7 @@ const api: WorkbenchAPI = Object.freeze({
     if (typeof url !== 'string' || new TextEncoder().encode(url).length > 2048) throw new Error('The posting link is invalid or too long.')
     return z.object({ token: uuidSchema }).strict().parse(await ipcRenderer.invoke('posting-import:start', url))
   },
+  async acceptPostingImport(token: string, input: JobInput) { return jobSaveResultSchema.parse(await ipcRenderer.invoke('posting-import:accept', uuidSchema.parse(token), jobInputSchema.parse(input))) },
   async readPostingPreview(token: string) { return postingFetchStateSchema.parse(await ipcRenderer.invoke('posting-import:read', uuidSchema.parse(token))) },
   async cancelPostingFetch(token: string) { return z.object({ ok: z.boolean() }).strict().parse(await ipcRenderer.invoke('posting-import:cancel', uuidSchema.parse(token))) },
   async openPostingSource(url: string) { return z.object({ ok: z.boolean(), message: z.string() }).strict().parse(await ipcRenderer.invoke('posting-import:open-source', url)) },
