@@ -138,6 +138,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
   }
   const history = (id: string): EvidenceRevision[] => (db.prepare('SELECT id, revision, action, snapshot, created_at FROM evidence_revisions WHERE id = ? ORDER BY revision').all(id) as { id: string; revision: number; action: EvidenceRevision['action']; snapshot: string; created_at: string }[]).map((row) => evidenceRevisionSchema.parse({ id: row.id, revision: row.revision, action: row.action, snapshot: JSON.parse(row.snapshot), createdAt: row.created_at }))
   const failure = (code: string, message: string, fieldErrors?: Record<string, string>) => profileMutationResultSchema.parse({ ok: false, error: { code, message, ...(fieldErrors ? { fieldErrors } : {}) } })
+  const backupFailureMessage = (error: unknown, fallback: string) => error instanceof WorkspaceBackupCapacityError ? error.message : fallback
   const experienceFailure = (code: string, message: string, fieldErrors?: Record<string, string>) => experienceMutationResultSchema.parse({ ok: false, error: { code, message, ...(fieldErrors ? { fieldErrors } : {}) } })
   const readExperience = () => experienceSnapshotSchema.parse({
     experience: (db.prepare('SELECT data FROM profile_experience ORDER BY rowid').all() as { data: string }[]).map(row => JSON.parse(row.data)),
@@ -261,7 +262,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       catch { throw Object.assign(new Error('OpenRouter API key is unavailable.'), { status: 401 }) }
       return createOpenRouterAnalysisTransport(key).generate(input)
     }
-  }, onAttempt: (timestamp, runId) => { previousAttempts.push(timestamp); const dispatchedAt = new Date(timestamp).toISOString(); db.prepare('INSERT INTO analysis_attempts (run_id, attempted_at) VALUES (?, ?)').run(runId, dispatchedAt); db.prepare('INSERT INTO provider_attempt_outcomes (run_id, dispatched_at, outcome) VALUES (?, ?, \'dispatched\')').run(runId, dispatchedAt) }, onAttemptComplete: (runId, succeeded) => { if (succeeded) db.prepare(`UPDATE provider_attempt_outcomes SET outcome='response', settled_at=? WHERE id=(SELECT id FROM provider_attempt_outcomes WHERE run_id=? AND outcome='dispatched' AND checkpointed_at IS NULL ORDER BY id DESC LIMIT 1)`).run(new Date().toISOString(), runId) }, onProgress: (runId, jobId, progress, attempts) => { if (jobId.startsWith('profile-import:')) return; const observed = (db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id = ?').get(runId) as { count: number }).count; const prior = currentAnalysis.get(jobId), sameRun = prior?.runId === runId; saveAnalysisState({ jobId, runId, status: 'running', analysis: sameRun ? prior.analysis : null, progress, attempts: observed || attempts, cacheHit: sameRun ? prior.cacheHit : false, ...(sameRun && prior.generationStep ? { generationStep: prior.generationStep } : {}), ...(sameRun && prior.completedSteps ? { completedSteps: prior.completedSteps } : {}) }) } })
+  }, onAttempt: (timestamp, runId) => { const dispatchedAt = new Date(timestamp).toISOString(); db.transaction(() => { db.prepare('INSERT INTO analysis_attempts (run_id, attempted_at) VALUES (?, ?)').run(runId, dispatchedAt); db.prepare('INSERT INTO provider_attempt_outcomes (run_id, dispatched_at, outcome) VALUES (?, ?, \'dispatched\')').run(runId, dispatchedAt) })(); previousAttempts.push(timestamp) }, onAttemptComplete: (runId, succeeded) => { if (succeeded) db.prepare(`UPDATE provider_attempt_outcomes SET outcome='response', settled_at=? WHERE id=(SELECT id FROM provider_attempt_outcomes WHERE run_id=? AND outcome='dispatched' AND checkpointed_at IS NULL ORDER BY id DESC LIMIT 1)`).run(new Date().toISOString(), runId) }, onProgress: (runId, jobId, progress, attempts) => { if (jobId.startsWith('profile-import:')) return; const observed = (db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id = ?').get(runId) as { count: number }).count; const prior = currentAnalysis.get(jobId), sameRun = prior?.runId === runId; saveAnalysisState({ jobId, runId, status: 'running', analysis: sameRun ? prior.analysis : null, progress, attempts: observed || attempts, cacheHit: sameRun ? prior.cacheHit : false, ...(sameRun && prior.generationStep ? { generationStep: prior.generationStep } : {}), ...(sameRun && prior.completedSteps ? { completedSteps: prior.completedSteps } : {}) }) } })
   const workingTextScopeNotice = (jobId: string) => {
     const row = db.prepare('SELECT data FROM jobs WHERE id = ?').get(jobId) as { data: string } | undefined
     if (!row) return ''
@@ -597,7 +598,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
         return { profile: readProfile(), experience: readExperience() }
       })
       try { return { ok: true, message: mergingProfile ? 'Reviewed CV decisions were applied. Accepted additions and updates were saved; skipped records were preserved.' : 'Reviewed CV details were added to your profile.', ...tx() } }
-      catch (error) { return { ok: false, message: error instanceof Error && error.message === 'STALE_PROFILE_PREVIEW' ? 'Your profile changed after this CV was reviewed. Nothing was applied; review the PDF again.' : error instanceof Error && error.message === 'PROFILE_NOT_EMPTY' ? 'This profile is no longer empty. Nothing was applied; use the separate profile editor to preserve existing facts.' : error instanceof Error && error.message === 'PROFILE_MERGE_DECISIONS_REQUIRED' ? 'Choose add, update, or skip for every proposed record before applying.' : error instanceof Error && error.message === 'PROFILE_MERGE_TARGET_INVALID' ? 'A selected record or nested detail no longer belongs to the chosen section or parent. Nothing was applied; review the current profile and choose its current matching record.' : error instanceof Error && error.message === 'PROFILE_MERGE_INVALID' ? 'One or more selected proposals are invalid. Correct or skip them before applying.' : 'The reviewed CV could not be applied. No profile changes were made.' } }
+      catch (error) { return { ok: false, message: error instanceof WorkspaceBackupCapacityError ? error.message : error instanceof Error && error.message === 'STALE_PROFILE_PREVIEW' ? 'Your profile changed after this CV was reviewed. Nothing was applied; review the PDF again.' : error instanceof Error && error.message === 'PROFILE_NOT_EMPTY' ? 'This profile is no longer empty. Nothing was applied; use the separate profile editor to preserve existing facts.' : error instanceof Error && error.message === 'PROFILE_MERGE_DECISIONS_REQUIRED' ? 'Choose add, update, or skip for every proposed record before applying.' : error instanceof Error && error.message === 'PROFILE_MERGE_TARGET_INVALID' ? 'A selected record or nested detail no longer belongs to the chosen section or parent. Nothing was applied; review the current profile and choose its current matching record.' : error instanceof Error && error.message === 'PROFILE_MERGE_INVALID' ? 'One or more selected proposals are invalid. Correct or skip them before applying.' : 'The reviewed CV could not be applied. No profile changes were made.' } }
     },
     async validateProfileImport(input: string) {
       const result = validateProfileImport(input)
@@ -633,7 +634,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
         for (const item of data.experience.experience) db.prepare('INSERT INTO profile_experience (id,revision,data) VALUES (?,?,?)').run(item.id,item.revision,JSON.stringify(item))
         for (const item of data.experience.projects) db.prepare('INSERT INTO profile_projects (id,revision,data) VALUES (?,?,?)').run(item.id,item.revision,JSON.stringify(item))
       })
-      try { tx(); return { ok: true, message: 'Profile replaced.', profile: readProfile() } } catch { return { ok: false, message: 'Profile replacement failed; no changes were applied.' } }
+      try { tx(); return { ok: true, message: 'Profile replaced.', profile: readProfile() } } catch (error) { return { ok: false, message: backupFailureMessage(error, 'Profile replacement failed; no changes were applied.') } }
     },
     async saveContact(input) {
       const { id: _id, ...contactInput } = input
@@ -651,7 +652,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
         recordRevision(record, row ? 'updated' : 'created')
         return profileMutationResultSchema.parse({ ok: true, value: readProfile() })
       })
-      try { return tx() } catch { return failure('CONFLICT', 'The contact could not be saved because of a data conflict.') }
+      try { return tx() } catch (error) { return error instanceof WorkspaceBackupCapacityError ? failure('BACKUP_LIMIT', error.message) : failure('CONFLICT', 'The contact could not be saved because of a data conflict.') }
     },
     async deleteContact(id) {
       if (!uuidSchema.safeParse(id).success) return failure('VALIDATION_ERROR', 'Contact ID must be a UUID.', { id: 'Invalid ID' })
@@ -683,7 +684,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
         recordRevision(record, row ? 'updated' : 'created')
         return profileMutationResultSchema.parse({ ok: true, value: readProfile() })
       })
-      try { return tx() } catch { return failure('CONFLICT', 'The skill could not be saved; a matching skill may already exist.') }
+      try { return tx() } catch (error) { return error instanceof WorkspaceBackupCapacityError ? failure('BACKUP_LIMIT', error.message) : failure('CONFLICT', 'The skill could not be saved; a matching skill may already exist.') }
     },
     async deleteSkill(id) {
       if (!uuidSchema.safeParse(id).success) return failure('VALIDATION_ERROR', 'Skill ID must be a UUID.', { id: 'Invalid ID' })
@@ -716,7 +717,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
         recordRevision(record, row ? 'updated' : 'created')
         return profileMutationResultSchema.parse({ ok: true, value: readProfile() })
       })
-      try { return tx() } catch { return failure('CONFLICT', 'The profile record could not be saved.') }
+      try { return tx() } catch (error) { return error instanceof WorkspaceBackupCapacityError ? failure('BACKUP_LIMIT', error.message) : failure('CONFLICT', 'The profile record could not be saved.') }
     },
     async deleteProfileEntry(id) {
       if (!uuidSchema.safeParse(id).success) return failure('VALIDATION_ERROR', 'Record ID must be a UUID.', { id: 'Invalid ID' })
@@ -755,7 +756,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
         recordRevision(record, old ? 'updated' : 'created')
         return experienceMutationResultSchema.parse({ ok: true, value: readExperience() })
       })
-      try { return tx() } catch (error) { return experienceFailure('CONFLICT', error instanceof Error && error.message.includes('Nested') ? error.message : 'The experience record could not be saved.') }
+      try { return tx() } catch (error) { return error instanceof WorkspaceBackupCapacityError ? experienceFailure('BACKUP_LIMIT', error.message) : experienceFailure('CONFLICT', error instanceof Error && error.message.includes('Nested') ? error.message : 'The experience record could not be saved.') }
     },
     async deleteExperience(id) {
       if (!uuidSchema.safeParse(id).success) return experienceFailure('VALIDATION_ERROR', 'Experience ID must be a UUID.', { id: 'Invalid ID' })
@@ -793,7 +794,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
         recordRevision(record, old ? 'updated' : 'created')
         return experienceMutationResultSchema.parse({ ok: true, value: readExperience() })
       })
-      try { return tx() } catch (error) { return experienceFailure('CONFLICT', error instanceof Error && error.message.includes('Nested') ? error.message : 'The project could not be saved.') }
+      try { return tx() } catch (error) { return error instanceof WorkspaceBackupCapacityError ? experienceFailure('BACKUP_LIMIT', error.message) : experienceFailure('CONFLICT', error instanceof Error && error.message.includes('Nested') ? error.message : 'The project could not be saved.') }
     },
     async deleteProject(id) {
       if (!uuidSchema.safeParse(id).success) return experienceFailure('VALIDATION_ERROR', 'Project ID must be a UUID.', { id: 'Invalid ID' })
@@ -867,11 +868,6 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
         const record = jobRecordSchema.parse({ ...parsed.data, id: input.id ?? randomUUID(), createdAt: existingRow?.created_at ?? now, updatedAt: changed ? now : prior!.updatedAt, provenance: changed ? 'manual' : prior?.provenance ?? 'manual', sourceSnapshot: prior?.sourceSnapshot ?? null, revisions })
         const serializedRecord = JSON.stringify(record)
         if (Buffer.byteLength(serializedRecord, 'utf8') > MAX_JOB_RECORD_UTF8_BYTES) return jobSaveResultSchema.parse({ ok: false, error: { code: 'HISTORY_SIZE_LIMIT', message: 'This saved job and its complete revision history exceed the 4 MiB per-job backup limit. Nothing was changed and no history was deleted.', fieldErrors: { description: 'Review the posting revision history limit; existing versions remain intact.' } } })
-        try { backupEngine.assertJobSaveFits({ id: record.id, created_at: record.createdAt, updated_at: record.updatedAt, data: serializedRecord }) }
-        catch (error) {
-          if (error instanceof WorkspaceBackupCapacityError) return jobSaveResultSchema.parse({ ok: false, error: { code: 'BACKUP_LIMIT', message: error.message, fieldErrors: { description: 'Workspace backup capacity would be exceeded. No saved posting or history was changed.' } } })
-          throw error
-        }
         db.prepare('INSERT INTO jobs (id, created_at, updated_at, data) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET updated_at=excluded.updated_at, data=excluded.data').run(record.id, record.createdAt, record.updatedAt, serializedRecord)
         if (changed && prior) {
           const unresolved = (db.prepare('SELECT COUNT(*) AS count FROM provider_attempt_outcomes WHERE checkpointed_at IS NULL AND run_id IN (SELECT run_id FROM generation_recovery WHERE job_id = ?)').get(record.id) as { count: number }).count
@@ -891,7 +887,10 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
         }
         return jobSaveResultSchema.parse({ ok: true, value: record })
       })
-      try { return tx() } catch { return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'The job could not be saved.' } }) }
+      try { return tx() } catch (error) {
+        if (error instanceof WorkspaceBackupCapacityError) return jobSaveResultSchema.parse({ ok: false, error: { code: 'BACKUP_LIMIT', message: error.message, fieldErrors: { description: 'Workspace backup capacity would be exceeded. No saved posting or history was changed.' } } })
+        return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'The job could not be saved.' } })
+      }
     },
     async listJobs() {
       return (db.prepare('SELECT data FROM jobs ORDER BY updated_at DESC, id').all() as { data: string }[]).map(row => jobRecordSchema.parse(JSON.parse(row.data)))
@@ -968,7 +967,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
         if (!stillCurrentRun) return analysisResultSchema.parse({ jobId: pending.jobId, runId: pending.runId, targetPostingUpdatedAt: pending.source.job.revision, status: 'cancelled', analysis: null, progress: 'Analysis was cancelled. Its late response was discarded.', attempts: failure.usage?.attempts ?? 0, cacheHit: false })
         const status = failure.code === 'CANCELLED' ? 'cancelled' : 'failed'
         const value = analysisResultSchema.parse({ jobId: pending.jobId, runId: pending.runId, status, analysis: null, progress: failure.message, attempts: failure.usage?.attempts ?? 0, error: failure.message, cacheHit: false })
-        saveAnalysisState(value)
+        if (!(failure.code === 'BUDGET' && /workspace change would exceed a backup safety limit/i.test(failure.message))) saveAnalysisState(value)
         return value
       }
       if (activeAnalysisByJob.get(pending.jobId) !== pending.runId || pendingOutbound.get(token) !== pending) return analysisResultSchema.parse({ jobId: pending.jobId, runId: pending.runId, targetPostingUpdatedAt: pending.source.job.revision, status: 'cancelled', analysis: null, progress: 'Analysis was cancelled. Its late response was discarded.', attempts: result.usage.attempts, cacheHit: false })
@@ -1486,7 +1485,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       if (stale.length) report = factualCheckReportSchema.parse({ ...report, passed: false, findings: [...report.findings, ...stale.map(evidenceId => ({ code: 'stale-source' as const, itemPath: 'sources', evidenceId, message: 'A cited profile source changed or was deleted after this draft was created.', correction: 'Review current evidence and create a draft from its current revision.' }))] })
       const saved = draftRevisionSchema.parse({ ...next, status: report.passed ? 'unverified' : 'blocked', checkReport: report })
       const tx = db.transaction(() => { const latest = db.prepare('SELECT id FROM draft_revisions WHERE job_id = ? ORDER BY revision DESC LIMIT 1').get(request.jobId) as { id: string } | undefined; if (latest?.id !== request.draftId) throw new Error('STALE_DRAFT'); if (sourcePlan) commitDraftProfileMutation(sourcePlan); db.prepare('INSERT INTO draft_revisions (id,job_id,revision,data) VALUES (?,?,?,?)').run(saved.id, saved.jobId, saved.revision, JSON.stringify(saved)); db.prepare('DELETE FROM document_fit_reports WHERE job_id = ?').run(saved.jobId) })
-      try { tx() } catch (error) { return { ok: false, message: error instanceof Error && error.message === 'STALE_DRAFT' ? 'This draft changed while saving. Reopen the current CV.' : 'The record could not be saved.' } }
+      try { tx() } catch (error) { return { ok: false, message: error instanceof WorkspaceBackupCapacityError ? error.message : error instanceof Error && error.message === 'STALE_DRAFT' ? 'This draft changed while saving. Reopen the current CV.' : 'The record could not be saved.' } }
       const message = sourcePlan ? `Record saved to this CV and profile. Profile history was recorded.${request.operation === 'remove' ? ' This deletion affects your profile and may make other drafts stale.' : ''}` : request.scope === 'profile' && request.operation === 'remove' ? 'This was a CV-only record; it was removed from this CV. No saved profile record existed to delete.' : 'Record saved to this CV only. Your profile was not changed.'
       return { ok: true, message, draft: (await this.getDraft(saved.jobId)) ?? saved, ...(recordIndex === undefined ? {} : { recordIndex }), ...(sourcePlan && request.operation === 'remove' ? { profileDeleteWarning: true } : {}) }
     },
@@ -1776,11 +1775,44 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
   const backupEngine = createWorkspaceBackupEngine(db, recoveryHooks?.workspaceBackupMaxBytes)
   const assertIdle = () => { if (activeAnalysisByJob.size) throw new Error('A cloud operation is active. Cancel or finish it before backing up or restoring.') }
   const backup: WorkspaceBackupEngine = {
-    assertJobSaveFits(row) { return backupEngine.assertJobSaveFits(row) },
+    assertBackupCapacity() { return backupEngine.assertBackupCapacity() },
     createBackup() { assertIdle(); return backupEngine.createBackup() },
     previewRestore(input) { assertIdle(); return backupEngine.previewRestore(input) },
     applyRestore(token, writeSafety) { assertIdle(); return backupEngine.applyRestore(token, writeSafety) },
     cancelRestore(token) { return backupEngine.cancelRestore(token) }
+  }
+  let checkingBackupCapacity = false
+  const assertBackupable = () => {
+    if (checkingBackupCapacity) return
+    checkingBackupCapacity = true
+    try { backupEngine.assertBackupCapacity() }
+    finally { checkingBackupCapacity = false }
+  }
+  // Guard every SQLite write transaction, not just job edits, so provider state, drafts,
+  // profile history, fit reports, restore and checkpoint writes cannot overrun backup bounds.
+  const nativeTransaction = db.transaction.bind(db)
+  const nativeExec = db.exec.bind(db)
+  const nativePrepare = db.prepare.bind(db)
+  const guardedDb = db as unknown as { transaction: (callback: (...args: any[]) => unknown) => any; exec: (source: string) => Database.Database; prepare: (source: string) => any }
+  guardedDb.transaction = (callback: (...args: any[]) => unknown) => nativeTransaction((...args: any[]) => {
+    const result = callback(...args)
+    assertBackupable()
+    return result
+  })
+  guardedDb.exec = (source: string) => {
+    if (db.inTransaction || checkingBackupCapacity) return nativeExec(source)
+    return nativeTransaction(() => { const result = nativeExec(source); assertBackupable(); return result })()
+  }
+  guardedDb.prepare = (source: string) => {
+    const statement = nativePrepare(source)
+    return new Proxy(statement, { get(target, property) {
+      if (property === 'run') return (...args: any[]) => {
+        if (db.inTransaction || checkingBackupCapacity) return target.run(...args)
+        return nativeTransaction(() => { const result = target.run(...args); assertBackupable(); return result })()
+      }
+      const value = Reflect.get(target, property, target)
+      return typeof value === 'function' ? value.bind(target) : value
+    } })
   }
   return { api, authorizeOutboundPayload, backup, hasActiveWork: () => activeAnalysisByJob.size > 0 || activeProfileAiRuns.size > 0 || [...postingFetches.values()].some(fetch => fetch.state.status === 'fetching'), close: () => { for (const fetch of postingFetches.values()) fetch.controller.abort(); postingFetches.clear(); db.close() } }
 }

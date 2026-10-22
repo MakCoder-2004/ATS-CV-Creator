@@ -76,7 +76,8 @@ export function createAnalysisDispatcher(options: Options) {
         const capacity = options.transport.validateCapacity && await options.transport.validateCapacity({ runId: input.runId, model: input.model, prompt, responseSchema: postingAnalysisSchema, maxTokens: 2048, signal: controller.signal })
         if (!capacity || (typeof capacity === 'object' && !capacity.fits)) throw capacityFailure(typeof capacity === 'object' ? capacity.message : undefined)
         const timestamp = now()
-        dispatched.push(timestamp); usage.attempts++; attemptCounts.set(input.runId, (attemptCounts.get(input.runId) ?? 0) + 1); options.onAttempt?.(timestamp, input.runId)
+        options.onAttempt?.(timestamp, input.runId)
+        dispatched.push(timestamp); usage.attempts++; attemptCounts.set(input.runId, (attemptCounts.get(input.runId) ?? 0) + 1)
         options.onProgress?.(input.runId, input.jobId, `Sending posting-analysis request ${usage.attempts} within this run's configured budget.`, usage.attempts)
         try {
           const response = await options.transport.generate({ model: input.model, prompt, signal: controller.signal, responseSchema: postingAnalysisSchema, maxTokens: 2048, ...(typeof capacity === 'object' ? { providerOnly: capacity.providers } : {}) })
@@ -94,6 +95,7 @@ export function createAnalysisDispatcher(options: Options) {
         catch (error) {
           if (timedOut) throw new AnalysisError('TIMEOUT', 'Analysis time budget is exhausted.')
           if (controller.signal.aborted || cancelled.has(input.runId)) throw cancelledError()
+          if (error instanceof Error && error.name === 'WorkspaceBackupCapacityError') throw new AnalysisError('BUDGET', error.message)
           if (error instanceof AnalysisError) throw error
           const result = providerError(error, now)
           if (!result.retry) throw new AnalysisError(result.kind, result.kind === 'INVALID_KEY' ? 'OpenRouter rejected the API key. Check the saved key in Settings.' : result.kind === 'OFFLINE' ? 'The network is unavailable. Check the connection, then start a new authorized run.' : 'OpenRouter could not complete the analysis. Check the model ID, model availability or credits in Settings, then try again.')
@@ -150,7 +152,7 @@ export function createAnalysisDispatcher(options: Options) {
           if (controller.signal.aborted) throw cancelledError()
           const capacity = options.transport.validateCapacity && await options.transport.validateCapacity({ runId: input.runId, model: input.model, prompt: input.prompt, responseSchema: input.responseSchema, maxTokens: input.maxTokens ?? 2048, signal: controller.signal })
           if (!capacity || (typeof capacity === 'object' && !capacity.fits)) throw capacityFailure(typeof capacity === 'object' ? capacity.message : undefined)
-          const timestamp = now(); dispatched.push(timestamp); attempts++; attemptCounts.set(input.runId, (attemptCounts.get(input.runId) ?? 0) + 1); options.onAttempt?.(timestamp, input.runId)
+          const timestamp = now(); options.onAttempt?.(timestamp, input.runId); dispatched.push(timestamp); attempts++; attemptCounts.set(input.runId, (attemptCounts.get(input.runId) ?? 0) + 1)
           options.onProgress?.(input.runId, input.jobId, `Sending source-linked generation request ${attempts} within the shared run budget.`, attempts)
           try {
             const response = await options.transport.generate({ model: input.model, prompt: input.prompt, signal: controller.signal, responseSchema: input.responseSchema, ...(input.maxTokens ? { maxTokens: input.maxTokens } : {}), ...(input.maxResponseChars !== undefined ? { maxResponseChars: input.maxResponseChars } : {}), ...(typeof capacity === 'object' ? { providerOnly: capacity.providers } : {}) })
@@ -163,6 +165,7 @@ export function createAnalysisDispatcher(options: Options) {
         catch (error) {
           if (timedOut) throw new AnalysisError('TIMEOUT', 'Analysis time budget is exhausted.')
           if (controller.signal.aborted || cancelled.has(input.runId)) throw cancelledError()
+          if (error instanceof Error && error.name === 'WorkspaceBackupCapacityError') throw new AnalysisError('BUDGET', error.message)
           if (error instanceof AnalysisError) throw error
           const failure = providerError(error, now)
           if (!failure.retry || input.retryProviderFailures === false) throw new AnalysisError(failure.kind, failure.kind === 'INVALID_KEY' ? 'OpenRouter rejected the API key. Check the saved key in Settings.' : failure.kind === 'OFFLINE' ? 'The network is unavailable. Check the connection, then start a new authorized run.' : input.retryProviderFailures === false ? 'OpenRouter did not confirm whether the request completed. No automatic retry was sent; a retry could incur another charge.' : 'OpenRouter could not complete generation. Check the model ID, model availability or credits in Settings.')

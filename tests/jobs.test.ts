@@ -366,7 +366,7 @@ test('aggregate backup ceiling rejects a multi-job save before mutation and pres
   try {
     expect(Buffer.byteLength(workbench.backup.createBackup(), 'utf8')).toBeLessThanOrEqual(backupBoundary)
     const rejected = await workbench.api.saveJob({ title: 'Third role', company: 'Example', description: 'C'.repeat(1000) })
-    expect(rejected).toMatchObject({ ok: false, error: { code: 'BACKUP_LIMIT', message: expect.stringMatching(/exceed.*workspace backup limit/i) } })
+    expect(rejected).toMatchObject({ ok: false, error: { code: 'BACKUP_LIMIT', message: expect.stringMatching(/exceed.*backup safety limit/i) } })
     expect(await workbench.api.listJobs()).toHaveLength(2)
     expect(await workbench.api.openJob(first.value.id)).toEqual(first.value)
     expect(await workbench.api.openJob(second.value.id)).toEqual(second.value)
@@ -376,6 +376,80 @@ test('aggregate backup ceiling rejects a multi-job save before mutation and pres
     workbench.backup.applyRestore(preview.token, safety => safety)
     expect(await workbench.api.listJobs()).toHaveLength(2)
   } finally { workbench.close() }
+})
+
+test('backup capacity also guards non-job SQLite writes and keeps them atomic', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'cv-tailor-nonjob-backup-capacity-'))
+  directories.push(directory)
+  const probe = createWorkbench(directory)
+  const currentBytes = Buffer.byteLength(probe.backup.createBackup(), 'utf8')
+  probe.close()
+  const maxBytes = currentBytes + 512
+  const workbench = createWorkbench(directory, undefined, undefined, { workspaceBackupMaxBytes: maxBytes })
+  try {
+    const result = await workbench.api.saveExperience({ kind: 'employment', title: 'Large record', organization: 'Example', description: 'profile evidence '.repeat(1000), factualItems: [] })
+    expect(result).toMatchObject({ ok: false, error: { code: 'BACKUP_LIMIT', message: expect.stringMatching(/backup safety limit/i) } })
+    expect(await workbench.api.getExperience()).toEqual({ experience: [], projects: [] })
+    const backup = workbench.backup.createBackup()
+    expect(Buffer.byteLength(backup, 'utf8')).toBeLessThanOrEqual(maxBytes)
+  } finally { workbench.close() }
+  const reopened = createWorkbench(directory)
+  expect(await reopened.api.getExperience()).toEqual({ experience: [], projects: [] })
+  reopened.close()
+})
+
+test('aggregate backup guard blocks model dispatch before accounting can overrun its capacity', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'cv-tailor-backup-dispatch-capacity-'))
+  directories.push(directory)
+  const probe = createWorkbench(directory)
+  const job = await probe.api.saveJob({ title: 'Capacity role', company: 'Example', description: 'Bounded posting.' })
+  if (!job.ok) throw Error('Job fixture failed')
+  const consentA = await probe.api.prepareOutboundConsent(job.value.id)
+  if (!consentA.ok) throw Error(consentA.message)
+  await probe.api.acceptOutboundConsent(consentA.token, true, true)
+  const backupA = probe.backup.createBackup()
+  const consentB = await probe.api.prepareOutboundConsent(job.value.id)
+  if (!consentB.ok) throw Error(consentB.message)
+  await probe.api.acceptOutboundConsent(consentB.token, true, true)
+  const backupB = probe.backup.createBackup()
+  const consentRowBytes = Buffer.byteLength(backupB, 'utf8') - Buffer.byteLength(backupA, 'utf8')
+  probe.close()
+
+  let modelDispatches = 0
+  const scripted = { async generate() { modelDispatches++; return JSON.stringify({ required: [], preferred: [], tools: [], responsibilities: [], keywords: [] }) } }
+  const maxBytes = Buffer.byteLength(backupB, 'utf8') + consentRowBytes + 80
+  const workbench = createWorkbench(directory, undefined, scripted, { workspaceBackupMaxBytes: maxBytes })
+  try {
+    const consent = await workbench.api.prepareOutboundConsent(job.value.id)
+    if (!consent.ok) throw Error(consent.message)
+    expect((await workbench.api.acceptOutboundConsent(consent.token, true, true)).ok).toBe(true)
+    const result = await workbench.api.startAnalysis(consent.token)
+    expect(result).toMatchObject({ status: 'failed', attempts: 0 })
+    expect(result.progress).toMatch(/backup safety limit/i)
+    expect(modelDispatches).toBe(0)
+    expect((await workbench.api.getAnalysisUsage()).attempts).toBe(0)
+    expect(await workbench.api.openJob(job.value.id)).toEqual(job.value)
+    expect(Buffer.byteLength(workbench.backup.createBackup(), 'utf8')).toBeLessThanOrEqual(maxBytes)
+  } finally { workbench.close() }
+})
+
+test('backupability guard rolls back non-job profile writes at the aggregate boundary', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'cv-tailor-nonjob-backup-capacity-'))
+  directories.push(directory)
+  const baseline = createWorkbench(directory)
+  const currentBytes = Buffer.byteLength(baseline.backup.createBackup(), 'utf8')
+  baseline.close()
+  const maxBytes = currentBytes + 512
+  const workbench = createWorkbench(directory, undefined, undefined, { workspaceBackupMaxBytes: maxBytes })
+  try {
+    const result = await workbench.api.saveExperience({ kind: 'employment', title: 'Large record', organization: 'Example', description: 'profile evidence '.repeat(500), factualItems: [] })
+    expect(result).toMatchObject({ ok: false, error: { code: 'BACKUP_LIMIT', message: expect.stringMatching(/backup safety limit/i) } })
+    expect(await workbench.api.getExperience()).toEqual({ experience: [], projects: [] })
+    expect(Buffer.byteLength(workbench.backup.createBackup(), 'utf8')).toBeLessThanOrEqual(maxBytes)
+  } finally { workbench.close() }
+  const reopened = createWorkbench(directory)
+  expect(await reopened.api.getExperience()).toEqual({ experience: [], projects: [] })
+  reopened.close()
 })
 
 test('model capacity refusal preserves long saved text and sends no scripted model request', async () => {
