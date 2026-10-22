@@ -62,9 +62,35 @@ export function createWorkspaceBackupEngine(db: Database.Database): WorkspaceBac
     for (const row of rows.profile_entries?.rows ?? []) { const data = parseJson('profile_entries', row.data as string); assertValid(profileEntrySchema, data, 'profile_entries'); if ((data as { id: string }).id !== row.id || (data as { revision: number }).revision !== row.revision || (data as { section: string }).section !== row.section) fail('profile_entries') }
     for (const [table, schema] of [['profile_experience', experienceRecordSchema], ['profile_projects', projectRecordSchema]] as const) for (const row of rows[table]?.rows ?? []) { const data = parseJson(table, row.data as string); assertValid(schema, data, table); if ((data as { id: string }).id !== row.id || (data as { revision: number }).revision !== row.revision) fail(table) }
     for (const row of rows.evidence_revisions?.rows ?? []) { assertValid(evidenceRevisionSchema, { id: row.id, revision: row.revision, action: row.action, snapshot: parseJson('evidence_revisions', row.snapshot as string), createdAt: row.created_at }, 'evidence_revisions') }
-    const revisions = new Set((rows.evidence_revisions?.rows ?? []).map(row => `${row.id}:${row.revision}`))
+    const evidence = (rows.evidence_revisions?.rows ?? []).map(row => ({ id: String(row.id), revision: Number(row.revision), snapshot: parseJson('evidence_revisions', row.snapshot as string) as Record<string, unknown> }))
+    const revisions = new Set(evidence.map(row => `${row.id}:${row.revision}`))
+    const isRecord = (snapshot: Record<string, unknown>, key: string) => Array.isArray(snapshot[key])
+    const ownerFieldMatches = (ownerId: string, ownerRevision: number, field: string) => {
+      const revision = evidence.find(item => item.id === ownerId && item.revision === ownerRevision)
+      if (!revision) return false
+      const snapshot = revision.snapshot
+      if (field.startsWith('contact.')) {
+        const property = field.slice('contact.'.length)
+        return 'fullName' in snapshot && ['fullName', 'headline', 'email', 'phone', 'location', 'links'].includes(property) && Object.hasOwn(snapshot, property) && (property !== 'links' || (Array.isArray(snapshot.links) && snapshot.links.length > 0))
+      }
+      if (field.startsWith('skills.')) return 'category' in snapshot && typeof snapshot.name === 'string' && field === `skills.${snapshot.name}`
+      if (field === 'experience.role' || field === 'experience.role.date') return 'organization' in snapshot && 'kind' in snapshot && 'title' in snapshot
+      if (field === 'projects.project' || field === 'projects.links') return typeof snapshot.name === 'string' && isRecord(snapshot, 'factualItems') && isRecord(snapshot, 'technologies') && (field !== 'projects.links' || (Array.isArray(snapshot.links) && snapshot.links.length > 0))
+      const nestedParentContains = (parentField: 'factualItems' | 'technologies', parentType: 'experience' | 'project') => evidence.some(item => {
+        const parent = item.snapshot
+        const children = parent[parentField]
+        const matchingType = parentType === 'experience' ? 'kind' in parent && !('technologies' in parent) : 'technologies' in parent
+        return Array.isArray(children) && matchingType && children.some(child => child && typeof child === 'object' && 'id' in child && 'revision' in child && (child as { id: unknown }).id === ownerId && (child as { revision: unknown }).revision === ownerRevision)
+      })
+      if (field === 'experience.factualItem') return 'text' in snapshot && nestedParentContains('factualItems', 'experience') && evidence.some(item => item.id === ownerId && item.revision === ownerRevision && 'text' in item.snapshot)
+      if (field === 'projects.factualItem') return 'text' in snapshot && nestedParentContains('factualItems', 'project') && evidence.some(item => item.id === ownerId && item.revision === ownerRevision && 'text' in item.snapshot)
+      if (field === 'projects.technology') return 'text' in snapshot && nestedParentContains('technologies', 'project') && evidence.some(item => item.id === ownerId && item.revision === ownerRevision && 'text' in item.snapshot)
+      const entryField = field.match(/^entries\.(education|certificates|summary|languages|extras)(?:\.(date|year))?$/)
+      if (entryField) return snapshot.section === entryField[1] && (!entryField[2] || (entryField[2] === 'date' && entryField[1] === 'education') || (entryField[2] === 'year' && entryField[1] === 'certificates'))
+      return false
+    }
     for (const row of rows.profile_import_provenance?.rows ?? []) {
-      if (!uuidSchema.safeParse(row.owner_id).success || !Number.isInteger(row.owner_revision) || Number(row.owner_revision) < 1 || typeof row.field !== 'string' || !row.field || !/^[a-f0-9]{64}$/.test(String(row.source_hash)) || !Number.isInteger(row.page) || Number(row.page) < 1 || typeof row.passage !== 'string' || !row.passage || typeof row.created_at !== 'string' || !Number.isFinite(Date.parse(row.created_at)) || !revisions.has(`${row.owner_id}:${row.owner_revision}`)) fail('profile_import_provenance')
+      if (!uuidSchema.safeParse(row.owner_id).success || !Number.isInteger(row.owner_revision) || Number(row.owner_revision) < 1 || typeof row.field !== 'string' || !row.field || !/^[a-f0-9]{64}$/.test(String(row.source_hash)) || !Number.isInteger(row.page) || Number(row.page) < 1 || typeof row.passage !== 'string' || !row.passage || typeof row.created_at !== 'string' || !Number.isFinite(Date.parse(row.created_at)) || !revisions.has(`${row.owner_id}:${row.owner_revision}`) || !ownerFieldMatches(String(row.owner_id), Number(row.owner_revision), row.field)) fail('profile_import_provenance')
     }
     for (const row of rows.jobs?.rows ?? []) { const data = parseJson('jobs', row.data as string); assertValid(jobRecordSchema, data, 'jobs'); if ((data as { id: string }).id !== row.id || (data as { createdAt: string }).createdAt !== row.created_at || (data as { updatedAt: string }).updatedAt !== row.updated_at) fail('jobs') }
     for (const row of rows.draft_revisions?.rows ?? []) { const data = parseJson('draft_revisions', row.data as string); assertValid(draftRevisionSchema, data, 'draft_revisions'); if ((data as { id: string }).id !== row.id || (data as { jobId: string }).jobId !== row.job_id || (data as { revision: number }).revision !== row.revision) fail('draft_revisions') }

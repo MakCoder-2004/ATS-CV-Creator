@@ -25,6 +25,34 @@ test('maps programming languages, tools, and concepts into their distinct profil
   expect(result.skills).toMatchObject([{ name: 'Python', category: 'Languages' }, { name: 'Java', category: 'Languages' }, { name: 'React', category: 'Tools' }, { name: 'Git', category: 'Tools' }, { name: 'Distributed systems', category: 'Domain' }, { name: 'Git', category: 'Technical' }])
 })
 
+test('associates recognizable contact and current-project hyperlinks without losing their targets', () => {
+  const result = mapProfilePdfPages([{ page: 1, text: [
+    'NAME: Ada Example', 'EMAIL: ada@example.test', 'PROJECT: Atlas | React',
+    'Repository', 'Project description that explicitly names the Atlas repository.',
+  ].join('\n'), links: [
+    { label: 'LinkedIn', url: 'https://www.linkedin.com/in/ada-example' },
+    { label: 'Repository', url: 'https://github.com/ada/atlas' },
+    { label: 'Mystery', url: 'https://example.test/unknown' },
+  ] }])
+  expect(result.contact?.links).toEqual([{ label: 'LinkedIn', url: 'https://www.linkedin.com/in/ada-example' }])
+  expect(result.projects[0]?.links).toEqual([{ label: 'Repository', url: 'https://github.com/ada/atlas' }])
+  expect(result.unmapped).toContainEqual({ page: 1, text: 'Unassigned PDF hyperlink: Mystery — https://example.test/unknown' })
+  expect(result.sources).toContainEqual(expect.objectContaining({ field: 'contact.links', passage: expect.stringContaining('https://www.linkedin.com/in/ada-example') }))
+  expect(result.sources).toContainEqual(expect.objectContaining({ field: 'projects.links', passage: expect.stringContaining('https://github.com/ada/atlas') }))
+})
+
+test('maps ordinary section headings and common unlabeled role, project, and skill patterns conservatively', () => {
+  const result = mapProfilePdfPages([{ page: 1, text: [
+    'Work Experience', 'Software Engineer — Example Labs | 2021 – 2023', '• Built the internal reporting service',
+    'Projects', 'Atlas — React, SQLite', '• Added offline support',
+    'Technical Skills', 'TypeScript, SQL', 'Other section', 'Volunteer mentor',
+  ].join('\n') }])
+  expect(result.experience).toMatchObject([{ title: 'Software Engineer', organization: 'Example Labs', startDate: '2021', endDate: '2023', factualItems: [{ text: '• Built the internal reporting service' }] }])
+  expect(result.projects).toMatchObject([{ name: 'Atlas', technologies: [{ text: 'React' }, { text: 'SQLite' }], factualItems: [{ text: 'Added offline support' }] }])
+  expect(result.skills).toMatchObject([{ name: 'TypeScript' }, { name: 'SQL' }])
+  expect(result.unmapped).toContainEqual({ page: 1, text: 'Volunteer mentor' })
+})
+
 test('maps spoken languages separately from programming skills and preserves source date precision', () => {
   const exactEducation = 'EDUCATION: BSc Computer Science | Example University | 2020-09-14 – 2024-06-20 | GPA 3.7'
   const result = mapProfilePdfPages([{ page: 2, text: ['SPOKEN LANGUAGES: Arabic, English', 'TECHNICAL SKILLS: Python', exactEducation, 'PROJECT: Atlas | Python, Flask', 'PROJECT LINK: Repository | https://example.test/atlas', 'FACT: Built a recommendation service'].join('\n') }])
