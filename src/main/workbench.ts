@@ -9,6 +9,7 @@ import { defaultOpenRouterModel, openRouterKeyInputSchema, openRouterModelSchema
 import { contactInputSchema, contactRecordSchema, evidenceRevisionSchema, profileEntryInputSchema, profileEntrySchema, profileMutationResultSchema, profileSnapshotSchema, skillInputSchema, skillRecordSchema, uuidSchema, type ContactRecord, type EvidenceRevision, type ProfileEntry, type ProfileSnapshot, type SkillRecord } from '../shared/profile'
 import { experienceInputSchema, experienceRecordSchema, experienceSnapshotSchema, experienceMutationResultSchema, projectInputSchema, projectRecordSchema, type ExperienceRecord, type ProjectRecord, type FactualItemRecord, type ExperienceSnapshot } from '../shared/experience'
 import { jobInputSchema, jobRecordSchema, jobSaveResultSchema, legacyDraftTargetBaseline } from '../shared/jobs'
+import { samePostingSource } from '../shared/posting-identity'
 import type { JobRecord } from '../shared/jobs'
 import { profileExchangeSchema, type ProfileExchange } from '../shared/profile-exchange'
 import { prepareOutboundBundle, type ConsentSource, type EvidenceScopeRevision, type OutboundBundle, type OutboundPayload } from '../shared/outbound-consent'
@@ -69,6 +70,7 @@ function repairsIncompletePosting(source: import('../shared/posting-import').Pos
 function leverSourceIdentity(value: string): string | null {
   try {
     const url = new URL(value), parts = url.pathname.split('/').filter(Boolean)
+    if (url.protocol !== 'https:') return null
     if (url.hostname === 'jobs.lever.co' && parts.length === 2) return `lever:${parts[0]}/${parts[1]}`
     if (url.hostname === 'api.lever.co' && parts.length === 4 && parts[0] === 'v0' && parts[1] === 'postings') return `lever:${parts[2]}/${parts[3]}`
   } catch {}
@@ -917,7 +919,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       const sourceIdentity = leverSourceIdentity(source.submittedUrl)
       if (!sourceIdentity) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'The posting source identity could not be verified.' } })
       const known = (db.prepare('SELECT data FROM jobs').all() as { data: string }[]).map(row => jobRecordSchema.parse(JSON.parse(row.data)))
-      if (known.some(job => job.sourceSnapshot && (job.sourceSnapshot.sourceIdentity === sourceIdentity || job.sourceSnapshot.finalUrl === source.finalUrl || leverSourceIdentity(job.sourceSnapshot.submittedUrl) === sourceIdentity))) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'This exact source is already saved. Open the existing posting instead; no duplicate was created.' } })
+      if (known.some(job => job.sourceSnapshot && samePostingSource(job.sourceSnapshot, source))) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'This exact source is already saved. Open the existing posting instead; no duplicate was created.' } })
       const hash = (value: string) => createHash('sha256').update(value, 'utf8').digest('hex')
       const sourceSnapshot = {
         title: source.title, company: source.company, description: source.description, optionalDetails: source.optionalDetails, conflicts: source.conflicts,

@@ -6,8 +6,17 @@ import { join } from 'node:path'
 import { gzipSync } from 'node:zlib'
 import Database from 'better-sqlite3'
 import { createWorkbench } from '../src/main/workbench'
+import { normalizePostingUrl, samePostingSource } from '../src/shared/posting-identity'
 
 const directories: string[] = []
+
+test('posting source identity removes known tracking only and preserves role-bearing URL differences', () => {
+  expect(normalizePostingUrl('https://EXAMPLE.test/jobs/42?utm_source=mail&team=platform#details')).toBe('https://example.test/jobs/42?team=platform')
+  expect(normalizePostingUrl('https://example.test/jobs/42?team=platform')).not.toBe(normalizePostingUrl('https://example.test/jobs/42?team=security'))
+  expect(samePostingSource({ submittedUrl: 'https://jobs.lever.co/board/role?utm_campaign=x', finalUrl: 'https://jobs.lever.co/board/role' }, { submittedUrl: 'https://jobs.lever.co/board/role?utm_medium=email', finalUrl: 'https://jobs.lever.co/board/role' })).toBe(true)
+  expect(samePostingSource({ submittedUrl: 'https://jobs.lever.co/board/role-a', finalUrl: 'https://jobs.lever.co/board/role-a' }, { submittedUrl: 'https://jobs.lever.co/board/role-b', finalUrl: 'https://jobs.lever.co/board/role-b' })).toBe(false)
+  expect(normalizePostingUrl('http://example.test/jobs/42')).toBeNull()
+})
 afterEach(async () => { for (const directory of directories.splice(0)) await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) })
 function open() {
   const directory = mkdtempSync(join(tmpdir(), 'cv-tailor-jobs-'))

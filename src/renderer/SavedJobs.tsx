@@ -1,6 +1,7 @@
 import React, { FormEvent, useEffect, useRef, useState } from 'react'
 import { FolderOpen, Plus } from 'lucide-react'
 import type { JobInput, JobRecord } from '../shared/jobs'
+import { samePostingSource } from '../shared/posting-identity'
 import type { DraftRevision } from '../shared/draft'
 import './jobs.css'
 
@@ -9,14 +10,6 @@ const optionalPostingFields = [
   ['location', 'Location'], ['workArrangement', 'Work arrangement'], ['employmentType', 'Employment type'], ['compensation', 'Compensation'],
   ['language', 'Language'], ['postedDate', 'Posted date'], ['deadline', 'Deadline'], ['applicationUrl', 'Application URL']
 ] as const
-function postingSourceIdentity(value: string): string | null {
-  try {
-    const url = new URL(value), parts = url.pathname.split('/').filter(Boolean)
-    if (url.hostname === 'jobs.lever.co' && parts.length === 2) return `lever:${parts[0]}/${parts[1]}`
-    if (url.hostname === 'api.lever.co' && parts.length === 4 && parts[0] === 'v0' && parts[1] === 'postings') return `lever:${parts[2]}/${parts[3]}`
-  } catch {}
-  return null
-}
 
 export function SavedJobs({ jobs, activeJob, onSaved, onOpened, onNavigate }: { jobs: JobRecord[]; activeJob: JobRecord | null; onSaved: (job: JobRecord) => void; onOpened: (job: JobRecord) => void; onNavigate: (page: 'Tailor CV') => void }) {
   const [input, setInput] = useState<JobInput>({ title: '', company: '', description: '' })
@@ -210,7 +203,7 @@ export function SavedJobs({ jobs, activeJob, onSaved, onOpened, onNavigate }: { 
   </div>
   const editedJob = editingId ? jobs.find(job => job.id === editingId) : undefined
   const intakeVisible = intakeOpen || jobs.length === 0
-  const sourceMatch = (() => { if (!preview) return undefined; const identity = postingSourceIdentity(preview.submittedUrl); return jobs.find(job => job.sourceSnapshot && (job.sourceSnapshot.sourceIdentity === identity || job.sourceSnapshot.finalUrl === preview.finalUrl || postingSourceIdentity(job.sourceSnapshot.submittedUrl) === identity)) })()
+  const sourceMatch = (() => { if (!preview) return undefined; return jobs.find(job => job.sourceSnapshot && samePostingSource(job.sourceSnapshot, preview)) })()
   const sourceMatchIsUnchanged = !!sourceMatch?.sourceSnapshot && sourceMatch.sourceSnapshot.title === capturedPreview?.title && sourceMatch.sourceSnapshot.company === capturedPreview?.company && sourceMatch.sourceSnapshot.description === capturedPreview?.description && JSON.stringify(sourceMatch.sourceSnapshot.optionalDetails) === JSON.stringify(capturedPreview?.optionalDetails) && JSON.stringify(sourceMatch.sourceSnapshot.conflicts) === JSON.stringify(capturedPreview?.conflicts) && sourceMatch.sourceSnapshot.extractionMethod === capturedPreview?.extractionMethod
   const renderIntake = (insideEmptyState = false) => <section className={`saved-jobs-intake${insideEmptyState ? ' is-inside-empty' : ''}`} aria-labelledby="posting-intake-title">
     <header className="saved-jobs-intake-heading"><div><p className="context">New job</p><h2 id="posting-intake-title">Add a job posting</h2></div>{jobs.length > 0 && <button type="button" className="secondary-button" onClick={closeIntake}>Cancel</button>}</header>
