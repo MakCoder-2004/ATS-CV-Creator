@@ -27,6 +27,7 @@ import { addDraftItemInputSchema, draftCorrectionInputSchema, draftGenerationSch
 import { factualCheckReportSchema } from '../shared/factual-report'
 import { regenerationProposalSchema, regenerationResultSchema, regenerationTargetSchema } from '../shared/regeneration'
 import { mutateDraftRecordInputSchema } from '../shared/draft-records'
+import { validateLeverPostingUrl } from './safe-posting-fetch'
 
 let window: BrowserWindow | undefined
 let workspace: ReturnType<typeof createWorkbench> | undefined
@@ -49,6 +50,14 @@ function isTrusted(event: Electron.IpcMainInvokeEvent): boolean {
 
 function trusted(event: Electron.IpcMainInvokeEvent): void {
   if (!isTrusted(event)) throw new Error('Untrusted IPC sender')
+}
+
+async function openOriginalPosting(url: string): Promise<void> {
+  if (!app.isPackaged && process.env.CV_TAILOR_SCRIPTED_OPEN_ORIGINAL === '1') {
+    if (url !== 'https://jobs.lever.co/example-board/smoke-id') throw new Error('The scripted browser opener received an unexpected posting URL.')
+    return
+  }
+  await shell.openExternal(url)
 }
 
 // The test override is disabled in packaged builds; production always uses Electron's userData.
@@ -108,9 +117,16 @@ app.whenReady().then(() => {
     if (process.env.CV_TAILOR_SCRIPTED_ANALYSIS === 'tailored-flow') return JSON.stringify({ required: ['Python', 'RASA', 'Google Cloud Platform', 'NLP'], preferred: ['Docker'], tools: ['Python', 'RASA', 'Google Cloud Platform', 'spaCy', 'Git', 'Docker'], responsibilities: ['Build Python APIs and conversational AI solutions'], keywords: ['Python', 'NLP', 'intent classification', 'model evaluation', 'backend services'] })
     return JSON.stringify({ required: ['TypeScript', 'Kubernetes'], preferred: ['Cloud architecture'], tools: ['TypeScript'], responsibilities: ['Build reliable services'], keywords: ['TypeScript', 'Kubernetes', 'Cloud architecture'] })
   } } : undefined
-  workspace = createWorkbench(app.getPath('userData'), safeStorage, scriptedAnalysis)
+  const scriptedPostingFetch = !app.isPackaged && ['1', 'delayed'].includes(process.env.CV_TAILOR_SCRIPTED_POSTING_FETCH ?? '') ? {
+    lookup: async () => [{ address: '8.8.8.8', family: 4 }],
+    request: async (url: URL) => {
+      if (process.env.CV_TAILOR_SCRIPTED_POSTING_FETCH === 'delayed') await new Promise(resolve => setTimeout(resolve, 800))
+      return { status: 200, headers: { 'content-type': 'application/json' }, body: Buffer.from(JSON.stringify({ id: url.pathname.split('/').at(-1), text: 'Synthetic Reliability Engineer', company: 'Example Research', descriptionPlain: 'Responsibilities\nBuild and maintain fictional systems, document operational decisions, collaborate with the synthetic engineering team, and review reliability outcomes across a clearly invented service environment.', lists: [{ text: 'Requirements', content: '<li>Experience with testing.</li>' }] })) }
+    }
+  } : undefined
+  workspace = createWorkbench(app.getPath('userData'), safeStorage, scriptedAnalysis, undefined, scriptedPostingFetch)
   registerWorkspaceBackupIpc(() => window!, () => workspace!, () => {
-    const reopened = createWorkbench(app.getPath('userData'), safeStorage, scriptedAnalysis)
+    const reopened = createWorkbench(app.getPath('userData'), safeStorage, scriptedAnalysis, undefined, scriptedPostingFetch)
     const previous = workspace!
     workspace = reopened
     previous.close()
@@ -253,6 +269,22 @@ app.whenReady().then(() => {
     trusted(event)
     if (args.length) throw new Error('Unexpected arguments')
     return jobRecordSchema.array().parse(await workspace!.api.listJobs())
+  })
+  ipcMain.handle('posting-import:start', async (event, ...args: unknown[]) => {
+    trusted(event); if (args.length !== 1 || typeof args[0] !== 'string') throw new Error('Expected a posting link')
+    return await workspace!.api.startPostingFetch(args[0])
+  })
+  ipcMain.handle('posting-import:read', async (event, ...args: unknown[]) => {
+    trusted(event); if (args.length !== 1) throw new Error('Expected preview token')
+    return await workspace!.api.readPostingPreview(uuidSchema.parse(args[0]))
+  })
+  ipcMain.handle('posting-import:cancel', async (event, ...args: unknown[]) => {
+    trusted(event); if (args.length !== 1) throw new Error('Expected fetch token')
+    return await workspace!.api.cancelPostingFetch(uuidSchema.parse(args[0]))
+  })
+  ipcMain.handle('posting-import:open-source', async (event, ...args: unknown[]) => {
+    trusted(event); if (args.length !== 1 || typeof args[0] !== 'string' || !validateLeverPostingUrl(args[0])) throw new Error('Only a validated HTTPS Lever posting can be opened.')
+    await openOriginalPosting(args[0]); return { ok: true, message: 'Opened the posting in your default browser.' }
   })
   ipcMain.handle('consent:outbound:preview', async (event, ...args: unknown[]) => {
     trusted(event); if (args.length !== 1) throw new Error('Expected saved job ID')
