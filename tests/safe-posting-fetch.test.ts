@@ -33,6 +33,13 @@ describe('bounded Lever posting fetch', () => {
     const redirectResponse = vi.fn(async () => ({ status: 302, headers: {}, body: Buffer.alloc(0), location: 'https://api.lever.co/v0/postings/acme/role-123' }))
     await expect(fetchLeverPosting(url, { lookup, request: redirectResponse, singleRequest: true })).rejects.toThrow(/single-request/i)
     expect(redirectResponse).toHaveBeenCalledTimes(1)
+    const socketFailure = Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' })
+    const failedRequest = vi.fn(async () => { throw socketFailure })
+    const started = vi.fn(), completed = vi.fn()
+    await expect(fetchLeverPosting(url, { lookup, request: failedRequest, singleRequest: true, onRequestStarted: started, onRequestCompleted: completed })).rejects.toThrow(/connection failed or timed out/)
+    expect(failedRequest).toHaveBeenCalledTimes(1)
+    expect(started).toHaveBeenCalledTimes(1)
+    expect(completed).not.toHaveBeenCalled()
   })
   it('rejects adversarially deep HTML safely instead of recursing through the tree', async () => {
     const html = `${'<div>'.repeat(300)}<h1>Deep role</h1>${'</div>'.repeat(300)}`
