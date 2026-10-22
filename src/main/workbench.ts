@@ -17,7 +17,7 @@ import type { OutboundConsentAction, OutboundConsentPreview } from '../shared/ou
 import { regenerationProposalSchema, regenerationTargetSchema, type RegenerationTarget, type RegenerationProposal } from '../shared/regeneration'
 import { outboundConsentActionSchema, outboundConsentPreviewSchema } from '../shared/outbound-consent-contract'
 import { AnalysisError, createAnalysisDispatcher, type AnalysisTransport } from './posting-analysis'
-import { createOpenRouterAnalysisTransport } from './openrouter-analysis-transport'
+import { createOpenRouterAnalysisTransport, MAX_OPENROUTER_REQUEST_BODY_BYTES, serializeOpenRouterRequestBody } from './openrouter-analysis-transport'
 import { createHash } from 'node:crypto'
 import { z } from 'zod'
 import { analysisBudgetsSchema, analysisResultSchema, analysisUsageSchema, defaultAnalysisBudgets, generationRecoverySchema, postingAnalysisSchema, displayPostingAnalysisSchema, type AnalysisBudgets, type AnalysisResult, type RecoveryChoice } from '../shared/posting-analysis'
@@ -217,12 +217,13 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
     try { return secureStorage.decryptString(Buffer.from(row.ciphertext, 'base64')) }
     catch { throw new Error('The saved key could not be decrypted on this device.') }
   }
+  const activeProfileAiRuns = new Set<string>()
   const dispatcher = createAnalysisDispatcher({ ...readAnalysisBudgets(), maxAttempts: readAnalysisBudgets().runLimit, maxElapsedMs: readAnalysisBudgets().runTimeLimitMs, maxDailyAttempts: readAnalysisBudgets().configuredDailyLimit, observedAttempts: previousAttempts, observedRunAttempts: persistedRunCounts, observedRunStartedAt: persistedRunStarts, transport: scriptedTransport ?? { generate: async input => {
     let key: string
     try { key = readStoredOpenRouterKey() }
     catch { throw Object.assign(new Error('OpenRouter API key is unavailable.'), { status: 401 }) }
     return createOpenRouterAnalysisTransport(key).generate(input)
-  } }, onAttempt: (timestamp, runId) => { previousAttempts.push(timestamp); const dispatchedAt = new Date(timestamp).toISOString(); db.prepare('INSERT INTO analysis_attempts (run_id, attempted_at) VALUES (?, ?)').run(runId, dispatchedAt); db.prepare('INSERT INTO provider_attempt_outcomes (run_id, dispatched_at, outcome) VALUES (?, ?, \'dispatched\')').run(runId, dispatchedAt) }, onAttemptComplete: (runId, succeeded) => { if (succeeded) db.prepare(`UPDATE provider_attempt_outcomes SET outcome='response', settled_at=? WHERE id=(SELECT id FROM provider_attempt_outcomes WHERE run_id=? AND outcome='dispatched' AND checkpointed_at IS NULL ORDER BY id DESC LIMIT 1)`).run(new Date().toISOString(), runId) }, onProgress: (runId, jobId, progress, attempts) => { const observed = (db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id = ?').get(runId) as { count: number }).count; const prior = currentAnalysis.get(jobId), sameRun = prior?.runId === runId; saveAnalysisState({ jobId, runId, status: 'running', analysis: sameRun ? prior.analysis : null, progress, attempts: observed || attempts, cacheHit: sameRun ? prior.cacheHit : false, ...(sameRun && prior.generationStep ? { generationStep: prior.generationStep } : {}), ...(sameRun && prior.completedSteps ? { completedSteps: prior.completedSteps } : {}) }) } })
+  } }, onAttempt: (timestamp, runId) => { previousAttempts.push(timestamp); const dispatchedAt = new Date(timestamp).toISOString(); db.prepare('INSERT INTO analysis_attempts (run_id, attempted_at) VALUES (?, ?)').run(runId, dispatchedAt); db.prepare('INSERT INTO provider_attempt_outcomes (run_id, dispatched_at, outcome) VALUES (?, ?, \'dispatched\')').run(runId, dispatchedAt) }, onAttemptComplete: (runId, succeeded) => { if (succeeded) db.prepare(`UPDATE provider_attempt_outcomes SET outcome='response', settled_at=? WHERE id=(SELECT id FROM provider_attempt_outcomes WHERE run_id=? AND outcome='dispatched' AND checkpointed_at IS NULL ORDER BY id DESC LIMIT 1)`).run(new Date().toISOString(), runId) }, onProgress: (runId, jobId, progress, attempts) => { if (jobId.startsWith('profile-import:')) return; const observed = (db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id = ?').get(runId) as { count: number }).count; const prior = currentAnalysis.get(jobId), sameRun = prior?.runId === runId; saveAnalysisState({ jobId, runId, status: 'running', analysis: sameRun ? prior.analysis : null, progress, attempts: observed || attempts, cacheHit: sameRun ? prior.cacheHit : false, ...(sameRun && prior.generationStep ? { generationStep: prior.generationStep } : {}), ...(sameRun && prior.completedSteps ? { completedSteps: prior.completedSteps } : {}) }) } })
   const currentConsentSource = (jobId: string): ConsentSource | null => {
     const job = db.prepare('SELECT data FROM jobs WHERE id = ?').get(jobId) as { data: string } | undefined
     if (!job) return null
@@ -339,6 +340,24 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       return this.getSettings()
     },
     async getProfile() { return readProfile() },
+    async authorizeProfileImportAi(runId: string) {
+      if (!/^profile-import:[0-9a-f-]{36}$/.test(runId)) throw new Error('Profile import operation identity is invalid.')
+      if (!scriptedTransport) readStoredOpenRouterKey()
+      dispatcher.authorize(runId, runId)
+    },
+    async generateProfileImportAi(runId: string, model: string, prompt: string, responseSchema: import('zod').ZodTypeAny) {
+      if (!/^profile-import:[0-9a-f-]{36}$/.test(runId) || prompt.length > 24_000) throw new Error('Profile import request is invalid or exceeds the local input limit.')
+      if (activeProfileAiRuns.has(runId)) throw new Error('This profile import request is already running.')
+      const settings = db.prepare('SELECT value FROM settings WHERE key = ?').get('openrouter-model') as { value: string } | undefined
+      const selectedModel = openRouterModelSchema.parse(model)
+      if (selectedModel !== openRouterModelSchema.parse(settings?.value ?? defaultOpenRouterModel)) throw new Error('The OpenRouter model changed after consent. Review the outgoing text and authorize a fresh request.')
+      const requestBody = serializeOpenRouterRequestBody({ model: selectedModel, prompt, responseSchema, maxTokens: 2048 })
+      if (Buffer.byteLength(requestBody, 'utf8') > MAX_OPENROUTER_REQUEST_BODY_BYTES) throw new Error('The complete AI request, including its schema, exceeds the 64 KiB request limit. Nothing was sent; continue with local review.')
+      activeProfileAiRuns.add(runId)
+      try { return await dispatcher.generate({ runId, jobId: runId, model: selectedModel, prompt, consentId: runId, responseSchema, retryProviderFailures: false, maxTokens: 2048, maxResponseChars: 500_000 }) }
+      finally { activeProfileAiRuns.delete(runId) }
+    },
+    cancelProfileImportAi(runId: string) { dispatcher.cancel(runId) },
     async getProfileImportBaseline() { return profileImportBaseline() },
     async importEmptyProfilePdf(sourceHash: string, baseline: string, input: ProfilePdfProposal) {
       const validHash = /^[a-f0-9]{64}$/.test(sourceHash)
@@ -354,9 +373,149 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
         const insert = db.prepare('INSERT OR IGNORE INTO profile_import_provenance (owner_id,owner_revision,field,source_hash,page,passage,created_at) VALUES (?,?,?,?,?,?,?)')
         for (const source of sourceRows) insert.run(ownerId, ownerRevision, source.field, sourceHash, source.page, source.passage, new Date().toISOString())
       }
+      const mergingProfile = profileRecords(readProfile(), readExperience()).length > 0
       const tx = db.transaction(() => {
         if (profileImportBaseline() !== baseline) throw new Error('STALE_PROFILE_PREVIEW')
-        if (profileRecords(readProfile(), readExperience()).length) throw new Error('PROFILE_NOT_EMPTY')
+        const currentProfile = readProfile(), currentExperience = readExperience()
+        if (profileRecords(currentProfile, currentExperience).length) {
+          const decisions = proposals.decisions
+          if (!decisions) throw new Error('PROFILE_MERGE_DECISIONS_REQUIRED')
+          const decisionFor = (ref: string) => decisions[ref]
+          const sameRecordValues = (left: { revision: number }, right: { revision: number }) => {
+            const { revision: _leftRevision, ...leftValues } = left, { revision: _rightRevision, ...rightValues } = right
+            const stable = (value: unknown): unknown => Array.isArray(value) ? value.map(stable) : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => [key, stable(item)])) : value
+            return isDeepStrictEqual(stable(leftValues), stable(rightValues))
+          }
+          const mergeNested = (prior: Array<{ id: string; revision: number; text: string }>, incoming: Array<{ id?: string; text: string }>) => {
+            const merged: Array<{ id?: string; text: string }> = prior.map(({ id, text }) => ({ id, text }))
+            for (const item of incoming) {
+              if (item.id) {
+                const index = merged.findIndex(value => value.id === item.id)
+                if (index < 0) merged.push(item)
+                else merged[index] = item
+              } else if (!merged.some(value => value.text.trim().toLocaleLowerCase() === item.text.trim().toLocaleLowerCase())) merged.push(item)
+            }
+            return merged
+          }
+          const validateNestedUpdateTargets = (parentOperation: 'add' | 'update' | 'skip', ownerExists: boolean, proposed: Array<{ proposalRef: string }>, prior: Array<{ id: string }>) => {
+            const used = new Set<string>()
+            for (const item of proposed) {
+              const decision = decisionFor(item.proposalRef)
+              if (decision.action !== 'update') continue
+              const targetId = decision.targetId
+              if (parentOperation !== 'update' || !ownerExists || !targetId || !prior.some(value => value.id === targetId) || used.has(targetId)) throw new Error('PROFILE_MERGE_TARGET_INVALID')
+              used.add(targetId)
+            }
+          }
+          const updateEntry = (item: typeof proposals.entries[number]) => {
+            const decision = decisionFor(item.proposalRef)
+            if (decision.action === 'skip') return
+            const target = decision.action === 'update' ? profileRecords(currentProfile, currentExperience).find(record => record.id === decision.targetId && 'section' in record && record.section === item.section) as ProfileEntry | undefined : undefined
+            if (decision.action === 'update' && !target) throw new Error('PROFILE_MERGE_TARGET_INVALID')
+            const { proposalRef: _ref, requiresDateResolution: _dateResolution, ...incoming } = item
+            const prior = target
+            const record = profileEntrySchema.parse({ ...(prior ?? {}), ...incoming, id: prior?.id ?? persistentId(item.proposalRef), revision: (prior?.revision ?? 0) + 1 })
+            if (prior && sameRecordValues(prior, record)) { associate(prior.id, prior.revision, item.proposalRef); return }
+            db.prepare('INSERT INTO profile_entries(id,section,revision,data) VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET section=excluded.section,revision=excluded.revision,data=excluded.data').run(record.id, record.section, record.revision, JSON.stringify(record))
+            recordRevision(record, prior ? 'updated' : 'created'); associate(record.id, record.revision, item.proposalRef)
+          }
+          const contactProposal = proposals.contact
+          if (contactProposal) {
+            const decision = decisionFor(contactProposal.proposalRef)
+            if (decision.action !== 'skip') {
+              if (decision.action === 'add' && currentProfile.contact) throw new Error('PROFILE_MERGE_TARGET_INVALID')
+              const existing = decision.action === 'update' && currentProfile.contact?.id === decision.targetId ? currentProfile.contact : undefined
+              if (decision.action === 'update' && !existing) throw new Error('PROFILE_MERGE_TARGET_INVALID')
+              const { proposalRef: _ref, ...incoming } = contactProposal
+              const record = contactRecordSchema.parse({ ...(existing ?? {}), ...incoming, id: existing?.id ?? persistentId(contactProposal.proposalRef), revision: (existing?.revision ?? 0) + 1 })
+              if (existing && sameRecordValues(existing, record)) associate(existing.id, existing.revision, contactProposal.proposalRef)
+              else {
+                db.prepare('INSERT INTO profile_contact(singleton,id,revision,data) VALUES(1,?,?,?) ON CONFLICT(singleton) DO UPDATE SET id=excluded.id,revision=excluded.revision,data=excluded.data').run(record.id, record.revision, JSON.stringify(record))
+                recordRevision(record, existing ? 'updated' : 'created'); associate(record.id, record.revision, contactProposal.proposalRef)
+              }
+            }
+          }
+          for (const item of proposals.skills) {
+            const decision = decisionFor(item.proposalRef)
+            if (decision.action === 'skip') continue
+            const target = decision.action === 'update' ? currentProfile.skills.find(record => record.id === decision.targetId) : undefined
+            if (decision.action === 'update' && !target) throw new Error('PROFILE_MERGE_TARGET_INVALID')
+            const { proposalRef: _ref, ...incoming } = item
+            const record = skillRecordSchema.parse({ ...(target ?? {}), ...incoming, id: target?.id ?? persistentId(item.proposalRef), revision: (target?.revision ?? 0) + 1 })
+            if (target && sameRecordValues(target, record)) { associate(target.id, target.revision, item.proposalRef); continue }
+            db.prepare('INSERT INTO profile_skills(id,revision,data) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,data=excluded.data').run(record.id, record.revision, JSON.stringify(record))
+            recordRevision(record, target ? 'updated' : 'created'); associate(record.id, record.revision, item.proposalRef)
+          }
+          for (const item of proposals.entries) updateEntry(item)
+          for (const item of proposals.experience) {
+            const decision = decisionFor(item.proposalRef)
+            if (decision.action === 'skip') continue
+            const target = decision.action === 'update' ? currentExperience.experience.find(record => record.id === decision.targetId) : undefined
+            if (decision.action === 'update' && !target) throw new Error('PROFILE_MERGE_TARGET_INVALID')
+            const { proposalRef: _ref, requiresDateResolution: _dateResolution, factualItems, ...fields } = item
+            validateNestedUpdateTargets(decision.action, Boolean(target), factualItems, target?.factualItems ?? [])
+            const facts = factualItems.flatMap(({ proposalRef, ...fact }) => {
+              const choice = decisionFor(proposalRef)
+              return choice.action === 'skip' ? [] : [{ ...fact, ...(choice.action === 'update' ? { id: choice.targetId } : {}) }]
+            })
+            const priorFacts = target?.factualItems ?? []
+            const { id: _targetId, revision: _targetRevision, ...targetInput } = target ?? {}
+            const input = { ...targetInput, ...fields, factualItems: mergeNested(priorFacts, facts) }
+            const plan = stageDraftProfileMutation('experience', decision.action, target?.id, target?.revision, input)
+            if (!plan) throw new Error('PROFILE_MERGE_INVALID')
+            const record = plan.record as ExperienceRecord
+            if (target && sameRecordValues(target, record)) {
+              associate(target.id, target.revision, item.proposalRef)
+              for (const fact of factualItems) { if (decisionFor(fact.proposalRef).action === 'skip') continue; const accepted = target.factualItems.find(value => value.text.trim().toLocaleLowerCase() === fact.text.trim().toLocaleLowerCase()); if (accepted) associate(accepted.id, accepted.revision, fact.proposalRef) }
+              continue
+            }
+            commitDraftProfileMutation(plan)
+            associate(record.id, record.revision, item.proposalRef)
+            for (const fact of factualItems) {
+              if (decisionFor(fact.proposalRef).action === 'skip') continue
+              const accepted = record.factualItems.find(value => value.text.trim().toLocaleLowerCase() === fact.text.trim().toLocaleLowerCase())
+              if (accepted) associate(accepted.id, accepted.revision, fact.proposalRef)
+            }
+          }
+          for (const item of proposals.projects) {
+            const decision = decisionFor(item.proposalRef)
+            if (decision.action === 'skip') continue
+            const target = decision.action === 'update' ? currentExperience.projects.find(record => record.id === decision.targetId) : undefined
+            if (decision.action === 'update' && !target) throw new Error('PROFILE_MERGE_TARGET_INVALID')
+            const { proposalRef: _ref, factualItems, technologies, ...fields } = item
+            validateNestedUpdateTargets(decision.action, Boolean(target), factualItems, target?.factualItems ?? [])
+            validateNestedUpdateTargets(decision.action, Boolean(target), technologies, target?.technologies ?? [])
+            const facts = factualItems.flatMap(({ proposalRef, ...fact }) => { const choice = decisionFor(proposalRef); return choice.action === 'skip' ? [] : [{ ...fact, ...(choice.action === 'update' ? { id: choice.targetId } : {}) }] })
+            const tools = technologies.flatMap(({ proposalRef, ...technology }) => { const choice = decisionFor(proposalRef); return choice.action === 'skip' ? [] : [{ ...technology, ...(choice.action === 'update' ? { id: choice.targetId } : {}) }] })
+            const preserve = (incoming: typeof facts, old: Array<{ id: string; revision?: number; text: string }>) => mergeNested(old.map(({ id, text }) => ({ id, revision: 1, text })), incoming)
+            const incomingLinks = fields.links ?? []
+            const mergedLinks = [...incomingLinks, ...(target?.links ?? []).filter(link => !incomingLinks.some(value => value.url.toLocaleLowerCase() === link.url.toLocaleLowerCase()))]
+            const { id: _targetId, revision: _targetRevision, ...targetInput } = target ?? {}
+            const input = { ...targetInput, ...fields, links: mergedLinks, factualItems: preserve(facts, target?.factualItems.map(({ id, text }) => ({ id, text })) ?? []), technologies: preserve(tools, target?.technologies.map(({ id, text }) => ({ id, text })) ?? []) }
+            const plan = stageDraftProfileMutation('projects', decision.action, target?.id, target?.revision, input)
+            if (!plan) throw new Error('PROFILE_MERGE_INVALID')
+            const record = plan.record as ProjectRecord
+            if (target && sameRecordValues(target, record)) {
+              associate(target.id, target.revision, item.proposalRef)
+              for (const nested of factualItems) { if (decisionFor(nested.proposalRef).action === 'skip') continue; const accepted = target.factualItems.find(value => value.text.trim().toLocaleLowerCase() === nested.text.trim().toLocaleLowerCase()); if (accepted) associate(accepted.id, accepted.revision, nested.proposalRef) }
+              for (const nested of technologies) { if (decisionFor(nested.proposalRef).action === 'skip') continue; const accepted = target.technologies.find(value => value.text.trim().toLocaleLowerCase() === nested.text.trim().toLocaleLowerCase()); if (accepted) associate(accepted.id, accepted.revision, nested.proposalRef) }
+              continue
+            }
+            commitDraftProfileMutation(plan)
+            associate(record.id, record.revision, item.proposalRef)
+            for (const nested of factualItems) {
+              if (decisionFor(nested.proposalRef).action === 'skip') continue
+              const accepted = record.factualItems.find(value => value.text.trim().toLocaleLowerCase() === nested.text.trim().toLocaleLowerCase())
+              if (accepted) associate(accepted.id, accepted.revision, nested.proposalRef)
+            }
+            for (const nested of technologies) {
+              if (decisionFor(nested.proposalRef).action === 'skip') continue
+              const accepted = record.technologies.find(value => value.text.trim().toLocaleLowerCase() === nested.text.trim().toLocaleLowerCase())
+              if (accepted) associate(accepted.id, accepted.revision, nested.proposalRef)
+            }
+          }
+          return { profile: readProfile(), experience: readExperience() }
+        }
         const contact = proposals.contact?.fullName ? contactRecordSchema.parse({ ...((({ proposalRef: _proposalRef, ...value }) => value)(proposals.contact)), id: persistentId(proposals.contact.proposalRef), revision: 1 }) : null
         const skills = proposals.skills.map(item => { const { proposalRef: _proposalRef, ...value } = item; return skillRecordSchema.parse({ ...value, id: persistentId(item.proposalRef), revision: 1 }) })
         const roles = proposals.experience.map(item => { const { proposalRef: _proposalRef, requiresDateResolution: _requiresDateResolution, ...value } = item; return experienceRecordSchema.parse({ ...value, id: persistentId(item.proposalRef), revision: 1, factualItems: item.factualItems.map(fact => ({ text: fact.text, id: persistentId(fact.proposalRef), revision: 1 })) }) })
@@ -391,8 +550,8 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
         })
         return { profile: readProfile(), experience: readExperience() }
       })
-      try { return { ok: true, message: 'Reviewed CV details were added to your profile.', ...tx() } }
-      catch (error) { return { ok: false, message: error instanceof Error && error.message === 'STALE_PROFILE_PREVIEW' ? 'Your profile changed after this CV was reviewed. Nothing was applied; review the PDF again.' : error instanceof Error && error.message === 'PROFILE_NOT_EMPTY' ? 'This profile is no longer empty. Nothing was applied; use the separate profile editor to preserve existing facts.' : 'The reviewed CV could not be applied. No profile changes were made.' } }
+      try { return { ok: true, message: mergingProfile ? 'Reviewed CV decisions were applied. Accepted additions and updates were saved; skipped records were preserved.' : 'Reviewed CV details were added to your profile.', ...tx() } }
+      catch (error) { return { ok: false, message: error instanceof Error && error.message === 'STALE_PROFILE_PREVIEW' ? 'Your profile changed after this CV was reviewed. Nothing was applied; review the PDF again.' : error instanceof Error && error.message === 'PROFILE_NOT_EMPTY' ? 'This profile is no longer empty. Nothing was applied; use the separate profile editor to preserve existing facts.' : error instanceof Error && error.message === 'PROFILE_MERGE_DECISIONS_REQUIRED' ? 'Choose add, update, or skip for every proposed record before applying.' : error instanceof Error && error.message === 'PROFILE_MERGE_TARGET_INVALID' ? 'A selected record or nested detail no longer belongs to the chosen section or parent. Nothing was applied; review the current profile and choose its current matching record.' : error instanceof Error && error.message === 'PROFILE_MERGE_INVALID' ? 'One or more selected proposals are invalid. Correct or skip them before applying.' : 'The reviewed CV could not be applied. No profile changes were made.' } }
     },
     async validateProfileImport(input: string) {
       const result = validateProfileImport(input)
@@ -1468,5 +1627,5 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
     applyRestore(token, writeSafety) { assertIdle(); return backupEngine.applyRestore(token, writeSafety) },
     cancelRestore(token) { return backupEngine.cancelRestore(token) }
   }
-  return { api, authorizeOutboundPayload, backup, hasActiveWork: () => activeAnalysisByJob.size > 0, close: () => db.close() }
+  return { api, authorizeOutboundPayload, backup, hasActiveWork: () => activeAnalysisByJob.size > 0 || activeProfileAiRuns.size > 0, close: () => db.close() }
 }

@@ -274,11 +274,21 @@ nav button:hover, nav button[aria-current=page] { background: var(--raised); col
 :root[data-appearance=dark] .profile-message.error { color: #ffdce0; background: #4a2029; border-color: #9b4551; }
 .profile-message button { color: inherit; }
 .profile-panel[role=status] { color: var(--muted); }
-.pdf-import-review { display: grid; gap: 18px; }
+.pdf-import-review { display: grid; gap: 16px; }
+.profile-ai-proposals { min-width: 0; display: grid; gap: 16px; }
+.ai-consent-review { display: grid; gap: 12px; }
+.ai-consent-review textarea { width: 100%; min-height: 200px; padding: 12px; color: var(--ink); background: var(--canvas); border: 1px solid var(--control-border); border-radius: 6px; font: inherit; font-weight: 450; overflow-wrap: anywhere; }
 .pdf-proposal { min-width: 0; display: grid; gap: 12px; padding: 16px; border: 1px solid var(--line); border-radius: 6px; }
 .pdf-proposal legend { padding: 0 6px; font-weight: 700; }
+.pdf-nested-proposal { display: grid; gap: 8px; padding-left: 12px; border-left: 2px solid var(--line); }
+.pdf-merge-choice { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--canvas); }
+.pdf-merge-choice legend { font-size: 13px; }
+.pdf-merge-choice p { margin: 0; color: var(--muted); overflow-wrap: anywhere; }
+.pdf-merge-actions { display: flex; flex-wrap: wrap; gap: 8px 16px; }
+.pdf-merge-actions label { display: inline-flex !important; align-items: center; gap: 8px !important; min-height: 40px; }
+.pdf-proposal .pdf-merge-actions input[type=radio] { width: 16px; min-height: 16px; accent-color: var(--blue); }
 .pdf-proposal label:not(.pdf-include) { display: grid; gap: 6px; font-size: 13px; font-weight: 650; }
-.pdf-proposal input:not([type=checkbox]), .pdf-proposal select, .pdf-proposal textarea { width: 100%; min-height: 44px; padding: 10px 12px; color: var(--ink); background: var(--canvas); border: 1px solid var(--control-border); border-radius: 6px; font: inherit; font-weight: 450; }
+.pdf-proposal input:not([type=checkbox]):not([type=radio]), .pdf-proposal select, .pdf-proposal textarea { width: 100%; min-height: 44px; padding: 10px 12px; color: var(--ink); background: var(--canvas); border: 1px solid var(--control-border); border-radius: 6px; font: inherit; font-weight: 450; }
 .pdf-proposal blockquote { margin: 0; padding: 10px 12px; border-left: 3px solid var(--link); background: var(--raised); overflow-wrap: anywhere; }
 .pdf-proposal blockquote small { color: var(--muted); font-size: 12px; }
 .pdf-include { display: flex; gap: 8px; align-items: center; min-height: 40px; font-weight: 650; }

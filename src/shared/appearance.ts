@@ -12,6 +12,7 @@ import type { CanonicalDocument, DocumentFitReport, DocumentPdf } from './docume
 import type { RegenerationProposal, RegenerationTarget } from './regeneration'
 import type { MutateDraftRecordInput, MutateDraftRecordResult } from './draft-records'
 import type { ProfilePdfProposal, ProfilePdfPreview } from './profile-pdf-import'
+import type { ProfileAiConsentAction, ProfileAiConsentPreview, ProfileAiRunResult } from './profile-ai-structuring'
 
 export const appearanceSchema = z.enum(['light', 'dark'])
 export type Appearance = z.infer<typeof appearanceSchema>
@@ -41,6 +42,13 @@ export interface WorkbenchAPI {
   previewProfilePdfImport(): Promise<ProfilePdfPreview>
   cancelProfilePdfImport(token: string): Promise<{ ok: boolean; message: string }>
   applyProfilePdfImport(token: string, proposals: ProfilePdfProposal): Promise<{ ok: boolean; message: string; profile?: ProfileSnapshot; experience?: ExperienceSnapshot }>
+  previewProfileDocxImport(): Promise<ProfilePdfPreview>
+  cancelProfileDocxImport(token: string): Promise<{ ok: boolean; message: string }>
+  applyProfileDocxImport(token: string, proposals: ProfilePdfProposal): Promise<{ ok: boolean; message: string; profile?: ProfileSnapshot; experience?: ExperienceSnapshot }>
+  previewProfileAiStructuring(importToken: string): Promise<ProfileAiConsentPreview>
+  consentProfileAiStructuring(token: string, accepted: boolean): Promise<ProfileAiConsentAction>
+  runProfileAiStructuring(token: string): Promise<ProfileAiRunResult>
+  cancelProfileAiStructuring(token: string): Promise<{ ok: boolean; message: string }>
   exportProfile(): Promise<{ ok: boolean; cancelled: boolean; message: string }>
   previewProfileImport(): Promise<ProfileExchangeResult>
   applyProfileImport(token: string): Promise<{ ok: boolean; message: string; profile?: ProfileSnapshot }>
@@ -93,10 +101,13 @@ export interface WorkbenchAPI {
   setAnalysisBudgets(value: AnalysisBudgets): Promise<AnalysisUsage>
 }
 
-export type WorkbenchStorageAPI = Omit<WorkbenchAPI, 'exportProfile' | 'previewProfileImport' | 'applyProfileImport' | 'cancelProfileImport' | 'previewProfilePdfImport' | 'cancelProfilePdfImport' | 'applyProfilePdfImport' | 'exportWorkspaceBackup' | 'previewWorkspaceRestore' | 'applyWorkspaceRestore' | 'cancelWorkspaceRestore' | 'measureDocument' | 'getDocumentPdf' | 'copyOpenRouterApiKey' | 'exportApprovedPdf' | 'exportDraftDocx'> & {
+export type WorkbenchStorageAPI = Omit<WorkbenchAPI, 'exportProfile' | 'previewProfileImport' | 'applyProfileImport' | 'cancelProfileImport' | 'previewProfilePdfImport' | 'cancelProfilePdfImport' | 'applyProfilePdfImport' | 'previewProfileDocxImport' | 'cancelProfileDocxImport' | 'applyProfileDocxImport' | 'previewProfileAiStructuring' | 'consentProfileAiStructuring' | 'runProfileAiStructuring' | 'cancelProfileAiStructuring' | 'exportWorkspaceBackup' | 'previewWorkspaceRestore' | 'applyWorkspaceRestore' | 'cancelWorkspaceRestore' | 'measureDocument' | 'getDocumentPdf' | 'copyOpenRouterApiKey' | 'exportApprovedPdf' | 'exportDraftDocx'> & {
   saveDocumentFitReport(jobId: string, report: DocumentFitReport): Promise<DocumentFitReport>
   validateProfileImport(input: string): Promise<{ ok: boolean; message: string }>
   replaceProfile(input: string): Promise<{ ok: boolean; message: string; profile?: ProfileSnapshot }>
   getProfileImportBaseline(): Promise<string>
   importEmptyProfilePdf(sourceHash: string, baseline: string, proposals: ProfilePdfProposal): Promise<{ ok: boolean; message: string; profile?: ProfileSnapshot; experience?: ExperienceSnapshot }>
+  authorizeProfileImportAi(runId: string): void
+  generateProfileImportAi(runId: string, model: string, prompt: string, responseSchema: import('zod').ZodTypeAny): Promise<{ text: string; attempts: number }>
+  cancelProfileImportAi(runId: string): void
 }

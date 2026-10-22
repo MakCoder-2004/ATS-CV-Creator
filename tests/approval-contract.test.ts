@@ -1,11 +1,12 @@
 import { afterEach, expect, test } from 'vitest'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createWorkbench } from '../src/main/workbench'
 import type { AnalysisTransport } from '../src/main/posting-analysis'
 import { analysisBudgetValues } from '../src/shared/posting-analysis'
+import { mapProfilePdfPages } from '../src/shared/profile-pdf-import'
 
 const directories: string[] = []
 const opened: Array<ReturnType<typeof createWorkbench>> = []
@@ -241,6 +242,21 @@ test('a changed or deleted cited source blocks approval while an unrelated new s
   await other.workspace.api.deleteSkill(other.skillId)
   expect(await other.workspace.api.approveDraft(other.jobId)).toMatchObject({ ok: false })
   expect(await other.workspace.api.assertDraftExportable(other.jobId)).toMatchObject({ ok: false })
+})
+
+test('a populated CV merge updating a cited source makes the affected draft stale', async () => {
+  const { workspace, jobId, skillId } = await fixture()
+  await workspace.api.checkDraft(jobId)
+  await measure(workspace, jobId)
+  expect(await workspace.api.approveDraft(jobId)).toMatchObject({ ok: true })
+  const baseline = await workspace.api.getProfileImportBaseline()
+  const draft = mapProfilePdfPages([{ page: 1, text: 'SKILLS: TypeScript 6' }])
+  const refs = [...draft.skills.map(item => item.proposalRef), ...draft.sources.map(source => source.proposalRef)]
+  const proposalIds = Object.fromEntries([...new Set(refs)].map(ref => [ref, randomUUID()]))
+  const proposals = { ...draft, proposalIds, decisions: { [draft.skills[0].proposalRef]: { action: 'update' as const, targetId: skillId } }, sources: draft.sources.map(source => ({ ...source, proposalId: proposalIds[source.proposalRef] })) }
+  const merged = await workspace.api.importEmptyProfilePdf('e'.repeat(64), baseline, proposals)
+  expect(merged.ok).toBe(true)
+  expect(await workspace.api.assertDraftExportable(jobId)).toMatchObject({ ok: false, message: expect.stringMatching(/stale|current checks/i) })
 })
 
 test('known unresolved generation failure remains blocked through direct public approval and export APIs', async () => {
