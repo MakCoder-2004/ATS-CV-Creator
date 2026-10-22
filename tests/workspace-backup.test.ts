@@ -150,13 +150,13 @@ test('restore rejects oversized aggregate, table, row, and posting-revision inpu
 
   const tooWideRow = structuredClone(base)
   tooWideRow.tables.jobs.rows[0].data = 'x'.repeat(MAX_WORKSPACE_BACKUP_ROW_BYTES + 1)
-  expect(() => workbench.backup.previewRestore(JSON.stringify(tooWideRow))).toThrow(/row jobs.*8 MiB/i)
+  expect(() => workbench.backup.previewRestore(JSON.stringify(tooWideRow))).toThrow(/row jobs.*16 MiB/i)
 
   const tooManyRevisions = structuredClone(base)
   const jobData = JSON.parse(tooManyRevisions.tables.jobs.rows[0].data)
-  jobData.revisions = Array.from({ length: MAX_WORKSPACE_BACKUP_POSTING_REVISIONS + 1 }, (_, index) => ({ title: 'Role', company: 'Example', description: 'Archived text.', revision: index + 1, acceptedAt: jobData.updatedAt, provenance: 'manual' }))
+  jobData.revisions = Array.from({ length: MAX_WORKSPACE_BACKUP_POSTING_REVISIONS + 1 }, () => null)
   tooManyRevisions.tables.jobs.rows[0].data = JSON.stringify(jobData)
-  expect(() => workbench.backup.previewRestore(JSON.stringify(tooManyRevisions))).toThrow(/256-revision safety limit/i)
+  expect(() => workbench.backup.previewRestore(JSON.stringify(tooManyRevisions))).toThrow(/100000-revision safety limit/i)
   expect(await workbench.api.openJob(saved.value.id)).toEqual(saved.value)
   workbench.close(); instances.pop()
   expect(await open(dir).api.openJob(saved.value.id)).toEqual(saved.value)

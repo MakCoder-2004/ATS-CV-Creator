@@ -303,6 +303,54 @@ test('opening another job returns only its posting and updating one keeps its id
   reopened.close()
 })
 
+test('posting revision write ceiling matches backup limits and refuses without pruning or partial mutation', async () => {
+  const { directory, workbench } = open()
+  let saved = await workbench.api.saveJob({ title: 'History-bound role', company: 'Example', description: 'Revision 1.' })
+  if (!saved.ok) throw Error(saved.error.message)
+  for (let revision = 2; revision <= 256; revision++) {
+    saved = await workbench.api.saveJob({ id: saved.value.id, title: 'History-bound role', company: 'Example', description: `Revision ${revision}.` })
+    if (!saved.ok) throw Error(`Revision ${revision} was refused before the advertised history limit.`)
+  }
+  expect(saved.value.revisions).toHaveLength(256)
+  const atLimit = saved.value
+  const rejected = await workbench.api.saveJob({ id: saved.value.id, title: 'History-bound role', company: 'Example', description: 'Revision 257.' })
+  expect(rejected).toMatchObject({ ok: false, error: { code: 'REVISION_LIMIT', message: expect.stringMatching(/256-revision history limit/) } })
+  expect(await workbench.api.openJob(saved.value.id)).toEqual(atLimit)
+  const backup = workbench.backup.createBackup()
+  const preview = workbench.backup.previewRestore(backup)
+  workbench.backup.applyRestore(preview.token, safety => safety)
+  expect(await workbench.api.openJob(saved.value.id)).toEqual(atLimit)
+  workbench.close()
+  const reopened = createWorkbench(directory)
+  expect(await reopened.api.openJob(saved.value.id)).toEqual(atLimit)
+  reopened.close()
+})
+
+test('job history byte ceiling refuses atomically and the last accepted full history remains backupable', async () => {
+  const { directory, workbench } = open()
+  const description = (revision: number) => `${revision.toString().padStart(2, '0')}${'x'.repeat(199998)}`
+  let saved = await workbench.api.saveJob({ title: 'Large history role', company: 'Example', description: description(0) })
+  if (!saved.ok) throw Error(saved.error.message)
+  let refused: unknown
+  for (let revision = 1; revision <= 30; revision++) {
+    const result = await workbench.api.saveJob({ id: saved.value.id, title: 'Large history role', company: 'Example', description: description(revision) })
+    if (!result.ok) { refused = result; break }
+    saved = result
+  }
+  expect(refused).toMatchObject({ ok: false, error: { code: 'HISTORY_SIZE_LIMIT', message: expect.stringMatching(/4 MiB/) } })
+  if (!saved.ok) throw new Error('The last accepted job revision was lost.')
+  const lastAccepted = saved.value
+  expect(await workbench.api.openJob(lastAccepted.id)).toEqual(lastAccepted)
+  const backup = workbench.backup.createBackup()
+  const restore = workbench.backup.previewRestore(backup)
+  workbench.backup.applyRestore(restore.token, safety => safety)
+  expect(await workbench.api.openJob(lastAccepted.id)).toEqual(lastAccepted)
+  workbench.close()
+  const reopened = createWorkbench(directory)
+  expect(await reopened.api.openJob(lastAccepted.id)).toEqual(lastAccepted)
+  reopened.close()
+})
+
 test('model capacity refusal preserves long saved text and sends no scripted model request', async () => {
   let modelDispatches = 0
   const transport = {

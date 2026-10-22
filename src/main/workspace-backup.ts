@@ -3,7 +3,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { MAX_WORKSPACE_BACKUP_BYTES, MAX_WORKSPACE_BACKUP_POSTING_REVISIONS, MAX_WORKSPACE_BACKUP_ROW_BYTES, WORKSPACE_BACKUP_TABLE_ROW_LIMITS, workspaceBackupSchema, workspaceBackupWarning, type WorkspaceBackupEngine, type WorkspaceRestorePreview } from '../shared/workspace-backup'
 import { contactRecordSchema, skillRecordSchema, profileEntrySchema, evidenceRevisionSchema, uuidSchema } from '../shared/profile'
 import { experienceRecordSchema, projectRecordSchema } from '../shared/experience'
-import { jobRecordSchema } from '../shared/jobs'
+import { jobRecordSchema, MAX_JOB_RECORD_UTF8_BYTES } from '../shared/jobs'
 import { draftRevisionSchema } from '../shared/draft'
 import { analysisResultSchema, analysisBudgetsSchema, postingAnalysisSchema } from '../shared/posting-analysis'
 import { regenerationProposalSchema } from '../shared/regeneration'
@@ -61,10 +61,11 @@ export function createWorkspaceBackupEngine(db: Database.Database): WorkspaceBac
       for (const row of table.rows) {
         let encoded: string
         try { encoded = JSON.stringify(row) } catch { throw new Error(`Backup table ${name} contains an invalid row.`) }
-        if (Buffer.byteLength(encoded, 'utf8') > MAX_WORKSPACE_BACKUP_ROW_BYTES) throw new Error(`Backup row ${name} exceeds the 8 MiB safety limit.`)
+        if (Buffer.byteLength(encoded, 'utf8') > MAX_WORKSPACE_BACKUP_ROW_BYTES) throw new Error(`Backup row ${name} exceeds the 16 MiB safety limit.`)
         if (name === 'jobs' && row && typeof row === 'object' && !Array.isArray(row)) {
           const value = (row as Record<string, unknown>).data
           if (typeof value === 'string') {
+            if (Buffer.byteLength(value, 'utf8') > MAX_JOB_RECORD_UTF8_BYTES) throw new Error(`Backup job row exceeds the ${MAX_JOB_RECORD_UTF8_BYTES / (1024 * 1024)} MiB accepted-storage limit.`)
             let job: unknown
             try { job = JSON.parse(value) } catch { continue }
             if (job && typeof job === 'object' && !Array.isArray(job)) {

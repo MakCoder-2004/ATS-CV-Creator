@@ -2,6 +2,8 @@ import { z } from 'zod'
 
 export const POSTING_TEXT_MAX_CODE_POINTS = 200_000
 export const POSTING_TEXT_MAX_UTF8_BYTES = 1_048_576
+export const MAX_POSTING_REVISIONS = 256
+export const MAX_JOB_RECORD_UTF8_BYTES = 4 * 1024 * 1024
 const postingText = z.string()
   .refine(value => Array.from(value).length <= POSTING_TEXT_MAX_CODE_POINTS, 'Posting text exceeds the 200,000-character safety limit.')
   .refine(value => new TextEncoder().encode(value).byteLength <= POSTING_TEXT_MAX_UTF8_BYTES, 'Posting text exceeds the 1 MiB UTF-8 safety limit.')

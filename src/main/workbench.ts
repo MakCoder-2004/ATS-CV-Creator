@@ -8,7 +8,7 @@ import { appearanceSchema, settingsSchema, type WorkbenchStorageAPI } from '../s
 import { defaultOpenRouterModel, openRouterKeyInputSchema, openRouterModelSchema, type OpenRouterModel } from '../shared/openrouter-settings'
 import { contactInputSchema, contactRecordSchema, evidenceRevisionSchema, profileEntryInputSchema, profileEntrySchema, profileMutationResultSchema, profileSnapshotSchema, skillInputSchema, skillRecordSchema, uuidSchema, type ContactRecord, type EvidenceRevision, type ProfileEntry, type ProfileSnapshot, type SkillRecord } from '../shared/profile'
 import { experienceInputSchema, experienceRecordSchema, experienceSnapshotSchema, experienceMutationResultSchema, projectInputSchema, projectRecordSchema, type ExperienceRecord, type ProjectRecord, type FactualItemRecord, type ExperienceSnapshot } from '../shared/experience'
-import { jobInputSchema, jobRecordSchema, jobSaveResultSchema } from '../shared/jobs'
+import { jobInputSchema, jobRecordSchema, jobSaveResultSchema, MAX_JOB_RECORD_UTF8_BYTES, MAX_POSTING_REVISIONS } from '../shared/jobs'
 import type { JobRecord } from '../shared/jobs'
 import { profileExchangeSchema, type ProfileExchange } from '../shared/profile-exchange'
 import { prepareOutboundBundle, type ConsentSource, type EvidenceScopeRevision, type OutboundBundle, type OutboundPayload } from '../shared/outbound-consent'
@@ -17,7 +17,7 @@ import type { OutboundConsentAction, OutboundConsentPreview } from '../shared/ou
 import { regenerationProposalSchema, regenerationTargetSchema, type RegenerationTarget, type RegenerationProposal } from '../shared/regeneration'
 import { outboundConsentActionSchema, outboundConsentPreviewSchema } from '../shared/outbound-consent-contract'
 import { AnalysisError, createAnalysisDispatcher, type AnalysisTransport } from './posting-analysis'
-import { createOpenRouterAnalysisTransport, MAX_OPENROUTER_REQUEST_BODY_BYTES, serializeOpenRouterRequestBody } from './openrouter-analysis-transport'
+import { createOpenRouterAnalysisTransport, MAX_PROFILE_AI_REQUEST_BODY_BYTES, serializeOpenRouterRequestBody } from './openrouter-analysis-transport'
 import { createHash } from 'node:crypto'
 import { z } from 'zod'
 import { analysisBudgetsSchema, analysisResultSchema, analysisUsageSchema, defaultAnalysisBudgets, generationRecoverySchema, postingAnalysisSchema, displayPostingAnalysisSchema, type AnalysisBudgets, type AnalysisResult, type RecoveryChoice } from '../shared/posting-analysis'
@@ -379,7 +379,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       const selectedModel = openRouterModelSchema.parse(model)
       if (selectedModel !== openRouterModelSchema.parse(settings?.value ?? defaultOpenRouterModel)) throw new Error('The OpenRouter model changed after consent. Review the outgoing text and authorize a fresh request.')
       const requestBody = serializeOpenRouterRequestBody({ model: selectedModel, prompt, responseSchema, maxTokens: 2048 })
-      if (Buffer.byteLength(requestBody, 'utf8') > MAX_OPENROUTER_REQUEST_BODY_BYTES) throw new Error('The complete AI request, including its schema, exceeds the 64 KiB request limit. Nothing was sent; continue with local review.')
+      if (Buffer.byteLength(requestBody, 'utf8') > MAX_PROFILE_AI_REQUEST_BODY_BYTES) throw new Error('The complete AI request, including its schema, exceeds the 64 KiB request limit. Nothing was sent; continue with local review.')
       activeProfileAiRuns.add(runId)
       try { return await dispatcher.generate({ runId, jobId: runId, model: selectedModel, prompt, consentId: runId, responseSchema, retryProviderFailures: false, maxTokens: 2048, maxResponseChars: 500_000 }) }
       finally { activeProfileAiRuns.delete(runId) }
@@ -843,9 +843,12 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
         const priorRevisions = prior && prior.revisions.length === 0 && changed ? [{ title: prior.title, company: prior.company, description: prior.description, revision: 1, acceptedAt: prior.updatedAt, provenance: 'legacy-unknown' as const }] : prior?.revisions ?? []
         const acceptedRevision = changed ? { ...parsed.data, revision: (priorRevisions.at(-1)?.revision ?? 0) + 1, acceptedAt: now, provenance: 'manual' as const } : undefined
         const revisions = acceptedRevision ? [...priorRevisions, acceptedRevision] : priorRevisions
+        if (changed && revisions.length > MAX_POSTING_REVISIONS) return jobSaveResultSchema.parse({ ok: false, error: { code: 'REVISION_LIMIT', message: `This saved job reached the ${MAX_POSTING_REVISIONS}-revision history limit. Nothing was changed and no history was deleted.`, fieldErrors: { description: 'The revision limit was reached. Existing posting history remains intact.' } } })
         if (changed && input.id && activeAnalysisByJob.has(input.id)) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'A provider operation is active for this saved job. Cancel it before changing the posting.' } })
         const record = jobRecordSchema.parse({ ...parsed.data, id: input.id ?? randomUUID(), createdAt: existingRow?.created_at ?? now, updatedAt: changed ? now : prior!.updatedAt, provenance: changed ? 'manual' : prior?.provenance ?? 'manual', sourceSnapshot: prior?.sourceSnapshot ?? null, revisions })
-        db.prepare('INSERT INTO jobs (id, created_at, updated_at, data) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET updated_at=excluded.updated_at, data=excluded.data').run(record.id, record.createdAt, record.updatedAt, JSON.stringify(record))
+        const serializedRecord = JSON.stringify(record)
+        if (Buffer.byteLength(serializedRecord, 'utf8') > MAX_JOB_RECORD_UTF8_BYTES) return jobSaveResultSchema.parse({ ok: false, error: { code: 'HISTORY_SIZE_LIMIT', message: 'This saved job and its complete revision history exceed the 4 MiB per-job backup limit. Nothing was changed and no history was deleted.', fieldErrors: { description: 'Review the posting revision history limit; existing versions remain intact.' } } })
+        db.prepare('INSERT INTO jobs (id, created_at, updated_at, data) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET updated_at=excluded.updated_at, data=excluded.data').run(record.id, record.createdAt, record.updatedAt, serializedRecord)
         if (changed && prior) {
           const unresolved = (db.prepare('SELECT COUNT(*) AS count FROM provider_attempt_outcomes WHERE checkpointed_at IS NULL AND run_id IN (SELECT run_id FROM generation_recovery WHERE job_id = ?)').get(record.id) as { count: number }).count
           db.prepare("UPDATE outbound_consents SET revoked = 1 WHERE run_id IN (SELECT run_id FROM generation_recovery WHERE job_id = ? AND status IN ('running','paused')) OR run_id = (SELECT run_id FROM analysis_run_state WHERE job_id = ?)").run(record.id, record.id)

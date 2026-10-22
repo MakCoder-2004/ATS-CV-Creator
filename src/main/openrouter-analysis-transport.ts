@@ -2,7 +2,8 @@ import { z } from 'zod'
 import type { AnalysisTransport } from './posting-analysis'
 
 const endpoint = 'https://openrouter.ai/api/v1/chat/completions'
-export const MAX_OPENROUTER_REQUEST_BODY_BYTES = 64 * 1024
+export const MAX_PROFILE_AI_REQUEST_BODY_BYTES = 64 * 1024
+export const MAX_MODEL_REQUEST_BODY_BYTES = 8 * 1024 * 1024
 export const MAX_OPENROUTER_RESPONSE_BYTES = 4 * 1024 * 1024
 
 export function serializeOpenRouterRequestBody(input: { model: string; prompt: string; responseSchema: import('zod').ZodTypeAny; maxTokens?: number; providerOnly?: string[] }) {
@@ -82,16 +83,22 @@ export function createOpenRouterAnalysisTransport(apiKey: string, fetcher: typeo
   return {
     async validateCapacity({ runId, model, prompt, responseSchema, maxTokens, signal }) {
       const capacity = await fetchCapacity(model, runId, signal, fetcher)
-      try { return capacity && fitsCapacity({ model, prompt, responseSchema, maxTokens }, capacity) ? { fits: true, providers: capacity.providers } : { fits: false, providers: [] } }
-      catch { return { fits: false, providers: [] } }
+      try {
+        if (!capacity) return { fits: false, providers: [] }
+        const requestBytes = new TextEncoder().encode(serializeOpenRouterRequestBody({ model, prompt, responseSchema, maxTokens, providerOnly: capacity.providers })).byteLength
+        if (requestBytes > MAX_MODEL_REQUEST_BODY_BYTES) return { fits: false, providers: [], message: 'The complete authorized model request exceeds the 8 MiB transport safety limit. No model request was sent; keep the saved posting intact and consciously shorten the working posting or choose another supported path.' }
+        return fitsCapacity({ model, prompt, responseSchema, maxTokens }, capacity) ? { fits: true, providers: capacity.providers } : { fits: false, providers: [] }
+      } catch { return { fits: false, providers: [] } }
     },
     async generate({ model, prompt, signal, responseSchema, maxTokens = 2048, maxResponseChars, providerOnly }) {
+      const requestBody = serializeOpenRouterRequestBody({ model, prompt, responseSchema, maxTokens, providerOnly })
+      if (new TextEncoder().encode(requestBody).byteLength > MAX_MODEL_REQUEST_BODY_BYTES) throw new Error('The complete model request exceeds the 8 MiB transport safety limit; no provider request was sent.')
       let response: Response
       try {
         response = await fetcher(endpoint, {
           method: 'POST', signal,
           headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-          body: serializeOpenRouterRequestBody({ model, prompt, responseSchema, maxTokens, providerOnly })
+          body: requestBody
         })
       } catch (error) {
         // Preserve network codes for the dispatcher's offline/cancellation handling; never surface request headers.

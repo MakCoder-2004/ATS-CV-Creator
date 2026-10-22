@@ -1,6 +1,6 @@
 import { expect, test, vi } from 'vitest'
 import { z } from 'zod'
-import { createOpenRouterAnalysisTransport, MAX_OPENROUTER_RESPONSE_BYTES } from '../src/main/openrouter-analysis-transport'
+import { createOpenRouterAnalysisTransport, MAX_MODEL_REQUEST_BODY_BYTES, MAX_OPENROUTER_RESPONSE_BYTES } from '../src/main/openrouter-analysis-transport'
 import { minimizeProfileText } from '../src/shared/profile-ai-structuring'
 import { profilePdfProposalDraftSchema } from '../src/shared/profile-pdf-import'
 
@@ -109,6 +109,20 @@ test('fails closed for unknown capacity and requests that exceed metadata output
   expect(await limited.validateCapacity!({ runId: 'run-limited', model, prompt: 'short', responseSchema: input.responseSchema, maxTokens: 2048, signal: input.signal })).toMatchObject({ fits: false })
   const oversized = createOpenRouterAnalysisTransport('unused', vi.fn(async (url: unknown) => new Response(String(url).includes('/endpoints') ? endpoints(5000, 4096) : response(5000, 4096), { status: 200 })) as unknown as typeof fetch)
   expect(await oversized.validateCapacity!({ runId: 'run-oversized', model, prompt: 'X'.repeat(6000), responseSchema: input.responseSchema, maxTokens: 2048, signal: input.signal })).toMatchObject({ fits: false })
+})
+
+test('rejects the complete request above the hard transport byte ceiling before any model POST', async () => {
+  const model = input.model
+  const metadata = { data: [{ id: model, context_length: 20_000_000, architecture: { tokenizer: 'GPT' }, top_provider: { context_length: 20_000_000, max_completion_tokens: 4096 } }] }
+  const endpoints = { data: { id: model, endpoints: [{ context_length: 20_000_000, max_completion_tokens: 4096, tag: 'provider-a' }] } }
+  const fetcher = vi.fn(async (url: unknown) => new Response(JSON.stringify(String(url).includes('/endpoints') ? endpoints : metadata), { status: 200 })) as unknown as typeof fetch
+  const transport = createOpenRouterAnalysisTransport('private-key', fetcher)
+  const prompt = 'x'.repeat(MAX_MODEL_REQUEST_BODY_BYTES + 1)
+  const result = await transport.validateCapacity!({ runId: 'transport-byte-limit', model, prompt, responseSchema: input.responseSchema, maxTokens: 2048, signal: input.signal })
+  expect(result).toMatchObject({ fits: false, message: expect.stringMatching(/8 MiB/) })
+  expect(fetcher).toHaveBeenCalledTimes(2)
+  await expect(transport.generate({ ...input, prompt, maxTokens: 2048 })).rejects.toThrow(/8 MiB/)
+  expect(fetcher).toHaveBeenCalledTimes(2)
 })
 
 test('bounds streamed provider output when no character limit was supplied', async () => {
