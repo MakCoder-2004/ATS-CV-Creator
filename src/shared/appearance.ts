@@ -2,7 +2,7 @@ import { z } from 'zod'
 import type { ContactInput, EvidenceRevision, ProfileEntryInput, ProfileMutationResult, ProfileSnapshot, SkillInput } from './profile'
 import type { ExperienceInput, ExperienceMutationResult, ExperienceSnapshot, ProjectInput } from './experience'
 import { openRouterSettingsSchema, openRouterModelSchema, type OpenRouterModel } from './openrouter-settings'
-import type { JobInput, JobRecord, JobSaveResult } from './jobs'
+import type { JobInput, JobRecord, JobSaveResult, PostingRefreshChoice } from './jobs'
 import type { ProfileExchangeResult } from './profile-exchange'
 import type { OutboundConsentAction, OutboundConsentPreview } from './outbound-consent-contract'
 import type { AnalysisBudgets, AnalysisResult, AnalysisUsage, GenerationRecovery, RecoveryChoice } from './posting-analysis'
@@ -13,7 +13,7 @@ import type { RegenerationProposal, RegenerationTarget } from './regeneration'
 import type { MutateDraftRecordInput, MutateDraftRecordResult } from './draft-records'
 import type { ProfilePdfProposal, ProfilePdfPreview } from './profile-pdf-import'
 import type { ProfileAiConsentAction, ProfileAiConsentPreview, ProfileAiRunResult } from './profile-ai-structuring'
-import type { PostingFetchState, PostingPreviewEdit, PostingReview } from './posting-import'
+import type { PostingFetchState, PostingPreviewEdit, PostingRefreshComparison, PostingReview } from './posting-import'
 
 export const appearanceSchema = z.enum(['light', 'dark'])
 export type Appearance = z.infer<typeof appearanceSchema>
@@ -70,6 +70,8 @@ export interface WorkbenchAPI {
   updatePostingPreview(token: string, expectedRevision: number, input: PostingPreviewEdit): Promise<{ ok: boolean; revision?: number; message?: string }>
   reviewPostingPreview(token: string, revision: number, review: PostingReview): Promise<{ ok: boolean; message?: string }>
   acceptPostingImport(token: string, revision: number): Promise<JobSaveResult>
+  comparePostingRefresh(token: string, jobId: string, expectedUpdatedAt: string, expectedRevision: number): Promise<PostingRefreshComparison>
+  acceptPostingRefresh(token: string, revision: number, jobId: string, expectedUpdatedAt: string, expectedBaseRevision: number, choices: PostingRefreshChoice): Promise<JobSaveResult>
   listJobs(): Promise<JobRecord[]>
   openJob(id: string): Promise<JobRecord | null>
   startPostingFetch(url: string): Promise<{ token: string }>

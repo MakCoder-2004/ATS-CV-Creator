@@ -1,4 +1,5 @@
 import { afterEach, expect, test, vi } from 'vitest'
+import { createHash } from 'node:crypto'
 import { mkdtempSync, readFileSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -6,6 +7,8 @@ import { join } from 'node:path'
 import { gzipSync } from 'node:zlib'
 import Database from 'better-sqlite3'
 import { createWorkbench } from '../src/main/workbench'
+import type { AnalysisTransport } from '../src/main/posting-analysis'
+import { analysisBudgetValues } from '../src/shared/posting-analysis'
 import { normalizePostingUrl, samePostingSource } from '../src/shared/posting-identity'
 
 const directories: string[] = []
@@ -13,8 +16,10 @@ const directories: string[] = []
 test('posting source identity removes known tracking only and preserves role-bearing URL differences', () => {
   expect(normalizePostingUrl('https://EXAMPLE.test/jobs/42?utm_source=mail&team=platform#details')).toBe('https://example.test/jobs/42?team=platform')
   expect(normalizePostingUrl('https://example.test/jobs/42?team=platform')).not.toBe(normalizePostingUrl('https://example.test/jobs/42?team=security'))
+  expect(normalizePostingUrl('https://example.test/jobs/42?a=1&b=2')).not.toBe(normalizePostingUrl('https://example.test/jobs/42?b=2&a=1'))
   expect(samePostingSource({ submittedUrl: 'https://jobs.lever.co/board/role?utm_campaign=x', finalUrl: 'https://jobs.lever.co/board/role' }, { submittedUrl: 'https://jobs.lever.co/board/role?utm_medium=email', finalUrl: 'https://jobs.lever.co/board/role' })).toBe(true)
-  expect(samePostingSource({ submittedUrl: 'https://jobs.lever.co/board/role-a', finalUrl: 'https://jobs.lever.co/board/role-a' }, { submittedUrl: 'https://jobs.lever.co/board/role-b', finalUrl: 'https://jobs.lever.co/board/role-b' })).toBe(false)
+  expect(samePostingSource({ submittedUrl: 'https://jobs.lever.co/board/role-a', finalUrl: 'https://jobs.lever.co/board/role-a', sourceIdentity: 'lever:board/role-b' }, { submittedUrl: 'https://jobs.lever.co/board/role-b', finalUrl: 'https://jobs.lever.co/board/role-b', sourceIdentity: 'lever:board/role-a' })).toBe(false)
+  expect(samePostingSource({ submittedUrl: 'https://jobs.lever.co/board/role-a', finalUrl: 'https://jobs.lever.co/board/apply', sourceIdentity: 'lever:board/role-a' }, { submittedUrl: 'https://jobs.lever.co/board/role-b', finalUrl: 'https://jobs.lever.co/board/apply', sourceIdentity: 'lever:board/role-b' })).toBe(false)
   expect(normalizePostingUrl('http://example.test/jobs/42')).toBeNull()
 })
 afterEach(async () => { for (const directory of directories.splice(0)) await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) })
@@ -35,6 +40,141 @@ async function acceptImport(api: ReturnType<typeof createWorkbench>['api'], toke
   const staged = await stageImportReview(api, token, input, review)
   return api.acceptPostingImport(token, staged.revision)
 }
+
+test('changed exact-source refresh compares all three versions and explicitly accepts selected fields atomically', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'cv-tailor-refresh-contract-'))
+  directories.push(directory)
+  const initialText = `Responsibilities\n${'Build dependable fictional platform services with collaboration and careful engineering. '.repeat(3)}\nRequirements\n• TypeScript and testing.`
+  const refreshedText = `Responsibilities\n${'Build dependable fictional platform services with collaboration and careful engineering. '.repeat(3)}\nRequirements\n• TypeScript, testing, and accessibility.`
+  let fetchCount = 0
+  const requestedUrls: string[] = []
+  const response = () => JSON.stringify({ id: 'refresh-role', text: 'Platform Engineer', company: 'Example Employer', descriptionPlain: ++fetchCount === 1 ? initialText : refreshedText })
+  const wb = createWorkbench(directory, undefined, undefined, undefined, { lookup: async () => [{ address: '8.8.8.8', family: 4 }], request: async url => { requestedUrls.push(url.href); return { status: 200, headers: { 'content-type': 'application/json' }, body: Buffer.from(response()) } } })
+  try {
+    const first = await wb.api.startPostingFetch('https://api.lever.co/v0/postings/example-board/refresh-role')
+    const firstState = await readReady(wb.api, first.token)
+    const saved = await acceptImport(wb.api, first.token, { title: firstState.preview.title, company: firstState.preview.company!, description: firstState.preview.description }, { completenessConfirmed: true, conflictResolutions: {} })
+    if (!saved.ok) throw new Error(saved.error.message)
+    const second = await wb.api.startPostingFetch('https://api.lever.co/v0/postings/example-board/refresh-role?utm_source=refresh')
+    const secondState = await readReady(wb.api, second.token)
+    const stagedRefresh = await wb.api.updatePostingPreview(second.token, 0, { title: secondState.preview.title, company: secondState.preview.company ?? '', description: secondState.preview.description, optionalDetails: secondState.preview.optionalDetails })
+    if (!stagedRefresh.ok || stagedRefresh.revision === undefined) throw new Error('Could not stage refreshed source for review.')
+    expect(await wb.api.reviewPostingPreview(second.token, stagedRefresh.revision, { completenessConfirmed: true, conflictResolutions: {} })).toMatchObject({ ok: true })
+    expect(await wb.api.listJobs()).toEqual([saved.value])
+    const comparison = await wb.api.comparePostingRefresh(second.token, saved.value.id, saved.value.updatedAt, saved.value.revisions.at(-1)?.revision ?? 0)
+    expect(comparison).toMatchObject({ ok: true, unchanged: false, previousSource: { description: initialText }, working: { description: initialText }, newSource: { description: refreshedText, submittedUrl: 'https://api.lever.co/v0/postings/example-board/refresh-role?utm_source=refresh' } })
+    expect(requestedUrls[1]).toBe('https://api.lever.co/v0/postings/example-board/refresh-role')
+    const database = new Database(join(directory, 'workbench.sqlite'))
+    database.exec("CREATE TRIGGER refuse_refresh BEFORE UPDATE ON jobs BEGIN SELECT RAISE(ABORT, 'simulated refresh transaction failure'); END")
+    expect(await wb.api.acceptPostingRefresh(second.token, stagedRefresh.revision, saved.value.id, saved.value.updatedAt, saved.value.revisions.at(-1)?.revision ?? 0, { title: 'source', company: 'working', description: 'working', optionalDetails: {} })).toMatchObject({ ok: false })
+    expect(await wb.api.openJob(saved.value.id)).toEqual(saved.value)
+    database.exec('DROP TRIGGER refuse_refresh'); database.close()
+    const accepted = await wb.api.acceptPostingRefresh(second.token, stagedRefresh.revision, saved.value.id, saved.value.updatedAt, saved.value.revisions.at(-1)?.revision ?? 0, { title: 'source', company: 'working', description: 'working', optionalDetails: {} })
+    expect(accepted).toMatchObject({ ok: true, value: { title: 'Platform Engineer', description: initialText, sourceSnapshot: { description: refreshedText, submittedUrl: 'https://api.lever.co/v0/postings/example-board/refresh-role?utm_source=refresh' }, sourceHistory: [{ description: initialText }], revisions: [{ revision: 1 }, { revision: 2, description: initialText }] } })
+    if (!accepted.ok) throw new Error(accepted.error.message)
+    expect(await wb.api.getAnalysisUsage()).toMatchObject({ attempts: 0 })
+    const backup = wb.backup.createBackup()
+    const backupJob = JSON.parse(JSON.parse(backup).tables.jobs.rows[0].data)
+    expect(backupJob.sourceHistory[0].description).toBe(initialText)
+    const unrelated = await wb.api.saveJob({ title: 'Unrelated', company: 'Other', description: 'Unrelated role.' })
+    expect(unrelated.ok).toBe(true)
+    const restore = wb.backup.previewRestore(backup)
+    wb.backup.applyRestore(restore.token, safety => safety)
+    expect(await wb.api.listJobs()).toHaveLength(1)
+    expect(await wb.api.acceptPostingRefresh(second.token, stagedRefresh.revision, saved.value.id, saved.value.updatedAt, saved.value.revisions.at(-1)?.revision ?? 0, { title: 'source', company: 'working', description: 'source', optionalDetails: {} })).toMatchObject({ ok: false })
+    const third = await wb.api.startPostingFetch('https://api.lever.co/v0/postings/example-board/refresh-role')
+    const thirdState = await readReady(wb.api, third.token)
+    const thirdEdit = await wb.api.updatePostingPreview(third.token, 0, { title: thirdState.preview.title, company: thirdState.preview.company ?? '', description: thirdState.preview.description, optionalDetails: thirdState.preview.optionalDetails })
+    if (!thirdEdit.ok || thirdEdit.revision === undefined) throw new Error('Could not stage unchanged source.')
+    await wb.api.reviewPostingPreview(third.token, thirdEdit.revision, { completenessConfirmed: true, conflictResolutions: {} })
+    const thirdComparison = await wb.api.comparePostingRefresh(third.token, saved.value.id, accepted.value.updatedAt, accepted.value.revisions.at(-1)?.revision ?? 0)
+    expect(thirdComparison).toMatchObject({ ok: true, unchanged: true })
+    const noOp = await wb.api.acceptPostingRefresh(third.token, thirdEdit.revision, saved.value.id, accepted.value.updatedAt, accepted.value.revisions.at(-1)?.revision ?? 0, { title: 'working', company: 'working', description: 'working', optionalDetails: {} })
+    expect(noOp).toMatchObject({ ok: true, value: { updatedAt: accepted.value.updatedAt, revisions: [{ revision: 1 }, { revision: 2 }] } })
+    const fourth = await wb.api.startPostingFetch('https://api.lever.co/v0/postings/example-board/refresh-role')
+    const fourthState = await readReady(wb.api, fourth.token)
+    const fourthEdit = await wb.api.updatePostingPreview(fourth.token, 0, { title: fourthState.preview.title, company: fourthState.preview.company ?? '', description: fourthState.preview.description, optionalDetails: fourthState.preview.optionalDetails })
+    if (!fourthEdit.ok || fourthEdit.revision === undefined) throw new Error('Could not stage concurrent refresh.')
+    await wb.api.reviewPostingPreview(fourth.token, fourthEdit.revision, { completenessConfirmed: true, conflictResolutions: {} })
+    const concurrent = await wb.api.saveJob({ id: saved.value.id, title: 'Platform Engineer', company: 'Example Employer', description: 'A newer local edit made while refresh was open.' })
+    if (!concurrent.ok) throw new Error(concurrent.error.message)
+    expect(await wb.api.comparePostingRefresh(fourth.token, saved.value.id, noOp.ok ? noOp.value.updatedAt : '', noOp.ok ? noOp.value.revisions.at(-1)?.revision ?? 0 : -1)).toMatchObject({ ok: false, message: expect.stringMatching(/changed/i) })
+    expect(await wb.api.acceptPostingRefresh(fourth.token, fourthEdit.revision, saved.value.id, noOp.ok ? noOp.value.updatedAt : '', noOp.ok ? noOp.value.revisions.at(-1)?.revision ?? 0 : -1, { title: 'source', company: 'source', description: 'source', optionalDetails: {} })).toMatchObject({ ok: false, error: { code: 'CONFLICT' } })
+    await wb.api.cancelPostingFetch(fourth.token)
+    expect(await wb.api.acceptPostingRefresh(fourth.token, fourthEdit.revision, saved.value.id, concurrent.value.updatedAt, concurrent.value.revisions.at(-1)?.revision ?? 0, { title: 'source', company: 'source', description: 'source', optionalDetails: {} })).toMatchObject({ ok: false })
+    expect(await wb.api.openJob(saved.value.id)).toEqual(concurrent.value)
+    wb.close()
+    const reopened = createWorkbench(directory)
+    expect(await reopened.api.openJob(saved.value.id)).toEqual(concurrent.value)
+    reopened.close()
+  } finally { wb.close() }
+}, 30_000)
+
+async function readReady(api: ReturnType<typeof createWorkbench>['api'], token: string) {
+  let state = await api.readPostingPreview(token)
+  for (let attempt = 0; attempt < 300 && state.status === 'fetching'; attempt++) { await new Promise(resolve => setTimeout(resolve, 10)); state = await api.readPostingPreview(token) }
+  if (state.status !== 'ready' && state.status !== 'incomplete') throw new Error(state.status === 'failed' ? state.message : 'Posting preview is unavailable.')
+  return { ...state, revision: 0 }
+}
+
+test('accepting refreshed requirements stales prior analysis without dispatching another model request', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'cv-tailor-refresh-target-'))
+  directories.push(directory)
+  const oldText = `Responsibilities\n${'Maintain reliable fictional services with careful coordination and written operational plans. '.repeat(3)}\nRequirements\n• TypeScript and testing.`
+  const newText = `${oldText}\n• Accessibility review.`
+  let fetchCount = 0, modelCalls = 0
+  const transport: AnalysisTransport = { async generate({ prompt }) {
+    modelCalls++
+    if (prompt.includes('Extract only explicit qualifications')) return JSON.stringify({ required: ['TypeScript'], preferred: [], tools: ['TypeScript'], responsibilities: ['Maintain services'], keywords: ['TypeScript'] })
+    if (prompt.startsWith('Factual repair cycle')) return JSON.stringify({ corrections: [] })
+    if (prompt.startsWith('Propose conservative replacement wording')) {
+      const { sourcesByItem } = JSON.parse(prompt.slice(prompt.indexOf('{')))
+      return JSON.stringify({ items: sourcesByItem.map((sources: string[]) => ({ text: sources[0], rationale: 'Keeps the cited wording while reflecting the role.' })) })
+    }
+    const payload = JSON.parse(prompt.slice(prompt.indexOf('{')))
+    if (prompt.startsWith('Score these numbered')) return JSON.stringify({ relevance: payload.items.map((item: { index: number }) => ({ index: item.index, score: 1, rationale: 'Relevant saved skill.' })) })
+    return JSON.stringify({ headline: 'Engineer', summary: { text: 'Engineer with saved technical skills.', evidence: [payload.selected[0].index], rationale: 'Selected profile evidence.' }, education: [], experience: [], projects: [], skills: payload.selected.filter((item: { category: string }) => item.category === 'skills').map((item: { index: number; text: string }) => ({ name: JSON.parse(item.text).name, evidence: [item.index], rationale: 'Saved skill.' })), certificates: [] })
+  } }
+  const wb = createWorkbench(directory, undefined, transport, undefined, { lookup: async () => [{ address: '8.8.8.8', family: 4 }], request: async () => ({ status: 200, headers: { 'content-type': 'application/json' }, body: Buffer.from(JSON.stringify({ id: 'refresh-target', text: 'Platform Engineer', company: 'Example Employer', descriptionPlain: ++fetchCount === 1 ? oldText : newText })) }) })
+  try {
+    await wb.api.saveSkill({ name: 'TypeScript', category: 'Programming' })
+    const first = await wb.api.startPostingFetch('https://api.lever.co/v0/postings/example-board/refresh-target')
+    const firstState = await readReady(wb.api, first.token)
+    const saved = await acceptImport(wb.api, first.token, { title: firstState.preview.title, company: firstState.preview.company!, description: firstState.preview.description }, { completenessConfirmed: true, conflictResolutions: {} })
+    if (!saved.ok) throw new Error(saved.error.message)
+    const usage = await wb.api.getAnalysisUsage()
+    await wb.api.setAnalysisBudgets({ ...analysisBudgetValues(usage), minimumSpacingMs: 0, rateLimitWindowMs: 1000 })
+    const consent = await wb.api.prepareOutboundConsent(saved.value.id)
+    if (!consent.ok) throw new Error(consent.message)
+    expect(await wb.api.acceptOutboundConsent(consent.token, true, true)).toMatchObject({ ok: true })
+    expect(await wb.api.startAnalysis(consent.token)).toMatchObject({ status: 'complete' })
+    const generated = await wb.api.generateDraft(consent.token)
+    if (!generated.ok || !generated.draft) throw new Error('Could not generate a draft against the original posting.')
+    expect((await wb.api.checkDraft(saved.value.id))?.passed).toBe(true)
+    const canonical = await wb.api.getCanonicalDocument(saved.value.id)
+    if (!canonical) throw new Error('Could not prepare the original canonical document.')
+    const documentHash = createHash('sha256').update(JSON.stringify(canonical)).digest('hex')
+    await wb.api.saveDocumentFitReport(saved.value.id, { documentHash, targetPages: canonical.targetPages, actualPages: canonical.targetPages, extractedText: ['CV'], linkTargets: [], links: [], overflow: false, proposedCuts: [], measuredAt: new Date().toISOString() })
+    expect(await wb.api.approveDraft(saved.value.id)).toMatchObject({ ok: true })
+    expect(await wb.api.assertDraftExportable(saved.value.id)).toMatchObject({ ok: true })
+    const earlierDraft = await wb.api.getDraft(saved.value.id)
+    if (!earlierDraft) throw new Error('Approved draft disappeared.')
+    const callsBeforeRefresh = modelCalls, attemptsBeforeRefresh = (await wb.api.getAnalysisUsage()).attempts
+    const second = await wb.api.startPostingFetch('https://api.lever.co/v0/postings/example-board/refresh-target')
+    const secondState = await readReady(wb.api, second.token)
+    const edit = await wb.api.updatePostingPreview(second.token, 0, { title: secondState.preview.title, company: secondState.preview.company!, description: secondState.preview.description, optionalDetails: secondState.preview.optionalDetails })
+    if (!edit.ok || edit.revision === undefined) throw new Error('Could not stage changed requirements.')
+    await wb.api.reviewPostingPreview(second.token, edit.revision, { completenessConfirmed: true, conflictResolutions: {} })
+    const accepted = await wb.api.acceptPostingRefresh(second.token, edit.revision, saved.value.id, saved.value.updatedAt, saved.value.revisions.at(-1)?.revision ?? 0, { title: 'working', company: 'working', description: 'source', optionalDetails: {} })
+    if (!accepted.ok) throw new Error(accepted.error.message)
+    expect(accepted.value.description).toContain('Accessibility review.')
+    expect(await wb.api.getAnalysis(saved.value.id)).toMatchObject({ status: 'stale', targetPostingUpdatedAt: saved.value.updatedAt })
+    expect(await wb.api.getDraft(saved.value.id)).toMatchObject({ id: earlierDraft.id, revision: earlierDraft.revision, content: earlierDraft.content, targetPostingUpdatedAt: earlierDraft.targetPostingUpdatedAt, approved: true, coverage: { stale: true } })
+    expect(await wb.api.assertDraftExportable(saved.value.id)).toMatchObject({ ok: false, message: expect.stringMatching(/earlier job posting/i) })
+    expect(modelCalls).toBe(callsBeforeRefresh)
+    expect(await wb.api.getAnalysisUsage()).toMatchObject({ attempts: attemptsBeforeRefresh })
+  } finally { wb.close() }
+}, 30_000)
 
 test('saved jobs preserve original posting text, have stable IDs, and reopen after SQLite restart', async () => {
   const { directory, workbench } = open()
@@ -64,7 +204,7 @@ test('reviewed link imports save atomically with immutable source provenance and
   try {
     const { token } = await imported.api.startPostingFetch('https://api.lever.co/v0/postings/example-board/review-save-1')
     let state = await imported.api.readPostingPreview(token)
-    for (let attempt = 0; attempt < 50 && state.status === 'fetching'; attempt++) { await new Promise(resolve => setTimeout(resolve, 2)); state = await imported.api.readPostingPreview(token) }
+    for (let attempt = 0; attempt < 300 && state.status === 'fetching'; attempt++) { await new Promise(resolve => setTimeout(resolve, 10)); state = await imported.api.readPostingPreview(token) }
     expect(state.status).toBe('ready')
     if (state.status !== 'ready') throw Error('Synthetic source was not ready')
     const reviewedDescription = `${state.preview.description}\nReviewed clarification: include the fictional on-call rotation.`
@@ -315,17 +455,19 @@ test('superseding a reviewed preview invalidates its revision-bound acceptance',
 test('listings and explicit removed-role responses fail distinctly from an unreachable 404', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'cv-tailor-import-nonposting-'))
   directories.push(directory)
+  const expiredDeadline = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10)
   const wb = createWorkbench(directory, undefined, undefined, undefined, {
     lookup: async () => [{ address: '8.8.8.8', family: 4 }],
     request: async url => {
       const id = url.pathname.split('/').at(-1)
+      if (id === 'expired-deadline') return { status: 200, headers: { 'content-type': 'application/json' }, body: Buffer.from(JSON.stringify({ id, text: 'Expired Engineer', company: 'Example Employer', descriptionPlain: 'A complete-looking posting.', deadline: expiredDeadline })) }
       if (id === 'listing-response') return { status: 200, headers: { 'content-type': 'application/json' }, body: Buffer.from(JSON.stringify([{ id: 'role-a' }, { id: 'role-b' }])) }
       if (id === 'removed-response') return { status: 200, headers: { 'content-type': 'application/json' }, body: Buffer.from(JSON.stringify({ id, status: 'removed', text: 'Old Engineer' })) }
       return { status: 404, headers: { 'content-type': 'application/json' }, body: Buffer.from('{}') }
     }
   })
   try {
-    for (const [id, expected] of [['listing-response', /listing or multiple roles/i], ['removed-response', /explicitly identifies.*removed/i], ['not-found', /does not confirm that the role was removed/i]] as const) {
+    for (const [id, expected] of [['listing-response', /listing or multiple roles/i], ['removed-response', /explicitly identifies.*removed/i], ['expired-deadline', /application deadline has passed/i], ['not-found', /does not confirm that the role was removed/i]] as const) {
       const started = await wb.api.startPostingFetch(`https://api.lever.co/v0/postings/example-board/${id}`)
       let state = await wb.api.readPostingPreview(started.token)
       for (let attempt = 0; attempt < 300 && state.status === 'fetching'; attempt++) { await new Promise(resolve => setTimeout(resolve, 10)); state = await wb.api.readPostingPreview(started.token) }

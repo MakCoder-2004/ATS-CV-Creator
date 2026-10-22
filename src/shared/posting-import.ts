@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { postingFieldConflictSchema, postingOptionalDetailsSchema, type PostingFieldConflict } from './jobs'
+import { jobInputSchema, postingFieldConflictSchema, postingOptionalDetailsSchema, postingSourceSnapshotSchema, type PostingFieldConflict } from './jobs'
 
 export { postingFieldConflictSchema }
 export type { PostingFieldConflict }
@@ -9,6 +9,11 @@ export const postingReviewSchema = z.object({ completenessConfirmed: z.boolean()
 export type PostingReview = z.infer<typeof postingReviewSchema>
 export const postingPreviewSchema = z.object({ title: z.string(), company: z.string().nullable(), description: z.string(), optionalDetails: postingOptionalDetailsSchema, submittedUrl: z.string().url(), finalUrl: z.string().url(), notices: z.array(z.string()), conflicts: z.array(postingFieldConflictSchema).default([]), extractionMethod: z.enum(['lever-json-v1', 'lever-html-jsonld-v1', 'lever-html-static-v1']) }).strict()
 export type PostingPreview = z.infer<typeof postingPreviewSchema>
+export const postingRefreshComparisonSchema = z.discriminatedUnion('ok', [
+  z.object({ ok: z.literal(true), unchanged: z.boolean(), previousSource: postingSourceSnapshotSchema, working: jobInputSchema, newSource: postingPreviewSchema }).strict(),
+  z.object({ ok: z.literal(false), message: z.string() }).strict()
+])
+export type PostingRefreshComparison = z.infer<typeof postingRefreshComparisonSchema>
 export const postingFetchStateSchema = z.discriminatedUnion('status', [
   z.object({ status: z.literal('fetching') }).strict(),
   z.object({ status: z.literal('ready'), preview: postingPreviewSchema }).strict(),

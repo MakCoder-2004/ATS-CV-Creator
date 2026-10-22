@@ -5,6 +5,21 @@ const MAX_HTML_NODES = 100_000
 const MAX_HTML_DEPTH = 256
 const IGNORED_HTML_TAGS = new Set(['script', 'style', 'nav', 'footer', 'aside', 'form', 'button', 'noscript'])
 
+function assertDeadlineNotPassed(value) {
+  if (typeof value !== 'string') return
+  const trimmed = value.trim()
+  const dateOnly = trimmed.match(/^(\d{4}-\d{2}-\d{2})$/)
+  if (dateOnly) {
+    const parsed = new Date(`${dateOnly[1]}T00:00:00.000Z`)
+    if (!Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === dateOnly[1] && dateOnly[1] < new Date().toISOString().slice(0, 10)) throw new Error('The source states that the application deadline has passed; it was not treated as an open role.')
+    return
+  }
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})$/.test(trimmed)) {
+    const parsed = Date.parse(trimmed)
+    if (Number.isFinite(parsed) && parsed < Date.now()) throw new Error('The source states that the application deadline has passed; it was not treated as an open role.')
+  }
+}
+
 function fragmentText(root, { format = true, ignorePageNoise = true } = {}) {
   const output = [], stack = [{ node: root, depth: 0, closing: false }]
   let nodes = 0
@@ -90,6 +105,7 @@ function extractHtml(text) {
   })
   if (jsonBlocks.length > 1) throw new Error('The page describes multiple roles and cannot be selected safely.')
   const posting = jsonBlocks[0] || null
+  assertDeadlineNotPassed(posting?.validThrough)
   const visiblePageText = fragmentText(document).toLocaleLowerCase()
   if (/(?:this|the) (?:job|position|posting) (?:has been|is) (?:removed|closed|filled|expired|taken down|no longer available)/i.test(visiblePageText) || /(?:discontinued|outofstock|expired|closed)/i.test(String(posting?.availability ?? posting?.jobStatus ?? ''))) throw new Error('The source explicitly identifies this posting as removed or closed; it was not imported as an active job.')
   const articles = elements.filter(node => node.tagName === 'article' && (['posting','job-description'].some(name => attr(node, 'class').split(/\s+/).includes(name)) || attr(node, 'id') === 'posting'))
@@ -133,6 +149,7 @@ function extractHtml(text) {
     applicationUrl: [null, null]
   }
   const optionalDetails = Object.fromEntries(Object.entries(rawDetails).map(([field, [value, source]]) => [field, { value, source: value ? source : null, origin: value ? 'source' : 'unknown', uncertainty: value && /(?:today|yesterday|\d+\s+(?:days?|weeks?|months?)\s+ago)/i.test(value) ? 'relative-date' : 'none' }]))
+  assertDeadlineNotPassed(optionalDetails.deadline.value)
   const conflicts = []
   const addConflict = (id, field, left, leftSource, right, rightSource) => {
     if (!left || !right || left.trim().toLocaleLowerCase() === right.trim().toLocaleLowerCase()) return
@@ -180,6 +197,7 @@ function extract(text, expectedId) {
   if (!data || typeof data !== 'object') throw new Error('The posting response was not valid posting JSON.')
   if (/^(?:removed|closed|expired|deleted)$/i.test(String(data.status ?? data.state ?? ''))) throw new Error('The source explicitly identifies this posting as removed or closed; it was not imported as an active job.')
   if (data.id !== expectedId) throw new Error('The source response did not match the requested posting; this may be an unrelated job.')
+  assertDeadlineNotPassed(data.deadline ?? data.applicationDeadline ?? data.validThrough)
 
   const titleCandidates = [['Title field', data.text], ['Alternate title field', data.title]].filter(([, value]) => typeof value === 'string' && value.trim()).map(([source, value]) => ({ value: value.trim(), source }))
   const uniqueTitles = [...new Map(titleCandidates.map(candidate => [candidate.value.toLocaleLowerCase(), candidate])).values()]
@@ -254,6 +272,7 @@ function extract(text, expectedId) {
     value, source: value ? source : null, origin: value ? 'source' : 'unknown',
     uncertainty: value && /(?:today|yesterday|\d+\s+(?:minutes?|hours?|days?|weeks?|months?)\s+ago|(?:last|this)\s+(?:week|month))/i.test(value) ? 'relative-date' : 'none'
   }]))
+  assertDeadlineNotPassed(optionalDetails.deadline.value)
   const conflicts = [
     ...(uniqueTitles.length > 1 ? [{ id: 'title', field: 'title', values: uniqueTitles }] : []),
     ...(uniqueCompanies.length > 1 ? [{ id: 'company', field: 'company', values: uniqueCompanies }] : [])

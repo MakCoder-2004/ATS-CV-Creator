@@ -67,7 +67,8 @@ function parseSubmitted(value: string): { submitted: URL; api: URL; html: boolea
   if (typeof value !== 'string' || Buffer.byteLength(value, 'utf8') > MAX_URL_BYTES) throw new Error('The link is invalid or longer than 2,048 bytes.')
   let submitted: URL
   try { submitted = new URL(value) } catch { throw new Error('Enter a valid Lever posting link.') }
-  if (submitted.protocol !== 'https:' || submitted.username || submitted.password || submitted.port || submitted.hash || submitted.search) throw new Error('Only public HTTPS Lever posting links without credentials, query strings, or fragments are supported.')
+  const knownTracking = (key: string) => /^utm_[a-z0-9_]+$/i.test(key) || ['gclid', 'fbclid', 'li_fat_id', 'mc_cid', 'mc_eid'].includes(key.toLowerCase())
+  if (submitted.protocol !== 'https:' || submitted.username || submitted.password || submitted.port || submitted.hash || [...submitted.searchParams.keys()].some(key => !knownTracking(key))) throw new Error('Only public HTTPS Lever posting links without credentials, identity-bearing query strings, or fragments are supported.')
   const hosted = submitted.hostname === 'jobs.lever.co' && /^\/[A-Za-z0-9_-]{1,100}\/[A-Za-z0-9_-]{1,150}$/.test(submitted.pathname)
   const api = submitted.hostname === HOST && /^\/v0\/postings\/[A-Za-z0-9_-]{1,100}\/[A-Za-z0-9_-]{1,150}$/.test(submitted.pathname)
   if (!hosted && !api) throw new Error('Only a named Lever hosted job page or documented posting-detail API URL is supported. Paste posting text instead for other sources.')
@@ -152,7 +153,8 @@ export async function fetchLeverPosting(input: string, options: SafePostingFetch
   const timeout = setTimeout(() => controller.abort(new Error('Fetch exceeded the 30-second deadline.')), TOTAL_TIMEOUT_MS)
   const lookup = options.lookup ?? defaultLookup, request = options.request ?? defaultRequest, wait = options.wait ?? defaultWait, now = options.now ?? Date.now
   try {
-    let current = html || sourceRoute === 'api' ? submitted : api, response: Awaited<ReturnType<Request>> | undefined
+    let current = new URL(html || sourceRoute === 'api' ? submitted : api), response: Awaited<ReturnType<Request>> | undefined
+    for (const key of [...current.searchParams.keys()]) current.searchParams.delete(key)
     const visited = new Set<string>()
     for (let hop = 0; hop <= 3; hop++) {
       if (controller.signal.aborted) throw options.signal?.aborted ? new Error('Fetch cancelled.') : controller.signal.reason instanceof Error ? controller.signal.reason : new Error('Fetch timed out.')
