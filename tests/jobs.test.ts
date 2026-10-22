@@ -147,6 +147,21 @@ test('posting fetch previews run through the public application contract and sta
   } finally { workbench.close(); reopened?.close() }
 })
 
+test('Lever JSON API HTML descriptions decode Unicode entities and keep structure at the public contract', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'cv-tailor-html-entities-'))
+  directories.push(directory)
+  const description = `<p>${'A complete synthetic engineering role develops safe software and collaborates with colleagues. '.repeat(3)}Caf&eacute; &#x2019;reviewed&#x2019; plans.</p><h2>Requirements</h2><ul><li>Communicate clearly</li></ul>`
+  const body = JSON.stringify({ id: 'entities', text: 'Synthetic Engineer', company: 'Example Works', description })
+  const workbench = createWorkbench(directory, undefined, undefined, undefined, { lookup: async () => [{ address: '8.8.8.8', family: 4 }], request: async () => ({ status: 200, headers: { 'content-type': 'application/json' }, body: Buffer.from(body) }), wait: async () => {}, now: () => Date.now() })
+  try {
+    const { token } = await workbench.api.startPostingFetch('https://api.lever.co/v0/postings/example-board/entities')
+    let state = await workbench.api.readPostingPreview(token)
+    for (let attempt = 0; attempt < 200 && state.status === 'fetching'; attempt++) { await new Promise(resolve => setTimeout(resolve, 10)); state = await workbench.api.readPostingPreview(token) }
+    expect(state).toMatchObject({ status: 'ready', preview: { description: expect.stringContaining('Café ’reviewed’ plans.') } })
+    if (state.status === 'ready') expect(state.preview.description).toContain('• Communicate clearly')
+  } finally { workbench.close() }
+})
+
 test('Lever hosted HTML preview preserves JSON-LD provenance and static posting text through save and offline reopen', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'cv-tailor-hosted-html-'))
   directories.push(directory)
