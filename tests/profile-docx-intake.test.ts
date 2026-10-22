@@ -73,6 +73,20 @@ test('reads real DOCX text, builds mapped source text and hashes the captured do
   expect(mapped.entries.filter(entry => entry.section === 'languages').map(entry => entry.title)).toEqual(['Arabic', 'English'])
 })
 
+test('maps conventional unlabeled CV sections from extracted DOCX paragraphs without upgrading unknown text into profile facts', async () => {
+  const document = '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>' +
+    '<w:p><w:r><w:t>Work Experience</w:t></w:r></w:p><w:p><w:r><w:t>Software Engineer — Example Labs | 2021 – 2023</w:t></w:r></w:p><w:p><w:r><w:t>Built the internal reporting service</w:t></w:r></w:p>' +
+    '<w:p><w:r><w:t>Projects</w:t></w:r></w:p><w:p><w:r><w:t>Atlas — React, SQLite</w:t></w:r></w:p><w:p><w:r><w:t>• Added offline support</w:t></w:r></w:p>' +
+    '<w:p><w:r><w:t>Technical Skills</w:t></w:r></w:p><w:p><w:r><w:t>TypeScript, SQL</w:t></w:r></w:p><w:p><w:r><w:t>Community mentor</w:t></w:r></w:p>' +
+    '</w:body></w:document>'
+  const extracted = await extractProfileDocx(await makeDocx(document))
+  const result = mapProfileDocxPages(extracted.pages)
+  expect(result.experience).toMatchObject([{ title: 'Software Engineer', organization: 'Example Labs', startDate: '2021', endDate: '2023', factualItems: [{ text: 'Built the internal reporting service' }] }])
+  expect(result.projects).toMatchObject([{ name: 'Atlas', technologies: [{ text: 'React' }, { text: 'SQLite' }], factualItems: [{ text: 'Added offline support' }] }])
+  expect(result.skills.map(skill => skill.name)).toEqual(['TypeScript', 'SQL'])
+  expect(result.unmapped).toContainEqual(expect.objectContaining({ text: 'Community mentor' }))
+})
+
 test('keeps contact, project and ambiguous links tied to their Word paragraph context', async () => {
   const document = '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body>' +
     '<w:p><w:r><w:t>NAME: Ada Example</w:t></w:r></w:p><w:p><w:r><w:t>EMAIL: ada@example.test</w:t></w:r></w:p>' +

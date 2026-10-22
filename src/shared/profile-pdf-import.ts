@@ -51,7 +51,15 @@ export type ProfilePdfProposal = z.infer<typeof profilePdfProposalSchema>
 export type ProfilePdfProposalDraft = z.infer<typeof profilePdfProposalDraftSchema>
 export type ProfilePdfPreview = z.infer<typeof profilePdfPreviewSchema>
 
-const sectionNames = new Set(['experience', 'employment', 'work experience', 'training', 'education', 'skills', 'technical skills', 'programming languages', 'tools', 'concepts', 'summary', 'projects', 'certificates', 'languages'])
+const sectionNames = new Set(['experience', 'employment', 'work experience', 'professional experience', 'employment history', 'training', 'education', 'skills', 'technical skills', 'programming languages', 'tools', 'concepts', 'summary', 'professional summary', 'projects', 'personal projects', 'certificates', 'certifications', 'languages'])
+const sectionAlias = (value: string) => {
+  const key = value.trim().toLocaleLowerCase().replace(/[:.]$/, '').replace(/\s+/g, ' ')
+  if (['experience', 'employment', 'work experience', 'professional experience', 'employment history', 'training'].includes(key)) return key === 'training' ? 'training' : 'experience'
+  if (['projects', 'personal projects'].includes(key)) return 'projects'
+  if (['skills', 'technical skills', 'programming languages', 'tools', 'concepts'].includes(key)) return key === 'programming languages' ? key : key === 'tools' || key === 'concepts' ? key : 'skills'
+  if (['summary', 'professional summary'].includes(key)) return 'summary'
+  return sectionNames.has(key) ? key : undefined
+}
 const source = (line: string, page: number, field: string, proposalRef: string) => ({ proposalRef, page, passage: line.slice(0, 4000), field })
 const splitParts = (value: string) => value.split(/\s+[|]\s+/).map(part => part.trim())
 
@@ -69,9 +77,15 @@ export function mapProfilePdfPages(pages: Array<{ page: number; text: string; li
     sources.push(source(line, page, `skills.${skill.name}`, skill.proposalRef))
   }
   for (const page of pages) {
+    const projectCountAtPageStart = projects.length
     const lines = page.text.split(/\n|\s{2,}/).map(line => line.trim()).filter(Boolean)
     const ambiguousReadingOrder = (page.warnings ?? []).some(warning => /multiple text columns|reading order may be ambiguous/i.test(warning))
     for (const warning of page.warnings ?? []) unmapped.push({ page: page.page, text: warning })
+    if (ambiguousReadingOrder) {
+      for (const line of lines) unmapped.push({ page: page.page, text: line })
+      for (const link of page.links ?? []) unmapped.push({ page: page.page, text: `Unassigned PDF hyperlink: ${link.label} — ${link.url}` })
+      continue
+    }
     for (const line of lines) {
       if (line.length > 4000) {
         for (let offset = 0; offset < line.length; offset += 4000) unmapped.push({ page: page.page, text: line.slice(offset, offset + 4000) })
@@ -80,6 +94,9 @@ export function mapProfilePdfPages(pages: Array<{ page: number; text: string; li
       }
       const header = line.match(/^([A-Z][A-Z ]{2,}):\s*(.*)$/)
       if (!header) {
+        const heading = sectionAlias(line)
+        if (heading) { section = heading; currentRole = undefined; currentProject = undefined; continue }
+        if (section === 'skills' && /^[A-Z][a-z]+(?: [A-Z]?[a-z]+){1,3}$/.test(line)) { section = ''; currentRole = undefined; currentProject = undefined; unmapped.push({ page: page.page, text: line }); continue }
         if (!contact.fullName && !section) {
           const parts = line.split(/\s+[|]\s+/).map(value => value.trim())
           const emailIndex = parts.findIndex(value => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value))
@@ -100,7 +117,30 @@ export function mapProfilePdfPages(pages: Array<{ page: number; text: string; li
           const category = section === 'programming languages' ? 'Languages' : section === 'tools' ? 'Tools' : section === 'concepts' ? 'Domain' : 'Technical'
           for (const name of line.split(/[,;|•]/).map(value => value.trim()).filter(Boolean)) addSkill(name, category, line, page.page)
         } else if (section === 'summary') { summaryText = [summaryText, line].filter(Boolean).join('\n'); sources.push(source(line, page.page, 'entries.summary', 'entry:summary')) }
-        else if (currentRole && ['experience', 'employment', 'work experience', 'training'].includes(section) && !ambiguousReadingOrder) { const ref = `${currentRole.proposalRef}:fact:${currentRole.factualItems.length}`; currentRole.factualItems.push({ text: line, proposalRef: ref }); sources.push(source(line, page.page, 'experience.factualItem', ref)) }
+        else if (section === 'experience' && !ambiguousReadingOrder) {
+          const role = line.match(/^(.+?)\s+[—–-]\s+(.+?)\s*[|,]\s*((?:19|20)\d{2}(?:\s*[-–—]\s*(?:(?:present|current)|(?:19|20)\d{2}))?)$/i)
+          const pipeRole = splitParts(line)
+          const pipeDates = pipeRole[2]?.match(/^(?:19|20)\d{2}(?:\s*(?:to|[-–—])\s*(?:19|20)\d{2})?$/i) ? pipeRole[2].match(/(?:19|20)\d{2}/g) ?? [] : []
+          if (role || (pipeRole.length >= 3 && pipeDates.length > 0 && pipeRole[0] && pipeRole[1])) {
+            const title = role?.[1].trim() ?? pipeRole[0].trim(), organization = role?.[2].trim() ?? pipeRole[1].trim()
+            const dates = role ? role[3].split(/\s*[-–—]\s*/) : pipeDates, ref = `experience:${experience.length}`
+            currentRole = { kind: 'employment', title, organization, description: line, factualItems: [], proposalRef: ref, startDate: dates[0], ...(dates[1] ? { endDate: dates[1] } : {}) }
+            currentProject = undefined; experience.push(currentRole); sources.push(source(line, page.page, 'experience.role', ref))
+          } else if (currentRole) { const ref = `${currentRole.proposalRef}:fact:${currentRole.factualItems.length}`; currentRole.factualItems.push({ text: line, proposalRef: ref }); sources.push(source(line, page.page, 'experience.factualItem', ref)) }
+          else unmapped.push({ page: page.page, text: line })
+        }
+        else if (section === 'projects') {
+          const project = line.match(/^(.+?)\s+[—–-]\s+([\w.+# ,/]+)$/)
+          const pipeProject = splitParts(line)
+          if (project || (pipeProject.length >= 2 && /^[\w.+# ,/]+$/.test(pipeProject.slice(1).join(' | ')))) {
+            const ref = `project:${projects.length}`, name = project?.[1].trim() ?? pipeProject[0].trim(), technologyText = project?.[2] ?? pipeProject.slice(1).join(', ')
+            currentProject = { name, description: line, factualItems: [], technologies: [], links: [], proposalRef: ref }
+            currentRole = undefined; projects.push(currentProject); sources.push(source(line, page.page, 'projects.project', ref))
+            for (const text of technologyText.split(/[,;]+/).map(item => item.trim()).filter(Boolean)) { const technologyRef = `${ref}:technology:${currentProject.technologies.length}`; currentProject.technologies.push({ text, proposalRef: technologyRef }); sources.push(source(line, page.page, 'projects.technology', technologyRef)) }
+          } else if (currentProject && !ambiguousReadingOrder) { const ref = `${currentProject.proposalRef}:fact:${currentProject.factualItems.length}`; currentProject.factualItems.push({ text: line.replace(/^[•▪◦*-]\s+/, ''), proposalRef: ref }); sources.push(source(line, page.page, 'projects.factualItem', ref)) }
+          else unmapped.push({ page: page.page, text: line })
+        }
+        else if (currentRole && ['experience', 'employment', 'work experience', 'training'].includes(section) && !ambiguousReadingOrder) { const ref = `${currentRole.proposalRef}:fact:${currentRole.factualItems.length}`; currentRole.factualItems.push({ text: line.replace(/^[•▪◦*-]\s+/, ''), proposalRef: ref }); sources.push(source(line, page.page, 'experience.factualItem', ref)) }
         else unmapped.push({ page: page.page, text: line })
         continue
       }
@@ -169,7 +209,28 @@ export function mapProfilePdfPages(pages: Array<{ page: number; text: string; li
       if (sectionNames.has(key)) { section = key; currentRole = undefined; currentProject = undefined; continue }
       currentRole = undefined; currentProject = undefined; unmapped.push({ page: page.page, text: line })
     }
-    for (const link of page.links ?? []) unmapped.push({ page: page.page, text: `Unassigned PDF hyperlink: ${link.label} — ${link.url}` })
+    for (const link of page.links ?? []) {
+      const passage = `${link.label} — ${link.url}`
+      const contactLink = Boolean(contact.fullName) && /linkedin\.com|github\.com\/[^/]+\/?$/i.test(link.url)
+      const pageProject = projects.length === projectCountAtPageStart + 1 ? projects[projectCountAtPageStart] : undefined
+      const linkProject = pageProject
+      const projectLink = Boolean(linkProject) && /repository|source|demo|live|project|website/i.test(link.label)
+      if (contactLink) {
+        const labelIndex = unmapped.findIndex(item => item.page === page.page && item.text === link.label)
+        if (labelIndex >= 0) unmapped.splice(labelIndex, 1)
+        const links = Array.isArray(contact.links) ? contact.links as Array<{ label: string; url: string }> : []
+        links.push({ label: link.label, url: link.url }); contact.links = links
+        sources.push(source(passage, page.page, 'contact.links', ensureContactRef()))
+      } else if (projectLink && linkProject) {
+        const labelIndex = unmapped.findIndex(item => item.page === page.page && item.text === link.label)
+        if (labelIndex >= 0) unmapped.splice(labelIndex, 1)
+        const linkedLabelRefs = new Set(linkProject.factualItems.filter(item => item.text === link.label).map(item => item.proposalRef))
+        linkProject.factualItems = linkProject.factualItems.filter(item => !linkedLabelRefs.has(item.proposalRef))
+        for (let index = sources.length - 1; index >= 0; index--) if (sources[index]!.page === page.page && linkedLabelRefs.has(sources[index]!.proposalRef)) sources.splice(index, 1)
+        linkProject.links.push({ label: link.label, url: link.url })
+        sources.push(source(passage, page.page, 'projects.links', linkProject.proposalRef))
+      } else unmapped.push({ page: page.page, text: `Unassigned PDF hyperlink: ${passage}` })
+    }
   }
   if (summaryText) entries.push({ section: 'summary', title: 'Summary', description: summaryText, proposalRef: 'entry:summary' })
   const cleanContact = Object.fromEntries(Object.entries(contact).filter(([, value]) => typeof value !== 'string' || value.trim()))
