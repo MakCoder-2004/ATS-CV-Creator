@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
+import { gzipSync } from 'node:zlib'
 import { fetchLeverPosting, isPublicAddress, validateLeverPostingUrl } from '../src/main/safe-posting-fetch'
 
-const url = 'https://jobs.lever.co/acme/role-123'
+const url = 'https://api.lever.co/v0/postings/acme/role-123'
 const headers = { 'content-type': 'application/json' }
 const response = (body: unknown, status = 200) => ({ status, headers, body: Buffer.from(JSON.stringify({ id: 'role-123', ...body as object })) })
 const lookup = vi.fn(async () => [{ address: '8.8.8.8', family: 4 }])
@@ -25,6 +26,17 @@ describe('bounded Lever posting fetch', () => {
     expect(request).not.toHaveBeenCalled()
     await expect(fetchLeverPosting(url, { lookup, request: async () => ({ status: 302, headers: {}, body: Buffer.alloc(0), location: 'https://evil.test/path' }) })).rejects.toThrow('outside the approved')
   })
+  it('rejects adversarially deep HTML safely instead of recursing through the tree', async () => {
+    const html = `${'<div>'.repeat(300)}<h1>Deep role</h1>${'</div>'.repeat(300)}`
+    await expect(fetchLeverPosting('https://jobs.lever.co/acme/deep', { lookup, request: async () => ({ status: 200, headers: { 'content-type': 'text/html' }, body: Buffer.from(html) }) })).rejects.toThrow(/nested too deeply/)
+  })
+  it('terminates expensive HTML parsing at the two-second worker budget', async () => {
+    const repeated = '<table><tr><td>x</table>'.repeat(300_000)
+    const html = `<main><h1>Engineer</h1><p class="company">Example</p><article class="posting">${repeated}</article></main>`
+    const body = gzipSync(Buffer.from(html))
+    expect(body.byteLength).toBeLessThan(2 * 1024 * 1024)
+    await expect(fetchLeverPosting('https://jobs.lever.co/acme/timeout', { lookup, request: async () => ({ status: 200, headers: { 'content-type': 'text/html', 'content-encoding': 'gzip' }, body }) })).rejects.toThrow(/2-second budget/)
+  }, 10_000)
   it('rejects special-use address ranges', () => {
     for (const ip of ['10.0.0.1', '169.254.1.1', '192.168.1.1', '100.64.0.1', '192.0.2.1', '192.88.99.4', '198.51.100.2', '203.0.113.1', '240.0.0.1']) expect(isPublicAddress(ip, 4)).toBe(false)
     for (const ip of ['::1', 'fc00::1', 'fe80::1', '2001:db8::1', '2001:1::1', '2001:20::1', '::ffff:127.0.0.1', '::ffff:192.168.1.1']) expect(isPublicAddress(ip, 6), ip).toBe(false)
