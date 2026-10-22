@@ -8,6 +8,7 @@ import { createWorkbench } from '../src/main/workbench'
 import type { AnalysisTransport } from '../src/main/posting-analysis'
 import { analysisBudgetValues } from '../src/shared/posting-analysis'
 import { mapProfilePdfPages } from '../src/shared/profile-pdf-import'
+import { registerWorkspaceBackupRowSizer } from '../src/main/workspace-backup'
 
 const directories: string[] = []
 const opened: Array<ReturnType<typeof createWorkbench>> = []
@@ -55,6 +56,7 @@ async function approvedLegacyWorkspaceWithoutTargetBinding() {
   expect(await state.workspace.api.approveDraft(state.jobId)).toMatchObject({ ok: true })
   state.workspace.close(); opened.splice(opened.indexOf(state.workspace), 1)
   const database = new Database(join(state.directory, 'workbench.sqlite'))
+  registerWorkspaceBackupRowSizer(database)
   const row = database.prepare('SELECT id, data FROM draft_revisions WHERE job_id = ? ORDER BY revision DESC LIMIT 1').get(state.jobId) as { id: string; data: string }
   const legacy = JSON.parse(row.data) as Record<string, unknown>
   delete legacy.targetPostingUpdatedAt
@@ -243,6 +245,7 @@ test('a legacy posting with no recoverable baseline stays stale instead of borro
   expect(await state.workspace.api.saveJob({ id: state.jobId, title: job.title, company: job.company, description: `${job.description} Untracked legacy edit.` })).toMatchObject({ ok: true })
   state.workspace.close(); opened.splice(opened.indexOf(state.workspace), 1)
   const database = new Database(join(state.directory, 'workbench.sqlite'))
+  registerWorkspaceBackupRowSizer(database)
   const jobRow = database.prepare('SELECT data FROM jobs WHERE id = ?').get(state.jobId) as { data: string }
   const legacyJob = JSON.parse(jobRow.data) as Record<string, unknown>
   legacyJob.provenance = 'legacy-unknown'
@@ -278,6 +281,7 @@ test('legacy drafts across posting edits keep the earliest preserved posting bas
   expect(editedJob.updatedAt).not.toBe(originalTarget)
   state.workspace.close(); opened.splice(opened.indexOf(state.workspace), 1)
   const database = new Database(join(state.directory, 'workbench.sqlite'))
+  registerWorkspaceBackupRowSizer(database)
   const drafts = database.prepare('SELECT id, data FROM draft_revisions WHERE job_id = ?').all(state.jobId) as Array<{ id: string; data: string }>
   expect(drafts.length).toBeGreaterThan(1)
   for (const row of drafts) {

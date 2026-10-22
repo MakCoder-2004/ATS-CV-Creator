@@ -6,6 +6,7 @@ import Database from 'better-sqlite3'
 import { createWorkbench } from '../src/main/workbench'
 import type { AnalysisTransport } from '../src/main/posting-analysis'
 import { analysisBudgetValues } from '../src/shared/posting-analysis'
+import { registerWorkspaceBackupRowSizer } from '../src/main/workspace-backup'
 
 const dirs: string[] = []
 const opened: Array<ReturnType<typeof createWorkbench>> = []
@@ -143,6 +144,7 @@ test('corrupt recovery snapshots fail closed without dispatch', async () => {
   const recovery = await workspace.api.getGenerationRecovery(jobId)
   workspace.close(); opened.pop()
   const sqlite = new Database(join(directory, 'workbench.sqlite'))
+  registerWorkspaceBackupRowSizer(sqlite)
   sqlite.prepare('UPDATE generation_recovery SET snapshot=? WHERE run_id=?').run('{invalid', recovery!.runId)
   sqlite.close()
   let calls = 0

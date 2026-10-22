@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import { BriefcaseBusiness, FileText, LayoutPanelLeft, Moon, PanelLeftClose, PanelLeftOpen, Plus, Settings2, Sun, UserRound } from 'lucide-react'
+import { AlertTriangle, BriefcaseBusiness, FileText, LayoutPanelLeft, Moon, PanelLeftClose, PanelLeftOpen, Plus, Settings2, Sun, UserRound } from 'lucide-react'
 import type { Appearance } from '../shared/appearance'
+import type { WorkspaceBackupStatus } from '../shared/workspace-backup'
 import { OpenRouterSettingsPanel } from './OpenRouterSettings'
 import { WorkspaceBackup } from './WorkspaceBackup'
 import { ProfileEditor } from './ProfileEditor'
@@ -30,21 +31,25 @@ function App() {
   const [error, setError] = useState('')
   const [ready, setReady] = useState(false)
   const [jobs, setJobs] = useState<JobRecord[]>([])
+  const [backupStatus, setBackupStatus] = useState<WorkspaceBackupStatus | null>(null)
   const [activeJob, setActiveJob] = useState<JobRecord | null>(null)
   const [workspaceRevision, setWorkspaceRevision] = useState(0)
   const contentRef = useRef<HTMLElement>(null)
   useEffect(() => {
     window.workbench.getSettings().then(settings => { setAppearance(settings.appearance); setReady(true) }).catch(() => setError('Could not open workspace settings. Restart the app to retry.'))
+    window.workbench.getWorkspaceBackupStatus().then(setBackupStatus).catch(() => {})
     window.workbench.listJobs().then(setJobs).catch(() => setError('Saved postings could not be loaded. Restart the app to retry.'))
   }, [])
   useEffect(() => { if (ready) contentRef.current?.focus() }, [page, ready])
   function keepJob(job: JobRecord) {
     setJobs(current => [job, ...current.filter(item => item.id !== job.id).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))])
     setActiveJob(job)
+    void window.workbench.getWorkspaceBackupStatus().then(setBackupStatus).catch(() => {})
   }
   async function afterWorkspaceRestore() {
-    const [settings, savedJobs] = await Promise.all([window.workbench.getSettings(), window.workbench.listJobs()])
+    const [settings, savedJobs, nextBackupStatus] = await Promise.all([window.workbench.getSettings(), window.workbench.listJobs(), window.workbench.getWorkspaceBackupStatus()])
     setAppearance(settings.appearance)
+    setBackupStatus(nextBackupStatus)
     setJobs(savedJobs)
     setActiveJob(null)
     setWorkspaceRevision(value => value + 1)
@@ -53,6 +58,13 @@ function App() {
     try { const job = await window.workbench.openJob(id); setActiveJob(job) }
     catch { setError('The selected saved posting could not be opened.') }
   }
+  useEffect(() => {
+    if (!backupStatus || backupStatus.backupable) return
+    let active = true
+    const refresh = () => { void window.workbench.getWorkspaceBackupStatus().then(status => { if (active) setBackupStatus(status) }).catch(() => {}) }
+    const timer = window.setInterval(refresh, 2000)
+    return () => { active = false; window.clearInterval(timer) }
+  }, [backupStatus?.backupable])
   useEffect(() => { document.documentElement.dataset.appearance = appearance }, [appearance])
   useEffect(() => {
     try { window.localStorage.setItem('cv-tailor-sidebar-collapsed', String(sidebarCollapsed)) }
@@ -74,6 +86,10 @@ function App() {
     <div className="workspace-main">
       <header className="header"><span className="breadcrumb">Workspace <span aria-hidden="true">/</span> {page}</span><AppearanceControls className="header-appearance" appearance={appearance} change={value => void changeAppearance(value)} /></header>
       {error && <p role="alert" className="error">{error}</p>}
+      {backupStatus && !backupStatus.backupable && <aside className="backup-capacity-warning" role="status" aria-label="Workspace backup limits">
+        <AlertTriangle size={20} aria-hidden="true" /><div><p><strong>This workspace is above its backup safety limits.</strong></p><p>Saved data remains intact. Backups and changes that increase stored size are blocked; no history is deleted. You can try shortening an existing working posting to reduce the workspace size.</p></div>
+        <button type="button" className="secondary-button" onClick={() => setPage('Saved jobs')}>Review saved postings</button>
+      </aside>}
       <main id="content" ref={contentRef} tabIndex={-1}>
         {(page === 'My profile' || page === 'Settings') && <div className="title"><span className="context">Personal workspace</span><h1>{page}</h1><p>{page === 'My profile' ? 'Keep the career facts that support your CV in one place.' : 'Manage the model and credentials for future CV generation.'}</p></div>}
         {page === 'Tailor CV' ? <WorkbenchStart key={workspaceRevision} activeJob={activeJob} onNavigate={setPage} /> : page === 'My profile' ? <ProfileEditor key={workspaceRevision} /> : page === 'Saved jobs' ? <SavedJobs key={workspaceRevision} jobs={jobs} activeJob={activeJob} onSaved={keepJob} onOpened={keepJob} onNavigate={setPage} /> : <div className="settings-page"><OpenRouterSettingsPanel key={workspaceRevision} /><WorkspaceBackup onRestored={afterWorkspaceRestore} /></div>}

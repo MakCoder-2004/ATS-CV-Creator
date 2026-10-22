@@ -39,9 +39,12 @@ export type WorkspaceRestorePreview = {
   automaticRunsResumed: false
 }
 
+export const workspaceBackupStatusSchema = z.object({ backupable: z.boolean(), legacyOverCap: z.boolean(), bytes: z.number().int().nonnegative(), maxBytes: z.number().int().positive() }).strict()
+export type WorkspaceBackupStatus = z.infer<typeof workspaceBackupStatusSchema>
 export interface WorkspaceBackupEngine {
   createBackup(): string
-  assertBackupCapacity(): void
+  readBackupStatus(): WorkspaceBackupStatus
+  assertBackupCapacity(previousBytes?: number): void
   previewRestore(input: string): WorkspaceRestorePreview
   applyRestore(token: string, writeAndVerifySafetyBackup: (backup: string) => string): void
   cancelRestore(token: string): boolean

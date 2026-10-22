@@ -14,6 +14,7 @@ import type { MutateDraftRecordInput, MutateDraftRecordResult } from './draft-re
 import type { ProfilePdfProposal, ProfilePdfPreview } from './profile-pdf-import'
 import type { ProfileAiConsentAction, ProfileAiConsentPreview, ProfileAiRunResult } from './profile-ai-structuring'
 import type { PostingFetchState } from './posting-import'
+import type { WorkspaceBackupStatus } from './workspace-backup'
 
 export const appearanceSchema = z.enum(['light', 'dark'])
 export type Appearance = z.infer<typeof appearanceSchema>
@@ -28,6 +29,7 @@ export type WorkspaceBackupResult = { ok: boolean; cancelled: boolean; message: 
 /** Public renderer-facing application contract; no generic invoke or file access. */
 export interface WorkbenchAPI {
   getSettings(): Promise<Settings>
+  getWorkspaceBackupStatus(): Promise<WorkspaceBackupStatus>
   setAppearance(value: Appearance): Promise<Settings>
   setOpenRouterModel(value: OpenRouterModel): Promise<Settings>
   setFaithfulnessCheck(value: boolean): Promise<Settings>

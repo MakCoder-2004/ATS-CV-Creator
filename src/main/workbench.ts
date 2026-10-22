@@ -31,7 +31,7 @@ import { factualCheckReportSchema } from '../shared/factual-report'
 import { qualificationCoverage, supportedCoverageTerms } from './qualification-coverage'
 import { createCanonicalDocument, documentFitReportSchema, type DocumentFitReport } from '../shared/document'
 import { SqliteCheckpointSaver } from './sqlite-checkpoint'
-import { createWorkspaceBackupEngine, WorkspaceBackupCapacityError } from './workspace-backup'
+import { createWorkspaceBackupEngine, registerWorkspaceBackupRowSizer, WorkspaceBackupCapacityError } from './workspace-backup'
 import type { WorkspaceBackupEngine } from '../shared/workspace-backup'
 import { generationRecoverySnapshotSchema } from '../shared/generation-recovery'
 import { profilePdfProposalSchema, type ProfilePdfProposal } from '../shared/profile-pdf-import'
@@ -82,6 +82,7 @@ function preserveKnownFindings(checked: ReturnType<typeof checkDraftFacts>, prio
 export function createWorkbench(userData: string, secureStorage: SecureStorage = unavailableSecureStorage, scriptedTransport?: AnalysisTransport, recoveryHooks?: { beforeGraphCheckpoint?: (metadata: import('@langchain/langgraph').CheckpointMetadata) => void; modelCatalogFetcher?: typeof fetch; workspaceBackupMaxBytes?: number }, safePostingFetchOptions?: SafePostingFetchOptions): { api: WorkbenchStorageAPI; authorizeOutboundPayload<T>(runId: string, payload: T): T; backup: WorkspaceBackupEngine; hasActiveWork(): boolean; close(): void } {
   mkdirSync(userData, { recursive: true })
   const db = new Database(join(userData, 'workbench.sqlite'))
+  registerWorkspaceBackupRowSizer(db)
   db.pragma('journal_mode = WAL')
   const graphCheckpointer = new SqliteCheckpointSaver(db, recoveryHooks?.beforeGraphCheckpoint)
   const postingFetches = new Map<string, { controller: AbortController; state: ReturnType<typeof postingFetchStateSchema.parse> }>()
@@ -350,6 +351,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
   }
   const profileImportBaseline = () => createHash('sha256').update(JSON.stringify({ profile: readProfile(), experience: readExperience(), history: db.prepare('SELECT id,revision,action,snapshot,created_at FROM evidence_revisions ORDER BY id,revision').all() })).digest('hex')
   const api: WorkbenchStorageAPI = {
+    async getWorkspaceBackupStatus() { return backupEngine.readBackupStatus() },
     async getSettings() {
       const rows = db.prepare('SELECT key, value FROM settings WHERE key IN (?, ?, ?)').all('appearance', 'openrouter-model', 'faithfulness-check') as { key: string; value: string }[]
       const stored = Object.fromEntries(rows.map(row => [row.key, row.value]))
@@ -894,16 +896,17 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
         const existingRow = input.id ? db.prepare('SELECT created_at, data FROM jobs WHERE id = ?').get(input.id) as { created_at: string; data: string } | undefined : undefined
         if (input.id && !existingRow) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'This saved job no longer exists.' } })
         const prior = existingRow ? jobRecordSchema.parse(JSON.parse(existingRow.data)) : undefined
+        const backupStatus = backupEngine.readBackupStatus()
         const changed = !prior || prior.title !== parsed.data.title || prior.company !== parsed.data.company || prior.description !== parsed.data.description
         const now = new Date(Math.max(Date.now(), prior ? Date.parse(prior.updatedAt) + 1 : 0)).toISOString()
         const priorRevisions = prior && prior.revisions.length === 0 && changed ? [{ title: prior.title, company: prior.company, description: prior.description, revision: 1, acceptedAt: prior.updatedAt, provenance: 'legacy-unknown' as const }] : prior?.revisions ?? []
         const acceptedRevision = changed ? { ...parsed.data, revision: (priorRevisions.at(-1)?.revision ?? 0) + 1, acceptedAt: now, provenance: 'manual' as const } : undefined
         const revisions = acceptedRevision ? [...priorRevisions, acceptedRevision] : priorRevisions
-        if (changed && revisions.length > MAX_POSTING_REVISIONS) return jobSaveResultSchema.parse({ ok: false, error: { code: 'REVISION_LIMIT', message: `This saved job reached the ${MAX_POSTING_REVISIONS}-revision history limit. Nothing was changed and no history was deleted.`, fieldErrors: { description: 'The revision limit was reached. Existing posting history remains intact.' } } })
+        if (changed && revisions.length > MAX_POSTING_REVISIONS && !backupStatus.legacyOverCap) return jobSaveResultSchema.parse({ ok: false, error: { code: 'REVISION_LIMIT', message: `This saved job reached the ${MAX_POSTING_REVISIONS}-revision history limit. Nothing was changed and no history was deleted.`, fieldErrors: { description: 'The revision limit was reached. Existing posting history remains intact.' } } })
         if (changed && input.id && activeAnalysisByJob.has(input.id)) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'A provider operation is active for this saved job. Cancel it before changing the posting.' } })
         const record = jobRecordSchema.parse({ ...parsed.data, id: input.id ?? randomUUID(), createdAt: existingRow?.created_at ?? now, updatedAt: changed ? now : prior!.updatedAt, provenance: changed ? 'manual' : prior?.provenance ?? 'manual', sourceSnapshot: prior?.sourceSnapshot ?? null, revisions })
         const serializedRecord = JSON.stringify(record)
-        if (Buffer.byteLength(serializedRecord, 'utf8') > MAX_JOB_RECORD_UTF8_BYTES) return jobSaveResultSchema.parse({ ok: false, error: { code: 'HISTORY_SIZE_LIMIT', message: 'This saved job and its complete revision history exceed the 4 MiB per-job backup limit. Nothing was changed and no history was deleted.', fieldErrors: { description: 'Review the posting revision history limit; existing versions remain intact.' } } })
+        if (Buffer.byteLength(serializedRecord, 'utf8') > MAX_JOB_RECORD_UTF8_BYTES && (!backupStatus.legacyOverCap || !existingRow || Buffer.byteLength(serializedRecord, 'utf8') >= Buffer.byteLength(existingRow.data, 'utf8'))) return jobSaveResultSchema.parse({ ok: false, error: { code: 'HISTORY_SIZE_LIMIT', message: 'This saved job and its complete revision history exceed the 4 MiB per-job backup limit. Nothing was changed and no history was deleted.', fieldErrors: { description: 'Review the posting revision history limit; existing versions remain intact.' } } })
         db.prepare('INSERT INTO jobs (id, created_at, updated_at, data) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET updated_at=excluded.updated_at, data=excluded.data').run(record.id, record.createdAt, record.updatedAt, serializedRecord)
         if (changed && prior) {
           const unresolved = (db.prepare('SELECT COUNT(*) AS count FROM provider_attempt_outcomes WHERE checkpointed_at IS NULL AND run_id IN (SELECT run_id FROM generation_recovery WHERE job_id = ?)').get(record.id) as { count: number }).count
@@ -1811,18 +1814,23 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
   const backupEngine = createWorkspaceBackupEngine(db, recoveryHooks?.workspaceBackupMaxBytes)
   const assertIdle = () => { if (activeAnalysisByJob.size) throw new Error('A cloud operation is active. Cancel or finish it before backing up or restoring.') }
   const backup: WorkspaceBackupEngine = {
-    assertBackupCapacity() { return backupEngine.assertBackupCapacity() },
+    readBackupStatus() { return backupEngine.readBackupStatus() },
+    assertBackupCapacity(previousBytes) { return backupEngine.assertBackupCapacity(previousBytes) },
     createBackup() { assertIdle(); return backupEngine.createBackup() },
     previewRestore(input) { assertIdle(); return backupEngine.previewRestore(input) },
     applyRestore(token, writeSafety) { assertIdle(); return backupEngine.applyRestore(token, writeSafety) },
     cancelRestore(token) { return backupEngine.cancelRestore(token) }
   }
   let checkingBackupCapacity = false
-  const assertBackupable = () => {
+  const assertBackupable = (previousBytes?: number) => {
     if (checkingBackupCapacity) return
     checkingBackupCapacity = true
-    try { backupEngine.assertBackupCapacity() }
+    try { backupEngine.assertBackupCapacity(previousBytes) }
     finally { checkingBackupCapacity = false }
+  }
+  const legacyBackupBaseline = () => {
+    const status = backupEngine.readBackupStatus()
+    return status.legacyOverCap ? status.bytes : undefined
   }
   const normalizeBackupWriteError = (error: unknown) => error instanceof WorkspaceBackupCapacityError
     ? error
@@ -1834,11 +1842,14 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
   const nativeTransaction = db.transaction.bind(db)
   const nativeExec = db.exec.bind(db)
   const nativePrepare = db.prepare.bind(db)
+  const selectChanges = nativePrepare('SELECT changes() AS count')
+  let writeSequence = 0
   const guardedDb = db as unknown as { transaction: (callback: (...args: any[]) => unknown) => any; exec: (source: string) => Database.Database; prepare: (source: string) => any }
   guardedDb.transaction = (callback: (...args: any[]) => unknown) => {
+    const priorWrites = writeSequence, priorBackupBytes = legacyBackupBaseline()
     const transaction = nativeTransaction((...args: any[]) => {
       const result = callback(...args)
-      assertBackupable()
+      if (writeSequence !== priorWrites) assertBackupable(priorBackupBytes)
       return result
     })
     return (...args: any[]) => {
@@ -1847,25 +1858,37 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
     }
   }
   guardedDb.exec = (source: string) => {
-    if (db.inTransaction || checkingBackupCapacity) return nativeExec(source)
-    try { return nativeTransaction(() => { const result = nativeExec(source); assertBackupable(); return result })() }
+    if (checkingBackupCapacity) return nativeExec(source)
+    const execute = () => { const result = nativeExec(source); writeSequence++; return result }
+    if (db.inTransaction) return execute()
+    const priorBackupBytes = legacyBackupBaseline()
+    try { return nativeTransaction(() => { const result = execute(); assertBackupable(priorBackupBytes); return result })() }
     catch (error) { throw normalizeBackupWriteError(error) }
   }
   const wrapStatement = (statement: Database.Statement, mutating: boolean): Database.Statement => new Proxy(statement, { get(target, property) {
     if (property === 'run' || property === 'get' || property === 'all') return (...args: any[]) => {
-      const execute = () => (target[property as 'run' | 'get' | 'all'] as (...values: any[]) => any)(...args)
-      if (!mutating || db.inTransaction || checkingBackupCapacity) return execute()
-      try { return nativeTransaction(() => { const result = execute(); assertBackupable(); return result })() }
+      const execute = () => {
+        const result = (target[property as 'run' | 'get' | 'all'] as (...values: any[]) => any)(...args)
+        if (mutating && Number((selectChanges.get() as { count: number }).count) > 0) writeSequence++
+        return result
+      }
+      if (!mutating || checkingBackupCapacity || db.inTransaction) return execute()
+      const priorWrites = writeSequence, priorBackupBytes = legacyBackupBaseline()
+      try { return nativeTransaction(() => { const result = execute(); if (writeSequence !== priorWrites) assertBackupable(priorBackupBytes); return result })() }
       catch (error) { throw normalizeBackupWriteError(error) }
     }
     if (property === 'iterate' && mutating) return (...args: any[]) => {
-      let rows: unknown[]
+      const execute = () => {
+        const rows = target.all(...args)
+        if (Number((selectChanges.get() as { count: number }).count) > 0) writeSequence++
+        return rows
+      }
+      if (db.inTransaction || checkingBackupCapacity) return execute()[Symbol.iterator]()
+      const priorWrites = writeSequence, priorBackupBytes = legacyBackupBaseline()
       try {
-        rows = !db.inTransaction && !checkingBackupCapacity
-          ? nativeTransaction(() => { const result = target.all(...args); assertBackupable(); return result })()
-          : target.all(...args)
+        const rows = nativeTransaction(() => { const result = execute(); if (writeSequence !== priorWrites) assertBackupable(priorBackupBytes); return result })()
+        return rows[Symbol.iterator]()
       } catch (error) { throw normalizeBackupWriteError(error) }
-      return rows[Symbol.iterator]()
     }
     const value = Reflect.get(target, property, target)
     if (typeof value !== 'function') return value

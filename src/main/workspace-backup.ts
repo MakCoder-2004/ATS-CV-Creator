@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3'
 import { createHash, randomUUID } from 'node:crypto'
-import { MAX_WORKSPACE_BACKUP_BYTES, MAX_WORKSPACE_BACKUP_POSTING_REVISIONS, MAX_WORKSPACE_BACKUP_ROW_BYTES, WORKSPACE_BACKUP_SIZE_TABLE, WORKSPACE_BACKUP_STATE_TABLE, WORKSPACE_BACKUP_TABLE_ROW_LIMITS, workspaceBackupSchema, workspaceBackupWarning, type WorkspaceBackupEngine, type WorkspaceRestorePreview } from '../shared/workspace-backup'
+import { MAX_WORKSPACE_BACKUP_BYTES, MAX_WORKSPACE_BACKUP_POSTING_REVISIONS, MAX_WORKSPACE_BACKUP_ROW_BYTES, WORKSPACE_BACKUP_SIZE_TABLE, WORKSPACE_BACKUP_STATE_TABLE, WORKSPACE_BACKUP_TABLE_ROW_LIMITS, workspaceBackupSchema, workspaceBackupStatusSchema, workspaceBackupWarning, type WorkspaceBackupEngine, type WorkspaceRestorePreview } from '../shared/workspace-backup'
 import { contactRecordSchema, skillRecordSchema, profileEntrySchema, evidenceRevisionSchema, uuidSchema } from '../shared/profile'
 import { experienceRecordSchema, projectRecordSchema } from '../shared/experience'
 import { jobRecordSchema, MAX_JOB_RECORD_UTF8_BYTES, legacyDraftTargetBaseline } from '../shared/jobs'
@@ -26,13 +26,22 @@ const hash = (value: string) => createHash('sha256').update(value, 'utf8').diges
 type TableBackup = { schema: string; rows: Array<Record<string, unknown>> }
 type Pending = { input: ReturnType<typeof workspaceBackupSchema.parse>; token: string }
 export class WorkspaceBackupCapacityError extends Error { constructor(message: string) { super(message); this.name = 'WorkspaceBackupCapacityError' } }
+const registeredRowSizers = new WeakSet<object>()
+export function registerWorkspaceBackupRowSizer(db: Database.Database): void {
+  if (registeredRowSizers.has(db)) return
+  db.function('cv_workspace_backup_row_bytes', { deterministic: true }, (rowJson: string) => Buffer.byteLength(JSON.stringify(JSON.parse(rowJson)), 'utf8'))
+  registeredRowSizers.add(db)
+}
 
 export function createWorkspaceBackupEngine(db: Database.Database, maxBackupBytes = MAX_WORKSPACE_BACKUP_BYTES): WorkspaceBackupEngine {
   if (!Number.isSafeInteger(maxBackupBytes) || maxBackupBytes < 1) throw new Error('Workspace backup byte ceiling must be a positive safe integer.')
+  registerWorkspaceBackupRowSizer(db)
   db.pragma('recursive_triggers = ON')
-  db.exec(`CREATE TABLE IF NOT EXISTS ${WORKSPACE_BACKUP_STATE_TABLE} (singleton INTEGER PRIMARY KEY CHECK(singleton=1), max_bytes INTEGER NOT NULL, base_bytes INTEGER NOT NULL);
+  db.exec(`CREATE TABLE IF NOT EXISTS ${WORKSPACE_BACKUP_STATE_TABLE} (singleton INTEGER PRIMARY KEY CHECK(singleton=1), max_bytes INTEGER NOT NULL, base_bytes INTEGER NOT NULL, legacy_over_cap INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE IF NOT EXISTS ${WORKSPACE_BACKUP_SIZE_TABLE} (table_name TEXT PRIMARY KEY, row_count INTEGER NOT NULL, row_bytes INTEGER NOT NULL);`)
-  db.prepare(`INSERT INTO ${WORKSPACE_BACKUP_STATE_TABLE} (singleton,max_bytes,base_bytes) VALUES (1,?,0) ON CONFLICT(singleton) DO UPDATE SET max_bytes=excluded.max_bytes`).run(maxBackupBytes)
+  const stateColumns = db.pragma(`table_info(${WORKSPACE_BACKUP_STATE_TABLE})`) as Array<{ name: string }>
+  if (!stateColumns.some(column => column.name === 'legacy_over_cap')) db.exec(`ALTER TABLE ${WORKSPACE_BACKUP_STATE_TABLE} ADD COLUMN legacy_over_cap INTEGER NOT NULL DEFAULT 0`)
+  db.prepare(`INSERT INTO ${WORKSPACE_BACKUP_STATE_TABLE} (singleton,max_bytes,base_bytes,legacy_over_cap) VALUES (1,?,0,0) ON CONFLICT(singleton) DO UPDATE SET max_bytes=excluded.max_bytes`).run(maxBackupBytes)
   const pending = new Map<string, Pending>()
   const tableSchema = (name: string): string => {
     const row = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name=?").get(name) as { sql: string } | undefined
@@ -84,14 +93,14 @@ export function createWorkspaceBackupEngine(db: Database.Database, maxBackupByte
     }
   }
   const jsonRowExpression = (prefix: 'NEW' | 'OLD', columns: Array<{ name: string }>) => `json_object(${columns.map(column => `'${column.name}', ${prefix}."${column.name}"`).join(',')})`
-  const rowBytesExpression = (prefix: 'NEW' | 'OLD', columns: Array<{ name: string }>) => `length(CAST(${jsonRowExpression(prefix, columns)} AS BLOB))`
+  const rowBytesExpression = (prefix: 'NEW' | 'OLD', columns: Array<{ name: string }>) => `cv_workspace_backup_row_bytes(${jsonRowExpression(prefix, columns)})`
   const backupBytesFromLedger = () => {
-    const state = db.prepare(`SELECT max_bytes, base_bytes FROM ${WORKSPACE_BACKUP_STATE_TABLE} WHERE singleton=1`).get() as { max_bytes: number; base_bytes: number }
+    const state = db.prepare(`SELECT max_bytes, base_bytes, legacy_over_cap FROM ${WORKSPACE_BACKUP_STATE_TABLE} WHERE singleton=1`).get() as { max_bytes: number; base_bytes: number; legacy_over_cap: number }
     const sizes = db.prepare(`SELECT table_name, row_count, row_bytes FROM ${WORKSPACE_BACKUP_SIZE_TABLE}`).all() as Array<{ table_name: string; row_count: number; row_bytes: number }>
     const byName = new Map(sizes.map(item => [item.table_name, item]))
-    for (const [name, maxRows] of Object.entries(WORKSPACE_BACKUP_TABLE_ROW_LIMITS)) if ((byName.get(name)?.row_count ?? 0) > maxRows) throw new WorkspaceBackupCapacityError(`Workspace table ${name} exceeds its ${maxRows}-row backup safety limit.`)
+    const overTableLimits = Object.entries(WORKSPACE_BACKUP_TABLE_ROW_LIMITS).some(([name, maxRows]) => (byName.get(name)?.row_count ?? 0) > maxRows)
     const rowsAndSeparators = sizes.reduce((sum, item) => sum + item.row_bytes + Math.max(0, item.row_count - 1), 0)
-    return { bytes: state.base_bytes + rowsAndSeparators, maxBytes: state.max_bytes }
+    return { bytes: state.base_bytes + rowsAndSeparators, maxBytes: state.max_bytes, legacyOverCap: state.legacy_over_cap === 1, overTableLimits }
   }
   const installBackupAccountingTriggers = () => {
     const names = actualTables()
@@ -104,22 +113,21 @@ export function createWorkspaceBackupEngine(db: Database.Database, maxBackupByte
       const rows = rowsFor(name), bytes = rows.reduce((sum, row) => sum + Buffer.byteLength(JSON.stringify(row), 'utf8'), 0)
       insertSize.run(name, rows.length, bytes)
     }
-    db.prepare(`UPDATE ${WORKSPACE_BACKUP_STATE_TABLE} SET max_bytes=?,base_bytes=? WHERE singleton=1`).run(maxBackupBytes, baseBytes)
-    const capacityCheck = `SELECT CASE WHEN (SELECT base_bytes FROM ${WORKSPACE_BACKUP_STATE_TABLE} WHERE singleton=1) + (SELECT COALESCE(SUM(row_bytes + CASE WHEN row_count > 0 THEN row_count-1 ELSE 0 END),0) FROM ${WORKSPACE_BACKUP_SIZE_TABLE}) > (SELECT max_bytes FROM ${WORKSPACE_BACKUP_STATE_TABLE} WHERE singleton=1) THEN RAISE(ABORT,'WORKSPACE_BACKUP_CAPACITY') END;`
+        const capacityCheck = `SELECT CASE WHEN (SELECT legacy_over_cap FROM ${WORKSPACE_BACKUP_STATE_TABLE} WHERE singleton=1)=0 AND (SELECT base_bytes FROM ${WORKSPACE_BACKUP_STATE_TABLE} WHERE singleton=1) + (SELECT COALESCE(SUM(row_bytes + CASE WHEN row_count > 0 THEN row_count-1 ELSE 0 END),0) FROM ${WORKSPACE_BACKUP_SIZE_TABLE}) > (SELECT max_bytes FROM ${WORKSPACE_BACKUP_STATE_TABLE} WHERE singleton=1) THEN RAISE(ABORT,'WORKSPACE_BACKUP_CAPACITY') END;`
     for (const name of names) {
       const table = `"${name}"`, maxRows = WORKSPACE_BACKUP_TABLE_ROW_LIMITS[name]!, columns = db.pragma(`table_info(${table})`) as Array<{ name: string }>
       const newJson = jsonRowExpression('NEW', columns), oldJson = jsonRowExpression('OLD', columns)
       const newBytes = rowBytesExpression('NEW', columns), oldBytes = rowBytesExpression('OLD', columns)
-      const jobGuard = name === 'jobs' ? `SELECT CASE WHEN length(CAST(NEW."data" AS BLOB)) > ${MAX_JOB_RECORD_UTF8_BYTES} OR NOT json_valid(NEW."data") OR COALESCE(json_array_length(NEW."data",'$.revisions'),0) > ${MAX_WORKSPACE_BACKUP_POSTING_REVISIONS} THEN RAISE(ABORT,'WORKSPACE_BACKUP_JOB_LIMIT') END;` : ''
+      const jobGuard = name === 'jobs' ? `SELECT CASE WHEN (SELECT legacy_over_cap FROM ${WORKSPACE_BACKUP_STATE_TABLE} WHERE singleton=1)=0 AND (length(CAST(NEW."data" AS BLOB)) > ${MAX_JOB_RECORD_UTF8_BYTES} OR NOT json_valid(NEW."data") OR COALESCE(json_array_length(NEW."data",'$.revisions'),0) > ${MAX_WORKSPACE_BACKUP_POSTING_REVISIONS}) THEN RAISE(ABORT,'WORKSPACE_BACKUP_JOB_LIMIT') END;` : ''
       db.exec(`CREATE TRIGGER "cv_backup_${name}_insert" AFTER INSERT ON ${table} BEGIN
-        SELECT CASE WHEN ${newBytes} > ${MAX_WORKSPACE_BACKUP_ROW_BYTES} THEN RAISE(ABORT,'WORKSPACE_BACKUP_ROW_LIMIT') END;
+        SELECT CASE WHEN (SELECT legacy_over_cap FROM ${WORKSPACE_BACKUP_STATE_TABLE} WHERE singleton=1)=0 AND ${newBytes} > ${MAX_WORKSPACE_BACKUP_ROW_BYTES} THEN RAISE(ABORT,'WORKSPACE_BACKUP_ROW_LIMIT') END;
         ${jobGuard}
         UPDATE ${WORKSPACE_BACKUP_SIZE_TABLE} SET row_count=row_count+1,row_bytes=row_bytes+${newBytes} WHERE table_name='${name}';
-        SELECT CASE WHEN (SELECT row_count FROM ${WORKSPACE_BACKUP_SIZE_TABLE} WHERE table_name='${name}') > ${maxRows} THEN RAISE(ABORT,'WORKSPACE_BACKUP_TABLE_LIMIT') END;
+        SELECT CASE WHEN (SELECT legacy_over_cap FROM ${WORKSPACE_BACKUP_STATE_TABLE} WHERE singleton=1)=0 AND (SELECT row_count FROM ${WORKSPACE_BACKUP_SIZE_TABLE} WHERE table_name='${name}') > ${maxRows} THEN RAISE(ABORT,'WORKSPACE_BACKUP_TABLE_LIMIT') END;
         ${capacityCheck}
       END;
       CREATE TRIGGER "cv_backup_${name}_update" AFTER UPDATE ON ${table} BEGIN
-        SELECT CASE WHEN ${newBytes} > ${MAX_WORKSPACE_BACKUP_ROW_BYTES} THEN RAISE(ABORT,'WORKSPACE_BACKUP_ROW_LIMIT') END;
+        SELECT CASE WHEN (SELECT legacy_over_cap FROM ${WORKSPACE_BACKUP_STATE_TABLE} WHERE singleton=1)=0 AND ${newBytes} > ${MAX_WORKSPACE_BACKUP_ROW_BYTES} THEN RAISE(ABORT,'WORKSPACE_BACKUP_ROW_LIMIT') END;
         ${jobGuard}
         UPDATE ${WORKSPACE_BACKUP_SIZE_TABLE} SET row_bytes=row_bytes-${oldBytes}+${newBytes} WHERE table_name='${name}';
         ${capacityCheck}
@@ -130,9 +138,16 @@ export function createWorkspaceBackupEngine(db: Database.Database, maxBackupByte
       END;`)
     }
     const currentSnapshot = { ...emptySnapshot, tables: Object.fromEntries(names.map(name => [name, { schema: tableSchema(name), rows: rowsFor(name) }])) }
-    validateRawBounds(currentSnapshot)
+    let legacyOverCap = false
+    try { validateRawBounds(currentSnapshot) } catch { legacyOverCap = true }
+    const snapshotBytes = Buffer.byteLength(JSON.stringify(currentSnapshot), 'utf8')
+    const rowBytesAndSeparators = (db.prepare(`SELECT COALESCE(SUM(row_bytes + CASE WHEN row_count > 0 THEN row_count-1 ELSE 0 END),0) AS value FROM ${WORKSPACE_BACKUP_SIZE_TABLE}`).get() as { value: number }).value
+    const calibratedBaseBytes = snapshotBytes - rowBytesAndSeparators
+    db.prepare(`UPDATE ${WORKSPACE_BACKUP_STATE_TABLE} SET max_bytes=?,base_bytes=?,legacy_over_cap=? WHERE singleton=1`).run(maxBackupBytes, calibratedBaseBytes, legacyOverCap ? 1 : 0)
     const bytes = backupBytesFromLedger().bytes
-    if (bytes !== Buffer.byteLength(JSON.stringify(currentSnapshot), 'utf8')) throw new Error('Workspace backup byte ledger is inconsistent with stored rows.')
+    if (bytes !== snapshotBytes) throw new Error(`Workspace backup byte ledger is inconsistent with stored rows (${bytes} accounted, ${snapshotBytes} serialized).`)
+    if (bytes > maxBackupBytes) { legacyOverCap = true; db.prepare(`UPDATE ${WORKSPACE_BACKUP_STATE_TABLE} SET legacy_over_cap=1 WHERE singleton=1`).run() }
+    if (Object.entries(WORKSPACE_BACKUP_TABLE_ROW_LIMITS).some(([name, maxRows]) => (db.prepare(`SELECT COUNT(*) AS count FROM "${name}"`).get() as { count: number }).count > maxRows)) { legacyOverCap = true; db.prepare(`UPDATE ${WORKSPACE_BACKUP_STATE_TABLE} SET legacy_over_cap=1 WHERE singleton=1`).run() }
   }
   installBackupAccountingTriggers()
   const buildSnapshot = () => {
@@ -320,10 +335,25 @@ export function createWorkspaceBackupEngine(db: Database.Database, maxBackupByte
     return backup
   }
   return {
-    assertBackupCapacity() {
+    readBackupStatus() {
+      const state = backupBytesFromLedger()
+      return { backupable: !state.legacyOverCap && !state.overTableLimits && state.bytes <= state.maxBytes, legacyOverCap: state.legacyOverCap, bytes: state.bytes, maxBytes: state.maxBytes }
+    },
+    assertBackupCapacity(previousBytes) {
+      const state = backupBytesFromLedger()
+      if (state.legacyOverCap) {
+        if (previousBytes !== undefined && state.bytes < previousBytes) {
+          if (state.bytes <= state.maxBytes) {
+            try { buildSnapshot(); db.prepare(`UPDATE ${WORKSPACE_BACKUP_STATE_TABLE} SET legacy_over_cap=0 WHERE singleton=1`).run() }
+            catch { /* Keep the legacy read-only recovery mode until every backup limit is met. */ }
+          }
+          return
+        }
+        throw new WorkspaceBackupCapacityError(`This legacy workspace exceeds current backup limits. Only a transaction that reduces its stored backup size is allowed; no history was removed.`)
+      }
       try {
-        const { bytes, maxBytes } = backupBytesFromLedger()
-        if (bytes > maxBytes) throw new Error(`Backup exceeds the ${Math.round(maxBytes / (1024 * 1024))} MiB workspace safety limit.`)
+        if (state.overTableLimits) throw new Error('A workspace table exceeds its row count limit.')
+        if (state.bytes > state.maxBytes) throw new Error(`Backup exceeds the ${Math.round(state.maxBytes / (1024 * 1024))} MiB workspace safety limit.`)
       } catch (error) {
         if (error instanceof WorkspaceBackupCapacityError) throw error
         const detail = error instanceof Error ? error.message : 'backup validation failed'

@@ -16,6 +16,7 @@ import { mutateDraftRecordInputSchema } from '../shared/draft-records'
 import { profilePdfApplyResultSchema, profilePdfPreviewSchema, profilePdfProposalSchema } from '../shared/profile-pdf-import'
 import { profileAiConsentActionSchema, profileAiConsentPreviewSchema, profileAiRunResultSchema } from '../shared/profile-ai-structuring'
 import { postingFetchStateSchema } from '../shared/posting-import'
+import { workspaceBackupStatusSchema } from '../shared/workspace-backup'
 
 const workspaceResult = z.object({ ok: z.boolean(), cancelled: z.boolean(), message: z.string() }).strict()
 const restoreSelection = z.discriminatedUnion('ok', [
@@ -27,6 +28,9 @@ const restoreDecision = z.object({ ok: z.boolean(), message: z.string() }).stric
 const api: WorkbenchAPI = Object.freeze({
   async getSettings() {
     return settingsSchema.parse(await ipcRenderer.invoke('settings:get'))
+  },
+  async getWorkspaceBackupStatus() {
+    return workspaceBackupStatusSchema.parse(await ipcRenderer.invoke('workspace:backup:status'))
   },
   async setAppearance(value: Appearance) {
     return settingsSchema.parse(await ipcRenderer.invoke('settings:appearance', appearanceSchema.parse(value)))

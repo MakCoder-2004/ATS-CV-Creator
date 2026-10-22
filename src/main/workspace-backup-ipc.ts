@@ -37,6 +37,10 @@ function writeVerified(path: string, content: string) {
 /** Native-only file dialogs, temporary restore previews and verified safety copies. */
 export function registerWorkspaceBackupIpc(getWindow: () => BrowserWindow, getWorkspace: () => Workspace, reopenWorkspace: () => void, trusted: (event: IpcMainInvokeEvent) => void) {
   const idle = () => { if (getWorkspace().hasActiveWork()) throw new Error('An operation is active. Cancel or finish it before backing up or restoring.') }
+  ipcMain.handle('workspace:backup:status', (event, ...args: unknown[]) => {
+    trusted(event); if (args.length) throw new Error('Unexpected arguments')
+    return getWorkspace().backup.readBackupStatus()
+  })
   ipcMain.handle('workspace:backup', async (event, ...args: unknown[]) => {
     trusted(event); if (args.length) throw new Error('Unexpected arguments')
     try {

@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { gzipSync } from 'node:zlib'
 import Database from 'better-sqlite3'
 import { createWorkbench } from '../src/main/workbench'
+import { registerWorkspaceBackupRowSizer } from '../src/main/workspace-backup'
 
 const directories: string[] = []
 afterEach(async () => { for (const directory of directories.splice(0)) await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) }, 30_000)
@@ -445,6 +446,42 @@ test('job history byte ceiling refuses atomically and the last accepted full his
   reopened.close()
 }, 20_000)
 
+test('legacy over-cap workspaces open read-only for growth and allow explicit size-reducing edits', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'cv-tailor-legacy-over-cap-'))
+  directories.push(directory)
+  const legacyDb = new Database(join(directory, 'workbench.sqlite'))
+  legacyDb.exec('CREATE TABLE jobs (id TEXT PRIMARY KEY, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, data TEXT NOT NULL)')
+  const id = '3b8fdc59-cdd0-4f9e-a4d9-e42f0f8f6b62', at = new Date().toISOString(), oldText = 'L'.repeat(20_000)
+  const revisions = Array.from({ length: 300 }, (_, index) => ({ title: 'Legacy role', company: 'Example', description: oldText, revision: index + 1, acceptedAt: at, provenance: 'manual' as const }))
+  const legacyRecord = { id, title: 'Legacy role', company: 'Example', description: oldText, createdAt: at, updatedAt: at, provenance: 'manual' as const, sourceSnapshot: null, revisions }
+  legacyDb.prepare('INSERT INTO jobs (id,created_at,updated_at,data) VALUES (?,?,?,?)').run(id, at, at, JSON.stringify(legacyRecord))
+  legacyDb.close()
+
+  const workbench = createWorkbench(directory)
+  try {
+    expect(await workbench.api.getWorkspaceBackupStatus()).toMatchObject({ backupable: false, legacyOverCap: true })
+    expect(await workbench.api.openJob(id)).toEqual(legacyRecord)
+    const shorterText = 'S'.repeat(100)
+    const reduced = await workbench.api.saveJob({ id, title: legacyRecord.title, company: legacyRecord.company, description: shorterText })
+    if (!reduced.ok) throw new Error(reduced.error.message)
+    expect(reduced.ok).toBe(true)
+    expect(reduced.value.description).toBe(shorterText)
+    const afterReduction = await workbench.api.openJob(id)
+    if (!afterReduction) throw new Error('Reduced legacy posting disappeared')
+    expect(afterReduction.revisions).toHaveLength(301)
+    expect((await workbench.api.getWorkspaceBackupStatus()).legacyOverCap).toBe(true)
+
+    const growth = await workbench.api.saveJob({ id, title: afterReduction.title, company: afterReduction.company, description: `${shorterText}more` })
+    expect(growth).toMatchObject({ ok: false })
+    expect(await workbench.api.openJob(id)).toEqual(afterReduction)
+    expect(() => workbench.backup.createBackup()).toThrow(/safety limit|accepted-storage limit/i)
+  } finally { workbench.close() }
+  const reopened = createWorkbench(directory)
+  expect((await reopened.api.openJob(id))?.revisions).toHaveLength(301)
+  expect((await reopened.api.getWorkspaceBackupStatus()).legacyOverCap).toBe(true)
+  reopened.close()
+})
+
 test('aggregate backup ceiling rejects a multi-job save before mutation and preserves a restorable workspace', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'cv-tailor-backup-capacity-'))
   directories.push(directory)
@@ -465,6 +502,7 @@ test('aggregate backup ceiling rejects a multi-job save before mutation and pres
     expect(await workbench.api.openJob(first.value.id)).toEqual(first.value)
     expect(await workbench.api.openJob(second.value.id)).toEqual(second.value)
     const directWriter = new Database(join(directory, 'workbench.sqlite'))
+    registerWorkspaceBackupRowSizer(directWriter)
     const directId = 'fd570a2e-53b5-4e2d-9e3d-8019ed4cc367', createdAt = new Date().toISOString()
     const directRecord = { id: directId, title: 'Direct SQL role', company: 'Example', description: 'D'.repeat(1000), createdAt, updatedAt: createdAt, provenance: 'manual', sourceSnapshot: null, revisions: [{ title: 'Direct SQL role', company: 'Example', description: 'D'.repeat(1000), revision: 1, acceptedAt: createdAt, provenance: 'manual' }] }
     expect(() => directWriter.prepare('INSERT INTO jobs (id, created_at, updated_at, data) VALUES (?, ?, ?, ?) RETURNING id').get(directId, createdAt, createdAt, JSON.stringify(directRecord))).toThrow(/WORKSPACE_BACKUP_CAPACITY/)

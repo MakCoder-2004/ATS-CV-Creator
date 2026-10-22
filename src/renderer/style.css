@@ -93,6 +93,13 @@ nav button:hover, nav button[aria-current=page] { background: var(--raised); col
 .storage-note { font-size: 12px; font-weight: 650; }
 .storage-note span { font-weight: 450; color: var(--muted); }
 .workspace-main { min-width: 0; }
+.backup-capacity-warning { display: flex; align-items: center; gap: 16px; margin: 16px 28px 0; padding: 16px 20px; color: var(--warning-ink); background: var(--warning-surface); border: 1px solid var(--warning-border); border-radius: 8px; }
+.backup-capacity-warning > svg { flex: 0 0 auto; }
+.backup-capacity-warning > div { flex: 1; min-width: 0; }
+.backup-capacity-warning p { margin: 0; line-height: 1.55; }
+.backup-capacity-warning p + p { margin-top: 4px; }
+.backup-capacity-warning button { flex: 0 0 auto; }
+@media (max-width: 760px) { .backup-capacity-warning { align-items: flex-start; flex-wrap: wrap; margin: 12px 16px 0; padding: 12px 16px; } .backup-capacity-warning > div { flex: 1 1 calc(100% - 40px); } .backup-capacity-warning button { margin-left: 36px; } }
 .header {
   background: var(--surface); border-bottom: 1px solid var(--line);
   min-height: 68px; display: flex; justify-content: space-between;
