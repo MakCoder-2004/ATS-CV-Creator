@@ -56,6 +56,7 @@ test('CV-44 final installed-app manual PDF and DOCX picker gate', async () => {
       expect(resolve(paths.userData)).toBe(userData)
       expect(realpathSync(paths.executable)).toBe(realpathSync(executablePath!))
     })
+    await page.evaluate(() => { document.title = 'CV44 FINAL ISOLATED TEST' })
     await expect.poll(() => page.title()).toBe(title)
     await page.getByRole('button', { name: 'My profile' }).click()
     await expect(page.getByRole('heading', { name: 'My profile' })).toBeVisible()
@@ -81,6 +82,7 @@ test('CV-44 final installed-app manual PDF and DOCX picker gate', async () => {
         : open(...args as [any, any])
       return true
     }, profileJson)
+    page.once('dialog', nativeDialog => nativeDialog.accept())
     await page.getByRole('button', { name: 'Export profile JSON' }).click()
     await expect(page.getByRole('status').filter({ hasText: /Profile JSON exported/i })).toBeVisible({ timeout: 15_000 })
     expect(existsSync(profileJson)).toBe(true)
