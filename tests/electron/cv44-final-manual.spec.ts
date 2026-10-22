@@ -1,9 +1,11 @@
 import { test, expect, _electron as electron, type ElectronApplication } from '@playwright/test'
 import { existsSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import { dirname, join, resolve } from 'node:path'
 
 const executablePath = process.env.CV_TAILOR_INSTALLED_EXE
 const enabled = process.env.RUN_CV44_MANUAL === '1' && Boolean(executablePath)
+const resumeAfterImports = process.env.CV44_RESUME_AFTER_IMPORTS === '1'
 test.skip(!enabled, 'Set RUN_CV44_MANUAL=1 and CV_TAILOR_INSTALLED_EXE to the reviewed installed executable')
 
 const userData = resolve('release/cv44-final-userdata')
@@ -23,7 +25,8 @@ async function snapshot(page: Awaited<ReturnType<ElectronApplication['firstWindo
 }
 
 async function waitForManualImport(page: Awaited<ReturnType<ElectronApplication['firstWindow']>>, button: 'Upload CV' | 'Upload Word CV', stage: Stage) {
-  progress(stage, `In ${title}: click “${button}”, choose the real file in the OS picker, review it, then click “Apply accepted details”.`)
+  const fixture = button === 'Upload CV' ? 'release/cv44-fixtures/cv44-synthetic.pdf' : 'release/cv44-fixtures/cv44-synthetic.docx'
+  progress(stage, `In ${title}: click “${button}”, choose ${fixture} in the real OS picker, review it, then click “Apply accepted details”.`)
   await page.getByRole('button', { name: button, exact: true }).click()
   const review = page.getByRole('region', { name: 'Review proposed profile details' })
   await expect(review).toBeVisible({ timeout: 210_000 })
@@ -37,11 +40,15 @@ test('CV-44 final installed-app manual PDF and DOCX picker gate', async () => {
   test.setTimeout(270_000)
   if (!executablePath) throw new Error('CV_TAILOR_INSTALLED_EXE is required.')
   mkdirSync(results, { recursive: true })
-  progress('starting', 'Preparing a new isolated userData directory. No application launched unless this gated test is explicitly enabled.')
+  progress('starting', resumeAfterImports ? 'Resuming only the post-import release checks against the previously isolated manual-picker profile.' : 'Preparing a new isolated userData directory. No application launched unless this gated test is explicitly enabled.')
   writeFileSync(join(results, 'evidence.json'), JSON.stringify({ task: '#44', status: 'prepared', passed: false, userDataIsolated: true }, null, 2))
-  if (existsSync(userData)) throw new Error(`Refusing to reuse existing data; move or remove this isolated directory before running: ${userData}`)
-  mkdirSync(dirname(userData), { recursive: true })
-  mkdirSync(userData)
+  if (resumeAfterImports) {
+    if (!existsSync(userData)) throw new Error(`No isolated userData exists to resume: ${userData}`)
+  } else {
+    if (existsSync(userData)) throw new Error(`Refusing to reuse existing data; move or remove this isolated directory before running: ${userData}`)
+    mkdirSync(dirname(userData), { recursive: true })
+    mkdirSync(userData)
+  }
 
   let app: ElectronApplication | undefined
   try {
@@ -61,12 +68,23 @@ test('CV-44 final installed-app manual PDF and DOCX picker gate', async () => {
     await page.getByRole('button', { name: 'My profile' }).click()
     await expect(page.getByRole('heading', { name: 'My profile' })).toBeVisible()
 
-    await waitForManualImport(page, 'Upload CV', 'awaiting-pdf-picker-and-apply')
-    const afterPdf = await snapshot(page)
-    expect(afterPdf.profile.contact || afterPdf.profile.skills.length || afterPdf.profile.education.length || afterPdf.profile.certificates.length || afterPdf.profile.summary.length || afterPdf.profile.languages.length || afterPdf.experience.experience.length || afterPdf.experience.projects.length).toBeTruthy()
-    await waitForManualImport(page, 'Upload Word CV', 'awaiting-docx-picker-and-apply')
+    if (!resumeAfterImports) {
+      await waitForManualImport(page, 'Upload CV', 'awaiting-pdf-picker-and-apply')
+      const afterPdf = await snapshot(page)
+      expect(afterPdf.profile.contact || afterPdf.profile.skills.length || afterPdf.profile.education.length || afterPdf.profile.certificates.length || afterPdf.profile.summary.length || afterPdf.profile.languages.length || afterPdf.experience.experience.length || afterPdf.experience.projects.length).toBeTruthy()
+      await waitForManualImport(page, 'Upload Word CV', 'awaiting-docx-picker-and-apply')
+    }
     const imported = await snapshot(page)
     expect(imported.profile.contact || imported.profile.skills.length || imported.profile.education.length || imported.profile.certificates.length || imported.profile.summary.length || imported.profile.languages.length || imported.experience.experience.length || imported.experience.projects.length).toBeTruthy()
+    await page.getByRole('button', { name: 'Use light mode' }).click()
+    await expect.poll(() => page.locator('html').getAttribute('data-appearance')).toBe('light')
+    await page.screenshot({ path: join(results, 'profile-light.png'), fullPage: true })
+    await page.getByRole('button', { name: 'Use dark mode' }).click()
+    await expect.poll(() => page.locator('html').getAttribute('data-appearance')).toBe('dark')
+    await page.screenshot({ path: join(results, 'profile-dark.png'), fullPage: true })
+    await page.setViewportSize({ width: 375, height: 812 })
+    await page.screenshot({ path: join(results, 'profile-dark-narrow.png'), fullPage: true })
+    await page.setViewportSize({ width: 1280, height: 800 })
 
     progress('exporting', 'Exporting profile JSON and complete workspace backup through only their narrowly matched dialogs.')
     await app.evaluate(({ dialog }, jsonPath) => {
@@ -88,6 +106,25 @@ test('CV-44 final installed-app manual PDF and DOCX picker gate', async () => {
     expect(existsSync(profileJson)).toBe(true)
     const profileExchange = JSON.parse(await import('node:fs/promises').then(fs => fs.readFile(profileJson, 'utf8')))
     expect(profileExchange).toMatchObject({ format: 'cv-tailor-profile', version: 1 })
+    expect(profileExchange).not.toHaveProperty('profile_import_provenance')
+    const previewOnlyJson = join(results, 'cv44-unfinished-profile-preview.json')
+    writeFileSync(previewOnlyJson, JSON.stringify({ ...profileExchange, profile: { ...profileExchange.profile, skills: [...profileExchange.profile.skills, { id: randomUUID(), revision: 1, name: 'CV44_UNFINISHED_PREVIEW_CANARY', category: 'Technical' }] } }))
+    await app.evaluate(({ dialog }, paths) => {
+      const open = dialog.showOpenDialog.bind(dialog)
+      dialog.showOpenDialog = async (...args: any[]) => args[1]?.title === 'Select profile JSON'
+        ? { canceled: false, filePaths: [paths.preview] }
+        : args[1]?.title === 'Select workspace backup'
+          ? { canceled: false, filePaths: [paths.backup] }
+          : open(...args as [any, any])
+      return true
+    }, { preview: previewOnlyJson, backup: workspaceBackup })
+    const pendingProfileImport = await page.evaluate(() => window.workbench.previewProfileImport())
+    expect(pendingProfileImport).toMatchObject({ ok: true })
+    if (!pendingProfileImport.ok) throw new Error('Could not create the unfinished profile JSON preview.')
+    expect(pendingProfileImport.value.profile.skills.map(skill => skill.name)).toContain('CV44_UNFINISHED_PREVIEW_CANARY')
+    await page.evaluate(token => window.workbench.cancelProfileImport(token), pendingProfileImport.token)
+    expect(await snapshot(page)).toEqual(imported)
+    expect(await page.evaluate(() => window.workbench.saveOpenRouterApiKey('CV44_DUMMY_SECRET_CANARY_NOT_A_REAL_KEY'))).toMatchObject({ openRouter: { credential: { configured: true } } })
 
     await page.getByRole('button', { name: 'Settings' }).click()
     await page.getByRole('button', { name: 'Back up workspace' }).click()
@@ -95,6 +132,13 @@ test('CV-44 final installed-app manual PDF and DOCX picker gate', async () => {
     expect(existsSync(workspaceBackup)).toBe(true)
     const backup = JSON.parse(await import('node:fs/promises').then(fs => fs.readFile(workspaceBackup, 'utf8')))
     expect(backup.format).toBe('cv-tailor-workspace-backup')
+    expect(backup.tables.profile_import_provenance.rows.length).toBeGreaterThan(0)
+    expect(backup.tables).not.toHaveProperty('encrypted_credentials')
+    expect(JSON.stringify(backup)).not.toContain('CV44_DUMMY_SECRET_CANARY_NOT_A_REAL_KEY')
+    expect(JSON.stringify(backup)).not.toContain('CV44_UNFINISHED_PREVIEW_CANARY')
+    expect(JSON.stringify(backup)).not.toMatch(/openrouter.*api.?key/i)
+    expect(backup.tables).not.toHaveProperty('profile_import_preview')
+    expect(JSON.stringify(JSON.parse(await import('node:fs/promises').then(fs => fs.readFile(profileJson, 'utf8'))))).not.toContain('CV44_UNFINISHED_PREVIEW_CANARY')
 
     progress('restoring', 'Restoring the just-exported complete backup through the app’s visible restore confirmation flow.')
     await page.evaluate(async () => {
@@ -105,6 +149,7 @@ test('CV-44 final installed-app manual PDF and DOCX picker gate', async () => {
     await expect(page.getByRole('dialog', { name: 'Replace workspace from backup?' })).toBeVisible({ timeout: 15_000 })
     await page.getByRole('button', { name: 'Confirm workspace replacement' }).click()
     await expect(page.getByRole('region', { name: 'Workspace backup' }).getByRole('status')).toContainText(/Workspace restored/i, { timeout: 20_000 })
+    expect(await page.evaluate(() => window.workbench.getSettings().then(settings => settings.openRouter.credential.configured))).toBe(false)
     const restored = await snapshot(page)
     expect(restored).toEqual(imported)
     expect(restored.profile.skills.map(skill => skill.name)).not.toContain('CV44 isolated restore sentinel')
@@ -129,6 +174,8 @@ test('CV-44 final installed-app manual PDF and DOCX picker gate', async () => {
     writeFileSync(join(results, 'evidence.json'), JSON.stringify({ task: '#44', status: 'failed', passed: false, userDataIsolated: true, detail }, null, 2))
     throw error
   } finally {
+    if (app) await app.firstWindow().then(page => page.evaluate(() => window.workbench.removeOpenRouterApiKey())).catch(() => {})
     await app?.close().catch(() => {})
+    await import('node:fs/promises').then(fs => fs.rm(join(results, 'cv44-unfinished-profile-preview.json'), { force: true })).catch(() => {})
   }
 })
