@@ -3,7 +3,7 @@ import JSZip from 'jszip'
 import { extractProfileDocx, profileDocxLimits } from '../src/main/profile-docx-intake'
 import { mapProfilePdfPages } from '../src/shared/profile-pdf-import'
 
-async function makeDocx(document = '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>NAME: Ada Example</w:t></w:r></w:p><w:p><w:r><w:t>EMAIL: ada@example.test</w:t></w:r></w:p><w:p><w:r><w:t>EXPERIENCE: Example Labs | Engineer | 2020-01 – 2022-03</w:t></w:r></w:p><w:p><w:r><w:t>FACT: Built data tools for customers</w:t></w:r></w:p><w:p><w:r><w:t>SKILLS: Python, SQL</w:t></w:r></w:p><w:p><w:r><w:t>SUMMARY: Practical engineer with a record of delivering reliable software</w:t></w:r></w:p></w:body></w:document>', relationships = '') {
+async function makeDocx(document = '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>NAME: Ada Example</w:t></w:r></w:p><w:p><w:r><w:t>EMAIL: ada@example.test</w:t></w:r></w:p><w:p><w:r><w:t>EXPERIENCE: Example Labs | Engineer | 2020-01 – 2022-03</w:t></w:r></w:p><w:p><w:r><w:t>FACT: Built data tools for customers</w:t></w:r></w:p><w:p><w:r><w:t>SKILLS: Python, SQL</w:t></w:r></w:p><w:p><w:r><w:t>SUMMARY: Practical engineer with a record of delivering reliable software</w:t></w:r></w:p><w:tbl><w:tr><w:tc><w:p><w:r><w:t>SPOKEN LANGUAGES: Arabic, English</w:t></w:r></w:p></w:tc></w:tr></w:tbl></w:body></w:document>', relationships = '') {
   const zip = new JSZip()
   zip.file('[Content_Types].xml', '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>')
   zip.file('_rels/.rels', '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>')
@@ -23,6 +23,7 @@ test('reads real DOCX text, builds mapped source text and hashes the captured do
   expect(mapped.contact).toMatchObject({ fullName: 'Ada Example', email: 'ada@example.test' })
   expect(mapped.experience).toMatchObject([{ organization: 'Example Labs', title: 'Engineer', factualItems: [{ text: 'Built data tools for customers' }] }])
   expect(mapped.skills.map(skill => skill.name)).toEqual(['Python', 'SQL'])
+  expect(mapped.entries.filter(entry => entry.section === 'languages').map(entry => entry.title)).toEqual(['Arabic', 'English'])
 })
 
 test('rejects wrong-format, oversized and hostile XML DOCX inputs', async () => {

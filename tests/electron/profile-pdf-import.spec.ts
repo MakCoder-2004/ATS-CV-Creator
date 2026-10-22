@@ -32,7 +32,7 @@ function makePdf(lines: string[]) {
 
 test('imports DOCX proposals through visible review and applies them to the existing profile contract', async () => {
   test.setTimeout(60000)
-  const root = mkdtempSync(join(tmpdir(), 'cv-tailor-docx-import-')), userData = join(root, 'workspace'), sourceFile = join(root, 'synthetic-cv.docx')
+  const root = mkdtempSync(join(tmpdir(), 'cv-tailor-docx-import-')), userData = join(root, 'workspace'), sourceFile = join(root, 'synthetic-cv.docx'), backupFile = join(root, 'accepted-docx-backup.json')
   writeFileSync(sourceFile, await makeDocx())
   const original = readFileSync(sourceFile)
   let running: ElectronApplication | undefined
@@ -47,13 +47,26 @@ test('imports DOCX proposals through visible review and applies them to the exis
     await expect(review).toBeVisible({ timeout: 15000 })
     await expect(review.getByLabel('Full name')).toHaveValue('Ada Example')
     await expect(review.getByLabel('Skill name').first()).toHaveValue('Python')
-    await expect(review.getByText('Built accessible software for customers across multiple teams')).toBeVisible()
+    await expect(review.getByText('Built accessible software for customers across multiple teams').first()).toBeVisible()
     await review.getByRole('button', { name: 'Apply accepted details' }).click()
     await expect(page.getByRole('status')).toContainText('added to your profile')
     expect(await page.evaluate(() => window.workbench.getProfile())).toMatchObject({ contact: { fullName: 'Ada Example' }, skills: [{ name: 'Python' }, { name: 'SQL' }] })
     expect(await page.evaluate(() => window.workbench.getExperience())).toMatchObject({ experience: [{ title: 'Engineer', organization: 'Example Labs', factualItems: [{ text: 'Built accessible software for customers across multiple teams' }] }] })
     expect(readFileSync(sourceFile)).toEqual(original)
     expect((await page.evaluate(() => window.workbench.getAnalysisUsage())).attempts).toBe(0)
+    await running.evaluate(({ dialog }, target) => { dialog.showSaveDialog = async () => ({ canceled: false, filePath: target }); return true }, backupFile)
+    await page.getByRole('button', { name: 'Settings' }).click()
+    await page.getByRole('button', { name: 'Back up workspace' }).click()
+    await expect(page.getByRole('region', { name: 'Workspace backup' }).getByRole('status')).toContainText('Workspace backup saved')
+    const provenance = JSON.parse(readFileSync(backupFile, 'utf8')).tables.profile_import_provenance.rows
+    expect(provenance).toEqual(expect.arrayContaining([expect.objectContaining({ source_hash: expect.stringMatching(/^[a-f0-9]{64}$/), passage: expect.stringContaining('EXPERIENCE: Example Labs | Engineer') })]))
+    await running.close(); running = undefined
+    running = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData } })
+    const reopened = await running.firstWindow()
+    await expect(reopened.locator('[data-ui-ready="true"]')).toBeVisible({ timeout: 15000 })
+    await reopened.getByRole('button', { name: 'My profile' }).click()
+    expect(await reopened.evaluate(() => window.workbench.getProfile())).toMatchObject({ contact: { fullName: 'Ada Example' }, skills: [{ name: 'Python' }, { name: 'SQL' }] })
+    expect(await reopened.evaluate(() => window.workbench.getExperience())).toMatchObject({ experience: [{ title: 'Engineer', organization: 'Example Labs', factualItems: [{ text: 'Built accessible software for customers across multiple teams' }] }] })
     await running.close(); running = undefined
   } finally { await running?.close(); await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }) }
 })
