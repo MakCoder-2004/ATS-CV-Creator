@@ -42,6 +42,9 @@ export interface WorkbenchAPI {
   previewProfilePdfImport(): Promise<ProfilePdfPreview>
   cancelProfilePdfImport(token: string): Promise<{ ok: boolean; message: string }>
   applyProfilePdfImport(token: string, proposals: ProfilePdfProposal): Promise<{ ok: boolean; message: string; profile?: ProfileSnapshot; experience?: ExperienceSnapshot }>
+  previewProfileDocxImport(): Promise<ProfilePdfPreview>
+  cancelProfileDocxImport(token: string): Promise<{ ok: boolean; message: string }>
+  applyProfileDocxImport(token: string, proposals: ProfilePdfProposal): Promise<{ ok: boolean; message: string; profile?: ProfileSnapshot; experience?: ExperienceSnapshot }>
   previewProfileAiStructuring(importToken: string): Promise<ProfileAiConsentPreview>
   consentProfileAiStructuring(token: string, accepted: boolean): Promise<ProfileAiConsentAction>
   runProfileAiStructuring(token: string): Promise<ProfileAiRunResult>
@@ -98,7 +101,7 @@ export interface WorkbenchAPI {
   setAnalysisBudgets(value: AnalysisBudgets): Promise<AnalysisUsage>
 }
 
-export type WorkbenchStorageAPI = Omit<WorkbenchAPI, 'exportProfile' | 'previewProfileImport' | 'applyProfileImport' | 'cancelProfileImport' | 'previewProfilePdfImport' | 'cancelProfilePdfImport' | 'applyProfilePdfImport' | 'previewProfileAiStructuring' | 'consentProfileAiStructuring' | 'runProfileAiStructuring' | 'cancelProfileAiStructuring' | 'exportWorkspaceBackup' | 'previewWorkspaceRestore' | 'applyWorkspaceRestore' | 'cancelWorkspaceRestore' | 'measureDocument' | 'getDocumentPdf' | 'copyOpenRouterApiKey' | 'exportApprovedPdf' | 'exportDraftDocx'> & {
+export type WorkbenchStorageAPI = Omit<WorkbenchAPI, 'exportProfile' | 'previewProfileImport' | 'applyProfileImport' | 'cancelProfileImport' | 'previewProfilePdfImport' | 'cancelProfilePdfImport' | 'applyProfilePdfImport' | 'previewProfileDocxImport' | 'cancelProfileDocxImport' | 'applyProfileDocxImport' | 'previewProfileAiStructuring' | 'consentProfileAiStructuring' | 'runProfileAiStructuring' | 'cancelProfileAiStructuring' | 'exportWorkspaceBackup' | 'previewWorkspaceRestore' | 'applyWorkspaceRestore' | 'cancelWorkspaceRestore' | 'measureDocument' | 'getDocumentPdf' | 'copyOpenRouterApiKey' | 'exportApprovedPdf' | 'exportDraftDocx'> & {
   saveDocumentFitReport(jobId: string, report: DocumentFitReport): Promise<DocumentFitReport>
   validateProfileImport(input: string): Promise<{ ok: boolean; message: string }>
   replaceProfile(input: string): Promise<{ ok: boolean; message: string; profile?: ProfileSnapshot }>
