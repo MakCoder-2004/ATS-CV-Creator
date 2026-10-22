@@ -55,7 +55,7 @@ function trusted(event: Electron.IpcMainInvokeEvent): void {
 
 async function openOriginalPosting(url: string): Promise<void> {
   if (!app.isPackaged && process.env.CV_TAILOR_SCRIPTED_OPEN_ORIGINAL === '1') {
-    if (url !== 'https://jobs.lever.co/example-board/smoke-id') throw new Error('The scripted browser opener received an unexpected posting URL.')
+    if (!['https://jobs.lever.co/example-board/smoke-id', 'https://api.lever.co/v0/postings/example-board/smoke-id'].includes(url)) throw new Error('The scripted browser opener received an unexpected posting URL.')
     return
   }
   await shell.openExternal(url)

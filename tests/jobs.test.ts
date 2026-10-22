@@ -53,7 +53,7 @@ test('reviewed link imports save atomically with immutable source provenance and
   const imported = createWorkbench(directory, undefined, undefined, undefined, { lookup: async () => [{ address: '8.8.8.8', family: 4 }], request: async url => { calls.push(url.href); return { status: 200, headers: { 'content-type': 'application/json' }, body: Buffer.from(responseBody) } } })
   let importedClosed = false
   try {
-    const { token } = await imported.api.startPostingFetch('https://jobs.lever.co/example-board/review-save-1')
+    const { token } = await imported.api.startPostingFetch('https://api.lever.co/v0/postings/example-board/review-save-1')
     let state = await imported.api.readPostingPreview(token)
     for (let attempt = 0; attempt < 50 && state.status === 'fetching'; attempt++) { await new Promise(resolve => setTimeout(resolve, 2)); state = await imported.api.readPostingPreview(token) }
     expect(state.status).toBe('ready')
@@ -69,7 +69,7 @@ test('reviewed link imports save atomically with immutable source provenance and
     database.close()
     expect(await imported.api.acceptPostingImport(token, 0)).toMatchObject({ ok: false, error: { code: 'CONFLICT' } })
     const result = await imported.api.acceptPostingImport(token, failedStage.revision)
-    expect(result).toMatchObject({ ok: true, value: { title: 'Reviewed Engineer', company: 'Corrected Example Co', provenance: 'imported', sourceSnapshot: { title: 'Source Engineer', company: 'Example Source Co', submittedUrl: 'https://jobs.lever.co/example-board/review-save-1', finalUrl: 'https://api.lever.co/v0/postings/example-board/review-save-1', extractionMethod: 'lever-json-v1', fieldOrigins: { title: 'user-correction', company: 'user-correction', description: 'user-correction' } }, revisions: [{ title: 'Reviewed Engineer', company: 'Corrected Example Co', revision: 1, provenance: 'imported' }] } })
+    expect(result).toMatchObject({ ok: true, value: { title: 'Reviewed Engineer', company: 'Corrected Example Co', provenance: 'imported', sourceSnapshot: { title: 'Source Engineer', company: 'Example Source Co', submittedUrl: 'https://api.lever.co/v0/postings/example-board/review-save-1', finalUrl: 'https://api.lever.co/v0/postings/example-board/review-save-1', extractionMethod: 'lever-json-v1', fieldOrigins: { title: 'user-correction', company: 'user-correction', description: 'user-correction' } }, revisions: [{ title: 'Reviewed Engineer', company: 'Corrected Example Co', revision: 1, provenance: 'imported' }] } })
     if (!result.ok) throw Error(result.error.message)
     expect(result.value.sourceSnapshot?.description).not.toBe(result.value.description)
     const backup = imported.backup.createBackup()
@@ -79,7 +79,7 @@ test('reviewed link imports save atomically with immutable source provenance and
     expect(unrelated.ok).toBe(true)
     const restore = imported.backup.previewRestore(backup)
     imported.backup.applyRestore(restore.token, safety => safety)
-    const repeatedFetch = await imported.api.startPostingFetch('https://jobs.lever.co/example-board/review-save-1')
+    const repeatedFetch = await imported.api.startPostingFetch('https://api.lever.co/v0/postings/example-board/review-save-1')
     let repeatedState = await imported.api.readPostingPreview(repeatedFetch.token)
     for (let attempt = 0; attempt < 300 && repeatedState.status === 'fetching'; attempt++) { await new Promise(resolve => setTimeout(resolve, 10)); repeatedState = await imported.api.readPostingPreview(repeatedFetch.token) }
     if (repeatedState.status !== 'ready') throw Error('Repeated synthetic source was not ready')
@@ -107,7 +107,7 @@ test('a source-missing company can be supplied deliberately while incomplete pos
   const body = JSON.stringify({ id: 'company-omitted', text: 'Source Engineer', descriptionPlain: `Responsibilities\n${'Build and maintain fictional software with a cross-functional example team. '.repeat(5)}\nRequirements\nCareful testing and documentation.`, lists: [{ text: 'Requirements', content: '<li>Careful testing and documentation.</li>' }] })
   const wb = createWorkbench(directory, undefined, undefined, undefined, { lookup: async () => [{ address: '8.8.8.8', family: 4 }], request: async () => ({ status: 200, headers: { 'content-type': 'application/json' }, body: Buffer.from(body) }) })
   try {
-    const started = await wb.api.startPostingFetch('https://jobs.lever.co/example-board/company-omitted')
+    const started = await wb.api.startPostingFetch('https://api.lever.co/v0/postings/example-board/company-omitted')
     let state = await wb.api.readPostingPreview(started.token)
     for (let attempt = 0; attempt < 300 && state.status === 'fetching'; attempt++) { await new Promise(resolve => setTimeout(resolve, 10)); state = await wb.api.readPostingPreview(started.token) }
     expect(state).toMatchObject({ status: 'incomplete', preview: { company: null } })
@@ -132,7 +132,7 @@ test('conflicting source company values stay visible and require an explicit sou
   const body = readFileSync(join(process.cwd(), 'tests/fixtures/posting-import-feasibility/lever-conflicting-company.synthetic.json'))
   const wb = createWorkbench(directory, undefined, undefined, undefined, { lookup: async () => [{ address: '8.8.8.8', family: 4 }], request: async () => ({ status: 200, headers: { 'content-type': 'application/json' }, body: Buffer.from(body) }) })
   try {
-    const started = await wb.api.startPostingFetch('https://jobs.lever.co/example-board/company-conflict')
+    const started = await wb.api.startPostingFetch('https://api.lever.co/v0/postings/example-board/company-conflict')
     let state = await wb.api.readPostingPreview(started.token)
     for (let attempt = 0; attempt < 300 && state.status === 'fetching'; attempt++) { await new Promise(resolve => setTimeout(resolve, 10)); state = await wb.api.readPostingPreview(started.token) }
     expect(state.status).toBe('incomplete')
@@ -196,7 +196,7 @@ test('missing essentials and teaser text can be repaired only with a reviewed co
     return updated.revision
   }
   try {
-    const missingTitle = await wb.api.startPostingFetch('https://jobs.lever.co/example-board/missing-title')
+    const missingTitle = await wb.api.startPostingFetch('https://api.lever.co/v0/postings/example-board/missing-title')
     const missingTitleSource = await ready(missingTitle.token)
     expect(missingTitleSource.title).toBe('')
     const titleEdit = await update(missingTitle.token, 0, { title: 'Reviewed Synthetic Engineer', company: missingTitleSource.company ?? '', description: missingTitleSource.description, optionalDetails: missingTitleSource.optionalDetails })
@@ -205,7 +205,7 @@ test('missing essentials and teaser text can be repaired only with a reviewed co
     expect(titleSaved).toMatchObject({ ok: true, value: { title: 'Reviewed Synthetic Engineer', sourceSnapshot: { title: '', fieldOrigins: { title: 'user-correction' } } } })
     if (!titleSaved.ok) throw new Error(titleSaved.error.message)
 
-    const teaser = await wb.api.startPostingFetch('https://jobs.lever.co/example-board/teaser-repair')
+    const teaser = await wb.api.startPostingFetch('https://api.lever.co/v0/postings/example-board/teaser-repair')
     const teaserSource = await ready(teaser.token)
     const unchanged = await update(teaser.token, 0, { title: teaserSource.title, company: teaserSource.company ?? '', description: teaserSource.description, optionalDetails: teaserSource.optionalDetails })
     expect(await wb.api.reviewPostingPreview(teaser.token, unchanged, { completenessConfirmed: true, conflictResolutions: {} })).toMatchObject({ ok: false })
@@ -216,7 +216,7 @@ test('missing essentials and teaser text can be repaired only with a reviewed co
     expect(teaserSaved).toMatchObject({ ok: true, value: { sourceSnapshot: { description: 'A short teaser.' }, description: completeDescription } })
     if (!teaserSaved.ok) throw new Error(teaserSaved.error.message)
 
-    const missingDescription = await wb.api.startPostingFetch('https://jobs.lever.co/example-board/missing-description')
+    const missingDescription = await wb.api.startPostingFetch('https://api.lever.co/v0/postings/example-board/missing-description')
     const missingDescriptionSource = await ready(missingDescription.token)
     expect(missingDescriptionSource.description).toBe('')
     const blankEdit = await update(missingDescription.token, 0, { title: missingDescriptionSource.title, company: missingDescriptionSource.company ?? '', description: '', optionalDetails: missingDescriptionSource.optionalDetails })
@@ -236,6 +236,52 @@ test('missing essentials and teaser text can be repaired only with a reviewed co
   } finally { wb.close() }
 }, 30_000)
 
+test('hosted HTML imports keep source conflicts resolvable and persist their extraction route', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'cv-tailor-import-html-route-'))
+  directories.push(directory)
+  const page = readFileSync(join(process.cwd(), 'tests/fixtures/posting-import-feasibility/lever-hosted-html-conflict.synthetic.html'))
+  const wb = createWorkbench(directory, undefined, undefined, undefined, {
+    lookup: async () => [{ address: '8.8.8.8', family: 4 }],
+    request: async url => {
+      if (url.hostname === 'jobs.lever.co' && url.pathname.endsWith('/removed-html')) return { status: 200, headers: { 'content-type': 'text/html' }, body: Buffer.from('<main><h1>Past Engineer</h1><p class="company">Example Employer</p><p>This job is no longer available.</p><article class="posting">This job is no longer available.</article></main>') }
+      if (url.hostname === 'jobs.lever.co') return { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' }, body: page }
+      return { status: 200, headers: { 'content-type': 'application/json' }, body: Buffer.from(JSON.stringify({ id: 'html-conflict', text: 'Synthetic Systems Engineer', company: 'Example Source Ltd.', descriptionPlain: `Responsibilities\n${'Build reliable fictional systems with a collaborative engineering team and clear documentation. '.repeat(4)}\nRequirements\nTesting and written communication.`, lists: [{ text: 'Requirements', content: '<li>Testing and written communication.</li>' }] })) }
+    }
+  })
+  try {
+    const started = await wb.api.startPostingFetch('https://jobs.lever.co/example-board/html-conflict')
+    let state = await wb.api.readPostingPreview(started.token)
+    for (let attempt = 0; attempt < 300 && state.status === 'fetching'; attempt++) { await new Promise(resolve => setTimeout(resolve, 10)); state = await wb.api.readPostingPreview(started.token) }
+    expect(state.status).toBe('incomplete')
+    if (state.status !== 'incomplete') throw new Error('Expected a reviewable HTML source conflict.')
+    expect(state.preview.extractionMethod).toBe('lever-html-jsonld-v1')
+    expect(state.preview.conflicts).toContainEqual({ id: 'company', field: 'company', values: [{ value: 'Example Source Ltd.', source: 'Lever JSON-LD hiringOrganization.name' }, { value: 'Example Readable Incorporated', source: 'Readable page company label' }] })
+    expect(state.preview.description).toContain('Requirements')
+    const htmlResolutions = Object.fromEntries(state.preview.conflicts.map(conflict => [conflict.id, conflict.field === 'company' ? 'Example Readable Incorporated' : conflict.field === 'description' ? state.preview.description : conflict.values[0].value]))
+    const staged = await stageImportReview(wb.api, started.token, { title: state.preview.title, company: 'Example Readable Incorporated', description: state.preview.description, optionalDetails: state.preview.optionalDetails }, { completenessConfirmed: true, conflictResolutions: htmlResolutions })
+    expect(staged.reviewed).toMatchObject({ ok: true })
+    const accepted = await wb.api.acceptPostingImport(started.token, staged.revision)
+    expect(accepted).toMatchObject({ ok: true, value: { company: 'Example Readable Incorporated', sourceSnapshot: { company: 'Example Source Ltd.', extractionMethod: 'lever-html-jsonld-v1', conflicts: [{ id: 'company' }] } } })
+    if (!accepted.ok) throw new Error(accepted.error.message)
+    const backup = wb.backup.createBackup()
+    const restore = wb.backup.previewRestore(backup)
+    wb.backup.applyRestore(restore.token, value => value)
+    expect(await wb.api.openJob(accepted.value.id)).toMatchObject({ sourceSnapshot: { company: 'Example Source Ltd.', extractionMethod: 'lever-html-jsonld-v1', conflicts: accepted.value.sourceSnapshot?.conflicts } })
+    const apiRoute = await wb.api.startPostingFetch('https://api.lever.co/v0/postings/example-board/html-conflict')
+    let apiState = await wb.api.readPostingPreview(apiRoute.token)
+    for (let attempt = 0; attempt < 300 && apiState.status === 'fetching'; attempt++) { await new Promise(resolve => setTimeout(resolve, 10)); apiState = await wb.api.readPostingPreview(apiRoute.token) }
+    expect(apiState.status).toBe('ready')
+    if (apiState.status !== 'ready') throw new Error('Expected the API route preview.')
+    const duplicate = await acceptImport(wb.api, apiRoute.token, { title: apiState.preview.title, company: apiState.preview.company ?? '', description: apiState.preview.description, optionalDetails: apiState.preview.optionalDetails }, { completenessConfirmed: true, conflictResolutions: {} })
+    expect(duplicate).toMatchObject({ ok: false, error: { code: 'CONFLICT', message: expect.stringMatching(/already saved|Open the existing/i) } })
+    expect(await wb.api.listJobs()).toHaveLength(1)
+    const removed = await wb.api.startPostingFetch('https://jobs.lever.co/example-board/removed-html')
+    let removedState = await wb.api.readPostingPreview(removed.token)
+    for (let attempt = 0; attempt < 300 && removedState.status === 'fetching'; attempt++) { await new Promise(resolve => setTimeout(resolve, 10)); removedState = await wb.api.readPostingPreview(removed.token) }
+    expect(removedState).toMatchObject({ status: 'failed', message: expect.stringMatching(/explicitly identifies.*removed/i) })
+  } finally { wb.close() }
+}, 25_000)
+
 test('superseding a reviewed preview invalidates its revision-bound acceptance', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'cv-tailor-import-supersede-review-'))
   directories.push(directory)
@@ -243,13 +289,13 @@ test('superseding a reviewed preview invalidates its revision-bound acceptance',
   const body = JSON.stringify({ id: 'supersede-review', text: 'Synthetic Engineer', company: 'Example Employer', descriptionPlain: description })
   const wb = createWorkbench(directory, undefined, undefined, undefined, { lookup: async () => [{ address: '8.8.8.8', family: 4 }], request: async () => ({ status: 200, headers: { 'content-type': 'application/json' }, body: Buffer.from(body) }) })
   try {
-    const first = await wb.api.startPostingFetch('https://jobs.lever.co/example-board/supersede-review')
+    const first = await wb.api.startPostingFetch('https://api.lever.co/v0/postings/example-board/supersede-review')
     let state = await wb.api.readPostingPreview(first.token)
     for (let attempt = 0; attempt < 300 && state.status === 'fetching'; attempt++) { await new Promise(resolve => setTimeout(resolve, 10)); state = await wb.api.readPostingPreview(first.token) }
     if (state.status !== 'ready') throw new Error('Expected first reviewable preview.')
     const staged = await stageImportReview(wb.api, first.token, { title: state.preview.title, company: state.preview.company!, description: state.preview.description }, { completenessConfirmed: true, conflictResolutions: {} })
     expect(staged.reviewed).toMatchObject({ ok: true })
-    const second = await wb.api.startPostingFetch('https://jobs.lever.co/example-board/supersede-review')
+    const second = await wb.api.startPostingFetch('https://api.lever.co/v0/postings/example-board/supersede-review')
     expect(await wb.api.readPostingPreview(first.token)).toEqual({ status: 'cancelled' })
     expect(await wb.api.acceptPostingImport(first.token, staged.revision)).toMatchObject({ ok: false, error: { code: 'CONFLICT' } })
     expect(await wb.api.listJobs()).toEqual([])
@@ -271,7 +317,7 @@ test('listings and explicit removed-role responses fail distinctly from an unrea
   })
   try {
     for (const [id, expected] of [['listing-response', /listing or multiple roles/i], ['removed-response', /explicitly identifies.*removed/i], ['not-found', /does not confirm that the role was removed/i]] as const) {
-      const started = await wb.api.startPostingFetch(`https://jobs.lever.co/example-board/${id}`)
+      const started = await wb.api.startPostingFetch(`https://api.lever.co/v0/postings/example-board/${id}`)
       let state = await wb.api.readPostingPreview(started.token)
       for (let attempt = 0; attempt < 300 && state.status === 'fetching'; attempt++) { await new Promise(resolve => setTimeout(resolve, 10)); state = await wb.api.readPostingPreview(started.token) }
       expect(state.status).toBe('failed')
@@ -287,7 +333,7 @@ test('an incomplete teaser cannot be accepted by supplying missing fields alone'
   const body = JSON.stringify({ id: 'teaser', text: 'Source Engineer', descriptionPlain: 'A short teaser.' })
   const wb = createWorkbench(directory, undefined, undefined, undefined, { lookup: async () => [{ address: '8.8.8.8', family: 4 }], request: async () => ({ status: 200, headers: { 'content-type': 'application/json' }, body: Buffer.from(body) }) })
   try {
-    const started = await wb.api.startPostingFetch('https://jobs.lever.co/example-board/teaser')
+    const started = await wb.api.startPostingFetch('https://api.lever.co/v0/postings/example-board/teaser')
     let state = await wb.api.readPostingPreview(started.token)
     for (let attempt = 0; attempt < 300 && state.status === 'fetching'; attempt++) { await new Promise(resolve => setTimeout(resolve, 10)); state = await wb.api.readPostingPreview(started.token) }
     expect(state).toMatchObject({ status: 'incomplete', preview: { company: null } })
@@ -308,7 +354,7 @@ test('posting fetch previews run through the public application contract and sta
   let reopened: ReturnType<typeof createWorkbench> | undefined
   try {
     expect(await workbench.api.listJobs()).toEqual([])
-    const started = await workbench.api.startPostingFetch('https://jobs.lever.co/example-board/synthetic-123')
+    const started = await workbench.api.startPostingFetch('https://api.lever.co/v0/postings/example-board/synthetic-123')
     let state = await workbench.api.readPostingPreview(started.token)
     for (let attempt = 0; attempt < 200 && state.status === 'fetching'; attempt++) { await new Promise(resolve => setTimeout(resolve, 10)); state = await workbench.api.readPostingPreview(started.token) }
     expect(calls).toHaveLength(1)
@@ -336,7 +382,7 @@ test('posting fetch preserves the Lever opening and reconciles adversarial list 
     wait: async () => {}, now: () => Date.now()
   })
   try {
-    const { token } = await workbench.api.startPostingFetch('https://jobs.lever.co/example-board/extract-me')
+    const { token } = await workbench.api.startPostingFetch('https://api.lever.co/v0/postings/example-board/extract-me')
     let state = await workbench.api.readPostingPreview(token)
     for (let attempt = 0; attempt < 100 && state.status === 'fetching'; attempt++) { await new Promise(resolve => setTimeout(resolve, 5)); state = await workbench.api.readPostingPreview(token) }
     expect(state, JSON.stringify(state).slice(0, 500)).toMatchObject({ status: 'ready' })
@@ -363,7 +409,7 @@ test('posting fetch rejects unsupported links before contacting a source and can
     })
     await expect(apiWorkbench.api.startPostingFetch('https://unknown.example/job')).rejects.toThrow(/Lever job-detail/)
     expect(dnsLookups).toBe(0)
-    const active = await apiWorkbench.api.startPostingFetch('https://jobs.lever.co/example-board/cancel-me')
+    const active = await apiWorkbench.api.startPostingFetch('https://api.lever.co/v0/postings/example-board/cancel-me')
     await startedRequest
     expect(await apiWorkbench.api.cancelPostingFetch(active.token)).toEqual({ ok: true })
     expect(await apiWorkbench.api.readPostingPreview(active.token)).toEqual({ status: 'cancelled' })
@@ -385,7 +431,7 @@ test('posting fetch cancellation interrupts pending DNS before opening a connect
     request: async () => { requests++; return { status: 200, headers: {}, body: Buffer.alloc(0) } }
   })
   try {
-    const { token } = await workbench.api.startPostingFetch('https://jobs.lever.co/example-board/dns-cancel')
+    const { token } = await workbench.api.startPostingFetch('https://api.lever.co/v0/postings/example-board/dns-cancel')
     await startedDns
     expect(await workbench.api.cancelPostingFetch(token)).toEqual({ ok: true })
     expect(await workbench.api.readPostingPreview(token)).toEqual({ status: 'cancelled' })
@@ -404,7 +450,7 @@ test('posting fetch fails closed on mixed public/private DNS and redirect pivots
     wait: async () => {}, now: () => Date.now()
   })
   try {
-    const privateTarget = await workbench.api.startPostingFetch('https://jobs.lever.co/example-board/private')
+    const privateTarget = await workbench.api.startPostingFetch('https://api.lever.co/v0/postings/example-board/private')
     let state = await workbench.api.readPostingPreview(privateTarget.token)
     for (let attempt = 0; attempt < 100 && state.status === 'fetching'; attempt++) { await new Promise(resolve => setTimeout(resolve, 5)); state = await workbench.api.readPostingPreview(privateTarget.token) }
     expect(state).toMatchObject({ status: 'failed', message: expect.stringContaining('non-public') })
@@ -418,7 +464,7 @@ test('posting fetch fails closed on mixed public/private DNS and redirect pivots
       wait: async () => {}, now: () => Date.now()
     })
     try {
-      const pivot = await redirectWork.api.startPostingFetch('https://jobs.lever.co/example-board/pivot')
+      const pivot = await redirectWork.api.startPostingFetch('https://api.lever.co/v0/postings/example-board/pivot')
       let pivotState = await redirectWork.api.readPostingPreview(pivot.token)
       for (let attempt = 0; attempt < 100 && pivotState.status === 'fetching'; attempt++) { await new Promise(resolve => setTimeout(resolve, 5)); pivotState = await redirectWork.api.readPostingPreview(pivot.token) }
       expect(pivotState).toMatchObject({ status: 'failed', message: expect.stringContaining('outside the approved') })
@@ -443,13 +489,13 @@ test('posting import retries one transient response and never saves on fetch', a
       wait: async ms => { waits.push(ms) },
       now: () => Date.now()
     })
-    const { token } = await workbench.api.startPostingFetch('https://jobs.lever.co/example-board/retry-me')
+    const { token } = await workbench.api.startPostingFetch('https://api.lever.co/v0/postings/example-board/retry-me')
     let state = await workbench.api.readPostingPreview(token)
     for (let attempt = 0; attempt < 100 && state.status === 'fetching'; attempt++) { await new Promise(resolve => setTimeout(resolve, 5)); state = await workbench.api.readPostingPreview(token) }
     expect(attempts).toHaveLength(2)
     expect(waits).toContain(2_000)
     expect(state).toMatchObject({ status: 'ready', preview: { company: 'Synthetic Employer', description: expect.stringContaining('• Maintain example services.') } })
-    const repeated = await workbench.api.startPostingFetch('https://jobs.lever.co/example-board/retry-me')
+    const repeated = await workbench.api.startPostingFetch('https://api.lever.co/v0/postings/example-board/retry-me')
     state = await workbench.api.readPostingPreview(repeated.token)
     for (let attempt = 0; attempt < 100 && state.status === 'fetching'; attempt++) { await new Promise(resolve => setTimeout(resolve, 5)); state = await workbench.api.readPostingPreview(repeated.token) }
     expect(attempts).toHaveLength(3)
@@ -471,7 +517,7 @@ test('posting fetch enforces its response deadline through the public applicatio
     wait: async () => {}, now: () => Date.now()
   })
   try {
-    const { token } = await workbench.api.startPostingFetch('https://jobs.lever.co/example-board/timeout')
+    const { token } = await workbench.api.startPostingFetch('https://api.lever.co/v0/postings/example-board/timeout')
     await startedRequest
     await vi.advanceTimersByTimeAsync(15_000)
     expect(await workbench.api.readPostingPreview(token)).toMatchObject({ status: 'failed', message: expect.stringContaining('15 seconds') })
@@ -489,7 +535,7 @@ test('posting import does not retry permanent access denials', async () => {
     wait: async () => {}, now: () => Date.now()
   })
   try {
-    const { token } = await workbench.api.startPostingFetch('https://jobs.lever.co/example-board/denied')
+    const { token } = await workbench.api.startPostingFetch('https://api.lever.co/v0/postings/example-board/denied')
     let state = await workbench.api.readPostingPreview(token)
     for (let attempt = 0; attempt < 100 && state.status === 'fetching'; attempt++) { await new Promise(resolve => setTimeout(resolve, 5)); state = await workbench.api.readPostingPreview(token) }
     expect(state).toMatchObject({ status: 'failed', message: expect.stringMatching(/denied or rate-limited/) })
@@ -511,7 +557,7 @@ test('posting fetch cancellation interrupts a bounded Retry-After wait', async (
       wait: async (milliseconds, signal) => milliseconds === 30_000 ? new Promise(resolve => { enterBackoff(); signal.addEventListener('abort', () => resolve(), { once: true }) }) : undefined,
       now: () => Date.now()
     })
-    const { token } = await workbench.api.startPostingFetch('https://jobs.lever.co/example-board/backoff')
+    const { token } = await workbench.api.startPostingFetch('https://api.lever.co/v0/postings/example-board/backoff')
     await backoff
     await workbench.api.cancelPostingFetch(token)
     expect(await workbench.api.readPostingPreview(token)).toEqual({ status: 'cancelled' })

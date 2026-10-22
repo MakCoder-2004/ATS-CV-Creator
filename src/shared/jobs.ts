@@ -8,6 +8,8 @@ const optionalPostingDetailsInputSchema = z.object(Object.fromEntries(postingOpt
 export const postingOptionalDetailsSchema = optionalPostingDetailsInputSchema.transform(details => Object.fromEntries(postingOptionalFieldNames.map(name => [name, details[name] ?? unknownPostingField])) as Record<typeof postingOptionalFieldNames[number], z.infer<typeof optionalPostingFieldSchema>>)
 const postingOptionalFieldOriginSchema = z.enum(['source', 'user-correction', 'unknown'])
 const postingOptionalOriginsSchema = z.object(Object.fromEntries(postingOptionalFieldNames.map(name => [name, postingOptionalFieldOriginSchema.optional()])) as Record<typeof postingOptionalFieldNames[number], ReturnType<typeof postingOptionalFieldOriginSchema.optional>>).strict().default({})
+export const postingFieldConflictSchema = z.object({ id: z.string(), field: z.enum(['title', 'company', 'description', 'location', 'workArrangement', 'employmentType', 'compensation', 'language', 'postedDate', 'deadline', 'applicationUrl']), values: z.array(z.object({ value: z.string(), source: z.string() }).strict()).min(2) }).strict()
+export type PostingFieldConflict = z.infer<typeof postingFieldConflictSchema>
 export type PostingOptionalDetails = z.infer<typeof postingOptionalDetailsSchema>
 export const emptyPostingOptionalDetails = (): PostingOptionalDetails => postingOptionalDetailsSchema.parse({})
 export const jobInputSchema = z.object({
@@ -26,8 +28,9 @@ export const postingRevisionSchema = jobInputSchema.extend({
 export const postingSourceSnapshotSchema = z.object({
   title: z.string().max(200), company: requiredText(200).nullable(), description: z.string().max(30000),
   submittedUrl: z.string().url(), finalUrl: z.string().url(), sourceIdentity: z.string().min(1).max(500), capturedAt: z.string().datetime(),
-  extractionMethod: z.literal('lever-json-v1'), extractionVersion: z.literal(1),
+  extractionMethod: z.enum(['lever-json-v1', 'lever-html-jsonld-v1', 'lever-html-static-v1']), extractionVersion: z.literal(1),
   optionalDetails: postingOptionalDetailsSchema,
+  conflicts: z.array(postingFieldConflictSchema).default([]),
   hashes: z.object({ title: z.string().length(64), company: z.string().length(64).nullable(), description: z.string().length(64) }).strict(),
   fieldOrigins: z.object({ title: z.enum(['source', 'user-correction']), company: z.enum(['source', 'user-correction']), description: z.enum(['source', 'user-correction']), optionalDetails: postingOptionalOriginsSchema }).strict()
 }).strict()

@@ -66,6 +66,14 @@ function repairsIncompletePosting(source: import('../shared/posting-import').Pos
   const descriptionIsComplete = hasCompleteReviewedPostingText(working.description) && (!descriptionNeedsRepair || working.description !== source.description)
   return titleIsConsciouslySupplied && !!working.company.trim() && descriptionIsComplete
 }
+function leverSourceIdentity(value: string): string | null {
+  try {
+    const url = new URL(value), parts = url.pathname.split('/').filter(Boolean)
+    if (url.hostname === 'jobs.lever.co' && parts.length === 2) return `lever:${parts[0]}/${parts[1]}`
+    if (url.hostname === 'api.lever.co' && parts.length === 4 && parts[0] === 'v0' && parts[1] === 'postings') return `lever:${parts[2]}/${parts[3]}`
+  } catch {}
+  return null
+}
 function reconcileNestedItems(items: NestedInput[], previous: NestedRecord[], owner: string): NestedRecord[] {
   const byId = new Map(previous.map(item => [item.id, item]))
   const used = new Set<string>()
@@ -815,7 +823,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       void fetchLeverPosting(input, { ...safePostingFetchOptions, signal: controller.signal }).then(preview => {
         const current = postingFetches.get(token)
         if (!current || current.controller.signal.aborted) return
-        const incomplete = preview.conflicts.length > 0 || preview.notices.some(notice => notice.includes('preview is incomplete')) || !preview.title || !preview.company || !preview.description
+        const incomplete = preview.conflicts.length > 0 || preview.notices.some(notice => notice.includes('preview is incomplete') || notice.startsWith('Unresolved source conflict:')) || !preview.title || !preview.company || !preview.description
         current.state = incomplete ? { status: 'incomplete', preview } : { status: 'ready', preview }
         current.working = { title: preview.title, company: preview.company ?? '', description: preview.description, optionalDetails: preview.optionalDetails }
       }).catch(error => {
@@ -870,14 +878,14 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       const source = pending.state.status === 'ready' || pending.state.status === 'incomplete' ? pending.state.preview : null
       const parsed = pending.working ? jobInputSchema.safeParse(pending.working) : { success: false as const }
       if (!source || !parsed.success) return { ok: false, message: 'Enter and review a non-empty title, company, and complete posting description before confirming.' }
-      const companyOnlyIncomplete = pending.state.status === 'incomplete' && !!source.title.trim() && !!source.description.trim() && source.company === null && source.notices.every(notice => /employer name was not provided|extraction cannot guarantee posting completeness or that the role remains open/i.test(notice))
-      const conflictOnlyIncomplete = pending.state.status === 'incomplete' && source.conflicts.length > 0 && !!source.title.trim() && !!parsed.data.company.trim() && !!source.description.trim() && source.notices.every(notice => /conflicting source values|extraction cannot guarantee posting completeness or that the role remains open/i.test(notice))
+      const companyOnlyIncomplete = pending.state.status === 'incomplete' && !!source.title.trim() && !!source.description.trim() && source.company === null && source.notices.every(notice => /employer name was not provided|extraction cannot guarantee posting completeness or that the role remains open|^extracted from (?:inert lever-hosted|the supported lever-hosted)/i.test(notice))
+      const conflictOnlyIncomplete = pending.state.status === 'incomplete' && source.conflicts.length > 0 && !!source.title.trim() && !!parsed.data.company.trim() && !!source.description.trim() && source.notices.every(notice => /conflicting source values|unresolved source conflict:|extraction cannot guarantee posting completeness or that the role remains open|^extracted from (?:inert lever-hosted|the supported lever-hosted)/i.test(notice))
       const contentRepair = pending.state.status === 'incomplete' && (!source.title.trim() || source.notices.some(notice => /source did not provide posting text|structured source sections could not be interpreted|lacks enough posting-detail structure/i.test(notice))) && repairsIncompletePosting(source, parsed.data)
       if (pending.state.status !== 'ready' && !companyOnlyIncomplete && !conflictOnlyIncomplete && !contentRepair) return { ok: false, message: 'This source is incomplete; correct missing essential content. Teaser text cannot be confirmed as complete.' }
       for (const conflict of source.conflicts) {
         const resolution = checkedReview.data.conflictResolutions[conflict.id]
         if (!resolution || !conflict.values.some(candidate => candidate.value === resolution)) return { ok: false, message: `Choose one of the listed source values for ${conflict.field}.` }
-        const selected = conflict.field === 'company' ? parsed.data.company : conflict.field === 'title' ? parsed.data.title : (parsed.data.optionalDetails ?? source.optionalDetails)[conflict.field].value
+        const selected = conflict.field === 'company' ? parsed.data.company : conflict.field === 'title' ? parsed.data.title : conflict.field === 'description' ? parsed.data.description : (parsed.data.optionalDetails ?? source.optionalDetails)[conflict.field].value
         if (selected !== resolution) return { ok: false, message: `The working ${conflict.field} must equal the selected source value.` }
       }
       if (Object.keys(checkedReview.data.conflictResolutions).some(id => !source.conflicts.some(conflict => conflict.id === id))) return { ok: false, message: 'A conflict resolution does not belong to this preview.' }
@@ -893,27 +901,28 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       if (!source) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'This posting preview is unavailable, cancelled, or already used.' } })
       const parsed = pending.reviewed.input
       const review = pending.reviewed.review
-      const companyOnlyIncomplete = pendingState.status === 'incomplete' && source.title.trim().length > 0 && source.description.trim().length > 0 && source.company === null && source.notices.every(notice => /employer name was not provided|extraction cannot guarantee posting completeness or that the role remains open/i.test(notice))
-      const conflictOnlyIncomplete = pendingState.status === 'incomplete' && source.conflicts.length > 0 && !!parsed.company.trim() && !!source.title.trim() && !!source.description.trim() && source.notices.every(notice => /conflicting source values|extraction cannot guarantee posting completeness or that the role remains open/i.test(notice))
+      const companyOnlyIncomplete = pendingState.status === 'incomplete' && source.title.trim().length > 0 && source.description.trim().length > 0 && source.company === null && source.notices.every(notice => /employer name was not provided|extraction cannot guarantee posting completeness or that the role remains open|^extracted from (?:inert lever-hosted|the supported lever-hosted)/i.test(notice))
+      const conflictOnlyIncomplete = pendingState.status === 'incomplete' && source.conflicts.length > 0 && !!parsed.company.trim() && !!source.title.trim() && !!source.description.trim() && source.notices.every(notice => /conflicting source values|unresolved source conflict:|extraction cannot guarantee posting completeness or that the role remains open|^extracted from (?:inert lever-hosted|the supported lever-hosted)/i.test(notice))
       const contentRepair = pendingState.status === 'incomplete' && (!source.title.trim() || source.notices.some(notice => /source did not provide posting text|structured source sections could not be interpreted|lacks enough posting-detail structure/i.test(notice))) && repairsIncompletePosting(source, parsed)
       if (pendingState.status !== 'ready' && !companyOnlyIncomplete && !conflictOnlyIncomplete && !contentRepair) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'Resolve missing essential content before saving.' } })
       const workingOptionalDetails = parsed.optionalDetails ?? source.optionalDetails
       for (const conflict of source.conflicts) {
         const resolution = review.conflictResolutions[conflict.id]
         if (!resolution || !conflict.values.some(candidate => candidate.value === resolution)) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: `Resolve the conflicting ${conflict.field} values using one of the source values before saving.` } })
-        const selected = conflict.field === 'company' ? parsed.company : conflict.field === 'title' ? parsed.title : workingOptionalDetails[conflict.field].value
+        const selected = conflict.field === 'company' ? parsed.company : conflict.field === 'title' ? parsed.title : conflict.field === 'description' ? parsed.description : workingOptionalDetails[conflict.field].value
         if (selected !== resolution) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: `The saved ${conflict.field} must match the explicitly selected source value.` } })
       }
       if (Object.keys(review.conflictResolutions).some(id => !source.conflicts.some(conflict => conflict.id === id))) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'A conflict resolution does not belong to this posting preview.' } })
       if (companyOnlyIncomplete && (parsed.title !== source.title || parsed.description !== source.description)) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'This source only allows a reviewed employer-name correction; its incomplete posting content cannot be replaced here.' } })
-      const sourceIdentity = new URL(source.finalUrl).pathname
+      const sourceIdentity = leverSourceIdentity(source.submittedUrl)
+      if (!sourceIdentity) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'The posting source identity could not be verified.' } })
       const known = (db.prepare('SELECT data FROM jobs').all() as { data: string }[]).map(row => jobRecordSchema.parse(JSON.parse(row.data)))
-      if (known.some(job => job.sourceSnapshot?.sourceIdentity === sourceIdentity || job.sourceSnapshot?.finalUrl === source.finalUrl)) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'This exact source is already saved. Open the existing posting instead; no duplicate was created.' } })
+      if (known.some(job => job.sourceSnapshot && (job.sourceSnapshot.sourceIdentity === sourceIdentity || job.sourceSnapshot.finalUrl === source.finalUrl || leverSourceIdentity(job.sourceSnapshot.submittedUrl) === sourceIdentity))) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'This exact source is already saved. Open the existing posting instead; no duplicate was created.' } })
       const hash = (value: string) => createHash('sha256').update(value, 'utf8').digest('hex')
       const sourceSnapshot = {
-        title: source.title, company: source.company, description: source.description, optionalDetails: source.optionalDetails,
+        title: source.title, company: source.company, description: source.description, optionalDetails: source.optionalDetails, conflicts: source.conflicts,
         submittedUrl: source.submittedUrl, finalUrl: source.finalUrl, sourceIdentity, capturedAt: new Date().toISOString(),
-        extractionMethod: 'lever-json-v1' as const, extractionVersion: 1 as const,
+        extractionMethod: source.extractionMethod, extractionVersion: 1 as const,
         hashes: { title: hash(source.title), company: source.company === null ? null : hash(source.company), description: hash(source.description) },
         fieldOrigins: { title: parsed.title === source.title ? 'source' as const : 'user-correction' as const, company: source.company !== null && parsed.company === source.company ? 'source' as const : 'user-correction' as const, description: parsed.description === source.description ? 'source' as const : 'user-correction' as const, optionalDetails: Object.fromEntries(Object.entries(workingOptionalDetails).map(([field, detail]) => [field, detail.origin])) }
       }

@@ -157,7 +157,7 @@ export function createWorkspaceBackupEngine(db: Database.Database): WorkspaceBac
         if (!oldJob.success) throw new Error('Backup row violates the released v2 jobs domain schema.')
         const emptyDetails = emptyPostingOptionalDetails()
         const value = oldJob.data
-        row.data = JSON.stringify({ ...value, optionalDetails: emptyDetails, revisions: value.revisions.map(revision => ({ ...revision, optionalDetails: emptyDetails })), sourceSnapshot: value.sourceSnapshot ? { ...value.sourceSnapshot, optionalDetails: emptyDetails, fieldOrigins: { ...value.sourceSnapshot.fieldOrigins, optionalDetails: {} } } : null })
+        row.data = JSON.stringify({ ...value, optionalDetails: emptyDetails, revisions: value.revisions.map(revision => ({ ...revision, optionalDetails: emptyDetails })), sourceSnapshot: value.sourceSnapshot ? { ...value.sourceSnapshot, optionalDetails: emptyDetails, conflicts: [], fieldOrigins: { ...value.sourceSnapshot.fieldOrigins, optionalDetails: {} } } : null })
       }
       upgraded.version = 3
       backup = upgraded
