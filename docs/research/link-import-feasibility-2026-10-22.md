@@ -24,7 +24,23 @@ Validated documented paths for fixture work: Lever named detail returns a struct
 
 For Lever, the evidence now supports a source-specific choice between its documented named-detail JSON endpoint and the public hosted job-detail route. On the hosted page, parse a bounded inert JSON-LD `JobPosting` block and/or source-specific static job content; ignore executable scripts and all unrelated page elements. The endpoint or hosted-page link must be derived from the submitted recognized posting URL under a fixed policy; JSON-LD URLs/canonical/apply links cannot authorize another request. Never execute scripts, run a browser, visit linked URLs, or treat schema presence as proof of completeness. Reject multiple roles, listings, login/CAPTCHA/paywall pages, teasers, malformed data, and missing title/company/description as incomplete/ambiguous; preserve source wording/structure and surface field conflicts.
 
-Committed synthetic fixtures (invented content; no source URLs or copied posting text) are under `tests/fixtures/posting-import-feasibility/`: `lever-detail.synthetic.json` models documented Lever response fields; `greenhouse-detail.synthetic.json` models the documented named-job response and encoded `content`; `static-posting.synthetic.html` includes posting content plus navigation/related-role/footer noise to exercise scope decisions. These fixtures are not live captures and no importer currently parses them.
+Committed synthetic fixtures (invented content; no source URLs or copied posting text) are under `tests/fixtures/posting-import-feasibility/`: `lever-detail.synthetic.json` models documented Lever response fields; `greenhouse-detail.synthetic.json` models the documented named-job response and encoded `content`; `static-posting.synthetic.html` exercises generic scope noise; `lever-hosted-page-jsonld.synthetic.html` models the live-observed Lever page shape with one inert `JobPosting` JSON-LD block, visible posting headings/bullets, separate company wording, and navigation/apply/related-role/footer/cookie noise. They are not live captures and no production importer parses them.
+
+### Offline JSON-LD fixture exercise (feasibility only)
+
+A bounded one-off Node `v24.21.0` exercise read only `lever-hosted-page-jsonld.synthetic.html`, parsed the single JSON-LD block, and used small regular expressions to inspect the invented `<article>` and page noise; it did not fetch network content or invoke a production parser. Expected and observed fixture behavior:
+
+| Check | Expected/observed result |
+|---|---|
+| JSON-LD schema | Exactly one block; valid JSON with `@type: JobPosting` |
+| Title/description | Nonempty synthetic title and description retained (27 and 195 characters respectively) |
+| Schema vs visible description | After stripping fixture tags and normalizing whitespace, structured description and visible `<article>` text matched at 130 characters |
+| Structure | `Responsibilities` and `Requirements` headings retained; three bullet items found |
+| Noise boundaries | Navigation, apply link, related roles, footer and cookie notice identified as outside the posting body; scripts were not executed |
+| Company conflict | JSON-LD says `Example Systems Ltd.` while visible company text says `Example Systems Incorporated`; expected result is a surfaced conflict requiring human review, not automatic selection |
+| Missing-company variant | In-memory copy with JSON-LD organization and visible company removed yielded no company value; expected result is unknown, never inference from the site slug |
+
+Assertions passed for the synthetic fixture and in-memory variants. This demonstrates that the source-compatible shape and desired conflict/missing-field behavior can be represented in controlled fixtures; the regexes are not a parser, and this does not validate production extraction, completeness, rendering, or real-source fidelity.
 
 ```json
 {"title":"Synthetic Systems Engineer","company":"Example Works","description":"Requirements and responsibilities. [repeated synthetic sentence]"}
