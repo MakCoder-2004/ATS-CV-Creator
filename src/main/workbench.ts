@@ -800,16 +800,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
           const analysisRow = db.prepare('SELECT data FROM analysis_run_state WHERE job_id = ?').get(record.id) as { data: string } | undefined
           const earlierAnalysis = currentAnalysis.get(record.id) ?? (analysisRow ? analysisResultSchema.parse(JSON.parse(analysisRow.data)) : undefined)
           if (earlierAnalysis?.analysis) saveAnalysisState({ ...earlierAnalysis, status: 'stale', targetPostingUpdatedAt: prior.updatedAt, progress: `This posting analysis is retained for history but targets an earlier accepted posting. ${unresolved ? `${unresolved} provider request outcome(s) from the cancelled run may be uncertain; this old run cannot resume. ` : ''}Review outgoing data and explicitly reassess the current posting.` })
-          // Retain historical CV content, but revoke the current document's readiness immediately.
-          const drafts = db.prepare('SELECT id, revision, data FROM draft_revisions WHERE job_id = ? ORDER BY revision DESC').all(record.id) as Array<{ id: string; revision: number; data: string }>
-          if (drafts[0]) {
-            const draft = draftRevisionSchema.parse(JSON.parse(drafts[0].data))
-            const priorAnalysis = earlierAnalysis?.analysis
-            const previousCoverage = draft.coverage ?? (priorAnalysis ? qualificationCoverage(earlierAnalysis?.runId ?? record.id, earlierAnalysis.displayAnalysis ?? priorAnalysis, draft, prepareDraftInputs(readProfile(), readExperience()).items.map(item => ({ evidenceId: item.id, revision: item.revision, snapshot: item.snapshot }))) : undefined)
-            const stale = draftRevisionSchema.parse({ ...draft, ...(previousCoverage ? { coverage: { ...previousCoverage, stale: true } } : {}), targetPostingUpdatedAt: draft.targetPostingUpdatedAt ?? prior.updatedAt, approved: false, approval: undefined, checkReport: undefined, status: 'blocked', progress: 'The accepted job posting changed. Review targeting against the current posting and create a renewed draft before approval.' })
-            db.prepare('UPDATE draft_revisions SET data = ? WHERE id = ?').run(JSON.stringify(stale), drafts[0].id)
-            db.prepare('DELETE FROM document_fit_reports WHERE job_id = ?').run(record.id)
-          }
+          // Keep prior draft and approval immutable. Public readiness checks compare its target binding to the accepted posting.
         }
         return jobSaveResultSchema.parse({ ok: true, value: record })
       })
@@ -1109,6 +1100,35 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
         saveAnalysisState({ jobId: pending.jobId, runId: pending.runId, status: cancelled ? 'cancelled' : 'failed', analysis: analysis.analysis, progress: safeMessage, attempts: observedAttempts, error: safeMessage, cacheHit: analysis.cacheHit, ...(priorProgress?.runId === pending.runId ? { generationStep: priorProgress.generationStep, completedSteps: priorProgress.completedSteps } : {}) })
         return { ok: false, message: safeMessage }
       }
+    },
+    async renewDraftReview(jobId: string) {
+      if (!uuidSchema.safeParse(jobId).success) return { ok: false, message: 'Choose a valid saved job before renewing its review.' }
+      if (activeAnalysisByJob.has(jobId)) return { ok: false, message: 'Wait for the current posting assessment to finish before renewing review.' }
+      const job = await this.openJob(jobId)
+      const analysis = await this.getAnalysis(jobId)
+      const currentScope = job ? currentConsentSource(jobId) : null
+      const authorizedCurrentRun = analysis?.runId && currentScope && analysis.targetPostingUpdatedAt === job?.updatedAt
+        ? db.prepare('SELECT 1 FROM outbound_consents WHERE run_id = ? AND scope_hash = ? AND revoked = 0').get(analysis.runId, prepareOutboundBundle(currentScope).scopeHash)
+        : undefined
+      if (!job || analysis?.status !== 'complete' || !analysis.analysis || analysis.targetPostingUpdatedAt !== job.updatedAt || !authorizedCurrentRun) return { ok: false, message: 'Complete an explicitly authorized assessment of the current posting before renewing this review.' }
+      const row = db.prepare('SELECT data FROM draft_revisions WHERE job_id = ? ORDER BY revision DESC LIMIT 1').get(jobId) as { data: string } | undefined
+      if (!row) return { ok: false, message: 'There is no existing CV wording to renew. Generate a draft when you choose.' }
+      const prior = draftRevisionSchema.parse(JSON.parse(row.data))
+      if (prior.targetPostingUpdatedAt === job.updatedAt) return { ok: false, message: 'This CV review already targets the current posting.' }
+      const revision = ((db.prepare('SELECT MAX(revision) AS revision FROM draft_revisions WHERE job_id = ?').get(jobId) as { revision: number | null }).revision ?? prior.revision) + 1
+      const sources = prepareDraftInputs(readProfile(), readExperience()).items.map(item => ({ evidenceId: item.id, revision: item.revision, snapshot: item.snapshot }))
+      const coverage = qualificationCoverage(analysis.runId ?? jobId, analysis.displayAnalysis ?? analysis.analysis, prior, sources)
+      const renewed = draftRevisionSchema.parse({ ...prior, id: randomUUID(), revision, targetPostingUpdatedAt: job.updatedAt, approved: false, approval: undefined, checkReport: undefined, coverage: { ...coverage, stale: false }, status: 'unverified', progress: 'Existing CV wording retained. Review it against the current posting, then run current checks and page measurement before approval.', createdAt: new Date().toISOString() })
+      const tx = db.transaction(() => {
+        const latestJob = db.prepare('SELECT updated_at FROM jobs WHERE id = ?').get(jobId) as { updated_at: string } | undefined
+        const latest = db.prepare('SELECT data FROM draft_revisions WHERE job_id = ? ORDER BY revision DESC LIMIT 1').get(jobId) as { data: string } | undefined
+        if (latestJob?.updated_at !== job.updatedAt || !latest || draftRevisionSchema.parse(JSON.parse(latest.data)).id !== prior.id) return false
+        db.prepare('INSERT INTO draft_revisions (id,job_id,revision,data) VALUES (?,?,?,?)').run(renewed.id, jobId, renewed.revision, JSON.stringify(renewed))
+        db.prepare('DELETE FROM document_fit_reports WHERE job_id = ?').run(jobId)
+        return true
+      })
+      if (!tx()) return { ok: false, message: 'The posting or CV changed during renewal. Review the current versions and try again.' }
+      return { ok: true, message: 'Existing wording is ready for your renewed review against the current posting. Checks and page fit must be refreshed.', draft: renewed }
     },
     async regenerateDraft(token: string, target: RegenerationTarget) {
       const parsedTarget = regenerationTargetSchema.safeParse(target)
@@ -1446,7 +1466,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       const staleTarget = Boolean(draft.targetPostingUpdatedAt && jobRow && draft.targetPostingUpdatedAt !== jobRow.updated_at)
       if (stale.length || staleTarget) report = factualCheckReportSchema.parse({ ...report, passed: false, findings: [...report.findings, ...stale.map(evidenceId => ({ code: 'stale-source' as const, itemPath: 'sources', evidenceId, message: 'A cited profile source changed or was deleted after this draft was created.', correction: 'Review the current source and regenerate or remove the affected wording.' })), ...(staleTarget ? [{ code: 'stale-source' as const, itemPath: 'job-posting', message: 'The accepted job posting changed after this draft was created.', correction: 'Create a renewed draft for the current posting before approval.' }] : [])] })
       const updated = draftRevisionSchema.parse({ ...draft, status: report.passed ? 'unverified' : 'blocked', checkReport: report, progress: report.passed ? 'Current factual checks passed; citations do not establish semantic truth. Human review remains required.' : `Blocked by ${report.findings.length} factual or source revision finding(s). Correct the draft and check again.` })
-      db.prepare('UPDATE draft_revisions SET data = ? WHERE id = ?').run(JSON.stringify(updated), draft.id)
+      if (!staleTarget) db.prepare('UPDATE draft_revisions SET data = ? WHERE id = ?').run(JSON.stringify(updated), draft.id)
       return report
     },
     async approveDraft(jobId: string) {
