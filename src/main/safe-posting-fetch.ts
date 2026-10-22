@@ -4,6 +4,7 @@ import type { IncomingMessage } from 'node:http'
 import { createBrotliDecompress, createGunzip, createInflate } from 'node:zlib'
 import { Readable } from 'node:stream'
 import { Worker } from 'node:worker_threads'
+import { join } from 'node:path'
 import { URL } from 'node:url'
 import { isIP } from 'node:net'
 
@@ -24,7 +25,6 @@ const MAX_DECOMPRESSED = 8 * 1024 * 1024
 const TOTAL_TIMEOUT_MS = 30_000
 const HOST = 'api.lever.co'
 const REQUEST_HEADERS = Object.freeze({ Accept: 'application/json', 'Accept-Encoding': 'identity', 'User-Agent': 'CV-Tailor/1.0' })
-const utf8Length = (s: string) => Buffer.byteLength(s, 'utf8')
 function textFromHtml(value: string): string {
   return value.replace(/<h[1-6][^>]*>/gi, '\n\n').replace(/<\/h[1-6]\s*>/gi, '\n').replace(/<li[^>]*>/gi, '\n• ').replace(/<\/li\s*>/gi, '').replace(/<\/(p|div|section|article)\s*>/gi, '\n').replace(/<br\s*\/?\s*>/gi, '\n').replace(/<[^>]*>/g, '').replace(/&nbsp;|&#160;/gi, ' ').replace(/&amp;/gi, '&').replace(/&lt;/gi, '<').replace(/&gt;/gi, '>').replace(/&quot;/gi, '"').replace(/&#39;|&apos;/gi, "'").replace(/[ \t]+/g, ' ').replace(/\n[ \t]+/g, '\n').replace(/\n{3,}/g, '\n\n').trim()
 }
@@ -63,7 +63,7 @@ export function isPublicAddress(address: string, family: number): boolean {
 }
 
 function parseSubmitted(value: string): { submitted: URL; api: URL } {
-  if (typeof value !== 'string' || utf8Length(value) > MAX_URL_BYTES) throw new Error('The link is invalid or longer than 2,048 bytes.')
+  if (typeof value !== 'string' || Buffer.byteLength(value, 'utf8') > MAX_URL_BYTES) throw new Error('The link is invalid or longer than 2,048 bytes.')
   let submitted: URL
   try { submitted = new URL(value) } catch { throw new Error('Enter a valid Lever posting link.') }
   if (submitted.protocol !== 'https:' || submitted.username || submitted.password || submitted.port || submitted.hash || submitted.search) throw new Error('Only public HTTPS Lever posting links without credentials, query strings, or fragments are supported.')
@@ -90,21 +90,21 @@ async function decodeBounded(body: Buffer, encoding: string, signal: AbortSignal
   finally { signal.removeEventListener('abort', abort) }
   return Buffer.concat(output, bytes)
 }
-async function parseJsonBounded(text: string, signal: AbortSignal): Promise<Record<string, unknown>> {
-  const worker = new Worker(`const { parentPort } = require('node:worker_threads'); parentPort.on('message', text => { let depth = 0, quoted = false, escaped = false; for (const char of text) { if (quoted) { if (escaped) escaped = false; else if (char === '\\\\') escaped = true; else if (char === '\"') quoted = false; continue } if (char === '\"') quoted = true; else if (char === '{' || char === '[') { depth++; if (depth > 64) { parentPort.postMessage({ error: 'JSON nesting exceeds 64 levels' }); return } } else if (char === '}' || char === ']') depth-- } try { parentPort.postMessage({ value: JSON.parse(text) }) } catch (error) { parentPort.postMessage({ error: String(error) }) } })`, { eval: true })
+type ExtractedPosting = { title: string; company: string | null; description: string; notices: string[] }
+async function extractPostingBounded(text: string, expectedId: string, signal: AbortSignal): Promise<ExtractedPosting> {
+  const worker = new Worker(join(__dirname, 'posting-extraction-worker.cjs'), { workerData: { text, expectedId } })
   return await new Promise((resolve, reject) => {
     const finish = () => { clearTimeout(timer); signal.removeEventListener('abort', cancel); void worker.terminate() }
-    const timer = setTimeout(() => { finish(); reject(new Error('The posting response exceeded the 2-second parsing budget.')) }, 2_000)
+    const timer = setTimeout(() => { finish(); reject(new Error('Posting parsing and extraction exceeded the 2-second budget.')) }, 2_000)
     const cancel = () => { finish(); reject(new Error('Fetch cancelled.')) }
     if (signal.aborted) return cancel()
     signal.addEventListener('abort', cancel, { once: true })
-    worker.once('message', (result: { value?: unknown; error?: string }) => {
+    worker.once('message', (result: { value?: ExtractedPosting; error?: string }) => {
       finish()
-      if (result.error || !result.value || typeof result.value !== 'object' || Array.isArray(result.value)) reject(new Error('The posting response was not valid posting JSON.'))
-      else resolve(result.value as Record<string, unknown>)
+      if (result.error || !result.value) reject(new Error(result.error ?? 'The source posting could not be extracted.'))
+      else resolve(result.value)
     })
     worker.once('error', error => { finish(); reject(error) })
-    worker.postMessage(text)
   })
 }
 const defaultWait = (milliseconds: number, signal: AbortSignal) => new Promise<void>((resolve, reject) => {
@@ -115,9 +115,9 @@ const defaultWait = (milliseconds: number, signal: AbortSignal) => new Promise<v
   signal.addEventListener('abort', cancel, { once: true })
 })
 const lastRequestAt = new Map<string, number>()
-function bounded<T>(operation: Promise<T>, milliseconds: number, signal: AbortSignal, timeoutMessage: string): Promise<T> {
+function bounded<T>(operation: Promise<T>, milliseconds: number, signal: AbortSignal, timeoutMessage: string, onTimeout?: () => void): Promise<T> {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => finish(() => reject(new Error(timeoutMessage))), milliseconds)
+    const timer = setTimeout(() => finish(() => { onTimeout?.(); reject(new Error(timeoutMessage)) }), milliseconds)
     const cancel = () => finish(() => reject(new Error('Fetch cancelled.')))
     const finish = (complete: () => void) => { clearTimeout(timer); signal.removeEventListener('abort', cancel); complete() }
     if (signal.aborted) return cancel()
@@ -152,25 +152,25 @@ export async function fetchLeverPosting(input: string, options: SafePostingFetch
     let current = api, response: Awaited<ReturnType<Request>> | undefined
     const visited = new Set<string>()
     for (let hop = 0; hop <= 3; hop++) {
-      if (controller.signal.aborted) throw new Error('Fetch cancelled or timed out.')
+      if (controller.signal.aborted) throw options.signal?.aborted ? new Error('Fetch cancelled.') : controller.signal.reason instanceof Error ? controller.signal.reason : new Error('Fetch timed out.')
       if (current.protocol !== 'https:' || current.hostname !== HOST || current.port || current.pathname !== api.pathname || current.search || current.hash || current.username || current.password) throw new Error('The posting redirected outside the approved Lever detail source.')
       if (visited.has(current.href)) throw new Error('The posting response contained a redirect loop.')
       visited.add(current.href)
-      const addresses = await bounded(lookup(current.hostname), 5_000, controller.signal, 'Source DNS resolution exceeded 5 seconds.')
+      const addresses = await bounded(lookup(current.hostname), 5_000, controller.signal, 'Source DNS resolution exceeded 5 seconds.', () => controller.abort(new Error('Source DNS resolution exceeded 5 seconds.')))
       if (!addresses.length || addresses.some(a => !isPublicAddress(a.address, a.family))) throw new Error('The source resolved to a non-public network address.')
       let lastError: unknown
       for (let attempt = 0; attempt < 2; attempt++) {
-        if (controller.signal.aborted) throw new Error('Fetch cancelled or timed out.')
+        if (controller.signal.aborted) throw options.signal?.aborted ? new Error('Fetch cancelled.') : controller.signal.reason instanceof Error ? controller.signal.reason : new Error('Fetch timed out.')
         const elapsed = now() - (lastRequestAt.get(current.hostname) ?? 0)
         if (lastRequestAt.has(current.hostname) && elapsed < 2_000) await wait(2_000 - elapsed, controller.signal)
         lastRequestAt.set(current.hostname, now())
-        try { response = await bounded(request(current, addresses[0], controller.signal, REQUEST_HEADERS), 15_000, controller.signal, 'Source response exceeded 15 seconds.') }
+        try { response = await bounded(request(current, addresses[0], controller.signal, REQUEST_HEADERS), 15_000, controller.signal, 'Source response exceeded 15 seconds.', () => controller.abort(new Error('Source response exceeded 15 seconds.'))) }
         catch (error) {
           lastError = error
           const code = typeof error === 'object' && error !== null && 'code' in error ? String((error as { code: unknown }).code) : ''
           const retryable = ['ECONNRESET', 'ETIMEDOUT', 'EAI_AGAIN', 'ECONNREFUSED'].includes(code)
           if (attempt === 0 && retryable && !controller.signal.aborted) { await wait(Math.max(0, 2_000 - (now() - lastRequestAt.get(current.hostname)!)), controller.signal); continue }
-          if (controller.signal.aborted) throw new Error('Fetch cancelled or timed out.')
+          if (controller.signal.aborted) throw options.signal?.aborted ? new Error('Fetch cancelled.') : controller.signal.reason instanceof Error ? controller.signal.reason : new Error('Fetch timed out.')
           if (code.startsWith('ERR_TLS') || code.startsWith('CERT_')) throw new Error('The source TLS certificate could not be verified. No insecure connection was attempted.')
           if (['ENOTFOUND', 'EAI_AGAIN'].includes(code)) throw new Error('The supported source hostname could not be resolved.')
           throw new Error('The source connection failed or timed out. Open the original posting or paste its text instead.')
@@ -203,41 +203,10 @@ export async function fetchLeverPosting(input: string, options: SafePostingFetch
     }
     let jsonText: string
     try { jsonText = new TextDecoder('utf-8', { fatal: true }).decode(body) } catch { throw new Error('The posting response was not valid UTF-8 JSON.') }
-    const data = await parseJsonBounded(jsonText, controller.signal)
-    const expectedId = api.pathname.split('/').at(-1)
-    if (data.id !== expectedId) throw new Error('The source response did not match the requested posting.')
-    const title = typeof data.text === 'string' ? data.text.trim() : ''
-    let description = typeof data.descriptionPlain === 'string' && data.descriptionPlain.trim() ? data.descriptionPlain.trim() : typeof data.description === 'string' ? textFromHtml(data.description) : ''
-    const supplemental = [data.openingPlain, data.descriptionBodyPlain, data.additionalPlain].filter((value): value is string => typeof value === 'string' && value.trim().length > 0).map(value => value.trim())
-    for (const section of supplemental) if (!description.includes(section)) description += `${description ? '\n\n' : ''}${section}`
-    if (Array.isArray(data.lists)) {
-      if (data.lists.length > 1_000) throw new Error('The posting response contains too many structured sections to review safely.')
-      let bulletCount = 0
-      for (const value of data.lists) {
-        if (!value || typeof value !== 'object') continue
-        const list = value as { text?: unknown; content?: unknown }
-        const heading = typeof list.text === 'string' ? textFromHtml(list.text) : ''
-        const items: string[] = []
-        if (typeof list.content === 'string') for (const match of list.content.matchAll(/<li\b[^>]*>([\s\S]*?)<\/li>/gi)) {
-          if (++bulletCount > 10_000) throw new Error('The posting response contains too many list items to review safely.')
-          const item = textFromHtml(match[1]); if (item) items.push(item)
-        }
-        if (!items.length) continue
-        const missing = items.filter(item => !description.includes(item))
-        if (missing.length) {
-          const sectionHeading = heading && !description.includes(heading) ? [heading] : []
-          description += `${description ? '\n\n' : ''}${[...sectionHeading, ...missing.map(item => `• ${item}`)].join('\n')}`
-        } else description = description.split('\n').map(line => items.includes(line.trim()) && !line.trim().startsWith('• ') ? `• ${line.trim()}` : line).join('\n')
-      }
-    }
-    const company = typeof data.company === 'string' && data.company.trim() ? data.company.trim() : null
-    if ([...title].length > 200 || (company && [...company].length > 200) || [...description].length > 200_000 || utf8Length(description) > 1024 * 1024) throw new Error('The posting text exceeds the safe preview limit; no partial preview was created.')
-    const hasStructuredSections = Array.isArray(data.lists) && data.lists.some(item => item && typeof item === 'object' && typeof (item as { content?: unknown }).content === 'string')
-    const hasSectionHeadings = /\b(responsibilities|requirements|qualifications|what you(?:'|’)ll do|what we(?:'|’)re looking for)\b/i.test(description)
-    const notices = [!company ? 'Employer name was not provided by this source; this preview is incomplete.' : '', !title ? 'The source did not provide a job title; this preview is incomplete.' : '', !description ? 'The source did not provide posting text; this preview is incomplete.' : '', description.length < 200 || (!hasStructuredSections && !hasSectionHeadings) ? 'The response lacks enough posting-detail structure to establish complete source text; this preview is incomplete.' : ''].filter(Boolean)
-    notices.push('Extraction cannot guarantee posting completeness or that the role remains open. Review the full source before relying on it.')
+    const expectedId = api.pathname.split('/').at(-1) ?? ''
+    const extracted = await extractPostingBounded(jsonText, expectedId, controller.signal)
     if (controller.signal.aborted) throw new Error(options.signal?.aborted ? 'Fetch cancelled.' : 'Fetch exceeded the 30-second deadline.')
-    return { title, company, description, submittedUrl: submitted.href, finalUrl: current.href, notices }
+    return { ...extracted, submittedUrl: submitted.href, finalUrl: current.href }
   } finally { clearTimeout(timeout); options.signal?.removeEventListener('abort', abort) }
 }
 
