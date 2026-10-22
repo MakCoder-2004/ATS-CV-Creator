@@ -6,6 +6,8 @@ export const MAX_WORKSPACE_BACKUP_BYTES = 64 * 1024 * 1024
 export const MAX_WORKSPACE_BACKUP_ROW_BYTES = 16 * 1024 * 1024
 // Retain pre-limit histories from earlier workspace files; never set this below the accepted-write ceiling.
 export const MAX_WORKSPACE_BACKUP_POSTING_REVISIONS = Math.max(100_000, MAX_POSTING_REVISIONS)
+export const WORKSPACE_BACKUP_STATE_TABLE = 'cv_workspace_backup_state'
+export const WORKSPACE_BACKUP_SIZE_TABLE = 'cv_workspace_backup_sizes'
 export const WORKSPACE_BACKUP_TABLE_ROW_LIMITS: Readonly<Record<string, number>> = {
   schema_migrations: 100, settings: 100, profile_contact: 1, profile_skills: 10_000, profile_entries: 10_000,
   evidence_revisions: 50_000, profile_import_provenance: 50_000, profile_experience: 10_000, profile_projects: 10_000,
