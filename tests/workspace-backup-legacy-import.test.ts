@@ -40,6 +40,21 @@ test('applies explicit add, update, and skip decisions against a populated profi
   expect(imported.profile.skills.filter(skill => skill.name === 'Python')).toHaveLength(1)
 })
 
+test('rejects a populated-profile merge preview after the current profile baseline changes', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'cv-tailor-merge-stale-')); directories.push(directory)
+  const workbench = createWorkbench(directory); instances.push(workbench)
+  await workbench.api.saveSkill({ name: 'SQLite', category: 'Tools' })
+  const baseline = await workbench.api.getProfileImportBaseline()
+  const draft = mapProfilePdfPages([{ page: 1, text: 'SKILLS: Python' }])
+  const refs = [...draft.skills.map(item => item.proposalRef), ...draft.sources.map(source => source.proposalRef)]
+  const proposalIds = Object.fromEntries([...new Set(refs)].map(ref => [ref, randomUUID()]))
+  const proposals = { ...draft, proposalIds, decisions: { [draft.skills[0].proposalRef]: { action: 'add' as const } }, sources: draft.sources.map(source => ({ ...source, proposalId: proposalIds[source.proposalRef] })) }
+  await workbench.api.saveSkill({ name: 'TypeScript', category: 'Technical' })
+  const result = await workbench.api.importEmptyProfilePdf('d'.repeat(64), baseline, proposals)
+  expect(result).toMatchObject({ ok: false, message: expect.stringContaining('profile changed') })
+  expect((await workbench.api.getProfile()).skills.map(skill => skill.name)).toEqual(['SQLite', 'TypeScript'])
+})
+
 test('rolls back every populated-profile merge write when a later selected addition conflicts', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'cv-tailor-merge-rollback-')); directories.push(directory)
   const workbench = createWorkbench(directory); instances.push(workbench)
@@ -78,6 +93,8 @@ test('merges updated experience and project records while preserving unrelated n
   const nestedId = first.experience.experience[0].factualItems.find(fact => fact.text === 'Built a data pipeline')!.id
   const beforeHistory = await workbench.api.getEvidenceHistory(role.id)
   const beforeProvenance = JSON.parse(workbench.backup.createBackup()).tables.profile_import_provenance.rows
+  expect(beforeProvenance).toContainEqual(expect.objectContaining({ owner_id: role.id, owner_revision: 2, source_hash: 'b'.repeat(64) }))
+  expect(beforeProvenance).toContainEqual(expect.objectContaining({ owner_id: nestedId, owner_revision: 1, passage: 'FACT: Built a data pipeline' }))
   const repeated = await workbench.api.importEmptyProfilePdf('b'.repeat(64), await workbench.api.getProfileImportBaseline(), makeReviewedProposal())
   expect(repeated.ok).toBe(true)
   if (!repeated.ok || !repeated.experience) throw new Error(repeated.message)
