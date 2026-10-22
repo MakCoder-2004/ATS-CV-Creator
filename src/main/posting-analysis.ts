@@ -75,10 +75,10 @@ export function createAnalysisDispatcher(options: Options) {
         checkBudget()
         const capacity = options.transport.validateCapacity && await options.transport.validateCapacity({ runId: input.runId, model: input.model, prompt, responseSchema: postingAnalysisSchema, maxTokens: 2048, signal: controller.signal })
         if (!capacity || (typeof capacity === 'object' && !capacity.fits)) throw capacityFailure(typeof capacity === 'object' ? capacity.message : undefined)
+        options.onProgress?.(input.runId, input.jobId, `Preparing posting-analysis request ${usage.attempts + 1}; local backup and accounting checks must finish before dispatch.`, usage.attempts)
         const timestamp = now()
         options.onAttempt?.(timestamp, input.runId)
         dispatched.push(timestamp); usage.attempts++; attemptCounts.set(input.runId, (attemptCounts.get(input.runId) ?? 0) + 1)
-        options.onProgress?.(input.runId, input.jobId, `Sending posting-analysis request ${usage.attempts} within this run's configured budget.`, usage.attempts)
         try {
           const response = await options.transport.generate({ model: input.model, prompt, signal: controller.signal, responseSchema: postingAnalysisSchema, maxTokens: 2048, ...(typeof capacity === 'object' ? { providerOnly: capacity.providers } : {}) })
           options.onAttemptComplete?.(input.runId, true)
@@ -152,8 +152,8 @@ export function createAnalysisDispatcher(options: Options) {
           if (controller.signal.aborted) throw cancelledError()
           const capacity = options.transport.validateCapacity && await options.transport.validateCapacity({ runId: input.runId, model: input.model, prompt: input.prompt, responseSchema: input.responseSchema, maxTokens: input.maxTokens ?? 2048, signal: controller.signal })
           if (!capacity || (typeof capacity === 'object' && !capacity.fits)) throw capacityFailure(typeof capacity === 'object' ? capacity.message : undefined)
+          options.onProgress?.(input.runId, input.jobId, `Preparing source-linked generation request ${attempts + 1}; local backup and accounting checks must finish before dispatch.`, attempts)
           const timestamp = now(); options.onAttempt?.(timestamp, input.runId); dispatched.push(timestamp); attempts++; attemptCounts.set(input.runId, (attemptCounts.get(input.runId) ?? 0) + 1)
-          options.onProgress?.(input.runId, input.jobId, `Sending source-linked generation request ${attempts} within the shared run budget.`, attempts)
           try {
             const response = await options.transport.generate({ model: input.model, prompt: input.prompt, signal: controller.signal, responseSchema: input.responseSchema, ...(input.maxTokens ? { maxTokens: input.maxTokens } : {}), ...(input.maxResponseChars !== undefined ? { maxResponseChars: input.maxResponseChars } : {}), ...(typeof capacity === 'object' ? { providerOnly: capacity.providers } : {}) })
             options.onAttemptComplete?.(input.runId, true)

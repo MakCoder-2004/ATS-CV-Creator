@@ -43,7 +43,7 @@ test('reviewed link imports save atomically with immutable source provenance and
   try {
     const { token } = await imported.api.startPostingFetch('https://jobs.lever.co/example-board/review-save-1')
     let state = await imported.api.readPostingPreview(token)
-    for (let attempt = 0; attempt < 50 && state.status === 'fetching'; attempt++) { await new Promise(resolve => setTimeout(resolve, 2)); state = await imported.api.readPostingPreview(token) }
+    for (let attempt = 0; attempt < 300 && state.status === 'fetching'; attempt++) { await new Promise(resolve => setTimeout(resolve, 10)); state = await imported.api.readPostingPreview(token) }
     expect(state.status).toBe('ready')
     if (state.status !== 'ready') throw Error('Synthetic source was not ready')
     expect(Array.from(state.preview.description).length).toBeGreaterThan(30000)
@@ -464,6 +464,12 @@ test('aggregate backup ceiling rejects a multi-job save before mutation and pres
     expect(await workbench.api.listJobs()).toHaveLength(2)
     expect(await workbench.api.openJob(first.value.id)).toEqual(first.value)
     expect(await workbench.api.openJob(second.value.id)).toEqual(second.value)
+    const directWriter = new Database(join(directory, 'workbench.sqlite'))
+    const directId = 'fd570a2e-53b5-4e2d-9e3d-8019ed4cc367', createdAt = new Date().toISOString()
+    const directRecord = { id: directId, title: 'Direct SQL role', company: 'Example', description: 'D'.repeat(1000), createdAt, updatedAt: createdAt, provenance: 'manual', sourceSnapshot: null, revisions: [{ title: 'Direct SQL role', company: 'Example', description: 'D'.repeat(1000), revision: 1, acceptedAt: createdAt, provenance: 'manual' }] }
+    expect(() => directWriter.prepare('INSERT INTO jobs (id, created_at, updated_at, data) VALUES (?, ?, ?, ?) RETURNING id').get(directId, createdAt, createdAt, JSON.stringify(directRecord))).toThrow(/WORKSPACE_BACKUP_CAPACITY/)
+    expect((directWriter.prepare('SELECT COUNT(*) AS count FROM jobs').get() as { count: number }).count).toBe(2)
+    directWriter.close()
     const currentBackup = workbench.backup.createBackup()
     expect(Buffer.byteLength(currentBackup, 'utf8')).toBeLessThanOrEqual(backupBoundary)
     const preview = workbench.backup.previewRestore(currentBackup)

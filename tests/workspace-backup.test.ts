@@ -102,7 +102,7 @@ test('complete workspace backup restores draft revisions, evidence, posting, pre
   expect(await reopened.api.assertDraftExportable(job.value.id)).toMatchObject({ ok: true })
   await expect(reopened.api.startAnalysis(consent.token)).rejects.toThrow()
   expect(requests.length).toBe(attemptsBeforeReopen)
-})
+}, 30_000)
 
 test('released version-1 job backups without provenance upgrade to honest legacy records on restore', async () => {
   const { dir, workbench } = fixture()

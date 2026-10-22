@@ -1824,31 +1824,47 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
     try { backupEngine.assertBackupCapacity() }
     finally { checkingBackupCapacity = false }
   }
+  const normalizeBackupWriteError = (error: unknown) => error instanceof WorkspaceBackupCapacityError
+    ? error
+    : error instanceof Error && /WORKSPACE_BACKUP_(?:CAPACITY|ROW_LIMIT|TABLE_LIMIT|JOB_LIMIT)/.test(error.message)
+      ? new WorkspaceBackupCapacityError(`The workspace change would exceed a backup safety limit (${error.message}). Nothing was changed and no existing history was deleted.`)
+      : error
   // Guard every SQLite write transaction, not just job edits, so provider state, drafts,
   // profile history, fit reports, restore and checkpoint writes cannot overrun backup bounds.
   const nativeTransaction = db.transaction.bind(db)
   const nativeExec = db.exec.bind(db)
   const nativePrepare = db.prepare.bind(db)
   const guardedDb = db as unknown as { transaction: (callback: (...args: any[]) => unknown) => any; exec: (source: string) => Database.Database; prepare: (source: string) => any }
-  guardedDb.transaction = (callback: (...args: any[]) => unknown) => nativeTransaction((...args: any[]) => {
-    const result = callback(...args)
-    assertBackupable()
-    return result
-  })
+  guardedDb.transaction = (callback: (...args: any[]) => unknown) => {
+    const transaction = nativeTransaction((...args: any[]) => {
+      const result = callback(...args)
+      assertBackupable()
+      return result
+    })
+    return (...args: any[]) => {
+      try { return transaction(...args) }
+      catch (error) { throw normalizeBackupWriteError(error) }
+    }
+  }
   guardedDb.exec = (source: string) => {
     if (db.inTransaction || checkingBackupCapacity) return nativeExec(source)
-    return nativeTransaction(() => { const result = nativeExec(source); assertBackupable(); return result })()
+    try { return nativeTransaction(() => { const result = nativeExec(source); assertBackupable(); return result })() }
+    catch (error) { throw normalizeBackupWriteError(error) }
   }
   const wrapStatement = (statement: Database.Statement, mutating: boolean): Database.Statement => new Proxy(statement, { get(target, property) {
     if (property === 'run' || property === 'get' || property === 'all') return (...args: any[]) => {
       const execute = () => (target[property as 'run' | 'get' | 'all'] as (...values: any[]) => any)(...args)
       if (!mutating || db.inTransaction || checkingBackupCapacity) return execute()
-      return nativeTransaction(() => { const result = execute(); assertBackupable(); return result })()
+      try { return nativeTransaction(() => { const result = execute(); assertBackupable(); return result })() }
+      catch (error) { throw normalizeBackupWriteError(error) }
     }
     if (property === 'iterate' && mutating) return (...args: any[]) => {
-      const rows = !db.inTransaction && !checkingBackupCapacity
-        ? nativeTransaction(() => { const result = target.all(...args); assertBackupable(); return result })()
-        : target.all(...args)
+      let rows: unknown[]
+      try {
+        rows = !db.inTransaction && !checkingBackupCapacity
+          ? nativeTransaction(() => { const result = target.all(...args); assertBackupable(); return result })()
+          : target.all(...args)
+      } catch (error) { throw normalizeBackupWriteError(error) }
       return rows[Symbol.iterator]()
     }
     const value = Reflect.get(target, property, target)
