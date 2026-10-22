@@ -2,6 +2,11 @@ import { z } from 'zod'
 import type { AnalysisTransport } from './posting-analysis'
 
 const endpoint = 'https://openrouter.ai/api/v1/chat/completions'
+export const MAX_OPENROUTER_REQUEST_BODY_BYTES = 64 * 1024
+
+export function serializeOpenRouterRequestBody(input: { model: string; prompt: string; responseSchema: import('zod').ZodTypeAny; maxTokens?: number }) {
+  return JSON.stringify({ model: input.model, stream: false, ...(input.maxTokens ? { max_tokens: input.maxTokens } : {}), messages: [{ role: 'user', content: `${input.prompt}\nReturn only a JSON object conforming to this schema. Do not include markdown or explanations.\n${JSON.stringify(z.toJSONSchema(input.responseSchema))}` }] })
+}
 
 async function boundedBody(response: Response, maxBytes?: number): Promise<string> {
   if (maxBytes === undefined || !response.body) return response.text()
@@ -31,7 +36,7 @@ export function createOpenRouterAnalysisTransport(apiKey: string, fetcher: typeo
         response = await fetcher(endpoint, {
           method: 'POST', signal,
           headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ model, stream: false, ...(maxTokens ? { max_tokens: maxTokens } : {}), messages: [{ role: 'user', content: `${prompt}\nReturn only a JSON object conforming to this schema. Do not include markdown or explanations.\n${JSON.stringify(z.toJSONSchema(responseSchema))}` }] })
+          body: serializeOpenRouterRequestBody({ model, prompt, responseSchema, maxTokens })
         })
       } catch (error) {
         // Preserve network codes for the dispatcher's offline/cancellation handling; never surface request headers.

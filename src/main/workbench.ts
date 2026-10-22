@@ -17,7 +17,7 @@ import type { OutboundConsentAction, OutboundConsentPreview } from '../shared/ou
 import { regenerationProposalSchema, regenerationTargetSchema, type RegenerationTarget, type RegenerationProposal } from '../shared/regeneration'
 import { outboundConsentActionSchema, outboundConsentPreviewSchema } from '../shared/outbound-consent-contract'
 import { AnalysisError, createAnalysisDispatcher, type AnalysisTransport } from './posting-analysis'
-import { createOpenRouterAnalysisTransport } from './openrouter-analysis-transport'
+import { createOpenRouterAnalysisTransport, MAX_OPENROUTER_REQUEST_BODY_BYTES, serializeOpenRouterRequestBody } from './openrouter-analysis-transport'
 import { createHash } from 'node:crypto'
 import { z } from 'zod'
 import { analysisBudgetsSchema, analysisResultSchema, analysisUsageSchema, defaultAnalysisBudgets, generationRecoverySchema, postingAnalysisSchema, displayPostingAnalysisSchema, type AnalysisBudgets, type AnalysisResult, type RecoveryChoice } from '../shared/posting-analysis'
@@ -339,6 +339,8 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       const settings = db.prepare('SELECT value FROM settings WHERE key = ?').get('openrouter-model') as { value: string } | undefined
       const selectedModel = openRouterModelSchema.parse(model)
       if (selectedModel !== openRouterModelSchema.parse(settings?.value ?? defaultOpenRouterModel)) throw new Error('The OpenRouter model changed after consent. Review the outgoing text and authorize a fresh request.')
+      const requestBody = serializeOpenRouterRequestBody({ model: selectedModel, prompt, responseSchema, maxTokens: 2048 })
+      if (Buffer.byteLength(requestBody, 'utf8') > MAX_OPENROUTER_REQUEST_BODY_BYTES) throw new Error('The complete AI request, including its schema, exceeds the 64 KiB request limit. Nothing was sent; continue with local review.')
       activeProfileAiRuns.add(runId)
       try { return await dispatcher.generate({ runId, jobId: runId, model: selectedModel, prompt, consentId: runId, responseSchema, retryProviderFailures: false, maxTokens: 2048, maxResponseChars: 500_000 }) }
       finally { activeProfileAiRuns.delete(runId) }

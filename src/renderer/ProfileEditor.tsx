@@ -34,6 +34,9 @@ export function ProfileEditor() {
   const [aiPreview, setAiPreview] = useState<Extract<ProfileAiConsentPreview, { ok: true }> | null>(null)
   const [aiAuthorized, setAiAuthorized] = useState(false)
   const [aiBusy, setAiBusy] = useState(false)
+  const [aiStage, setAiStage] = useState<'preparing' | 'running' | null>(null)
+  const activePdfToken = useRef<string | null>(null)
+  const activeAiToken = useRef<string | null>(null)
 
   function loadLinks(items: Array<string | { label: string; url: string }>) {
     setLinks(items.map(item => ({ key: ++nextLinkKey.current, label: typeof item === 'string' ? item : item.label, url: typeof item === 'string' ? item : item.url })))
@@ -66,38 +69,52 @@ export function ProfileEditor() {
   useEffect(() => () => { if (aiPreview?.token) void window.workbench.cancelProfileAiStructuring(aiPreview.token).catch(() => {}) }, [aiPreview?.token])
   async function prepareProfileAi() {
     if (!pdfPreview) return
-    setMutationError(''); setNotice(''); setAiBusy(true); setAiAuthorized(false)
+    setMutationError(''); setNotice(''); setAiBusy(true); setAiStage('preparing'); setAiAuthorized(false)
     try {
       const result = await window.workbench.previewProfileAiStructuring(pdfPreview.token)
-      if (result.ok) setAiPreview(result); else setMutationError(result.message)
+      if (result.ok) { activeAiToken.current = result.token; setAiPreview(result) } else setMutationError(result.message)
     } catch { setMutationError('Could not prepare the outgoing-text preview. Local CV review remains available.') }
-    finally { setAiBusy(false) }
+    finally { setAiBusy(false); setAiStage(null) }
   }
   async function cancelProfileAi() {
     if (!aiPreview) return
-    const token = aiPreview.token; setAiPreview(null); setAiAuthorized(false)
+    const token = aiPreview.token; activeAiToken.current = null; setAiPreview(null); setAiAuthorized(false)
     try { await window.workbench.cancelProfileAiStructuring(token) } catch { /* The run has already expired or ended. */ }
   }
   async function authorizeProfileAi() {
-    if (!aiPreview || !aiAuthorized) return
-    setAiBusy(true); setMutationError('')
+    if (!pdfPreview || !aiPreview || !aiAuthorized) return
+    const importToken = pdfPreview.token, consentToken = aiPreview.token
+    if (activePdfToken.current !== importToken || activeAiToken.current !== consentToken) return
+    const stillCurrent = () => activePdfToken.current === importToken && activeAiToken.current === consentToken
+    setAiBusy(true); setAiStage('running'); setMutationError('')
     try {
-      const accepted = await window.workbench.consentProfileAiStructuring(aiPreview.token, true)
+      const accepted = await window.workbench.consentProfileAiStructuring(consentToken, true)
+      if (!stillCurrent()) { void window.workbench.cancelProfileAiStructuring(consentToken); return }
       if (!accepted.ok) { setMutationError(accepted.message); return }
-      const result = await window.workbench.runProfileAiStructuring(aiPreview.token)
-      if (!result.ok) { setMutationError(result.message); return }
+      const result = await window.workbench.runProfileAiStructuring(consentToken)
+      if (!stillCurrent()) return
+      if (!result.ok) {
+        activeAiToken.current = null; setAiPreview(current => current?.token === consentToken ? null : current); setAiAuthorized(false)
+        setMutationError(result.message); return
+      }
       const proposals = result.proposals
-      setPdfPreview(current => current ? { ...current, proposals } : current)
+      setPdfPreview(current => current?.token === importToken ? { ...current, proposals } : current)
       setPdfSelected({ contact: Boolean(proposals.contact?.fullName), skills: proposals.skills.map(() => true), experience: proposals.experience.map(item => !item.requiresDateResolution), entries: proposals.entries.map(item => !item.requiresDateResolution), projects: proposals.projects.map(() => true) })
-      setAiPreview(null); setAiAuthorized(false); setNotice(result.message)
-    } catch { setMutationError('AI structuring failed. Your local proposals remain available for correction.') }
-    finally { setAiBusy(false) }
+      activeAiToken.current = null; setAiPreview(current => current?.token === consentToken ? null : current); setAiAuthorized(false); setNotice(result.message)
+    } catch {
+      if (stillCurrent()) {
+        activeAiToken.current = null; setAiPreview(current => current?.token === consentToken ? null : current); setAiAuthorized(false)
+        setMutationError('AI structuring failed. Your local proposals remain available for correction.')
+      }
+    } finally { setAiBusy(false); setAiStage(null) }
   }
   async function uploadPdf() {
     setMutationError(''); setNotice(''); setPdfBusy(true)
     try {
       const result = await window.workbench.previewProfilePdfImport()
       if (!result.ok) { if (!result.cancelled) setMutationError(result.message); return }
+      if (activeAiToken.current) void window.workbench.cancelProfileAiStructuring(activeAiToken.current).catch(() => {})
+      activePdfToken.current = result.token; activeAiToken.current = null; setAiPreview(null); setAiAuthorized(false)
       setPdfPreview(result)
       setPdfSelected({ contact: Boolean(result.proposals.contact?.fullName), skills: result.proposals.skills.map(() => true), experience: result.proposals.experience.map(item => !item.requiresDateResolution), entries: result.proposals.entries.map(item => !item.requiresDateResolution), projects: result.proposals.projects.map(() => true) })
     } catch { setMutationError('The selected PDF could not be read. Choose a text PDF and try again.') }
@@ -111,7 +128,7 @@ export function ProfileEditor() {
     if (!pdfPreview) return
     const token = pdfPreview.token
     if (!window.confirm('Discard this CV review? Any corrections will be lost; your profile has not been changed.')) return
-    setPdfPreview(null)
+    activePdfToken.current = null; activeAiToken.current = null; setAiPreview(null); setPdfPreview(null)
     try { await window.workbench.cancelProfilePdfImport(token) } catch { setMutationError('The CV review could not be cleared. No profile data was applied.') }
   }
   async function applyPdfReview() {
@@ -137,7 +154,7 @@ export function ProfileEditor() {
         if (/profile changed|profile is no longer empty|review expired/i.test(result.message)) setPdfPreview(null)
         await reload(); return
       }
-      setPdfPreview(null)
+      setPdfPreview(null); activePdfToken.current = null; activeAiToken.current = null
       if (result.profile) setSnapshot(result.profile)
       setNotice(`${result.message} Accepted source passages are retained as personal data.`)
       setActiveSection('Personal')
@@ -247,7 +264,7 @@ export function ProfileEditor() {
     <section className="profile-exchange-toolbar" aria-label="Profile files"><div><strong>Profile files</strong><p>JSON exchange stays separate. CV upload reads a text PDF locally and never sends it to a model.</p></div><div className="profile-exchange-actions"><button className="secondary-button" type="button" onClick={() => void exportProfile()}>Export profile JSON</button><button className="secondary-button" type="button" onClick={() => void previewImport()}>Import profile JSON</button><button className="primary-button" type="button" onClick={() => void uploadPdf()} disabled={pdfBusy}>{pdfBusy ? 'Reading PDF…' : 'Upload CV'}</button></div></section>
     <nav className="profile-sections" aria-label="Profile sections">{profileSections.map(section => <button key={section} type="button" aria-current={activeSection === section ? 'page' : undefined} onClick={() => { setActiveSection(section); setMutationError(''); setNotice(''); setFieldErrors({}) }}>{section}</button>)}</nav>
     {pdfBusy && <p className="profile-message" role="status" aria-live="polite">Reading the selected PDF on this device…</p>}
-    {aiBusy && <p className="profile-message" role="status" aria-live="polite">{aiPreview ? 'Sending the authorized text for bounded OpenRouter structuring…' : 'Preparing the outgoing-text preview locally…'}</p>}
+    {aiStage && <p className="profile-message" role="status" aria-live="polite">{aiStage === 'running' ? 'Sending the authorized text for bounded OpenRouter structuring…' : 'Preparing the outgoing-text preview locally…'}</p>}
     {pdfPreview && <section className="profile-panel pdf-import-review" role="region" aria-labelledby="pdf-import-title"><div className="panel-heading"><div><span className="context">Local PDF review</span><h2 id="pdf-import-title">Review proposed profile details</h2><p>Correct or skip each group. Nothing is saved until you apply. Source passages may contain sensitive personal data and will be retained only for accepted facts.</p></div></div>{pdfValidationError && <p className="profile-message error" role="alert">{pdfValidationError}</p>}
       {!aiPreview && <div className="form-actions"><button className="secondary-button" type="button" disabled={pdfBusy || aiBusy} onClick={() => void prepareProfileAi()}>{aiBusy ? 'Preparing AI preview…' : 'Optional AI structuring'}</button><span>AI replaces temporary proposals only; saved profile data is not sent or changed. Local review works without AI.</span></div>}
       {aiPreview && <section className="profile-panel ai-consent-review" role="region" aria-labelledby="profile-ai-consent-title"><h3 id="profile-ai-consent-title">Review text sent to OpenRouter</h3><p>Destination: OpenRouter · Model: <strong>{aiPreview.model}</strong></p><label>Exact outgoing text<textarea rows={10} readOnly value={aiPreview.outgoing} /></label><p role="note">{aiPreview.warning}</p><p>{aiPreview.termsNotice}</p><label className="pdf-include"><input type="checkbox" checked={aiAuthorized} onChange={event => setAiAuthorized(event.target.checked)} /> I authorize this one-time request to send the text above to OpenRouter for CV structuring.</label><div className="form-actions"><button className="primary-button" type="button" disabled={!aiAuthorized || aiBusy} onClick={() => void authorizeProfileAi()}>{aiBusy ? 'Structuring CV…' : 'Send text and structure'}</button><button className="secondary-button" type="button" onClick={() => void cancelProfileAi()}>{aiBusy ? 'Cancel AI request' : 'Decline AI assistance'}</button></div></section>}

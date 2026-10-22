@@ -1,6 +1,8 @@
 import { expect, test, vi } from 'vitest'
 import { z } from 'zod'
 import { createOpenRouterAnalysisTransport } from '../src/main/openrouter-analysis-transport'
+import { minimizeProfileText } from '../src/shared/profile-ai-structuring'
+import { profilePdfProposalDraftSchema } from '../src/shared/profile-pdf-import'
 
 const input = { model: 'minimax/minimax-m3.1-flash:free', prompt: 'Analyze authorized minimized posting.', signal: new AbortController().signal, responseSchema: z.object({ required: z.array(z.string()) }) }
 
@@ -33,6 +35,27 @@ test('applies explicit response token and byte ceilings for CV structuring', asy
     return new Response(JSON.stringify({ choices: [{ message: { content: 'x'.repeat(100) } }] }), { status: 200 })
   }) as unknown as typeof fetch
   await expect(createOpenRouterAnalysisTransport('test-key', fetcher).generate({ ...input, maxTokens: 2048, maxResponseChars: 10 })).rejects.toThrow('OpenRouter returned no usable JSON response.')
+})
+
+test('captures the exact minimized profile-intake HTTP request and excludes binary, credentials, and unrelated profile data', async () => {
+  const raw = JSON.stringify({ sources: [{ page: 1, field: 'contact.email', text: 'EMAIL: ada@example.test' }], unmapped: [] })
+  const outgoing = minimizeProfileText(raw, ['ada@example.test']).text
+  const prompt = `Structure only these local CV passages.\n${outgoing}`
+  let captured = ''
+  const fetcher = vi.fn(async (_url: unknown, options: unknown) => {
+    captured = (options as { body: string }).body
+    return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ skills: [], experience: [], projects: [], entries: [], unmapped: [], sources: [] }) } }] }), { status: 200 })
+  }) as unknown as typeof fetch
+  await createOpenRouterAnalysisTransport('private-api-key-canary', fetcher).generate({ ...input, prompt, responseSchema: profilePdfProposalDraftSchema, maxTokens: 2048 })
+  const request = JSON.parse(captured)
+  expect(request.model).toBe(input.model)
+  expect(request.max_tokens).toBe(2048)
+  expect(request.messages[0].content).toContain(outgoing)
+  expect(captured).not.toContain('ada@example.test')
+  expect(captured).not.toContain('%PDF')
+  expect(captured).not.toContain('PROFILE_SECRET_CANARY')
+  expect(captured).not.toContain('private-api-key-canary')
+  expect(fetcher).toHaveBeenCalledTimes(1)
 })
 
 test('rejects missing or unusable completion without returning raw provider data', async () => {

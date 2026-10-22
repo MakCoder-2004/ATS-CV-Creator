@@ -63,17 +63,18 @@ app.whenReady().then(() => {
   })
   let scriptedAttempts = 0
   let recoveryFailureSent = false
-  const scriptedAnalysis: AnalysisTransport | undefined = !app.isPackaged && ['1', 'retry', 'generation', 'factual', 'invalid', 'faithfulness', 'recovery', 'delayed', 'tailored-flow', 'profile-ai', 'profile-ai-delayed'].includes(process.env.CV_TAILOR_SCRIPTED_ANALYSIS ?? '') ? { generate: async ({ prompt, signal }) => {
+  const scriptedAnalysis: AnalysisTransport | undefined = !app.isPackaged && ['1', 'retry', 'generation', 'factual', 'invalid', 'faithfulness', 'recovery', 'delayed', 'tailored-flow', 'profile-ai', 'profile-ai-delayed', 'profile-ai-wrong-fact', 'profile-ai-late'].includes(process.env.CV_TAILOR_SCRIPTED_ANALYSIS ?? '') ? { generate: async ({ prompt, signal }) => {
     scriptedAttempts++
     const isTailoring = /^Write (?:conservative|concise)/.test(prompt)
     if (process.env.CV_TAILOR_SCRIPTED_ANALYSIS === 'profile-ai-delayed' && prompt.startsWith('Organize only facts')) return await new Promise<string>((_resolve, reject) => signal.addEventListener('abort', () => reject(Object.assign(new Error('scripted request cancelled'), { code: 'ECONNRESET' })), { once: true }))
-    if (process.env.CV_TAILOR_SCRIPTED_ANALYSIS === 'profile-ai' && prompt.startsWith('Organize only facts')) {
+    if (process.env.CV_TAILOR_SCRIPTED_ANALYSIS === 'profile-ai-late' && prompt.startsWith('Organize only facts')) await new Promise<void>(resolve => setTimeout(resolve, 1_500))
+    if (['profile-ai', 'profile-ai-wrong-fact', 'profile-ai-late'].includes(process.env.CV_TAILOR_SCRIPTED_ANALYSIS ?? '') && prompt.startsWith('Organize only facts')) {
       if (['ada@example.test', '+1 555 123 4567', '%PDF', 'PROFILE_SECRET_CANARY'].some(value => prompt.includes(value))) throw new Error('The scripted outbound request contained unapproved source data.')
       const authorized = prompt.split('AUTHORIZED CV TEXT (this exact minimized text only):\n')[1] ?? '{}'
       const input = JSON.parse(authorized) as { sources?: Array<{ sourceRef: string; page: number; field: string; text: string }> }
       const source = input.sources?.find(item => item.field.startsWith('skills.'))
       if (!source) return JSON.stringify({ contact: undefined, skills: [], experience: [], projects: [], entries: [], sources: [], unmapped: [] })
-      const skill = source.field.slice('skills.'.length)
+      const skill = process.env.CV_TAILOR_SCRIPTED_ANALYSIS === 'profile-ai-wrong-fact' ? 'Rust' : source.field.slice('skills.'.length)
       return JSON.stringify({ skills: [{ name: skill, category: 'Technical', proposalRef: 'ai-skill-1' }], experience: [], projects: [], entries: [], unmapped: [], sources: [{ proposalRef: 'ai-skill-1', page: source.page, passage: source.text, field: `skills.${skill}` }] })
     }
     if (process.env.CV_TAILOR_SCRIPTED_ANALYSIS === 'delayed' && isTailoring) await new Promise<void>(resolve => setTimeout(resolve, 30000))

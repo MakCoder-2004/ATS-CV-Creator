@@ -16,6 +16,11 @@ describe('profile AI outgoing projection', () => {
     expect(PROFILE_AI_RESIDUAL_NOTICE).toMatch(/does not make this anonymous/i)
   })
 
+  it('rejects a schema-valid but unsupported replacement skill value', () => {
+    const wrongFact = { contact: undefined, skills: [{ name: 'Rust', category: 'Technical', proposalRef: 'skill:0' }], experience: [], projects: [], entries: [], unmapped: [], sources: [{ proposalRef: 'skill:0', page: 1, passage: 'Skills: TypeScript', field: 'skills.Rust' }] }
+    expect(() => validateProfileAiDraft(proposal, wrongFact as never, () => '6cfd85b9-3946-452e-a227-787adf9007a6')).toThrow(/not present in its cited CV passages/)
+  })
+
   it('rejects a factual passage attributed to a different source role', () => {
     const source = profilePdfProposalSchema.parse({
       skills: [], experience: [
