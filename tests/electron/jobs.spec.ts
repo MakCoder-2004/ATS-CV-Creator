@@ -8,7 +8,7 @@ test('saved jobs follow the design-system list, support editing, and reopen for 
   const userData = mkdtempSync(join(tmpdir(), 'cv-tailor-jobs-'))
   let running: ElectronApplication | undefined
   const launch = async () => {
-    running = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData } })
+    running = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData, CV_TAILOR_SCRIPTED_POSTING_FETCH: '1', CV_TAILOR_SCRIPTED_OPEN_ORIGINAL: '1' } })
     return running
   }
   try {
@@ -19,9 +19,31 @@ test('saved jobs follow the design-system list, support editing, and reopen for 
     await expect(page.locator('.saved-jobs-empty')).toBeVisible()
     await expect(page.getByRole('heading', { name: 'Your first job starts here' })).toBeVisible()
     await page.locator('.saved-jobs-heading').getByRole('button', { name: 'New job' }).click()
-    await expect(page.getByRole('dialog')).toBeVisible()
-    await page.getByRole('button', { name: 'Cancel' }).click()
-    await expect(page.getByRole('dialog')).toBeHidden()
+    await expect(page.locator('.saved-jobs-intake')).toBeVisible()
+    await expect(page.getByRole('dialog')).toHaveCount(0)
+    await page.getByRole('button', { name: 'Import from link' }).click()
+    await page.getByLabel('Public Lever posting link').fill('https://example.test/jobs/123')
+    await expect(page.getByText('Source hostname: example.test')).toBeVisible()
+    await page.getByRole('button', { name: 'Fetch posting' }).click()
+    await expect(page.getByRole('alert')).toContainText(/Lever job-detail link/i)
+    await page.getByRole('button', { name: 'Open original posting' }).click()
+    await expect(page.getByRole('alert')).toContainText(/validated HTTPS Lever posting/i)
+    await page.getByLabel('Public Lever posting link').fill('https://jobs.lever.co/example-board/smoke-id')
+    await page.getByRole('button', { name: 'Open original posting' }).click()
+    await expect(page.getByRole('status')).toContainText('Opened the posting in your default browser.')
+    await page.getByRole('button', { name: 'Fetch posting' }).click()
+    await expect(page.getByRole('heading', { name: 'Temporary posting import preview' })).toBeVisible({ timeout: 10000 })
+    await expect(page.getByLabel('Job title')).toHaveValue('Synthetic Reliability Engineer')
+    await expect(page.getByLabel('Company')).toHaveValue('Example Research')
+    await expect(page.getByText(/Saving is not available yet/)).toBeVisible()
+    await expect(page.locator('.saved-job-row')).toHaveCount(0)
+    await page.setViewportSize({ width: 375, height: 812 })
+    const narrowIntake = await page.locator('.saved-jobs-page').evaluate(element => ({ scrollWidth: element.scrollWidth, clientWidth: element.clientWidth }))
+    expect(narrowIntake.scrollWidth).toBeLessThanOrEqual(narrowIntake.clientWidth)
+    await expect(page.getByRole('button', { name: 'Paste posting text instead' })).toBeVisible()
+    await page.setViewportSize({ width: 1280, height: 900 })
+    await page.getByRole('button', { name: 'Paste posting text instead' }).click()
+    await expect(page.locator('.saved-jobs-intake')).toBeVisible()
     await page.getByRole('button', { name: 'Save job' }).click()
     await expect(page.getByRole('alert')).toContainText(/blank|title/i)
     await expect(page.getByLabel('Job title')).toHaveAttribute('aria-invalid', 'true')
@@ -51,12 +73,13 @@ test('saved jobs follow the design-system list, support editing, and reopen for 
     await page.getByRole('button', { name: 'Cancel' }).click()
 
     await page.locator('.saved-jobs-heading').getByRole('button', { name: 'New job' }).click()
-    await expect(page.getByRole('dialog')).toBeVisible()
+    await expect(page.locator('.saved-jobs-intake')).toBeVisible()
+    await expect(page.getByRole('dialog')).toHaveCount(0)
     await page.getByLabel('Job title').fill('Fictional Product Analyst')
     await page.getByLabel('Company').fill('Contoso Labs')
     await page.getByLabel('Posting and requirements').fill('Review fictional product metrics and share findings.')
     await page.getByRole('button', { name: 'Save job' }).click()
-    await expect(page.getByRole('dialog')).toBeHidden()
+    await expect(page.locator('.saved-jobs-intake')).toHaveCount(0)
     await expect(page.locator('.saved-job-row')).toHaveCount(2)
 
     const firstTailor = page.locator('.saved-job-row').filter({ hasText: 'Fictional Platform Engineer' }).getByRole('button', { name: 'Open posting' })
@@ -92,6 +115,31 @@ test('saved jobs follow the design-system list, support editing, and reopen for 
     await expect(reopenedPage.locator('.posting-overview').getByText('Fictional Product Analyst')).toHaveCount(0)
     await reopened.close()
     running = undefined
+  } finally {
+    await running?.close()
+    await rm(userData, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 })
+  }
+})
+
+test('switching to paste text supersedes a late scripted posting response', async () => {
+  const userData = mkdtempSync(join(tmpdir(), 'cv-tailor-fetch-supersede-'))
+  let running: ElectronApplication | undefined
+  try {
+    running = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData, CV_TAILOR_SCRIPTED_POSTING_FETCH: 'delayed' } })
+    const page = await running.firstWindow()
+    await expect(page.locator('[data-ui-ready="true"]')).toBeVisible()
+    await page.getByRole('button', { name: 'Saved jobs', exact: true }).click()
+    await page.locator('.saved-jobs-heading').getByRole('button', { name: 'New job' }).click()
+    await page.getByRole('button', { name: 'Import from link' }).click()
+    await page.getByLabel('Public Lever posting link').fill('https://jobs.lever.co/example-board/late-response')
+    await page.getByRole('button', { name: 'Fetch posting' }).click()
+    await expect(page.getByRole('button', { name: 'Cancel fetch' })).toBeEnabled()
+    await page.getByRole('button', { name: 'Paste posting text instead' }).click()
+    await expect(page.getByLabel('Posting and requirements')).toBeVisible()
+    await page.waitForTimeout(1_000)
+    await expect(page.getByRole('heading', { name: 'Temporary posting import preview' })).toHaveCount(0)
+    await expect(page.getByLabel('Posting and requirements')).toHaveValue('')
+    await expect(page.locator('.saved-job-row')).toHaveCount(0)
   } finally {
     await running?.close()
     await rm(userData, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 })

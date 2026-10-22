@@ -35,6 +35,8 @@ import { createWorkspaceBackupEngine } from './workspace-backup'
 import type { WorkspaceBackupEngine } from '../shared/workspace-backup'
 import { generationRecoverySnapshotSchema } from '../shared/generation-recovery'
 import { profilePdfProposalSchema, type ProfilePdfProposal } from '../shared/profile-pdf-import'
+import { postingFetchStateSchema } from '../shared/posting-import'
+import { fetchLeverPosting, validateLeverPostingUrl, type SafePostingFetchOptions } from './safe-posting-fetch'
 
 export interface SecureStorage {
   isEncryptionAvailable(): boolean
@@ -77,11 +79,12 @@ function preserveKnownFindings(checked: ReturnType<typeof checkDraftFacts>, prio
   return factualCheckReportSchema.parse({ ...checked, passed: checked.passed && known.length === 0, findings })
 }
 
-export function createWorkbench(userData: string, secureStorage: SecureStorage = unavailableSecureStorage, scriptedTransport?: AnalysisTransport, recoveryHooks?: { beforeGraphCheckpoint?: (metadata: import('@langchain/langgraph').CheckpointMetadata) => void }): { api: WorkbenchStorageAPI; authorizeOutboundPayload<T>(runId: string, payload: T): T; backup: WorkspaceBackupEngine; hasActiveWork(): boolean; close(): void } {
+export function createWorkbench(userData: string, secureStorage: SecureStorage = unavailableSecureStorage, scriptedTransport?: AnalysisTransport, recoveryHooks?: { beforeGraphCheckpoint?: (metadata: import('@langchain/langgraph').CheckpointMetadata) => void }, safePostingFetchOptions?: SafePostingFetchOptions): { api: WorkbenchStorageAPI; authorizeOutboundPayload<T>(runId: string, payload: T): T; backup: WorkspaceBackupEngine; hasActiveWork(): boolean; close(): void } {
   mkdirSync(userData, { recursive: true })
   const db = new Database(join(userData, 'workbench.sqlite'))
   db.pragma('journal_mode = WAL')
   const graphCheckpointer = new SqliteCheckpointSaver(db, recoveryHooks?.beforeGraphCheckpoint)
+  const postingFetches = new Map<string, { controller: AbortController; state: ReturnType<typeof postingFetchStateSchema.parse> }>()
   db.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY);
     CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS encrypted_credentials (key TEXT PRIMARY KEY, ciphertext TEXT NOT NULL);
@@ -779,6 +782,42 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
         return experienceMutationResultSchema.parse({ ok: true, value: readExperience() })
       })
       return tx()
+    },
+    async startPostingFetch(input: string) {
+      if (!validateLeverPostingUrl(input)) throw new Error('Only a named HTTPS Lever job-detail link is supported. Paste posting text instead for other sources.')
+      if ([...postingFetches.values()].some(fetch => fetch.state.status === 'fetching')) throw new Error('A posting fetch is already active. Cancel it or wait for it to finish.')
+      while (postingFetches.size >= 5) {
+        const expired = [...postingFetches.entries()].find(([, fetch]) => fetch.state.status !== 'fetching')
+        if (!expired) throw new Error('Temporary posting previews are full. Close an earlier preview and try again.')
+        postingFetches.delete(expired[0])
+      }
+      const token = randomUUID(), controller = new AbortController()
+      postingFetches.set(token, { controller, state: { status: 'fetching' } })
+      void fetchLeverPosting(input, { ...safePostingFetchOptions, signal: controller.signal }).then(preview => {
+        const current = postingFetches.get(token)
+        if (!current || current.controller.signal.aborted) return
+        const incomplete = preview.notices.some(notice => notice.includes('preview is incomplete')) || !preview.title || !preview.company || !preview.description
+        current.state = incomplete ? { status: 'incomplete', preview } : { status: 'ready', preview }
+      }).catch(error => {
+        const current = postingFetches.get(token)
+        if (!current) return
+        current.state = controller.signal.aborted ? { status: 'cancelled' } : { status: 'failed', message: error instanceof Error ? error.message : 'The posting could not be fetched. Open it or paste posting text instead.' }
+      })
+      return { token }
+    },
+    async readPostingPreview(token: string) {
+      const checked = uuidSchema.safeParse(token)
+      if (!checked.success) return postingFetchStateSchema.parse({ status: 'failed', message: 'This temporary preview is no longer available.' })
+      return postingFetchStateSchema.parse(postingFetches.get(checked.data)?.state ?? { status: 'failed', message: 'This temporary preview is no longer available.' })
+    },
+    async cancelPostingFetch(token: string) {
+      const checked = uuidSchema.safeParse(token)
+      if (!checked.success) return { ok: false }
+      const fetch = postingFetches.get(checked.data)
+      if (!fetch) return { ok: false }
+      fetch.controller.abort()
+      fetch.state = { status: 'cancelled' }
+      return { ok: true }
     },
     async saveJob(input) {
       const { id: _id, ...jobInput } = input
@@ -1709,5 +1748,5 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
     applyRestore(token, writeSafety) { assertIdle(); return backupEngine.applyRestore(token, writeSafety) },
     cancelRestore(token) { return backupEngine.cancelRestore(token) }
   }
-  return { api, authorizeOutboundPayload, backup, hasActiveWork: () => activeAnalysisByJob.size > 0 || activeProfileAiRuns.size > 0, close: () => db.close() }
+  return { api, authorizeOutboundPayload, backup, hasActiveWork: () => activeAnalysisByJob.size > 0 || activeProfileAiRuns.size > 0 || [...postingFetches.values()].some(fetch => fetch.state.status === 'fetching'), close: () => { for (const fetch of postingFetches.values()) fetch.controller.abort(); postingFetches.clear(); db.close() } }
 }

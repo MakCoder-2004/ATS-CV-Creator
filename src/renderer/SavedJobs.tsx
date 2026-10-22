@@ -14,8 +14,15 @@ export function SavedJobs({ jobs, activeJob, onSaved, onOpened, onNavigate }: { 
   const [messageError, setMessageError] = useState(false)
   const [busy, setBusy] = useState(false)
   const [dialogOpen, setDialogOpen] = useState(false)
+  const [intakeOpen, setIntakeOpen] = useState(false)
   const [draftLabels, setDraftLabels] = useState<Record<string, DraftLabel>>({})
+  const [captureMode, setCaptureMode] = useState<'manual' | 'link'>('manual')
+  const [sourceUrl, setSourceUrl] = useState('')
+  const [fetching, setFetching] = useState(false)
+  const [fetchToken, setFetchToken] = useState<string>()
+  const [preview, setPreview] = useState<import('../shared/posting-import').PostingPreview | null>(null)
   const dialogRef = useRef<HTMLDialogElement>(null)
+  const fetchOperationRef = useRef(0)
   const titleRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -48,19 +55,41 @@ export function SavedJobs({ jobs, activeJob, onSaved, onOpened, onNavigate }: { 
     return () => { current = false }
   }, [jobs])
 
+  function discardFetchPreview() { fetchOperationRef.current++; if (fetchToken) void window.workbench.cancelPostingFetch(fetchToken); setFetching(false); setFetchToken(undefined); setPreview(null) }
   function closeDialog() { setDialogOpen(false); setErrors({}); setMessage(''); setMessageError(false) }
+  function closeIntake() { discardFetchPreview(); setSourceUrl(''); setCaptureMode('manual'); setIntakeOpen(false); setErrors({}); setMessage(''); setMessageError(false) }
+  async function fetchPosting() {
+    const operation = ++fetchOperationRef.current
+    setFetching(true); setPreview(null); setFetchToken(undefined); setMessage('Fetching one Lever job detail…'); setMessageError(false)
+    try {
+      const { token } = await window.workbench.startPostingFetch(sourceUrl)
+      if (operation !== fetchOperationRef.current) { void window.workbench.cancelPostingFetch(token); return }
+      setFetchToken(token)
+      while (operation === fetchOperationRef.current) {
+        const state = await window.workbench.readPostingPreview(token)
+        if (operation !== fetchOperationRef.current) return
+        if (state.status === 'fetching') { await new Promise(resolve => window.setTimeout(resolve, 150)); continue }
+        if (state.status === 'ready' || state.status === 'incomplete') { setPreview(state.preview); setMessage(state.status === 'incomplete' ? 'The source is incomplete and needs review. Nothing has been saved.' : 'Temporary preview loaded; extraction cannot guarantee completeness. Nothing has been saved.'); setMessageError(state.status === 'incomplete'); break }
+        if (state.status === 'cancelled') { setMessage('Fetch cancelled.'); setMessageError(false); break }
+        setMessage(state.message); setMessageError(true); break
+      }
+    } catch (error) { if (operation === fetchOperationRef.current) { setMessage(error instanceof Error ? error.message : 'Fetch failed. Open the source or paste posting text instead.'); setMessageError(true) } }
+    finally { if (operation === fetchOperationRef.current) setFetching(false) }
+  }
   function newJob() {
     const hasUnfinishedEntry = !editingId && Object.values(input).some(value => value.trim())
     setEditingId(undefined)
     if (!hasUnfinishedEntry) setInput({ title: '', company: '', description: '' })
-    setErrors({}); setMessage(''); setMessageError(false); setDialogOpen(true)
+    discardFetchPreview(); setSourceUrl(''); setCaptureMode('manual')
+    setErrors({}); setMessage(''); setMessageError(false); setDialogOpen(false); setIntakeOpen(true)
+    requestAnimationFrame(() => titleRef.current?.focus())
   }
   async function loadForEdit(id: string) {
     setMessage(''); setMessageError(false)
     try {
       const job = await window.workbench.openJob(id)
       if (!job) { setMessage('This saved job is no longer available. Refresh the list and try again.'); setMessageError(true); return }
-      setEditingId(job.id); setInput({ title: job.title, company: job.company, description: job.description }); setErrors({}); onOpened(job); setDialogOpen(true)
+      closeIntake(); setEditingId(job.id); setInput({ title: job.title, company: job.company, description: job.description }); setErrors({}); onOpened(job); setDialogOpen(true)
     } catch { setMessage('The saved job could not be opened. Try again.'); setMessageError(true) }
   }
   async function openForTailoring(id: string) {
@@ -80,45 +109,54 @@ export function SavedJobs({ jobs, activeJob, onSaved, onOpened, onNavigate }: { 
         setErrors(fieldErrors); setMessage(result.error.message); setMessageError(true)
         return
       }
-      onSaved(result.value); setEditingId(result.value.id); setMessage('Job saved on this device.'); setMessageError(false); setDialogOpen(false)
+      onSaved(result.value); setEditingId(result.value.id); setMessage('Job saved on this device.'); setMessageError(false); setDialogOpen(false); setIntakeOpen(false)
     } catch { setMessage('The job could not be saved. Check the fields and try again.'); setMessageError(true) }
     finally { setBusy(false) }
   }
+  const sourceHostname = (() => { try { return new URL(sourceUrl).hostname } catch { return '' } })()
   const field = (key: keyof JobInput) => ({ value: input[key], onChange: (event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => { setInput(value => ({ ...value, [key]: event.target.value })); setErrors(value => ({ ...value, [key]: '' })) }, 'aria-invalid': !!errors[key], 'aria-describedby': errors[key] ? `job-${key}-error` : undefined })
   const renderFields = () => <div className="form-grid">
     <label>Job title<input id="job-field-title" ref={titleRef} required {...field('title')} />{errors.title && <span id="job-title-error" className="field-error">{errors.title}</span>}</label>
     <label>Company<input id="job-field-company" required {...field('company')} />{errors.company && <span id="job-company-error" className="field-error">{errors.company}</span>}</label>
     <label className="wide-field">Posting and requirements<textarea id="job-field-description" rows={9} required maxLength={30000} {...field('description')} />{errors.description && <span id="job-description-error" className="field-error">{errors.description}</span>}</label>
   </div>
+  const editedJob = editingId ? jobs.find(job => job.id === editingId) : undefined
+  const intakeVisible = intakeOpen || jobs.length === 0
+  const renderIntake = (insideEmptyState = false) => <section className={`saved-jobs-intake${insideEmptyState ? ' is-inside-empty' : ''}`} aria-labelledby="posting-intake-title">
+    <header className="saved-jobs-intake-heading"><div><p className="context">New job</p><h2 id="posting-intake-title">Add a job posting</h2></div>{jobs.length > 0 && <button type="button" className="secondary-button" onClick={closeIntake}>Cancel</button>}</header>
+    <fieldset><legend>Choose how to add a posting</legend><div className="job-dialog-actions"><button type="button" className="secondary-button" aria-pressed={captureMode === 'link'} onClick={() => setCaptureMode('link')}>Import from link</button><button type="button" className="secondary-button" aria-pressed={captureMode === 'manual'} onClick={() => { if (fetching) discardFetchPreview(); setPreview(null); setCaptureMode('manual') }}>Paste posting text instead</button></div></fieldset>
+    {captureMode === 'link' ? <section className="posting-link-entry" aria-label="Import from link"><label htmlFor="posting-source-url">Public Lever posting link</label><input id="posting-source-url" type="url" disabled={fetching} value={sourceUrl} onChange={event => setSourceUrl(event.target.value)} placeholder="https://jobs.lever.co/company/posting-id" /><p>{sourceHostname ? `Source hostname: ${sourceHostname}` : 'Paste a public HTTPS posting link.'} Supported source: named Lever job-detail links only. Fetch contacts the source and exposes your normal network address and request metadata. No profile or model data is sent.</p><div className="job-dialog-actions"><button type="button" className="primary-button" disabled={fetching || !sourceUrl.trim()} onClick={() => void fetchPosting()}>{fetching ? 'Fetching…' : 'Fetch posting'}</button>{fetching && <button type="button" className="secondary-button" disabled={!fetchToken} onClick={() => { discardFetchPreview(); setMessage('Fetch cancelled.'); setMessageError(false) }}>Cancel fetch</button>}<button type="button" className="secondary-button" disabled={fetching || !sourceUrl.trim()} onClick={() => void window.workbench.openPostingSource(sourceUrl).then(result => { setMessage(result.message); setMessageError(false) }).catch(error => { setMessage(String(error)); setMessageError(true) })}>Open original posting</button></div>{message && intakeVisible && <p className={`saved-jobs-message${messageError ? ' is-error' : ''}`} role={messageError ? 'alert' : 'status'}>{message}</p>}{preview && <section className="posting-import-preview" aria-label="Posting import preview"><h3>Temporary posting import preview</h3><p>Submitted: {preview.submittedUrl}</p><p>Fetched from: {preview.finalUrl}</p><div className="posting-preview-fields"><label>Job title<input readOnly value={preview.title} /></label><label>Company<input readOnly value={preview.company ?? 'Unknown — review required'} /></label><label className="wide-field">Extracted posting text<textarea readOnly rows={12} value={preview.description} /></label></div>{preview.notices.map(notice => <p role="status" key={notice}>{notice}</p>)}<p>This is a temporary read-only preview. Saving is not available yet; use manual entry to create a saved job.</p></section>}</section> : <form className="job-dialog-form" onSubmit={event => void save(event)} noValidate>{renderFields()}<p className="job-form-guidance">Manual posting text has unknown source provenance and is saved on this device.</p>{message && intakeVisible && <p className={`saved-jobs-message${messageError ? ' is-error' : ''}`} role={messageError ? 'alert' : 'status'}>{message}</p>}<footer className="job-dialog-actions">{jobs.length > 0 && <button className="secondary-button" type="button" onClick={closeIntake}>Cancel</button>}<button className="primary-button" type="submit" disabled={busy}>{busy ? 'Saving…' : 'Save job'}</button></footer></form>}
+  </section>
 
   return <div className="saved-jobs-page">
     <header className="saved-jobs-heading">
       <div><p className="context">Your applications</p><h1>Give every CV a clear target.</h1><p>Saved postings, drafts, and the evidence behind them.</p></div>
       <button className="primary-button" type="button" onClick={newJob}><Plus size={17} aria-hidden="true" /> New job</button>
     </header>
+    {jobs.length > 0 && intakeOpen && renderIntake()}
     {jobs.length ? <section className="saved-jobs-table" aria-label="Saved jobs"><table><thead><tr><th scope="col">Posting</th><th scope="col">Draft status</th><th scope="col">Next action</th></tr></thead><tbody>
       {jobs.map(job => <tr className="saved-job-row" key={job.id} aria-current={activeJob?.id === job.id ? 'true' : undefined}>
         <td data-label="Posting"><div className="saved-job-description"><div className="saved-job-title"><strong>{job.title}</strong>{activeJob?.id === job.id && <span className="current-target">Current target</span>}</div><span>{job.company}</span><small>Updated {new Date(job.updatedAt).toLocaleDateString()}</small></div></td>
         <td data-label="Draft status"><span className={`draft-status${draftLabels[job.id] === 'Blocked' ? ' is-blocked' : draftLabels[job.id] === 'Approved' ? ' is-approved' : ''}`}>{draftLabels[job.id] ?? 'Checking…'}</span></td>
         <td data-label="Next action"><div className="saved-job-actions"><button className="secondary-button" type="button" aria-label={`Edit ${job.title} posting`} onClick={() => void loadForEdit(job.id)}>Edit</button><button className="text-button" type="button" onClick={() => void openForTailoring(job.id)}>Open posting</button></div></td>
       </tr>)}
-    </tbody></table></section> : <section className="saved-jobs-empty"><FolderOpen size={32} aria-hidden="true" /><div><h2>Your first job starts here</h2><p>Save a posting to set a target for your tailored CV.</p></div>{!dialogOpen && <form className="job-dialog-form" onSubmit={event => void save(event)} noValidate>{renderFields()}<p className="job-form-guidance">Job postings are saved on this device.</p>{message && <p className={`saved-jobs-message${messageError ? ' is-error' : ''}`} role={messageError ? 'alert' : 'status'}>{message}</p>}<footer className="job-dialog-actions"><button className="primary-button" type="submit" disabled={busy}>{busy ? 'Saving…' : 'Save job'}</button></footer></form>}</section>}
+    </tbody></table></section> : <section className="saved-jobs-empty"><FolderOpen size={32} aria-hidden="true" /><div><h2>Your first job starts here</h2><p>Save a posting to set a target for your tailored CV.</p></div>{renderIntake(true)}</section>}
     {jobs.length > 0 && <p className="jobs-history-note">Job postings and their draft revisions stay on this device.</p>}
-    {!dialogOpen && message && jobs.length > 0 && <p className={`saved-jobs-message${messageError ? ' is-error' : ''}`} role={messageError ? 'alert' : 'status'}>{message}</p>}
-    {(jobs.length > 0 || dialogOpen) && <dialog ref={dialogRef} className="job-dialog" aria-labelledby="job-dialog-title" onCancel={event => { event.preventDefault(); closeDialog() }} onClose={() => setDialogOpen(false)}>
-      <header className="job-dialog-heading"><div><p className="context">{editingId ? 'Saved job' : 'New job'}</p><h2 id="job-dialog-title">{editingId ? 'Edit job posting' : 'Add a job posting'}</h2></div><button type="button" className="icon-button" aria-label="Close job form" onClick={closeDialog}>×</button></header>
+    {!dialogOpen && !intakeOpen && message && jobs.length > 0 && <p className={`saved-jobs-message${messageError ? ' is-error' : ''}`} role={messageError ? 'alert' : 'status'}>{message}</p>}
+    {dialogOpen && editingId && <dialog ref={dialogRef} className="job-dialog" aria-labelledby="job-dialog-title" onCancel={event => { event.preventDefault(); closeDialog() }} onClose={() => setDialogOpen(false)}>
+      <header className="job-dialog-heading"><div><p className="context">Saved job</p><h2 id="job-dialog-title">Edit job posting</h2></div><button type="button" className="icon-button" aria-label="Close job form" onClick={closeDialog}>×</button></header>
       <form className="job-dialog-form" onSubmit={event => void save(event)} noValidate>
         {renderFields()}
-        {editingId && activeJob?.id === editingId && <section className="posting-history" aria-label="Posting source and revision history">
+        {editedJob && <section className="posting-history" aria-label="Posting source and revision history">
           <h3>Posting versions</h3>
-          <p><strong>Source snapshot:</strong> {activeJob.sourceSnapshot ? 'Captured source wording is retained.' : 'Unknown — this manual posting has no captured source snapshot.'}</p>
-          {activeJob.sourceSnapshot && <pre>{activeJob.sourceSnapshot.description}</pre>}
+          <p><strong>Source snapshot:</strong> {editedJob.sourceSnapshot ? 'Captured source wording is retained.' : 'Unknown — this manual posting has no captured source snapshot.'}</p>
+          {editedJob.sourceSnapshot && <pre>{editedJob.sourceSnapshot.description}</pre>}
           <p><strong>Working posting:</strong> The editable fields above are the accepted wording.</p>
-          {activeJob.revisions.length > 0 ? <ol>{activeJob.revisions.map(revision => <li key={revision.revision}><h4>Revision {revision.revision} <span>· {revision.provenance === 'manual' ? 'Manual edit' : 'Legacy provenance unknown'}</span></h4><p>{revision.title} — {revision.company}</p><pre>{revision.description}</pre></li>)}</ol> : <p>No accepted revision history is available for this legacy posting.</p>}
+          {editedJob.revisions.length > 0 ? <ol>{editedJob.revisions.map(revision => <li key={revision.revision}><h4>Revision {revision.revision} <span>· {revision.provenance === 'manual' ? 'Manual edit' : 'Legacy provenance unknown'}</span></h4><p>{revision.title} — {revision.company}</p><pre>{revision.description}</pre></li>)}</ol> : <p>No accepted revision history is available for this legacy posting.</p>}
         </section>}
         <p className="job-form-guidance">Job postings are saved on this device.</p>
-        {message && dialogOpen && <p className={`saved-jobs-message${messageError ? ' is-error' : ''}`} role={messageError ? 'alert' : 'status'}>{message}</p>}
-        <footer className="job-dialog-actions"><button className="secondary-button" type="button" onClick={closeDialog}>Cancel</button><button className="primary-button" type="submit" disabled={busy}>{busy ? 'Saving…' : editingId ? 'Save changes' : 'Save job'}</button></footer>
+        {message && <p className={`saved-jobs-message${messageError ? ' is-error' : ''}`} role={messageError ? 'alert' : 'status'}>{message}</p>}
+        <footer className="job-dialog-actions"><button className="secondary-button" type="button" onClick={closeDialog}>Cancel</button><button className="primary-button" type="submit" disabled={busy}>{busy ? 'Saving…' : 'Save changes'}</button></footer>
       </form>
     </dialog>}
   </div>
