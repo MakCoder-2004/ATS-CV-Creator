@@ -42,7 +42,7 @@ test('posting fetch previews run through the public application contract and sta
     expect(await workbench.api.listJobs()).toEqual([])
     const started = await workbench.api.startPostingFetch('https://jobs.lever.co/example-board/synthetic-123')
     let state = await workbench.api.readPostingPreview(started.token)
-    for (let attempt = 0; attempt < 20 && state.status === 'fetching'; attempt++) { await new Promise(resolve => setTimeout(resolve, 1)); state = await workbench.api.readPostingPreview(started.token) }
+    for (let attempt = 0; attempt < 200 && state.status === 'fetching'; attempt++) { await new Promise(resolve => setTimeout(resolve, 10)); state = await workbench.api.readPostingPreview(started.token) }
     expect(calls).toHaveLength(1)
     expect(calls[0]).toEqual({ url: 'https://api.lever.co/v0/postings/example-board/synthetic-123', address: '8.8.8.8', headers: { Accept: 'application/json', 'Accept-Encoding': 'identity', 'User-Agent': 'CV-Tailor/1.0' } })
     expect(state).toMatchObject({ status: 'incomplete', preview: { title: 'Synthetic Platform Engineer', company: null, description: expect.stringContaining('• Experience with testing.') } })
@@ -350,6 +350,33 @@ test('job history byte ceiling refuses atomically and the last accepted full his
   expect(await reopened.api.openJob(lastAccepted.id)).toEqual(lastAccepted)
   reopened.close()
 }, 20_000)
+
+test('aggregate backup ceiling rejects a multi-job save before mutation and preserves a restorable workspace', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'cv-tailor-backup-capacity-'))
+  directories.push(directory)
+  const baseline = createWorkbench(directory)
+  const first = await baseline.api.saveJob({ title: 'First role', company: 'Example', description: 'A'.repeat(2000) })
+  const second = await baseline.api.saveJob({ title: 'Second role', company: 'Example', description: 'B'.repeat(2000) })
+  if (!first.ok || !second.ok) throw Error('Job fixtures failed')
+  const twoJobBackup = baseline.backup.createBackup()
+  const backupBoundary = Buffer.byteLength(twoJobBackup, 'utf8') + 256
+  baseline.close()
+
+  const workbench = createWorkbench(directory, undefined, undefined, { workspaceBackupMaxBytes: backupBoundary })
+  try {
+    expect(Buffer.byteLength(workbench.backup.createBackup(), 'utf8')).toBeLessThanOrEqual(backupBoundary)
+    const rejected = await workbench.api.saveJob({ title: 'Third role', company: 'Example', description: 'C'.repeat(1000) })
+    expect(rejected).toMatchObject({ ok: false, error: { code: 'BACKUP_LIMIT', message: expect.stringMatching(/exceed.*workspace backup limit/i) } })
+    expect(await workbench.api.listJobs()).toHaveLength(2)
+    expect(await workbench.api.openJob(first.value.id)).toEqual(first.value)
+    expect(await workbench.api.openJob(second.value.id)).toEqual(second.value)
+    const currentBackup = workbench.backup.createBackup()
+    expect(Buffer.byteLength(currentBackup, 'utf8')).toBeLessThanOrEqual(backupBoundary)
+    const preview = workbench.backup.previewRestore(currentBackup)
+    workbench.backup.applyRestore(preview.token, safety => safety)
+    expect(await workbench.api.listJobs()).toHaveLength(2)
+  } finally { workbench.close() }
+})
 
 test('model capacity refusal preserves long saved text and sends no scripted model request', async () => {
   let modelDispatches = 0

@@ -25,8 +25,10 @@ const hash = (value: string) => createHash('sha256').update(value, 'utf8').diges
 
 type TableBackup = { schema: string; rows: Array<Record<string, unknown>> }
 type Pending = { input: ReturnType<typeof workspaceBackupSchema.parse>; token: string }
+export class WorkspaceBackupCapacityError extends Error { constructor(message: string) { super(message); this.name = 'WorkspaceBackupCapacityError' } }
 
-export function createWorkspaceBackupEngine(db: Database.Database): WorkspaceBackupEngine {
+export function createWorkspaceBackupEngine(db: Database.Database, maxBackupBytes = MAX_WORKSPACE_BACKUP_BYTES): WorkspaceBackupEngine {
+  if (!Number.isSafeInteger(maxBackupBytes) || maxBackupBytes < 1) throw new Error('Workspace backup byte ceiling must be a positive safe integer.')
   const pending = new Map<string, Pending>()
   const tableSchema = (name: string): string => {
     const row = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name=?").get(name) as { sql: string } | undefined
@@ -76,6 +78,33 @@ export function createWorkspaceBackupEngine(db: Database.Database): WorkspaceBac
         }
       }
     }
+  }
+  const buildSnapshot = (jobOverride?: import('../shared/workspace-backup').WorkspaceJobBackupRow) => {
+    const names = actualTables()
+    const tables = Object.fromEntries(names.map(name => {
+      const maxRows = WORKSPACE_BACKUP_TABLE_ROW_LIMITS[name]!
+      const currentCount = (db.prepare(`SELECT COUNT(*) AS count FROM "${name}"`).get() as { count: number }).count
+      const existing = name === 'jobs' && jobOverride ? db.prepare('SELECT 1 FROM jobs WHERE id = ?').get(jobOverride.id) !== undefined : false
+      const count = currentCount + (name === 'jobs' && jobOverride && !existing ? 1 : 0)
+      if (count > maxRows) throw new WorkspaceBackupCapacityError(`Workspace table ${name} would exceed its ${maxRows}-row backup safety limit; nothing was saved.`)
+      const rows = rowsFor(name)
+      if (name === 'jobs' && jobOverride) {
+        const replacement = { id: jobOverride.id, created_at: jobOverride.created_at, updated_at: jobOverride.updated_at, data: jobOverride.data }
+        const index = rows.findIndex(row => row.id === jobOverride.id)
+        if (index < 0) rows.push(replacement)
+        else rows[index] = replacement
+      }
+      return [name, { schema: tableSchema(name), rows }]
+    }))
+    const snapshot = { format: 'cv-tailor-workspace-backup', version: 2 as const, createdAt: new Date().toISOString(), warning: workspaceBackupWarning, tables }
+    validateRawBounds(snapshot)
+    const encoded = JSON.stringify(snapshot)
+    if (Buffer.byteLength(encoded, 'utf8') > maxBackupBytes) {
+      const limitMessage = `The ${Math.round(maxBackupBytes / (1024 * 1024))} MiB workspace backup limit would be exceeded.`
+      if (jobOverride) throw new WorkspaceBackupCapacityError(`This job change would exceed ${limitMessage} Nothing was saved and no existing history was deleted; export the current workspace or use a shorter working posting.`)
+      throw new Error(`Backup exceeds ${limitMessage}`)
+    }
+    return { snapshot, encoded }
   }
   const validateDomainRows = (backup: ReturnType<typeof workspaceBackupSchema.parse>) => {
     const rows = backup.tables
@@ -144,24 +173,12 @@ export function createWorkspaceBackupEngine(db: Database.Database): WorkspaceBac
       ? hash(JSON.stringify(rowsFor('encrypted_credentials'))) : null
   })
   const createBackup = () => {
-    const names = actualTables()
-    for (const name of names) {
-      const maxRows = WORKSPACE_BACKUP_TABLE_ROW_LIMITS[name]!
-      const count = (db.prepare(`SELECT COUNT(*) AS count FROM "${name}"`).get() as { count: number }).count
-      if (count > maxRows) throw new Error(`Workspace table ${name} exceeds its ${maxRows}-row backup safety limit.`)
-    }
-    const snapshot = {
-      format: 'cv-tailor-workspace-backup', version: 2 as const,
-      createdAt: new Date().toISOString(), warning: workspaceBackupWarning,
-      tables: Object.fromEntries(names.map(name => [name, { schema: tableSchema(name), rows: rowsFor(name) }]))
-    }
-    validateRawBounds(snapshot)
-    const result = JSON.stringify(snapshot)
-    validate(result)
-    return result
+    const { encoded } = buildSnapshot()
+    validate(encoded)
+    return encoded
   }
   const validate = (text: string) => {
-    if (Buffer.byteLength(text, 'utf8') > MAX_WORKSPACE_BACKUP_BYTES) throw new Error('Backup exceeds the 64 MiB workspace safety limit; no workspace data was changed.')
+    if (Buffer.byteLength(text, 'utf8') > maxBackupBytes) throw new Error(`Backup exceeds the ${Math.round(maxBackupBytes / (1024 * 1024))} MiB workspace safety limit.`)
     let parsed: unknown
     try { parsed = JSON.parse(text) } catch { throw new Error('Backup is invalid or incompatible.') }
     validateRawBounds(parsed)
@@ -259,6 +276,14 @@ export function createWorkspaceBackupEngine(db: Database.Database): WorkspaceBac
     return backup
   }
   return {
+    assertJobSaveFits(row) {
+      try { buildSnapshot(row) }
+      catch (error) {
+        if (error instanceof WorkspaceBackupCapacityError) throw error
+        const detail = error instanceof Error ? error.message : 'backup validation failed'
+        throw new WorkspaceBackupCapacityError(`This job change would exceed a workspace backup safety limit (${detail}). Nothing was saved and no existing history was deleted.`)
+      }
+    },
     createBackup,
     previewRestore(input) {
       const backup = validate(input)

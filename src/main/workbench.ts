@@ -31,7 +31,7 @@ import { factualCheckReportSchema } from '../shared/factual-report'
 import { qualificationCoverage, supportedCoverageTerms } from './qualification-coverage'
 import { createCanonicalDocument, documentFitReportSchema, type DocumentFitReport } from '../shared/document'
 import { SqliteCheckpointSaver } from './sqlite-checkpoint'
-import { createWorkspaceBackupEngine } from './workspace-backup'
+import { createWorkspaceBackupEngine, WorkspaceBackupCapacityError } from './workspace-backup'
 import type { WorkspaceBackupEngine } from '../shared/workspace-backup'
 import { generationRecoverySnapshotSchema } from '../shared/generation-recovery'
 import { profilePdfProposalSchema, type ProfilePdfProposal } from '../shared/profile-pdf-import'
@@ -79,7 +79,7 @@ function preserveKnownFindings(checked: ReturnType<typeof checkDraftFacts>, prio
   return factualCheckReportSchema.parse({ ...checked, passed: checked.passed && known.length === 0, findings })
 }
 
-export function createWorkbench(userData: string, secureStorage: SecureStorage = unavailableSecureStorage, scriptedTransport?: AnalysisTransport, recoveryHooks?: { beforeGraphCheckpoint?: (metadata: import('@langchain/langgraph').CheckpointMetadata) => void; modelCatalogFetcher?: typeof fetch }, safePostingFetchOptions?: SafePostingFetchOptions): { api: WorkbenchStorageAPI; authorizeOutboundPayload<T>(runId: string, payload: T): T; backup: WorkspaceBackupEngine; hasActiveWork(): boolean; close(): void } {
+export function createWorkbench(userData: string, secureStorage: SecureStorage = unavailableSecureStorage, scriptedTransport?: AnalysisTransport, recoveryHooks?: { beforeGraphCheckpoint?: (metadata: import('@langchain/langgraph').CheckpointMetadata) => void; modelCatalogFetcher?: typeof fetch; workspaceBackupMaxBytes?: number }, safePostingFetchOptions?: SafePostingFetchOptions): { api: WorkbenchStorageAPI; authorizeOutboundPayload<T>(runId: string, payload: T): T; backup: WorkspaceBackupEngine; hasActiveWork(): boolean; close(): void } {
   mkdirSync(userData, { recursive: true })
   const db = new Database(join(userData, 'workbench.sqlite'))
   db.pragma('journal_mode = WAL')
@@ -867,6 +867,11 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
         const record = jobRecordSchema.parse({ ...parsed.data, id: input.id ?? randomUUID(), createdAt: existingRow?.created_at ?? now, updatedAt: changed ? now : prior!.updatedAt, provenance: changed ? 'manual' : prior?.provenance ?? 'manual', sourceSnapshot: prior?.sourceSnapshot ?? null, revisions })
         const serializedRecord = JSON.stringify(record)
         if (Buffer.byteLength(serializedRecord, 'utf8') > MAX_JOB_RECORD_UTF8_BYTES) return jobSaveResultSchema.parse({ ok: false, error: { code: 'HISTORY_SIZE_LIMIT', message: 'This saved job and its complete revision history exceed the 4 MiB per-job backup limit. Nothing was changed and no history was deleted.', fieldErrors: { description: 'Review the posting revision history limit; existing versions remain intact.' } } })
+        try { backupEngine.assertJobSaveFits({ id: record.id, created_at: record.createdAt, updated_at: record.updatedAt, data: serializedRecord }) }
+        catch (error) {
+          if (error instanceof WorkspaceBackupCapacityError) return jobSaveResultSchema.parse({ ok: false, error: { code: 'BACKUP_LIMIT', message: error.message, fieldErrors: { description: 'Workspace backup capacity would be exceeded. No saved posting or history was changed.' } } })
+          throw error
+        }
         db.prepare('INSERT INTO jobs (id, created_at, updated_at, data) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET updated_at=excluded.updated_at, data=excluded.data').run(record.id, record.createdAt, record.updatedAt, serializedRecord)
         if (changed && prior) {
           const unresolved = (db.prepare('SELECT COUNT(*) AS count FROM provider_attempt_outcomes WHERE checkpointed_at IS NULL AND run_id IN (SELECT run_id FROM generation_recovery WHERE job_id = ?)').get(record.id) as { count: number }).count
@@ -1768,9 +1773,10 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
     }
     return outboundEngine.authorizePayload(runId, consent.bundle, payload)
   }
-  const backupEngine = createWorkspaceBackupEngine(db)
+  const backupEngine = createWorkspaceBackupEngine(db, recoveryHooks?.workspaceBackupMaxBytes)
   const assertIdle = () => { if (activeAnalysisByJob.size) throw new Error('A cloud operation is active. Cancel or finish it before backing up or restoring.') }
   const backup: WorkspaceBackupEngine = {
+    assertJobSaveFits(row) { return backupEngine.assertJobSaveFits(row) },
     createBackup() { assertIdle(); return backupEngine.createBackup() },
     previewRestore(input) { assertIdle(); return backupEngine.previewRestore(input) },
     applyRestore(token, writeSafety) { assertIdle(); return backupEngine.applyRestore(token, writeSafety) },
