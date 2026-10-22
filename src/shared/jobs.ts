@@ -54,7 +54,7 @@ export type JobRecord = z.infer<typeof jobRecordSchema>
 const releasedV2JobInputSchema = z.object({ title: requiredText(200), company: requiredText(200), description: requiredText(30000) }).strict()
 const releasedV2RevisionSchema = releasedV2JobInputSchema.extend({ revision: z.number().int().positive(), acceptedAt: z.string().datetime(), provenance: z.enum(['manual', 'legacy-unknown', 'imported']) }).strict()
 const releasedV2SourceSnapshotSchema = z.object({
-  title: requiredText(200), company: requiredText(200).nullable(), description: requiredText(30000), submittedUrl: z.string().url(), finalUrl: z.string().url(), sourceIdentity: z.string().min(1).max(500), capturedAt: z.string().datetime(), extractionMethod: z.literal('lever-json-v1'), extractionVersion: z.literal(1),
+  title: requiredText(200), company: requiredText(200).nullable(), description: requiredText(30000), submittedUrl: z.string().url(), finalUrl: z.string().url(), sourceIdentity: z.string().min(1).max(500), capturedAt: z.string().datetime(), extractionMethod: z.enum(['lever-json-v1', 'lever-html-jsonld-v1', 'lever-html-static-v1']), extractionVersion: z.literal(1),
   hashes: z.object({ title: z.string().length(64), company: z.string().length(64).nullable(), description: z.string().length(64) }).strict(),
   fieldOrigins: z.object({ title: z.enum(['source', 'user-correction']), company: z.enum(['source', 'user-correction']), description: z.enum(['source', 'user-correction']) }).strict()
 }).strict()

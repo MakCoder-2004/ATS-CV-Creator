@@ -143,6 +143,75 @@ test('released version-2 backups upgrade optional posting details to honest unkn
   expect(restored?.revisions[0].optionalDetails.compensation).toMatchObject({ value: null, origin: 'unknown' })
 })
 
+test('released v2 backups retain JSON and both HTML extraction provenance routes through v3 restore', async () => {
+  const { dir } = fixture()
+  const fullText = `Responsibilities\n${'Build reliable fictional services with careful collaboration and clear operational practices. '.repeat(4)}\nRequirements\n• Testing experience.\n• Clear written communication.`
+  const conflictHtml = readFileSync(join(process.cwd(), 'tests/fixtures/posting-import-feasibility/lever-hosted-html-conflict.synthetic.html'), 'utf8')
+  const staticHtml = readFileSync(join(process.cwd(), 'tests/fixtures/posting-import-feasibility/lever-hosted-html-static-complete.synthetic.html'), 'utf8')
+  const wb = createWorkbench(dir, undefined, undefined, undefined, {
+    lookup: async () => [{ address: '8.8.8.8', family: 4 }], wait: async () => {}, now: (() => { let value = 100_000; return () => value += 2_000 })(),
+    request: async url => {
+      const id = url.pathname.split('/').at(-1)
+      if (url.hostname === 'jobs.lever.co' && id === 'html-jsonld') return { status: 200, headers: { 'content-type': 'text/html' }, body: Buffer.from(conflictHtml) }
+      if (url.hostname === 'jobs.lever.co' && id === 'html-static') return { status: 200, headers: { 'content-type': 'text/html' }, body: Buffer.from(staticHtml) }
+      return { status: 200, headers: { 'content-type': 'application/json' }, body: Buffer.from(JSON.stringify({ id, text: 'JSON Systems Engineer', company: 'Example JSON Employer', descriptionPlain: fullText, lists: [{ text: 'Requirements', content: '<li>Testing experience.</li>' }] })) }
+    }
+  })
+  instances.push(wb)
+  const records: Array<{ id: string; method: string; sourceHash: string; workingHash: string; sourceText: string; workingText: string }> = []
+  try {
+    for (const [route, id, expectedMethod] of [
+      ['api', 'json-detail', 'lever-json-v1'],
+      ['html', 'html-jsonld', 'lever-html-jsonld-v1'],
+      ['html', 'html-static', 'lever-html-static-v1']
+    ] as const) {
+      const url = route === 'api' ? `https://api.lever.co/v0/postings/example-board/${id}` : `https://jobs.lever.co/example-board/${id}`
+      const { token } = await wb.api.startPostingFetch(url)
+      let state = await wb.api.readPostingPreview(token)
+      for (let attempt = 0; attempt < 300 && state.status === 'fetching'; attempt++) { await new Promise(resolve => setTimeout(resolve, 10)); state = await wb.api.readPostingPreview(token) }
+      if (state.status !== 'ready' && state.status !== 'incomplete') throw new Error(`No preview for ${id}: ${JSON.stringify(state)}`)
+      expect(state.preview.extractionMethod).toBe(expectedMethod)
+      const input = { title: state.preview.title, company: state.preview.company ?? 'Reviewed employer', description: state.preview.description, optionalDetails: state.preview.optionalDetails }
+      const edited = await wb.api.updatePostingPreview(token, 0, input)
+      if (!edited.ok || edited.revision === undefined) throw new Error(edited.message ?? 'Preview edit failed.')
+      const conflictResolutions = Object.fromEntries(state.preview.conflicts.map(conflict => {
+        const selected = conflict.field === 'title' ? input.title : conflict.field === 'company' ? input.company : conflict.field === 'description' ? input.description : input.optionalDetails[conflict.field].value
+        const candidate = conflict.values.find(value => value.value === selected)
+        if (!candidate) throw new Error(`No source value matches selected ${conflict.field} for ${id}.`)
+        return [conflict.id, candidate.value]
+      }))
+      expect(await wb.api.reviewPostingPreview(token, edited.revision, { completenessConfirmed: true, conflictResolutions })).toMatchObject({ ok: true })
+      const saved = await wb.api.acceptPostingImport(token, edited.revision)
+      if (!saved.ok) throw new Error(saved.error.message)
+      records.push({ id: saved.value.id, method: expectedMethod, sourceHash: saved.value.sourceSnapshot!.hashes.description, workingHash: createHash('sha256').update(saved.value.description).digest('hex'), sourceText: saved.value.sourceSnapshot!.description, workingText: saved.value.description })
+    }
+    const v3 = JSON.parse(wb.backup.createBackup())
+    const v2 = structuredClone(v3)
+    v2.version = 2
+    for (const row of v2.tables.jobs.rows) {
+      const job = JSON.parse(row.data)
+      delete job.optionalDetails
+      for (const revision of job.revisions) delete revision.optionalDetails
+      if (job.sourceSnapshot) {
+        delete job.sourceSnapshot.optionalDetails
+        delete job.sourceSnapshot.conflicts
+        delete job.sourceSnapshot.fieldOrigins.optionalDetails
+      }
+      row.data = JSON.stringify(job)
+    }
+    const restore = wb.backup.previewRestore(JSON.stringify(v2))
+    wb.backup.applyRestore(restore.token, safetyBackup(dir))
+    for (const record of records) {
+      const restored = await wb.api.openJob(record.id)
+      expect(restored?.sourceSnapshot?.extractionMethod).toBe(record.method)
+      expect(restored?.sourceSnapshot?.description).toBe(record.sourceText)
+      expect(restored?.sourceSnapshot?.hashes.description).toBe(record.sourceHash)
+      expect(restored?.description).toBe(record.workingText)
+      expect(createHash('sha256').update(restored!.description).digest('hex')).toBe(record.workingHash)
+    }
+  } finally { wb.close() }
+}, 30_000)
+
 test('legacy backups bind untagged approved drafts to their accepted posting before later edits', async () => {
   const { dir, workbench } = fixture()
   await workbench.api.saveSkill({ name: 'TypeScript', category: 'Programming' })
