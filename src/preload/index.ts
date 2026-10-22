@@ -123,7 +123,7 @@ const api: WorkbenchAPI = Object.freeze({
     if (typeof url !== 'string' || new TextEncoder().encode(url).length > 2048) throw new Error('The posting link is invalid or too long.')
     return z.object({ token: uuidSchema }).strict().parse(await ipcRenderer.invoke('posting-import:start', url))
   },
-  async acceptPostingImport(token: string, input: JobInput) { return jobSaveResultSchema.parse(await ipcRenderer.invoke('posting-import:accept', uuidSchema.parse(token), jobInputSchema.parse(input))) },
+  async acceptPostingImport(token: string, input: JobInput, review: import('../shared/posting-import').PostingReview) { return jobSaveResultSchema.parse(await ipcRenderer.invoke('posting-import:accept', uuidSchema.parse(token), jobInputSchema.parse(input), review)) },
   async readPostingPreview(token: string) { return postingFetchStateSchema.parse(await ipcRenderer.invoke('posting-import:read', uuidSchema.parse(token))) },
   async cancelPostingFetch(token: string) { return z.object({ ok: z.boolean() }).strict().parse(await ipcRenderer.invoke('posting-import:cancel', uuidSchema.parse(token))) },
   async openPostingSource(url: string) { return z.object({ ok: z.boolean(), message: z.string() }).strict().parse(await ipcRenderer.invoke('posting-import:open-source', url)) },

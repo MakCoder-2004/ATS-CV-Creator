@@ -1,0 +1,13 @@
+{
+  "id": "company-conflict",
+  "text": "Source Engineer",
+  "company": "Example Systems Ltd.",
+  "companyName": "Example Systems Incorporated",
+  "descriptionPlain": "Responsibilities\nBuild and maintain fictional software with a cross-functional example team. Build and maintain fictional software with a cross-functional example team. Build and maintain fictional software with a cross-functional example team. Build and maintain fictional software with a cross-functional example team. Build and maintain fictional software with a cross-functional example team.\nRequirements\nCareful testing and documentation.",
+  "lists": [
+    {
+      "text": "Requirements",
+      "content": "<li>Careful testing and documentation.</li>"
+    }
+  ]
+}

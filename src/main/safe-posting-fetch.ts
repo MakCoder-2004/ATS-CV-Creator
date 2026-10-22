@@ -8,7 +8,7 @@ import { join } from 'node:path'
 import { URL } from 'node:url'
 import { isIP } from 'node:net'
 
-export type PostingPreview = { title: string; company: string | null; description: string; submittedUrl: string; finalUrl: string; notices: string[] }
+export type PostingPreview = import('../shared/posting-import').PostingPreview
 export type Address = { address: string; family: number }
 export type SafePostingFetchOptions = {
   lookup?: (hostname: string) => Promise<Address[]>
@@ -90,7 +90,7 @@ async function decodeBounded(body: Buffer, encoding: string, signal: AbortSignal
   finally { signal.removeEventListener('abort', abort) }
   return Buffer.concat(output, bytes)
 }
-type ExtractedPosting = { title: string; company: string | null; description: string; notices: string[] }
+type ExtractedPosting = { title: string; company: string | null; description: string; notices: string[]; conflicts: import('../shared/posting-import').PostingFieldConflict[] }
 async function extractPostingBounded(text: string, expectedId: string, signal: AbortSignal): Promise<ExtractedPosting> {
   const worker = new Worker(join(__dirname, 'posting-extraction-worker.cjs'), { workerData: { text, expectedId } })
   return await new Promise((resolve, reject) => {

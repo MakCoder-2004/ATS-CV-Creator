@@ -1,6 +1,10 @@
 import { z } from 'zod'
 
-export const postingPreviewSchema = z.object({ title: z.string(), company: z.string().nullable(), description: z.string(), submittedUrl: z.string().url(), finalUrl: z.string().url(), notices: z.array(z.string()) }).strict()
+export const postingFieldConflictSchema = z.object({ id: z.string(), field: z.enum(['title', 'company']), values: z.array(z.object({ value: z.string(), source: z.string() }).strict()).min(2) }).strict()
+export type PostingFieldConflict = z.infer<typeof postingFieldConflictSchema>
+export const postingReviewSchema = z.object({ completenessConfirmed: z.boolean(), conflictResolutions: z.record(z.string(), z.string()) }).strict()
+export type PostingReview = z.infer<typeof postingReviewSchema>
+export const postingPreviewSchema = z.object({ title: z.string(), company: z.string().nullable(), description: z.string(), submittedUrl: z.string().url(), finalUrl: z.string().url(), notices: z.array(z.string()), conflicts: z.array(postingFieldConflictSchema).default([]) }).strict()
 export type PostingPreview = z.infer<typeof postingPreviewSchema>
 export const postingFetchStateSchema = z.discriminatedUnion('status', [
   z.object({ status: z.literal('fetching') }).strict(),

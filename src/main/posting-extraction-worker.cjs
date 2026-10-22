@@ -74,8 +74,14 @@ function extract(text, expectedId) {
   if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('The posting response was not valid posting JSON.')
   if (data.id !== expectedId) throw new Error('The source response did not match the requested posting.')
 
-  const title = typeof data.text === 'string' ? data.text.trim() : ''
-  const company = typeof data.company === 'string' && data.company.trim() ? data.company.trim() : null
+  const title = typeof data.text === 'string' ? data.text.trim() : typeof data.title === 'string' ? data.title.trim() : ''
+  const companyCandidates = [
+    ['Company field', data.company], ['Company name field', data.companyName],
+    ['Hiring organization', data.hiringOrganization && typeof data.hiringOrganization === 'object' ? data.hiringOrganization.name : null]
+  ].filter(([, value]) => typeof value === 'string' && value.trim()).map(([source, value]) => ({ value: value.trim(), source }))
+  const uniqueCompanies = [...new Map(companyCandidates.map(candidate => [candidate.value.toLocaleLowerCase(), candidate])).values()]
+  const company = uniqueCompanies[0]?.value ?? null
+  const conflicts = uniqueCompanies.length > 1 ? [{ id: 'company', field: 'company', values: uniqueCompanies }] : []
   const segments = [], segmentSet = new Set()
   const addSegment = value => {
     if (typeof value !== 'string' || !value.trim()) return
@@ -126,6 +132,7 @@ function extract(text, expectedId) {
   const hasStructuredSections = lists.some(item => item && typeof item === 'object' && typeof item.content === 'string')
   const hasSectionHeadings = /\b(responsibilities|requirements|qualifications|what you(?:'|’)ll do|what we(?:'|’)re looking for)\b/i.test(description)
   const notices = [
+    conflicts.length ? 'The source provides conflicting employer names; choose one before saving.' : '',
     !company ? 'Employer name was not provided by this source; this preview is incomplete.' : '',
     malformedSection ? 'Some structured source sections could not be interpreted; this preview is incomplete.' : '',
     !title ? 'The source did not provide a job title; this preview is incomplete.' : '',
@@ -133,7 +140,7 @@ function extract(text, expectedId) {
     [...description].length < 200 || (!hasStructuredSections && !hasSectionHeadings) ? 'The response lacks enough posting-detail structure to establish complete source text; this preview is incomplete.' : ''
   ].filter(Boolean)
   notices.push('Extraction cannot guarantee posting completeness or that the role remains open. Review the full source before relying on it.')
-  return { title, company, description, notices }
+  return { title, company, description, notices, conflicts }
 }
 
 try {

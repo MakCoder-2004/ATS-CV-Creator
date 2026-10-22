@@ -13,7 +13,7 @@ import type { RegenerationProposal, RegenerationTarget } from './regeneration'
 import type { MutateDraftRecordInput, MutateDraftRecordResult } from './draft-records'
 import type { ProfilePdfProposal, ProfilePdfPreview } from './profile-pdf-import'
 import type { ProfileAiConsentAction, ProfileAiConsentPreview, ProfileAiRunResult } from './profile-ai-structuring'
-import type { PostingFetchState } from './posting-import'
+import type { PostingFetchState, PostingReview } from './posting-import'
 
 export const appearanceSchema = z.enum(['light', 'dark'])
 export type Appearance = z.infer<typeof appearanceSchema>
@@ -67,7 +67,7 @@ export interface WorkbenchAPI {
   saveProject(input: ProjectInput & { id?: string }): Promise<ExperienceMutationResult>
   deleteProject(id: string): Promise<ExperienceMutationResult>
   saveJob(input: JobInput & { id?: string }): Promise<JobSaveResult>
-  acceptPostingImport(token: string, input: JobInput): Promise<JobSaveResult>
+  acceptPostingImport(token: string, input: JobInput, review: PostingReview): Promise<JobSaveResult>
   listJobs(): Promise<JobRecord[]>
   openJob(id: string): Promise<JobRecord | null>
   startPostingFetch(url: string): Promise<{ token: string }>

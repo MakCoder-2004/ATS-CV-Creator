@@ -35,7 +35,7 @@ import { createWorkspaceBackupEngine } from './workspace-backup'
 import type { WorkspaceBackupEngine } from '../shared/workspace-backup'
 import { generationRecoverySnapshotSchema } from '../shared/generation-recovery'
 import { profilePdfProposalSchema, type ProfilePdfProposal } from '../shared/profile-pdf-import'
-import { postingFetchStateSchema } from '../shared/posting-import'
+import { postingFetchStateSchema, postingReviewSchema } from '../shared/posting-import'
 import { fetchLeverPosting, validateLeverPostingUrl, type SafePostingFetchOptions } from './safe-posting-fetch'
 
 export interface SecureStorage {
@@ -800,7 +800,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       void fetchLeverPosting(input, { ...safePostingFetchOptions, signal: controller.signal }).then(preview => {
         const current = postingFetches.get(token)
         if (!current || current.controller.signal.aborted) return
-        const incomplete = preview.notices.some(notice => notice.includes('preview is incomplete')) || !preview.title || !preview.company || !preview.description
+        const incomplete = preview.conflicts.length > 0 || preview.notices.some(notice => notice.includes('preview is incomplete')) || !preview.title || !preview.company || !preview.description
         current.state = incomplete ? { status: 'incomplete', preview } : { status: 'ready', preview }
       }).catch(error => {
         const current = postingFetches.get(token)
@@ -823,21 +823,31 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       fetch.state = { status: 'cancelled' }
       return { ok: true }
     },
-    async acceptPostingImport(token: string, input) {
+    async acceptPostingImport(token: string, input, review) {
+      const checkedReview = postingReviewSchema.safeParse(review)
+      if (!checkedReview.success || !checkedReview.data.completenessConfirmed) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'Confirm that you reviewed and corrected the complete posting before saving.' } })
       const checkedToken = uuidSchema.safeParse(token)
       const pending = checkedToken.success ? postingFetches.get(checkedToken.data) : undefined
       if (!pending) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'This reviewed posting preview is unavailable, incomplete, cancelled, or already used. Fetch it again before saving.' } })
       const pendingState = pending.state
-      const companyOnlyIncomplete = pendingState.status === 'incomplete' && pendingState.preview.title.trim().length > 0 && pendingState.preview.description.trim().length > 0 && pendingState.preview.company === null && pendingState.preview.notices.every(notice => /employer name was not provided|extraction cannot guarantee posting completeness or that the role remains open/i.test(notice))
-      if (pendingState.status !== 'ready' && !companyOnlyIncomplete) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'This reviewed posting preview is incomplete, cancelled, or already used. Resolve missing source content before saving.' } })
+      const sourcePreview = pendingState.status === 'ready' || pendingState.status === 'incomplete' ? pendingState.preview : null
+      const companyOnlyIncomplete = !!sourcePreview && pendingState.status === 'incomplete' && sourcePreview.title.trim().length > 0 && sourcePreview.description.trim().length > 0 && sourcePreview.company === null && sourcePreview.notices.every(notice => /employer name was not provided|extraction cannot guarantee posting completeness or that the role remains open/i.test(notice))
+      const conflictOnlyIncomplete = !!sourcePreview && pendingState.status === 'incomplete' && sourcePreview.conflicts.length > 0 && !!sourcePreview.title.trim() && !!sourcePreview.company?.trim() && !!sourcePreview.description.trim() && sourcePreview.notices.every(notice => /conflicting employer names|extraction cannot guarantee posting completeness or that the role remains open/i.test(notice))
+      if (pendingState.status !== 'ready' && !companyOnlyIncomplete && !conflictOnlyIncomplete) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'This reviewed posting preview is incomplete, cancelled, or already used. Resolve missing source content before saving.' } })
+      if (!sourcePreview) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'This posting preview is no longer saveable. Fetch it again before saving.' } })
       const parsed = jobInputSchema.safeParse(input)
       if (!parsed.success) {
         const fieldErrors: Record<string, string> = {}
         for (const issue of parsed.error.issues) fieldErrors[issue.path.length ? issue.path.join('.') : '_'] = issue.message
         return jobSaveResultSchema.parse({ ok: false, error: { code: 'VALIDATION_ERROR', message: 'Review a title, company, and complete posting description before saving.', fieldErrors } })
       }
-      const source = pendingState.status === 'ready' || pendingState.status === 'incomplete' ? pendingState.preview : null
-      if (!source) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'This posting preview is no longer saveable. Fetch it again before saving.' } })
+      const source = sourcePreview
+      for (const conflict of source.conflicts) {
+        const resolution = checkedReview.data.conflictResolutions[conflict.id]
+        if (!resolution || !conflict.values.some(candidate => candidate.value === resolution)) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: `Resolve the conflicting ${conflict.field} values using one of the source values before saving.` } })
+        if (conflict.field === 'company' && parsed.data.company !== resolution || conflict.field === 'title' && parsed.data.title !== resolution) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: `The saved ${conflict.field} must match the explicitly selected source value.` } })
+      }
+      if (Object.keys(checkedReview.data.conflictResolutions).some(id => !source.conflicts.some(conflict => conflict.id === id))) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'A conflict resolution does not belong to this posting preview.' } })
       if (companyOnlyIncomplete && (parsed.data.title !== source.title || parsed.data.description !== source.description)) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'This source only allows a reviewed employer-name correction; its incomplete posting content cannot be replaced here.' } })
       const sourceIdentity = new URL(source.finalUrl).pathname
       const known = (db.prepare('SELECT data FROM jobs').all() as { data: string }[]).map(row => jobRecordSchema.parse(JSON.parse(row.data)))

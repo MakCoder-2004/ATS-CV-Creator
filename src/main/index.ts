@@ -28,6 +28,7 @@ import { factualCheckReportSchema } from '../shared/factual-report'
 import { regenerationProposalSchema, regenerationResultSchema, regenerationTargetSchema } from '../shared/regeneration'
 import { mutateDraftRecordInputSchema } from '../shared/draft-records'
 import { validateLeverPostingUrl } from './safe-posting-fetch'
+import { postingReviewSchema } from '../shared/posting-import'
 
 let window: BrowserWindow | undefined
 let workspace: ReturnType<typeof createWorkbench> | undefined
@@ -271,14 +272,16 @@ app.whenReady().then(() => {
     return jobRecordSchema.array().parse(await workspace!.api.listJobs())
   })
   ipcMain.handle('posting-import:accept', async (event, ...args: unknown[]) => {
-    trusted(event); if (args.length !== 2) throw new Error('Expected preview token and reviewed posting')
+    trusted(event); if (args.length !== 3) throw new Error('Expected preview token, reviewed posting, and review decisions')
     const input = jobInputSchema.safeParse(args[1])
+    const review = postingReviewSchema.safeParse(args[2])
     if (!input.success) {
       const fieldErrors: Record<string, string> = {}
       for (const issue of input.error.issues) fieldErrors[issue.path.length ? issue.path.join('.') : '_'] = issue.message
       return jobSaveResultSchema.parse({ ok: false, error: { code: 'VALIDATION_ERROR', message: 'Review a title, company, and complete posting description before saving.', fieldErrors } })
     }
-    return jobSaveResultSchema.parse(await workspace!.api.acceptPostingImport(uuidSchema.parse(args[0]), input.data))
+    if (!review.success) return jobSaveResultSchema.parse({ ok: false, error: { code: 'VALIDATION_ERROR', message: 'Confirm the posting review and resolve each source conflict.' } })
+    return jobSaveResultSchema.parse(await workspace!.api.acceptPostingImport(uuidSchema.parse(args[0]), input.data, review.data))
   })
   ipcMain.handle('posting-import:start', async (event, ...args: unknown[]) => {
     trusted(event); if (args.length !== 1 || typeof args[0] !== 'string') throw new Error('Expected a posting link')
