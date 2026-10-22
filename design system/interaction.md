@@ -11,6 +11,16 @@
 - Confirm destructive or hard-to-reverse actions; do not add confirmations to reversible low-risk actions.
 - Profile CV upload review is source-backed and grouped in a full-width list within the existing My profile structure. Keep proposal review/correction/selection distinct from explicit application; never apply implicitly. Any AI analysis is a separate optional action with its own clear, run-specific consent and outgoing-text review; upload and deterministic parsing must not silently invoke AI.
 
+### Saved jobs link intake and refresh
+
+- Pasting a link or opening the intake never starts a request. Keep **Fetch posting**, **Save job**, **Refresh**, and any model-analysis authorization as distinct decisions. Show the hostname before fetch; only report fetch/extraction/save completion after that operation succeeds.
+- Announce distinct fetching, extracting, saving, cancelled and error states through a polite status region without moving focus. Disable unsafe duplicate actions while pending. Cancellation or supersession invalidates the operation so a late response cannot replace the current preview or mutate saved data. Recovery is explicit and preserves entered values where possible; **Retry fetch** performs a new fetch rather than displaying a canned success.
+- Keep the intake temporary until **Save job** is explicitly chosen. Warn before discarding edited preview text and offer clear keep/discard actions; never imply that an unsaved preview is persisted or recoverable. A fetch is not a save, a save is not model consent, and neither starts analysis.
+- Distinguish captured source fields/text from user corrections and working text. Identify missing optional values as unknown; label absent/manual legacy provenance unknown rather than showing unrelated fixture source data. Make the source snapshot, working posting and accepted revisions readable. Conflicts and essential incomplete content need a clear, adjacent resolution before saving.
+- An unchanged duplicate's **Open existing** action opens the existing saved job and does not claim a new save. Refresh compares the previous source, current working version and new source without automatic merging; the existing working version remains intact until explicit acceptance.
+- The manual-text fallback clearly identifies that its source URL/snapshot is unknown when none was captured. Long text remains complete and inspectable; explain an over-limit refusal and never silently truncate or represent a shortened working text as the full source.
+- Capture-method choices implemented as ordinary buttons must remain a semantic button group with visible selected/pressed state and normal Tab/Enter/Space behavior; do not assign tab roles without implementing the expected arrow-key and roving-tab-stop behavior. Keep errors, labels and actions keyboard-reachable at narrow widths.
+
 ## Keyboard and assistive technology
 
 - All controls work with keyboard alone. Tab order follows visible reading order; Enter/Space activates appropriate controls; Escape closes dialogs/popovers where expected. Navigation indicates the current page (`aria-current="page"`) and workflow indicates the current step (`aria-current="step"`).
