@@ -1,12 +1,12 @@
 import { z } from 'zod'
 import { analysisResultSchema, analysisBudgetsSchema } from './posting-analysis'
-import { jobRecordSchema } from './jobs'
+import { jobRecordSchema, POSTING_TEXT_MAX_CODE_POINTS, POSTING_TEXT_MAX_UTF8_BYTES } from './jobs'
 import { contactRecordSchema, profileEntrySchema, profileSnapshotSchema, skillRecordSchema, uuidSchema } from './profile'
 import { experienceRecordSchema, experienceSnapshotSchema, projectRecordSchema } from './experience'
 import { openRouterModelSchema } from './openrouter-settings'
 
 const consentSourceSchema = z.object({
-  job: z.object({ id: uuidSchema, revision: z.union([z.string(), z.number()]), title: z.string().min(1).max(200), company: z.string().min(1).max(200), description: z.string().min(1).max(30000) }).strict(),
+  job: z.object({ id: uuidSchema, revision: z.union([z.string(), z.number()]), title: z.string().min(1).max(200), company: z.string().min(1).max(200), description: z.string().min(1).refine(value => Array.from(value).length <= POSTING_TEXT_MAX_CODE_POINTS && new TextEncoder().encode(value).byteLength <= POSTING_TEXT_MAX_UTF8_BYTES) }).strict(),
   profile: z.object({
     revision: z.array(z.tuple([uuidSchema, z.number().int().positive()])), contact: contactRecordSchema.nullable(),
     experience: z.array(experienceRecordSchema), projects: z.array(projectRecordSchema), skills: z.array(skillRecordSchema),

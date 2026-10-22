@@ -103,6 +103,20 @@ test('complete workspace backup restores draft revisions, evidence, posting, pre
   expect(requests.length).toBe(attemptsBeforeReopen)
 })
 
+test('workspace backup restores full long posting text without truncation', async () => {
+  const { dir, workbench } = fixture()
+  const complete = `Scope:\n${'Unicode ☕ and detailed synthetic requirements.\n'.repeat(1000)}`
+  expect(Array.from(complete).length).toBeGreaterThan(30000)
+  const job = await workbench.api.saveJob({ title: 'Long posting', company: 'Example', description: complete })
+  if (!job.ok) throw new Error(job.error.message)
+  const backup = workbench.backup.createBackup()
+  const preview = workbench.backup.previewRestore(backup)
+  workbench.backup.applyRestore(preview.token, safetyBackup(dir))
+  workbench.close(); instances.pop()
+  const reopened = open(dir)
+  expect((await reopened.api.openJob(job.value.id))?.description).toBe(complete)
+})
+
 test('released version-1 job backups without provenance upgrade to honest legacy records on restore', async () => {
   const { dir, workbench } = fixture()
   const saved = await workbench.api.saveJob({ title: 'Engineer', company: 'Example', description: 'Original wording.' })

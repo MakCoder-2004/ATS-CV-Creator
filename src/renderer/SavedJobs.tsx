@@ -88,7 +88,7 @@ export function SavedJobs({ jobs, activeJob, onSaved, onOpened, onNavigate }: { 
   const renderFields = () => <div className="form-grid">
     <label>Job title<input id="job-field-title" ref={titleRef} required {...field('title')} />{errors.title && <span id="job-title-error" className="field-error">{errors.title}</span>}</label>
     <label>Company<input id="job-field-company" required {...field('company')} />{errors.company && <span id="job-company-error" className="field-error">{errors.company}</span>}</label>
-    <label className="wide-field">Posting and requirements<textarea id="job-field-description" rows={9} required maxLength={30000} {...field('description')} />{errors.description && <span id="job-description-error" className="field-error">{errors.description}</span>}</label>
+    <label className="wide-field">Posting and requirements<textarea id="job-field-description" rows={9} required maxLength={200000} {...field('description')} /><span className="field-hint">Complete posting text is saved up to 200,000 characters and 1 MiB of UTF-8 text. Longer text is rejected without truncation.</span>{errors.description && <span id="job-description-error" className="field-error">{errors.description}</span>}</label>
   </div>
 
   return <div className="saved-jobs-page">

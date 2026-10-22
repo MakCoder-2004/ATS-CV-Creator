@@ -58,14 +58,19 @@ test('opening another job returns only its posting and updating one keeps its id
   reopened.close()
 })
 
-test('manual posting text remains within the established safe limit and rejects overflow without mutation', async () => {
-  const { workbench } = open()
-  const exact = await workbench.api.saveJob({ title: 'Engineer', company: 'Example', description: 'x'.repeat(30000) })
-  expect(exact.ok).toBe(true)
-  const oversized = await workbench.api.saveJob({ title: 'Engineer', company: 'Example', description: 'x'.repeat(30001) })
-  expect(oversized).toMatchObject({ ok: false, error: { code: 'VALIDATION_ERROR', fieldErrors: { description: expect.any(String) } } })
-  expect(await workbench.api.listJobs()).toHaveLength(1)
-  if (!exact.ok) throw Error('exact-limit posting rejected')
-  expect((await workbench.api.openJob(exact.value.id))?.description).toHaveLength(30000)
+test('complete long postings reopen exactly and text above the shared safety ceiling is refused', async () => {
+  const { directory, workbench } = open()
+  const complete = `Requirements:\n${'Unicode ☕ responsibilities and qualifications.\n'.repeat(1100)}`
+  expect(Array.from(complete).length).toBeGreaterThan(30000)
+  const saved = await workbench.api.saveJob({ title: 'Engineer', company: 'Example', description: complete })
+  expect(saved.ok).toBe(true)
+  if (!saved.ok) throw Error(saved.error.message)
   workbench.close()
+
+  const reopened = createWorkbench(directory)
+  expect((await reopened.api.openJob(saved.value.id))?.description).toBe(complete)
+  const oversized = await reopened.api.saveJob({ title: 'Engineer', company: 'Example', description: 'x'.repeat(200001) })
+  expect(oversized).toMatchObject({ ok: false, error: { code: 'VALIDATION_ERROR', fieldErrors: { description: expect.stringMatching(/200,000/) } } })
+  expect((await reopened.api.openJob(saved.value.id))?.description).toBe(complete)
+  reopened.close()
 })
