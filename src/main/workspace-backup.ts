@@ -3,7 +3,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { workspaceBackupSchema, workspaceBackupWarning, type WorkspaceBackupEngine, type WorkspaceRestorePreview } from '../shared/workspace-backup'
 import { contactRecordSchema, skillRecordSchema, profileEntrySchema, evidenceRevisionSchema, uuidSchema } from '../shared/profile'
 import { experienceRecordSchema, projectRecordSchema } from '../shared/experience'
-import { jobRecordSchema } from '../shared/jobs'
+import { jobRecordSchema, legacyDraftTargetBaseline } from '../shared/jobs'
 import { draftRevisionSchema } from '../shared/draft'
 import { analysisResultSchema, analysisBudgetsSchema, postingAnalysisSchema } from '../shared/posting-analysis'
 import { regenerationProposalSchema } from '../shared/regeneration'
@@ -162,13 +162,14 @@ export function createWorkspaceBackupEngine(db: Database.Database): WorkspaceBac
       const upgraded = structuredClone(backup) as typeof backup
       const jobs = new Map((upgraded.tables.jobs?.rows ?? []).map(row => {
         const job = jobRecordSchema.parse(parseJson('jobs', String(row.data)))
-        return [job.id, job.updatedAt] as const
+        return [job.id, legacyDraftTargetBaseline(job)] as const
       }))
       for (const row of upgraded.tables.draft_revisions?.rows ?? []) {
         const stored = parseJson('draft_revisions', String(row.data)) as Record<string, unknown>
         if (typeof stored.targetPostingUpdatedAt === 'string') continue
+        if (!jobs.has(String(row.job_id))) throw new Error('A legacy CV draft has no saved-job target to bind.')
         const baseline = jobs.get(String(row.job_id))
-        if (!baseline) throw new Error('A legacy CV draft has no saved-job target to bind.')
+        if (!baseline) continue
         row.data = JSON.stringify(draftRevisionSchema.parse({ ...stored, pageTarget: stored.pageTarget ?? 1, targetPostingUpdatedAt: baseline }))
       }
       if (!upgraded.tables.schema_migrations!.rows.some(row => row.version === 8)) upgraded.tables.schema_migrations!.rows.push({ version: 8 })

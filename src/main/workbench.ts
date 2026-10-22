@@ -8,7 +8,7 @@ import { appearanceSchema, settingsSchema, type WorkbenchStorageAPI } from '../s
 import { defaultOpenRouterModel, openRouterKeyInputSchema, openRouterModelSchema, type OpenRouterModel } from '../shared/openrouter-settings'
 import { contactInputSchema, contactRecordSchema, evidenceRevisionSchema, profileEntryInputSchema, profileEntrySchema, profileMutationResultSchema, profileSnapshotSchema, skillInputSchema, skillRecordSchema, uuidSchema, type ContactRecord, type EvidenceRevision, type ProfileEntry, type ProfileSnapshot, type SkillRecord } from '../shared/profile'
 import { experienceInputSchema, experienceRecordSchema, experienceSnapshotSchema, experienceMutationResultSchema, projectInputSchema, projectRecordSchema, type ExperienceRecord, type ProjectRecord, type FactualItemRecord, type ExperienceSnapshot } from '../shared/experience'
-import { jobInputSchema, jobRecordSchema, jobSaveResultSchema } from '../shared/jobs'
+import { jobInputSchema, jobRecordSchema, jobSaveResultSchema, legacyDraftTargetBaseline } from '../shared/jobs'
 import type { JobRecord } from '../shared/jobs'
 import { profileExchangeSchema, type ProfileExchange } from '../shared/profile-exchange'
 import { prepareOutboundBundle, type ConsentSource, type EvidenceScopeRevision, type OutboundBundle, type OutboundPayload } from '../shared/outbound-consent'
@@ -112,13 +112,17 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
   db.prepare('INSERT OR IGNORE INTO schema_migrations (version) VALUES (1), (2), (4), (5), (6), (7)').run()
   const migrateDraftTargetBaselines = db.transaction(() => {
     if (db.prepare('SELECT 1 FROM schema_migrations WHERE version = 8').get()) return
-    const jobs = new Map((db.prepare('SELECT id, updated_at FROM jobs').all() as Array<{ id: string; updated_at: string }>).map(job => [job.id, job.updated_at]))
+    const jobs = new Map((db.prepare('SELECT id, data FROM jobs').all() as Array<{ id: string; data: string }>).map(row => {
+      const job = jobRecordSchema.parse(JSON.parse(row.data))
+      return [row.id, legacyDraftTargetBaseline(job)] as const
+    }))
     const drafts = db.prepare('SELECT id, job_id, data FROM draft_revisions').all() as Array<{ id: string; job_id: string; data: string }>
     for (const row of drafts) {
       const stored = JSON.parse(row.data) as Record<string, unknown>
       if (typeof stored.targetPostingUpdatedAt === 'string') continue
+      if (!jobs.has(row.job_id)) throw new Error('A legacy CV draft has no saved-job target to bind.')
       const baseline = jobs.get(row.job_id)
-      if (!baseline) throw new Error('A legacy CV draft has no saved-job target to bind.')
+      if (!baseline) continue
       const migrated = draftRevisionSchema.parse({ ...stored, pageTarget: stored.pageTarget ?? 1, targetPostingUpdatedAt: baseline })
       db.prepare('UPDATE draft_revisions SET data = ? WHERE id = ?').run(JSON.stringify(migrated), row.id)
     }

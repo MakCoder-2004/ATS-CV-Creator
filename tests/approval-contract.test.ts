@@ -236,6 +236,66 @@ test('an approved legacy CV without a target binding remains usable until its ac
   expect(await workspace.api.assertDraftExportable(jobId)).toMatchObject({ ok: false })
 })
 
+test('a legacy posting with no recoverable baseline stays stale instead of borrowing its current target', async () => {
+  const state = await approvedLegacyWorkspaceWithoutTargetBinding()
+  const job = await state.workspace.api.openJob(state.jobId)
+  if (!job) throw new Error('Job fixture unavailable')
+  expect(await state.workspace.api.saveJob({ id: state.jobId, title: job.title, company: job.company, description: `${job.description} Untracked legacy edit.` })).toMatchObject({ ok: true })
+  state.workspace.close(); opened.splice(opened.indexOf(state.workspace), 1)
+  const database = new Database(join(state.directory, 'workbench.sqlite'))
+  const jobRow = database.prepare('SELECT data FROM jobs WHERE id = ?').get(state.jobId) as { data: string }
+  const legacyJob = JSON.parse(jobRow.data) as Record<string, unknown>
+  legacyJob.provenance = 'legacy-unknown'
+  legacyJob.revisions = []
+  database.prepare('UPDATE jobs SET data = ? WHERE id = ?').run(JSON.stringify(legacyJob), state.jobId)
+  const draftRows = database.prepare('SELECT id, data FROM draft_revisions WHERE job_id = ?').all(state.jobId) as Array<{ id: string; data: string }>
+  for (const row of draftRows) {
+    const legacyDraft = JSON.parse(row.data) as Record<string, unknown>
+    delete legacyDraft.targetPostingUpdatedAt
+    database.prepare('UPDATE draft_revisions SET data = ? WHERE id = ?').run(JSON.stringify(legacyDraft), row.id)
+  }
+  database.prepare('DELETE FROM schema_migrations WHERE version = 8').run()
+  database.close()
+  const reopened = createWorkbench(state.directory); opened.push(reopened)
+  expect((await reopened.api.getDraft(state.jobId))?.targetPostingUpdatedAt).toBeUndefined()
+  expect(await reopened.api.approveDraft(state.jobId)).toMatchObject({ ok: false })
+  expect(await reopened.api.assertDraftExportable(state.jobId)).toMatchObject({ ok: false })
+})
+
+test('legacy drafts across posting edits keep the earliest preserved posting baseline instead of the current target', async () => {
+  const state = await fixture()
+  const prior = await state.workspace.api.getDraft(state.jobId)
+  if (!prior) throw new Error('Draft fixture unavailable')
+  expect(await state.workspace.api.correctDraft({ jobId: state.jobId, section: 'skills', index: 0, text: 'TypeScript tooling' })).not.toBeNull()
+  const originalJob = await state.workspace.api.openJob(state.jobId)
+  if (!originalJob) throw new Error('Job fixture unavailable')
+  for (const description of ['TypeScript required. Revision two.', 'TypeScript required. Revision three.']) {
+    expect(await state.workspace.api.saveJob({ id: state.jobId, title: originalJob.title, company: originalJob.company, description })).toMatchObject({ ok: true })
+  }
+  const editedJob = await state.workspace.api.openJob(state.jobId)
+  if (!editedJob) throw new Error('Edited job fixture unavailable')
+  const originalTarget = editedJob.revisions[0].acceptedAt
+  expect(editedJob.updatedAt).not.toBe(originalTarget)
+  state.workspace.close(); opened.splice(opened.indexOf(state.workspace), 1)
+  const database = new Database(join(state.directory, 'workbench.sqlite'))
+  const drafts = database.prepare('SELECT id, data FROM draft_revisions WHERE job_id = ?').all(state.jobId) as Array<{ id: string; data: string }>
+  expect(drafts.length).toBeGreaterThan(1)
+  for (const row of drafts) {
+    const legacy = JSON.parse(row.data) as Record<string, unknown>
+    delete legacy.targetPostingUpdatedAt
+    database.prepare('UPDATE draft_revisions SET data = ? WHERE id = ?').run(JSON.stringify(legacy), row.id)
+  }
+  database.prepare('DELETE FROM schema_migrations WHERE version = 8').run()
+  database.close()
+  const reopened = createWorkbench(state.directory); opened.push(reopened)
+  const restored = await reopened.api.getDraft(state.jobId)
+  expect(restored?.targetPostingUpdatedAt).toBe(originalTarget)
+  const backupRows = JSON.parse(reopened.backup.createBackup()).tables.draft_revisions.rows.filter((row: { job_id: string }) => row.job_id === state.jobId)
+  expect(backupRows.map((row: { data: string }) => JSON.parse(row.data).targetPostingUpdatedAt)).toEqual(drafts.map(() => originalTarget))
+  expect(await reopened.api.approveDraft(state.jobId)).toMatchObject({ ok: false })
+  expect(await reopened.api.assertDraftExportable(state.jobId)).toMatchObject({ ok: false })
+})
+
 test('material posting edits preserve approved history and require explicit current reassessment before renewing unchanged wording', async () => {
   const { workspace, jobId, prompts } = await fixture()
   await workspace.api.checkDraft(jobId)
