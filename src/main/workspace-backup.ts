@@ -3,7 +3,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { workspaceBackupSchema, workspaceBackupWarning, type WorkspaceBackupEngine, type WorkspaceRestorePreview } from '../shared/workspace-backup'
 import { contactRecordSchema, skillRecordSchema, profileEntrySchema, evidenceRevisionSchema, uuidSchema } from '../shared/profile'
 import { experienceRecordSchema, projectRecordSchema } from '../shared/experience'
-import { jobRecordSchema, legacyDraftTargetBaseline } from '../shared/jobs'
+import { emptyPostingOptionalDetails, jobRecordSchema, legacyDraftTargetBaseline, releasedV2JobRecordSchema } from '../shared/jobs'
 import { draftRevisionSchema } from '../shared/draft'
 import { analysisResultSchema, analysisBudgetsSchema, postingAnalysisSchema } from '../shared/posting-analysis'
 import { regenerationProposalSchema } from '../shared/regeneration'
@@ -114,7 +114,7 @@ export function createWorkspaceBackupEngine(db: Database.Database): WorkspaceBac
   })
   const createBackup = () => {
     const snapshot = {
-      format: 'cv-tailor-workspace-backup', version: 2 as const,
+      format: 'cv-tailor-workspace-backup', version: 3 as const,
       createdAt: new Date().toISOString(), warning: workspaceBackupWarning,
       tables: Object.fromEntries(actualTables().map(name => [name, { schema: tableSchema(name), rows: rowsFor(name) }]))
     }
@@ -144,6 +144,22 @@ export function createWorkspaceBackupEngine(db: Database.Database): WorkspaceBac
         row.data = JSON.stringify({ ...value, provenance: 'legacy-unknown', sourceSnapshot: null, revisions: [] })
       }
       upgraded.version = 2
+      backup = upgraded
+    }
+    if (backup.version === 2) {
+      const upgraded = structuredClone(backup) as typeof backup
+      const jobs = upgraded.tables.jobs
+      if (!jobs) throw new Error('Backup is invalid or incompatible with this workspace schema.')
+      for (const row of jobs.rows) {
+        let rawJob: unknown
+        try { rawJob = JSON.parse(String(row.data)) } catch { throw new Error('Backup contains corrupt JSON: jobs') }
+        const oldJob = releasedV2JobRecordSchema.safeParse(rawJob)
+        if (!oldJob.success) throw new Error('Backup row violates the released v2 jobs domain schema.')
+        const emptyDetails = emptyPostingOptionalDetails()
+        const value = oldJob.data
+        row.data = JSON.stringify({ ...value, optionalDetails: emptyDetails, revisions: value.revisions.map(revision => ({ ...revision, optionalDetails: emptyDetails })), sourceSnapshot: value.sourceSnapshot ? { ...value.sourceSnapshot, optionalDetails: emptyDetails, fieldOrigins: { ...value.sourceSnapshot.fieldOrigins, optionalDetails: {} } } : null })
+      }
+      upgraded.version = 3
       backup = upgraded
     }
     // Earlier released workspaces may not have the CV import provenance relation.

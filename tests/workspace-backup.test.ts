@@ -120,6 +120,29 @@ test('released version-1 job backups without provenance upgrade to honest legacy
   expect(edited).toMatchObject({ ok: true, value: { revisions: [{ description: 'Original wording.', revision: 1, provenance: 'legacy-unknown' }, { description: 'Corrected wording.', revision: 2, provenance: 'manual' }] } })
 })
 
+test('released version-2 backups upgrade optional posting details to honest unknowns', async () => {
+  const { dir, workbench } = fixture()
+  const saved = await workbench.api.saveJob({ title: 'Engineer', company: 'Example', description: 'Original posting.' })
+  if (!saved.ok) throw new Error('Job fixture failed')
+  const old = JSON.parse(workbench.backup.createBackup())
+  old.version = 2
+  for (const row of old.tables.jobs.rows) {
+    const job = JSON.parse(row.data)
+    delete job.optionalDetails
+    for (const revision of job.revisions) delete revision.optionalDetails
+    if (job.sourceSnapshot) {
+      delete job.sourceSnapshot.optionalDetails
+      delete job.sourceSnapshot.fieldOrigins.optionalDetails
+    }
+    row.data = JSON.stringify(job)
+  }
+  const preview = workbench.backup.previewRestore(JSON.stringify(old))
+  workbench.backup.applyRestore(preview.token, safetyBackup(dir))
+  const restored = await workbench.api.openJob(saved.value.id)
+  expect(restored?.optionalDetails.location).toMatchObject({ value: null, origin: 'unknown' })
+  expect(restored?.revisions[0].optionalDetails.compensation).toMatchObject({ value: null, origin: 'unknown' })
+})
+
 test('legacy backups bind untagged approved drafts to their accepted posting before later edits', async () => {
   const { dir, workbench } = fixture()
   await workbench.api.saveSkill({ name: 'TypeScript', category: 'Programming' })

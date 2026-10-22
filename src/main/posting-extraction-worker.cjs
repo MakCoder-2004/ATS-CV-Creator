@@ -71,17 +71,20 @@ function extract(text, expectedId) {
     } else if (char === '}' || char === ']') depth--
   }
   const data = JSON.parse(text)
-  if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('The posting response was not valid posting JSON.')
-  if (data.id !== expectedId) throw new Error('The source response did not match the requested posting.')
+  if (Array.isArray(data) || data && typeof data === 'object' && (Array.isArray(data.jobs) || Array.isArray(data.results) || Array.isArray(data.postings))) throw new Error('The source returned a listing or multiple roles, not one job detail. Paste the specific posting text instead.')
+  if (!data || typeof data !== 'object') throw new Error('The posting response was not valid posting JSON.')
+  if (/^(?:removed|closed|expired|deleted)$/i.test(String(data.status ?? data.state ?? ''))) throw new Error('The source explicitly identifies this posting as removed or closed; it was not imported as an active job.')
+  if (data.id !== expectedId) throw new Error('The source response did not match the requested posting; this may be an unrelated job.')
 
-  const title = typeof data.text === 'string' ? data.text.trim() : typeof data.title === 'string' ? data.title.trim() : ''
+  const titleCandidates = [['Title field', data.text], ['Alternate title field', data.title]].filter(([, value]) => typeof value === 'string' && value.trim()).map(([source, value]) => ({ value: value.trim(), source }))
+  const uniqueTitles = [...new Map(titleCandidates.map(candidate => [candidate.value.toLocaleLowerCase(), candidate])).values()]
+  const title = uniqueTitles[0]?.value ?? ''
   const companyCandidates = [
     ['Company field', data.company], ['Company name field', data.companyName],
     ['Hiring organization', data.hiringOrganization && typeof data.hiringOrganization === 'object' ? data.hiringOrganization.name : null]
   ].filter(([, value]) => typeof value === 'string' && value.trim()).map(([source, value]) => ({ value: value.trim(), source }))
   const uniqueCompanies = [...new Map(companyCandidates.map(candidate => [candidate.value.toLocaleLowerCase(), candidate])).values()]
   const company = uniqueCompanies[0]?.value ?? null
-  const conflicts = uniqueCompanies.length > 1 ? [{ id: 'company', field: 'company', values: uniqueCompanies }] : []
   const segments = [], segmentSet = new Set()
   const addSegment = value => {
     if (typeof value !== 'string' || !value.trim()) return
@@ -128,11 +131,48 @@ function extract(text, expectedId) {
   }
 
   const description = [...baseLines, ...extras].join('\n').trim()
+  const asText = value => typeof value === 'string' && value.trim() ? value.trim() : typeof value === 'number' && Number.isFinite(value) ? String(value) : null
+  const salary = typeof data.salaryRange === 'object' && data.salaryRange !== null
+    ? [data.salaryRange.currency, data.salaryRange.min, data.salaryRange.max, data.salaryRange.interval].filter(value => value !== undefined && value !== null && value !== '').join(' ')
+    : asText(data.salaryDescription) || asText(data.compensation)
+  const rawFields = {
+    location: [asText(data.categories?.location) || asText(data.location), 'Lever categories.location/location'],
+    workArrangement: [asText(data.workplaceType) || asText(data.workArrangement), 'Lever workplaceType/workArrangement'],
+    employmentType: [asText(data.categories?.commitment) || asText(data.employmentType), 'Lever categories.commitment/employmentType'],
+    compensation: [salary || null, 'Lever salaryRange/salaryDescription'],
+    language: [asText(data.language), 'Lever language'],
+    postedDate: [asText(data.datePosted) || asText(data.createdAt), 'Lever datePosted/createdAt'],
+    deadline: [asText(data.deadline) || asText(data.applicationDeadline), 'Lever deadline/applicationDeadline'],
+    applicationUrl: [asText(data.applyUrl) || asText(data.applicationUrl), 'Lever applyUrl/applicationUrl']
+  }
+  const optionalDetails = Object.fromEntries(Object.entries(rawFields).map(([field, [value, source]]) => [field, {
+    value, source: value ? source : null, origin: value ? 'source' : 'unknown',
+    uncertainty: value && /(?:today|yesterday|\d+\s+(?:minutes?|hours?|days?|weeks?|months?)\s+ago|(?:last|this)\s+(?:week|month))/i.test(value) ? 'relative-date' : 'none'
+  }]))
+  const conflicts = [
+    ...(uniqueTitles.length > 1 ? [{ id: 'title', field: 'title', values: uniqueTitles }] : []),
+    ...(uniqueCompanies.length > 1 ? [{ id: 'company', field: 'company', values: uniqueCompanies }] : [])
+  ]
+  const readableLabels = { title: ['job title', 'position'], company: ['company', 'employer'], location: ['location'], workArrangement: ['work arrangement', 'workplace'], employmentType: ['employment type'], compensation: ['compensation', 'salary'], language: ['language', 'languages'], postedDate: ['posted', 'posted date'], deadline: ['deadline', 'apply by'], applicationUrl: ['application url', 'apply url'] }
+  for (const [field, labels] of Object.entries(readableLabels)) {
+    const structured = field === 'title' ? title : field === 'company' ? company : optionalDetails[field].value
+    if (!structured) continue
+    const readable = description.split('\n').map(line => line.trim().replace(/^[•-]\s*/, '')).map(line => {
+      const match = line.match(new RegExp(`^(?:${labels.map(label => label.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')).join('|')})\\s*:\\s*(.+)$`, 'i'))
+      return match ? match[1].trim() : null
+    }).find(Boolean)
+    if (readable && structured && readable.toLocaleLowerCase() !== structured.toLocaleLowerCase()) {
+      const structuredSource = field === 'title' ? titleCandidates[0]?.source ?? 'Lever title field' : field === 'company' ? companyCandidates[0]?.source ?? 'Lever company field' : rawFields[field][1]
+      const alreadyConflicted = conflicts.find(conflict => conflict.field === field)
+      if (alreadyConflicted) alreadyConflicted.values.push({ value: readable, source: `Readable posting: ${labels[0]} heading` })
+      else conflicts.push({ id: field, field, values: [{ value: structured, source: structuredSource }, { value: readable, source: `Readable posting: ${labels[0]} heading` }] })
+    }
+  }
   if ([...title].length > 200 || (company && [...company].length > 200) || [...description].length > 200_000 || Buffer.byteLength(description, 'utf8') > 1024 * 1024) throw new Error('The posting text exceeds the safe preview limit; no partial preview was created.')
   const hasStructuredSections = lists.some(item => item && typeof item === 'object' && typeof item.content === 'string')
   const hasSectionHeadings = /\b(responsibilities|requirements|qualifications|what you(?:'|’)ll do|what we(?:'|’)re looking for)\b/i.test(description)
   const notices = [
-    conflicts.length ? 'The source provides conflicting employer names; choose one before saving.' : '',
+    conflicts.length ? 'The source provides conflicting source values; choose one before saving.' : '',
     !company ? 'Employer name was not provided by this source; this preview is incomplete.' : '',
     malformedSection ? 'Some structured source sections could not be interpreted; this preview is incomplete.' : '',
     !title ? 'The source did not provide a job title; this preview is incomplete.' : '',
@@ -140,7 +180,7 @@ function extract(text, expectedId) {
     [...description].length < 200 || (!hasStructuredSections && !hasSectionHeadings) ? 'The response lacks enough posting-detail structure to establish complete source text; this preview is incomplete.' : ''
   ].filter(Boolean)
   notices.push('Extraction cannot guarantee posting completeness or that the role remains open. Review the full source before relying on it.')
-  return { title, company, description, notices, conflicts }
+  return { title, company, description, optionalDetails, notices, conflicts }
 }
 
 try {

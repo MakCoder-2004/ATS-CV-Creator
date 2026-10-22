@@ -14,6 +14,18 @@ function open() {
   directories.push(directory)
   return { directory, workbench: createWorkbench(directory) }
 }
+async function stageImportReview(api: ReturnType<typeof createWorkbench>['api'], token: string, input: { title: string; company: string; description: string; optionalDetails?: import('../src/shared/jobs').PostingOptionalDetails }, review: { completenessConfirmed: boolean; conflictResolutions: Record<string, string> }) {
+  const state = await api.readPostingPreview(token)
+  if (state.status !== 'ready' && state.status !== 'incomplete') throw new Error('Posting preview is no longer reviewable.')
+  const edited = await api.updatePostingPreview(token, 0, { ...input, optionalDetails: input.optionalDetails ?? state.preview.optionalDetails })
+  if (!edited.ok || edited.revision === undefined) throw new Error(edited.message ?? 'Posting preview edit failed.')
+  const reviewed = await api.reviewPostingPreview(token, edited.revision, review)
+  return { revision: edited.revision, reviewed }
+}
+async function acceptImport(api: ReturnType<typeof createWorkbench>['api'], token: string, input: { title: string; company: string; description: string; optionalDetails?: import('../src/shared/jobs').PostingOptionalDetails }, review: { completenessConfirmed: boolean; conflictResolutions: Record<string, string> }) {
+  const staged = await stageImportReview(api, token, input, review)
+  return api.acceptPostingImport(token, staged.revision)
+}
 
 test('saved jobs preserve original posting text, have stable IDs, and reopen after SQLite restart', async () => {
   const { directory, workbench } = open()
@@ -49,13 +61,14 @@ test('reviewed link imports save atomically with immutable source provenance and
     const reviewedDescription = `${state.preview.description}\nReviewed clarification: include the fictional on-call rotation.`
     const database = new Database(join(directory, 'workbench.sqlite'))
     database.exec("CREATE TRIGGER refuse_import BEFORE INSERT ON jobs BEGIN SELECT RAISE(ABORT, 'simulated import transaction failure'); END")
-    const failedAcceptance = await imported.api.acceptPostingImport(token, { title: 'Reviewed Engineer', company: 'Corrected Example Co', description: reviewedDescription }, { completenessConfirmed: true, conflictResolutions: {} })
+    const failedStage = await stageImportReview(imported.api, token, { title: 'Reviewed Engineer', company: 'Corrected Example Co', description: reviewedDescription }, { completenessConfirmed: true, conflictResolutions: {} })
+    const failedAcceptance = await imported.api.acceptPostingImport(token, failedStage.revision)
     expect(failedAcceptance).toMatchObject({ ok: false, error: { code: 'CONFLICT' } })
     expect(await imported.api.listJobs()).toEqual([])
     database.exec('DROP TRIGGER refuse_import')
     database.close()
-    expect(await imported.api.acceptPostingImport(token, { title: 'Reviewed Engineer', company: 'Corrected Example Co', description: reviewedDescription }, { completenessConfirmed: false, conflictResolutions: {} })).toMatchObject({ ok: false, error: { code: 'CONFLICT' } })
-    const result = await imported.api.acceptPostingImport(token, { title: 'Reviewed Engineer', company: 'Corrected Example Co', description: reviewedDescription }, { completenessConfirmed: true, conflictResolutions: {} })
+    expect(await imported.api.acceptPostingImport(token, 0)).toMatchObject({ ok: false, error: { code: 'CONFLICT' } })
+    const result = await imported.api.acceptPostingImport(token, failedStage.revision)
     expect(result).toMatchObject({ ok: true, value: { title: 'Reviewed Engineer', company: 'Corrected Example Co', provenance: 'imported', sourceSnapshot: { title: 'Source Engineer', company: 'Example Source Co', submittedUrl: 'https://jobs.lever.co/example-board/review-save-1', finalUrl: 'https://api.lever.co/v0/postings/example-board/review-save-1', extractionMethod: 'lever-json-v1', fieldOrigins: { title: 'user-correction', company: 'user-correction', description: 'user-correction' } }, revisions: [{ title: 'Reviewed Engineer', company: 'Corrected Example Co', revision: 1, provenance: 'imported' }] } })
     if (!result.ok) throw Error(result.error.message)
     expect(result.value.sourceSnapshot?.description).not.toBe(result.value.description)
@@ -70,7 +83,7 @@ test('reviewed link imports save atomically with immutable source provenance and
     let repeatedState = await imported.api.readPostingPreview(repeatedFetch.token)
     for (let attempt = 0; attempt < 300 && repeatedState.status === 'fetching'; attempt++) { await new Promise(resolve => setTimeout(resolve, 10)); repeatedState = await imported.api.readPostingPreview(repeatedFetch.token) }
     if (repeatedState.status !== 'ready') throw Error('Repeated synthetic source was not ready')
-    const repeated = await imported.api.acceptPostingImport(repeatedFetch.token, { title: 'Reviewed Engineer', company: 'Corrected Example Co', description: reviewedDescription }, { completenessConfirmed: true, conflictResolutions: {} })
+    const repeated = await acceptImport(imported.api, repeatedFetch.token, { title: 'Reviewed Engineer', company: 'Corrected Example Co', description: reviewedDescription }, { completenessConfirmed: true, conflictResolutions: {} })
     expect(repeated).toMatchObject({ ok: false, error: { code: 'CONFLICT', message: expect.stringMatching(/already saved|Open the existing/i) } })
     expect(await imported.api.listJobs()).toHaveLength(1)
     expect((await imported.api.getAnalysisUsage()).attempts).toBe(0)
@@ -99,11 +112,17 @@ test('a source-missing company can be supplied deliberately while incomplete pos
     for (let attempt = 0; attempt < 300 && state.status === 'fetching'; attempt++) { await new Promise(resolve => setTimeout(resolve, 10)); state = await wb.api.readPostingPreview(started.token) }
     expect(state).toMatchObject({ status: 'incomplete', preview: { company: null } })
     if (state.status !== 'incomplete') throw Error('Expected the source to omit its employer name')
-    expect(await wb.api.acceptPostingImport(started.token, { title: state.preview.title, company: 'User-reviewed Example Employer', description: 'A replacement description cannot bypass incomplete source notices.' }, { completenessConfirmed: true, conflictResolutions: {} })).toMatchObject({ ok: false, error: { code: 'CONFLICT' } })
-    const accepted = await wb.api.acceptPostingImport(started.token, { title: state.preview.title, company: 'User-reviewed Example Employer', description: state.preview.description }, { completenessConfirmed: true, conflictResolutions: {} })
+    const blockedCorrection = await stageImportReview(wb.api, started.token, { title: state.preview.title, company: 'User-reviewed Example Employer', description: 'A replacement description cannot bypass incomplete source notices.' }, { completenessConfirmed: true, conflictResolutions: {} })
+    expect(blockedCorrection.reviewed).toMatchObject({ ok: false })
+    expect(await wb.api.acceptPostingImport(started.token, blockedCorrection.revision)).toMatchObject({ ok: false, error: { code: 'CONFLICT' } })
+    const corrected = await wb.api.updatePostingPreview(started.token, blockedCorrection.revision, { title: state.preview.title, company: 'User-reviewed Example Employer', description: state.preview.description, optionalDetails: state.preview.optionalDetails })
+    expect(corrected.ok).toBe(true)
+    if (corrected.revision === undefined) throw Error('Corrected preview revision is missing.')
+    expect(await wb.api.reviewPostingPreview(started.token, corrected.revision, { completenessConfirmed: true, conflictResolutions: {} })).toMatchObject({ ok: true })
+    const accepted = await wb.api.acceptPostingImport(started.token, corrected.revision)
     if (!accepted.ok) throw new Error(`Company correction rejected: ${accepted.error.message}`)
     expect(accepted).toMatchObject({ ok: true, value: { company: 'User-reviewed Example Employer', sourceSnapshot: { company: null, hashes: { company: null }, fieldOrigins: { company: 'user-correction' } } } })
-    expect(await wb.api.acceptPostingImport(started.token, { title: state.preview.title, company: 'Another Guess', description: state.preview.description }, { completenessConfirmed: true, conflictResolutions: {} })).toMatchObject({ ok: false, error: { code: 'CONFLICT' } })
+    expect(await wb.api.acceptPostingImport(started.token, blockedCorrection.revision)).toMatchObject({ ok: false, error: { code: 'CONFLICT' } })
   } finally { wb.close() }
 })
 
@@ -118,16 +137,85 @@ test('conflicting source company values stay visible and require an explicit sou
     for (let attempt = 0; attempt < 300 && state.status === 'fetching'; attempt++) { await new Promise(resolve => setTimeout(resolve, 10)); state = await wb.api.readPostingPreview(started.token) }
     expect(state.status).toBe('incomplete')
     if (state.status !== 'incomplete') throw Error('Expected a source-conflict preview')
-    expect(state.preview.conflicts).toEqual([{ id: 'company', field: 'company', values: [{ value: 'Example Systems Ltd.', source: 'Company field' }, { value: 'Example Systems Incorporated', source: 'Company name field' }] }])
-    const input = { title: state.preview.title, company: 'Example Systems Incorporated', description: state.preview.description }
-    expect(await wb.api.acceptPostingImport(started.token, input, { completenessConfirmed: true, conflictResolutions: {} })).toMatchObject({ ok: false, error: { code: 'CONFLICT' } })
-    expect(await wb.api.acceptPostingImport(started.token, input, { completenessConfirmed: true, conflictResolutions: { company: 'A compromise employer' } })).toMatchObject({ ok: false, error: { code: 'CONFLICT' } })
-    expect(await wb.api.acceptPostingImport(started.token, input, { completenessConfirmed: false, conflictResolutions: { company: 'Example Systems Incorporated' } })).toMatchObject({ ok: false, error: { code: 'CONFLICT' } })
-    const accepted = await wb.api.acceptPostingImport(started.token, input, { completenessConfirmed: true, conflictResolutions: { company: 'Example Systems Incorporated' } })
-    expect(accepted).toMatchObject({ ok: true, value: { company: 'Example Systems Incorporated', sourceSnapshot: { company: 'Example Systems Ltd.', fieldOrigins: { company: 'user-correction' } } } })
-    expect((await wb.api.openJob(accepted.ok ? accepted.value.id : '') )?.sourceSnapshot?.company).toBe('Example Systems Ltd.')
+    expect(state.preview.conflicts).toEqual([
+      { id: 'company', field: 'company', values: [{ value: 'Example Systems Ltd.', source: 'Company field' }, { value: 'Example Systems Incorporated', source: 'Company name field' }] },
+      { id: 'location', field: 'location', values: [{ value: 'Remote', source: 'Lever categories.location/location' }, { value: 'On-site', source: 'Readable posting: location heading' }] },
+      { id: 'compensation', field: 'compensation', values: [{ value: 'USD 80000 95000 year', source: 'Lever salaryRange/salaryDescription' }, { value: 'CAD 70,000 annually', source: 'Readable posting: compensation heading' }] },
+      { id: 'postedDate', field: 'postedDate', values: [{ value: '2 days ago', source: 'Lever datePosted/createdAt' }, { value: 'yesterday', source: 'Readable posting: posted heading' }] }
+    ])
+    expect(state.preview.optionalDetails).toMatchObject({ location: { value: 'Remote', origin: 'source' }, compensation: { value: 'USD 80000 95000 year', origin: 'source' }, postedDate: { value: '2 days ago', uncertainty: 'relative-date' }, deadline: { value: '2026-11-30' }, applicationUrl: { value: 'https://jobs.lever.co/example-board/apply-id' }, language: { value: 'English' } })
+    const input = { title: state.preview.title, company: 'Example Systems Incorporated', description: state.preview.description, optionalDetails: { ...state.preview.optionalDetails, location: { ...state.preview.optionalDetails.location, value: 'On-site', origin: 'source' as const, source: 'forged source context', uncertainty: 'relative-date' as const } } }
+    const staged = await stageImportReview(wb.api, started.token, input, { completenessConfirmed: true, conflictResolutions: {} })
+    expect(staged.reviewed).toMatchObject({ ok: false })
+    expect(await wb.api.acceptPostingImport(started.token, staged.revision)).toMatchObject({ ok: false, error: { code: 'CONFLICT' } })
+    expect((await wb.api.reviewPostingPreview(started.token, staged.revision, { completenessConfirmed: true, conflictResolutions: { company: 'A compromise employer' } })).ok).toBe(false)
+    const mismatch = await wb.api.reviewPostingPreview(started.token, staged.revision, { completenessConfirmed: true, conflictResolutions: { company: 'Example Systems Incorporated', location: 'Remote' } })
+    expect(mismatch.ok).toBe(false)
+    const unresolved = await wb.api.reviewPostingPreview(started.token, staged.revision, { completenessConfirmed: true, conflictResolutions: { company: 'Example Systems Incorporated', location: 'On-site', compensation: 'USD 80000 95000 year', postedDate: '2 days ago' } })
+    expect(unresolved.ok).toBe(true)
+    const updatedAfterReview = await wb.api.updatePostingPreview(started.token, staged.revision, { ...input, description: `${input.description}\nReviewed clarification retained in working text.` })
+    expect(updatedAfterReview.ok).toBe(true)
+    expect(await wb.api.acceptPostingImport(started.token, staged.revision)).toMatchObject({ ok: false, error: { code: 'CONFLICT' } })
+    if (updatedAfterReview.revision === undefined) throw Error('Updated edit revision is missing.')
+    expect(await wb.api.reviewPostingPreview(started.token, updatedAfterReview.revision, { completenessConfirmed: true, conflictResolutions: { company: 'Example Systems Incorporated', location: 'On-site', compensation: 'USD 80000 95000 year', postedDate: '2 days ago' } })).toMatchObject({ ok: true })
+    const accepted = await wb.api.acceptPostingImport(started.token, updatedAfterReview.revision)
+    expect(accepted).toMatchObject({ ok: true, value: { company: 'Example Systems Incorporated', optionalDetails: { location: { value: 'On-site', origin: 'user-correction', source: 'Lever categories.location/location', uncertainty: 'none' }, postedDate: { value: '2 days ago', uncertainty: 'relative-date' } }, sourceSnapshot: { company: 'Example Systems Ltd.', optionalDetails: { location: { value: 'Remote', origin: 'source' }, compensation: { value: 'USD 80000 95000 year' } }, fieldOrigins: { company: 'user-correction' } } } })
+    if (!accepted.ok) throw new Error('Resolved posting did not save.')
+    const backup = wb.backup.createBackup()
+    expect(JSON.parse(backup).version).toBe(3)
+    const restore = wb.backup.previewRestore(backup)
+    wb.backup.applyRestore(restore.token, value => value)
+    const reopened = await wb.api.openJob(accepted.value.id)
+    expect(reopened?.sourceSnapshot?.company).toBe('Example Systems Ltd.')
+    expect(reopened?.sourceSnapshot?.optionalDetails).toEqual(accepted.value.sourceSnapshot?.optionalDetails)
+    expect(reopened?.optionalDetails.postedDate).toMatchObject({ value: '2 days ago', uncertainty: 'relative-date' })
   } finally { wb.close() }
 })
+
+test('superseding a reviewed preview invalidates its revision-bound acceptance', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'cv-tailor-import-supersede-review-'))
+  directories.push(directory)
+  const description = `Responsibilities\\n${'Build careful fictional software with a reliable team and clear operational practices. '.repeat(4)}\\nRequirements\\nTesting.`
+  const body = JSON.stringify({ id: 'supersede-review', text: 'Synthetic Engineer', company: 'Example Employer', descriptionPlain: description })
+  const wb = createWorkbench(directory, undefined, undefined, undefined, { lookup: async () => [{ address: '8.8.8.8', family: 4 }], request: async () => ({ status: 200, headers: { 'content-type': 'application/json' }, body: Buffer.from(body) }) })
+  try {
+    const first = await wb.api.startPostingFetch('https://jobs.lever.co/example-board/supersede-review')
+    let state = await wb.api.readPostingPreview(first.token)
+    for (let attempt = 0; attempt < 300 && state.status === 'fetching'; attempt++) { await new Promise(resolve => setTimeout(resolve, 10)); state = await wb.api.readPostingPreview(first.token) }
+    if (state.status !== 'ready') throw new Error('Expected first reviewable preview.')
+    const staged = await stageImportReview(wb.api, first.token, { title: state.preview.title, company: state.preview.company!, description: state.preview.description }, { completenessConfirmed: true, conflictResolutions: {} })
+    expect(staged.reviewed).toMatchObject({ ok: true })
+    const second = await wb.api.startPostingFetch('https://jobs.lever.co/example-board/supersede-review')
+    expect(await wb.api.readPostingPreview(first.token)).toEqual({ status: 'cancelled' })
+    expect(await wb.api.acceptPostingImport(first.token, staged.revision)).toMatchObject({ ok: false, error: { code: 'CONFLICT' } })
+    expect(await wb.api.listJobs()).toEqual([])
+    await wb.api.cancelPostingFetch(second.token)
+  } finally { wb.close() }
+})
+
+test('listings and explicit removed-role responses fail distinctly from an unreachable 404', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'cv-tailor-import-nonposting-'))
+  directories.push(directory)
+  const wb = createWorkbench(directory, undefined, undefined, undefined, {
+    lookup: async () => [{ address: '8.8.8.8', family: 4 }],
+    request: async url => {
+      const id = url.pathname.split('/').at(-1)
+      if (id === 'listing-response') return { status: 200, headers: { 'content-type': 'application/json' }, body: Buffer.from(JSON.stringify([{ id: 'role-a' }, { id: 'role-b' }])) }
+      if (id === 'removed-response') return { status: 200, headers: { 'content-type': 'application/json' }, body: Buffer.from(JSON.stringify({ id, status: 'removed', text: 'Old Engineer' })) }
+      return { status: 404, headers: { 'content-type': 'application/json' }, body: Buffer.from('{}') }
+    }
+  })
+  try {
+    for (const [id, expected] of [['listing-response', /listing or multiple roles/i], ['removed-response', /explicitly identifies.*removed/i], ['not-found', /does not confirm that the role was removed/i]] as const) {
+      const started = await wb.api.startPostingFetch(`https://jobs.lever.co/example-board/${id}`)
+      let state = await wb.api.readPostingPreview(started.token)
+      for (let attempt = 0; attempt < 300 && state.status === 'fetching'; attempt++) { await new Promise(resolve => setTimeout(resolve, 10)); state = await wb.api.readPostingPreview(started.token) }
+      expect(state.status).toBe('failed')
+      if (state.status === 'failed') expect(state.message).toMatch(expected)
+    }
+    expect(await wb.api.listJobs()).toEqual([])
+  } finally { wb.close() }
+}, 20_000)
 
 test('an incomplete teaser cannot be accepted by supplying missing fields alone', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'cv-tailor-import-teaser-'))
@@ -139,8 +227,9 @@ test('an incomplete teaser cannot be accepted by supplying missing fields alone'
     let state = await wb.api.readPostingPreview(started.token)
     for (let attempt = 0; attempt < 300 && state.status === 'fetching'; attempt++) { await new Promise(resolve => setTimeout(resolve, 10)); state = await wb.api.readPostingPreview(started.token) }
     expect(state).toMatchObject({ status: 'incomplete', preview: { company: null } })
-    expect(await wb.api.acceptPostingImport(started.token, { title: 'Engineer', company: 'User-reviewed Example', description: 'A complete posting description supplied by the caller cannot override source teaser warnings by itself.' }, { completenessConfirmed: true, conflictResolutions: {} })).toMatchObject({ ok: false, error: { code: 'CONFLICT' } })
-    expect(await wb.api.acceptPostingImport(started.token, { title: 'Engineer', company: 'Example', description: 'I supplied a replacement but no full posting.' }, { completenessConfirmed: true, conflictResolutions: {} })).toMatchObject({ ok: false, error: { code: 'CONFLICT' } })
+    const staged = await stageImportReview(wb.api, started.token, { title: 'Engineer', company: 'User-reviewed Example', description: 'A complete posting description supplied by the caller cannot override source teaser warnings by itself.' }, { completenessConfirmed: true, conflictResolutions: {} })
+    expect(staged.reviewed).toMatchObject({ ok: false })
+    expect(await wb.api.acceptPostingImport(started.token, staged.revision)).toMatchObject({ ok: false, error: { code: 'CONFLICT' } })
     expect(await wb.api.listJobs()).toEqual([])
   } finally { wb.close() }
 })
@@ -214,7 +303,7 @@ test('posting fetch rejects unsupported links before contacting a source and can
     await startedRequest
     expect(await apiWorkbench.api.cancelPostingFetch(active.token)).toEqual({ ok: true })
     expect(await apiWorkbench.api.readPostingPreview(active.token)).toEqual({ status: 'cancelled' })
-    expect(await apiWorkbench.api.acceptPostingImport(active.token, { title: 'Ignored Engineer', company: 'Example', description: 'This cancelled preview cannot be accepted.' }, { completenessConfirmed: true, conflictResolutions: {} })).toMatchObject({ ok: false, error: { code: 'CONFLICT' } })
+    expect(await apiWorkbench.api.acceptPostingImport(active.token, 0)).toMatchObject({ ok: false, error: { code: 'CONFLICT' } })
     resolveLate({ status: 200, headers: { 'content-type': 'application/json' }, body: Buffer.from(JSON.stringify({ id: 'cancel-me', text: 'Late response', company: 'Example', descriptionPlain: 'This response arrived only after cancellation.' })) })
     await new Promise(resolve => setTimeout(resolve, 0))
     expect(await apiWorkbench.api.readPostingPreview(active.token)).toEqual({ status: 'cancelled' })

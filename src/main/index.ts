@@ -28,7 +28,7 @@ import { factualCheckReportSchema } from '../shared/factual-report'
 import { regenerationProposalSchema, regenerationResultSchema, regenerationTargetSchema } from '../shared/regeneration'
 import { mutateDraftRecordInputSchema } from '../shared/draft-records'
 import { validateLeverPostingUrl } from './safe-posting-fetch'
-import { postingReviewSchema } from '../shared/posting-import'
+import { postingPreviewEditSchema, postingReviewSchema } from '../shared/posting-import'
 
 let window: BrowserWindow | undefined
 let workspace: ReturnType<typeof createWorkbench> | undefined
@@ -122,7 +122,11 @@ app.whenReady().then(() => {
     lookup: async () => [{ address: '8.8.8.8', family: 4 }],
     request: async (url: URL) => {
       if (process.env.CV_TAILOR_SCRIPTED_POSTING_FETCH === 'delayed') await new Promise(resolve => setTimeout(resolve, 800))
-      return { status: 200, headers: { 'content-type': 'application/json' }, body: Buffer.from(JSON.stringify({ id: url.pathname.split('/').at(-1), text: 'Synthetic Reliability Engineer', company: 'Example Research', descriptionPlain: 'Responsibilities\nBuild and maintain fictional systems, document operational decisions, collaborate with the synthetic engineering team, and review reliability outcomes across a clearly invented service environment.', lists: [{ text: 'Requirements', content: '<li>Experience with testing.</li>' }] })) }
+      const id = url.pathname.split('/').at(-1)
+      const conflictFixture = id === 'conflict-review'
+      const descriptionPlain = conflictFixture ? `Responsibilities\n${'The fictional team builds reliable systems, documents operations, and collaborates to maintain a safe service environment. '.repeat(4)}\nRequirements\nTesting and careful written communication.\nLocation: On-site` : id === 'missing-company' ? `Responsibilities\n${'Build and maintain fictional systems with careful collaboration and reliable operational practices. '.repeat(4)}\nRequirements\nExperience with testing and written communication.` : 'Responsibilities\nBuild and maintain fictional systems, document operational decisions, collaborate with the synthetic engineering team, and review reliability outcomes across a clearly invented service environment.'
+      const posting = { id, text: 'Synthetic Reliability Engineer', ...(id === 'missing-company' ? {} : { company: 'Example Research' }), ...(conflictFixture ? { companyName: 'Example Research Group', categories: { location: 'Remote' }, workplaceType: 'Remote', employmentType: 'Full-time', salaryRange: { currency: 'USD', min: 80000, max: 95000, interval: 'year' }, language: 'English', datePosted: '2 days ago', deadline: '2026-11-30', applyUrl: 'https://jobs.lever.co/example-board/apply-id' } : {}), descriptionPlain, lists: [{ text: 'Requirements', content: '<li>Testing and careful written communication.</li>' }] }
+      return { status: 200, headers: { 'content-type': 'application/json' }, body: Buffer.from(JSON.stringify(posting)) }
     }
   } : undefined
   workspace = createWorkbench(app.getPath('userData'), safeStorage, scriptedAnalysis, undefined, scriptedPostingFetch)
@@ -271,17 +275,21 @@ app.whenReady().then(() => {
     if (args.length) throw new Error('Unexpected arguments')
     return jobRecordSchema.array().parse(await workspace!.api.listJobs())
   })
-  ipcMain.handle('posting-import:accept', async (event, ...args: unknown[]) => {
-    trusted(event); if (args.length !== 3) throw new Error('Expected preview token, reviewed posting, and review decisions')
-    const input = jobInputSchema.safeParse(args[1])
+  ipcMain.handle('posting-import:update-preview', async (event, ...args: unknown[]) => {
+    trusted(event); if (args.length !== 3 || !Number.isSafeInteger(args[1])) throw new Error('Expected preview token, edit revision, and working details')
+    const input = postingPreviewEditSchema.safeParse(args[2])
+    if (!input.success) return { ok: false, message: 'The preview edit is invalid or exceeds a safe field limit.' }
+    return await workspace!.api.updatePostingPreview(uuidSchema.parse(args[0]), args[1] as number, input.data)
+  })
+  ipcMain.handle('posting-import:review-preview', async (event, ...args: unknown[]) => {
+    trusted(event); if (args.length !== 3 || !Number.isSafeInteger(args[1])) throw new Error('Expected preview token, edit revision, and review decisions')
     const review = postingReviewSchema.safeParse(args[2])
-    if (!input.success) {
-      const fieldErrors: Record<string, string> = {}
-      for (const issue of input.error.issues) fieldErrors[issue.path.length ? issue.path.join('.') : '_'] = issue.message
-      return jobSaveResultSchema.parse({ ok: false, error: { code: 'VALIDATION_ERROR', message: 'Review a title, company, and complete posting description before saving.', fieldErrors } })
-    }
-    if (!review.success) return jobSaveResultSchema.parse({ ok: false, error: { code: 'VALIDATION_ERROR', message: 'Confirm the posting review and resolve each source conflict.' } })
-    return jobSaveResultSchema.parse(await workspace!.api.acceptPostingImport(uuidSchema.parse(args[0]), input.data, review.data))
+    if (!review.success) return { ok: false, message: 'Confirm the posting review and resolve each source conflict.' }
+    return await workspace!.api.reviewPostingPreview(uuidSchema.parse(args[0]), args[1] as number, review.data)
+  })
+  ipcMain.handle('posting-import:accept', async (event, ...args: unknown[]) => {
+    trusted(event); if (args.length !== 2 || !Number.isSafeInteger(args[1])) throw new Error('Expected preview token and reviewed edit revision')
+    return jobSaveResultSchema.parse(await workspace!.api.acceptPostingImport(uuidSchema.parse(args[0]), args[1] as number))
   })
   ipcMain.handle('posting-import:start', async (event, ...args: unknown[]) => {
     trusted(event); if (args.length !== 1 || typeof args[0] !== 'string') throw new Error('Expected a posting link')

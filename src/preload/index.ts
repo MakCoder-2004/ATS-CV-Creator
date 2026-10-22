@@ -15,7 +15,7 @@ import { regenerationProposalSchema, regenerationResultSchema, regenerationTarge
 import { mutateDraftRecordInputSchema } from '../shared/draft-records'
 import { profilePdfApplyResultSchema, profilePdfPreviewSchema, profilePdfProposalSchema } from '../shared/profile-pdf-import'
 import { profileAiConsentActionSchema, profileAiConsentPreviewSchema, profileAiRunResultSchema } from '../shared/profile-ai-structuring'
-import { postingFetchStateSchema } from '../shared/posting-import'
+import { postingFetchStateSchema, postingPreviewEditSchema, postingReviewSchema } from '../shared/posting-import'
 
 const workspaceResult = z.object({ ok: z.boolean(), cancelled: z.boolean(), message: z.string() }).strict()
 const restoreSelection = z.discriminatedUnion('ok', [
@@ -123,7 +123,9 @@ const api: WorkbenchAPI = Object.freeze({
     if (typeof url !== 'string' || new TextEncoder().encode(url).length > 2048) throw new Error('The posting link is invalid or too long.')
     return z.object({ token: uuidSchema }).strict().parse(await ipcRenderer.invoke('posting-import:start', url))
   },
-  async acceptPostingImport(token: string, input: JobInput, review: import('../shared/posting-import').PostingReview) { return jobSaveResultSchema.parse(await ipcRenderer.invoke('posting-import:accept', uuidSchema.parse(token), jobInputSchema.parse(input), review)) },
+  async updatePostingPreview(token: string, expectedRevision: number, input: import('../shared/posting-import').PostingPreviewEdit) { return await ipcRenderer.invoke('posting-import:update-preview', uuidSchema.parse(token), expectedRevision, postingPreviewEditSchema.parse(input)) },
+  async reviewPostingPreview(token: string, revision: number, review: import('../shared/posting-import').PostingReview) { return await ipcRenderer.invoke('posting-import:review-preview', uuidSchema.parse(token), revision, postingReviewSchema.parse(review)) },
+  async acceptPostingImport(token: string, revision: number) { return jobSaveResultSchema.parse(await ipcRenderer.invoke('posting-import:accept', uuidSchema.parse(token), revision)) },
   async readPostingPreview(token: string) { return postingFetchStateSchema.parse(await ipcRenderer.invoke('posting-import:read', uuidSchema.parse(token))) },
   async cancelPostingFetch(token: string) { return z.object({ ok: z.boolean() }).strict().parse(await ipcRenderer.invoke('posting-import:cancel', uuidSchema.parse(token))) },
   async openPostingSource(url: string) { return z.object({ ok: z.boolean(), message: z.string() }).strict().parse(await ipcRenderer.invoke('posting-import:open-source', url)) },

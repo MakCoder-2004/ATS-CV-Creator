@@ -90,7 +90,7 @@ async function decodeBounded(body: Buffer, encoding: string, signal: AbortSignal
   finally { signal.removeEventListener('abort', abort) }
   return Buffer.concat(output, bytes)
 }
-type ExtractedPosting = { title: string; company: string | null; description: string; notices: string[]; conflicts: import('../shared/posting-import').PostingFieldConflict[] }
+type ExtractedPosting = { title: string; company: string | null; description: string; optionalDetails: PostingPreview['optionalDetails']; notices: string[]; conflicts: import('../shared/posting-import').PostingFieldConflict[] }
 async function extractPostingBounded(text: string, expectedId: string, signal: AbortSignal): Promise<ExtractedPosting> {
   const worker = new Worker(join(__dirname, 'posting-extraction-worker.cjs'), { workerData: { text, expectedId } })
   return await new Promise((resolve, reject) => {
@@ -191,7 +191,7 @@ export async function fetchLeverPosting(input: string, options: SafePostingFetch
       }
       break
     }
-    if (!response || response.status !== 200) throw new Error(response?.status === 403 || response?.status === 429 ? 'The source denied or rate-limited access. Try opening it or paste the posting text instead.' : `The posting source returned HTTP ${response?.status ?? 'error'}.`)
+    if (!response || response.status !== 200) throw new Error(response?.status === 403 || response?.status === 429 ? 'The source denied or rate-limited access. Try opening it or paste the posting text instead.' : response?.status === 404 ? 'The posting could not be reached (HTTP 404). This does not confirm that the role was removed; open the source or paste its text.' : `The posting source returned HTTP ${response?.status ?? 'error'}.`)
     let body: Buffer
     try { body = await decodeBounded(response.body, String(response.headers['content-encoding'] ?? 'identity').toLowerCase(), controller.signal) }
     catch (error) { throw error instanceof Error && error.message === 'oversized' ? new Error('The posting response exceeded the 8 MiB expanded limit.') : error }

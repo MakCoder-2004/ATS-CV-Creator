@@ -20,6 +20,10 @@
 .posting-history li { min-width: 0; }
 .posting-history h4 { font-size: 13px; }
 .posting-history h4 span { color: var(--muted); font-weight: 450; }
+.posting-history dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 16px; margin: 0; }
+.posting-history dl div { min-width: 0; }
+.posting-history dt { color: var(--muted); font-size: 12px; }
+.posting-history dd { margin: 0; overflow-wrap: anywhere; }
 .posting-history pre, .posting-captured-source pre { max-height: 320px; overflow: auto; margin: 0; padding: 12px; border: 1px solid var(--line); border-radius: 6px; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
 .posting-captured-source { display: grid; gap: 8px; min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
 .posting-captured-source summary { cursor: pointer; font-weight: 650; }
@@ -54,6 +58,8 @@
 .posting-preview-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; min-width: 0; }
 .posting-preview-fields .wide-field { grid-column: 1 / -1; }
 .posting-preview-fields textarea { min-height: 260px; line-height: 1.55; resize: vertical; white-space: pre-wrap; }
+.posting-optional-details { display: grid; gap: 12px; min-width: 0; padding: 12px 16px; border: 1px solid var(--line); border-radius: 6px; }
+.posting-optional-details legend { padding: 0 4px; color: var(--muted); font-size: 13px; font-weight: 650; }
 .posting-source-conflict { display: grid; gap: 8px; min-width: 0; padding: 12px 16px; border: 1px solid var(--warning-border); border-radius: 6px; background: var(--warning-surface); color: var(--warning-ink); }
 .posting-source-conflict legend { padding: 0 4px; font-weight: 650; }
 .posting-source-conflict label, .posting-completeness-review { display: flex; align-items: flex-start; gap: 8px; min-width: 0; line-height: 1.55; }
@@ -119,6 +125,7 @@
   .job-dialog-actions { justify-content: stretch; }
   .job-dialog-actions button { flex: 1; }
   .posting-preview-fields { grid-template-columns: minmax(0, 1fr); }
+  .posting-history dl { grid-template-columns: minmax(0, 1fr); }
   .posting-preview-fields .wide-field { grid-column: auto; }
   .saved-jobs-intake .job-dialog-actions { flex-wrap: wrap; }
 }
