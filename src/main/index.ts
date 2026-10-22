@@ -109,9 +109,12 @@ app.whenReady().then(() => {
     if (process.env.CV_TAILOR_SCRIPTED_ANALYSIS === 'tailored-flow') return JSON.stringify({ required: ['Python', 'RASA', 'Google Cloud Platform', 'NLP'], preferred: ['Docker'], tools: ['Python', 'RASA', 'Google Cloud Platform', 'spaCy', 'Git', 'Docker'], responsibilities: ['Build Python APIs and conversational AI solutions'], keywords: ['Python', 'NLP', 'intent classification', 'model evaluation', 'backend services'] })
     return JSON.stringify({ required: ['TypeScript', 'Kubernetes'], preferred: ['Cloud architecture'], tools: ['TypeScript'], responsibilities: ['Build reliable services'], keywords: ['TypeScript', 'Kubernetes', 'Cloud architecture'] })
   } } : undefined
-  const scriptedPostingFetch = !app.isPackaged && process.env.CV_TAILOR_SCRIPTED_POSTING_FETCH === '1' ? {
+  const scriptedPostingFetch = !app.isPackaged && ['1', 'delayed'].includes(process.env.CV_TAILOR_SCRIPTED_POSTING_FETCH ?? '') ? {
     lookup: async () => [{ address: '8.8.8.8', family: 4 }],
-    request: async (url: URL) => ({ status: 200, headers: { 'content-type': 'application/json' }, body: Buffer.from(JSON.stringify({ id: url.pathname.split('/').at(-1), text: 'Synthetic Reliability Engineer', company: 'Example Research', descriptionPlain: 'Responsibilities\nBuild and maintain fictional systems, document operational decisions, collaborate with the synthetic engineering team, and review reliability outcomes across a clearly invented service environment.', lists: [{ text: 'Requirements', content: '<li>Experience with testing.</li>' }] })) })
+    request: async (url: URL) => {
+      if (process.env.CV_TAILOR_SCRIPTED_POSTING_FETCH === 'delayed') await new Promise(resolve => setTimeout(resolve, 800))
+      return { status: 200, headers: { 'content-type': 'application/json' }, body: Buffer.from(JSON.stringify({ id: url.pathname.split('/').at(-1), text: 'Synthetic Reliability Engineer', company: 'Example Research', descriptionPlain: 'Responsibilities\nBuild and maintain fictional systems, document operational decisions, collaborate with the synthetic engineering team, and review reliability outcomes across a clearly invented service environment.', lists: [{ text: 'Requirements', content: '<li>Experience with testing.</li>' }] })) }
+    }
   } : undefined
   workspace = createWorkbench(app.getPath('userData'), safeStorage, scriptedAnalysis, undefined, scriptedPostingFetch)
   registerWorkspaceBackupIpc(() => window!, () => workspace!, () => {

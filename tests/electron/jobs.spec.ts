@@ -118,3 +118,28 @@ test('saved jobs follow the design-system list, support editing, and reopen for 
     await rm(userData, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 })
   }
 })
+
+test('switching to paste text supersedes a late scripted posting response', async () => {
+  const userData = mkdtempSync(join(tmpdir(), 'cv-tailor-fetch-supersede-'))
+  let running: ElectronApplication | undefined
+  try {
+    running = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData, CV_TAILOR_SCRIPTED_POSTING_FETCH: 'delayed' } })
+    const page = await running.firstWindow()
+    await expect(page.locator('[data-ui-ready="true"]')).toBeVisible()
+    await page.getByRole('button', { name: 'Saved jobs', exact: true }).click()
+    await page.locator('.saved-jobs-heading').getByRole('button', { name: 'New job' }).click()
+    await page.getByRole('button', { name: 'Import from link' }).click()
+    await page.getByLabel('Public Lever posting link').fill('https://jobs.lever.co/example-board/late-response')
+    await page.getByRole('button', { name: 'Fetch posting' }).click()
+    await expect(page.getByRole('button', { name: 'Cancel fetch' })).toBeEnabled()
+    await page.getByRole('button', { name: 'Paste posting text instead' }).click()
+    await expect(page.getByLabel('Posting and requirements')).toBeVisible()
+    await page.waitForTimeout(1_000)
+    await expect(page.getByRole('heading', { name: 'Temporary posting import preview' })).toHaveCount(0)
+    await expect(page.getByLabel('Posting and requirements')).toHaveValue('')
+    await expect(page.locator('.saved-job-row')).toHaveCount(0)
+  } finally {
+    await running?.close()
+    await rm(userData, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 })
+  }
+})
