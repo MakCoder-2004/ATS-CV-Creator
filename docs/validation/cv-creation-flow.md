@@ -1,5 +1,7 @@
 # Approved CV-creation flow — implementation validation
 
+**Historical v0.1.1 record.** The headline, summary, and Arial layout below were superseded by the supplied Letter/Lato template in [v0.2.0 export validation](latex-export.md). See the [current workflows](../workflows.md) before changing the app.
+
 Scope: [issue #25](https://github.com/MakCoder-2004/ATS-CV-Creator/issues/25), version **0.1.1**. The user approved the throwaway preview on `prototype/cv-creation-flow` (source `0aa68f4`, approval record `c1a84a0`). Production was rewritten against its decisions; no prototype simulator was merged.
 
 ## Implemented behavior

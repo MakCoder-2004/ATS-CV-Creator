@@ -1,0 +1,67 @@
+# Application architecture
+
+CV Tailor is an Electron desktop application for keeping a local profile of career facts, saving job postings, and producing a reviewed tailored CV. The installed app runs on Windows. Its renderer is React and TypeScript; the main process owns the database, network requests, model requests, native dialogs, and file operations. The [project glossary](../GLOSSARY.md) defines the terms used here. This page describes current code, not future features in research notes.
+
+## Stack and repository layout
+
+The [locked npm package](../package.json) and [Electron Vite config](../electron.vite.config.ts) define the build. This table names packages that the current application uses, rather than every transitive dependency.
+
+| Concern | Current choice |
+| --- | --- |
+| Desktop and build | Electron 39, TypeScript 5, Electron Vite 5, Vite 7, and an NSIS Windows installer through electron-builder. |
+| Interface | React 19, CSS and Tailwind 4, Radix Select and Popover controls, Lucide icons, and bundled Manrope and Sora variable fonts. The exported PDF instead uses Lato. |
+| Records and validation | `better-sqlite3` in the main process; Zod schemas shared across processes. |
+| Model work | OpenRouter transport, LangGraph state graph, and a SQLite checkpoint saver. |
+| Documents | PDF.js for import and preview, DOCX and JSZip for document paths, and an application-owned LaTeX template compiled by bundled pdfLaTeX. |
+| Tests | Vitest for domain and workbench contracts, and Playwright for Electron and installed-app flows. |
+
+`src/main/` owns privileged behavior, `src/preload/` owns the renderer bridge, `src/shared/` holds contracts, and `src/renderer/` holds the UI. `tests/` covers contracts and `tests/electron/` covers desktop behavior. `scripts/` contains build and verification tools. `resources/` holds the template, licenses, icon, and compiler lockfile. `prototypes/cv-tailor-ui/` is a separate npm workspace for design evidence, not an installed package.
+
+## Process boundaries
+
+| Layer | Ownership | Entry points |
+| --- | --- | --- |
+| Renderer | Four pages, user input, review state, and local display state. No Node or filesystem access. | [`src/renderer/main.tsx`](../src/renderer/main.tsx), [`src/renderer/WorkbenchStart.tsx`](../src/renderer/WorkbenchStart.tsx) |
+| Shared contracts | Zod schemas and types for records and the renderer-facing `WorkbenchAPI`. | [`src/shared/appearance.ts`](../src/shared/appearance.ts), [`src/shared/profile.ts`](../src/shared/profile.ts), [`src/shared/jobs.ts`](../src/shared/jobs.ts), [`src/shared/draft.ts`](../src/shared/draft.ts) |
+| Preload | Exposes `window.workbench` with named methods through `contextBridge`; parses IPC inputs and results. | [`src/preload/index.ts`](../src/preload/index.ts) |
+| Main | Checks the calling frame, registers IPC handlers, creates the workspace, and manages native and external operations. | [`src/main/index.ts`](../src/main/index.ts), [`src/main/workbench.ts`](../src/main/workbench.ts) |
+
+The browser window has context isolation and sandboxing, with Node integration disabled. The main process rejects IPC calls from frames other than the expected main renderer frame and blocks navigation. A new renderer capability therefore needs a shared API method, a preload implementation, a trusted main handler, and application logic. The renderer has neither generic IPC nor direct disk access.
+
+## Durable data and domain records
+
+`createWorkbench` in [`src/main/workbench.ts`](../src/main/workbench.ts) opens `workbench.sqlite` under Electron's per-user `userData` directory, enables WAL, creates tables, and runs forward migrations. The same module implements most storage operations; there is no separate repository layer. Stored JSON is parsed against shared schemas on read. The schema includes these groups:
+
+| Group | Tables and purpose |
+| --- | --- |
+| Configuration | `settings`, `encrypted_credentials`, and `schema_migrations` hold preferences, protected credentials, and migrations. |
+| Profile | `profile_contact`, `profile_skills`, `profile_entries`, `profile_experience`, `profile_projects`, `evidence_revisions`, and `profile_import_provenance` hold career facts and source history. |
+| Jobs | `jobs` holds saved job records, including source snapshots and accepted posting revisions. |
+| Model work | `outbound_consents`, `posting_analysis_cache`, `analysis_run_state`, `analysis_attempts`, `provider_attempt_outcomes`, `generation_recovery`, `generation_recovery_extensions`, and the SQLite graph checkpointer track authorization, work, and recovery. |
+| CV review | `draft_revisions`, `regeneration_proposals`, and `document_fit_reports` hold the draft, replacement proposals, and page-fit results. |
+
+A **profile** contains source facts. A **saved job** holds the target posting. A **draft** is a version of the tailored CV with evidence citations; it is not the profile. An imported **posting source snapshot** remains distinct from the person's accepted **working posting**. `src/shared/profile.ts`, `experience.ts`, `jobs.ts`, `posting-import.ts`, `draft.ts`, and `document.ts` define these record shapes. A profile edit records an evidence revision, so a draft can detect changed cited facts.
+
+## External input and model requests
+
+The Saved jobs link flow accepts only named, public HTTPS Lever posting detail URLs, including the corresponding Lever API route. [`src/main/safe-posting-fetch.ts`](../src/main/safe-posting-fetch.ts) validates the URL, resolves and pins public addresses, verifies transport, bounds the request and response, and runs extraction in a worker. Other job sites are not enabled by this fetch path; users can enter posting text. A link fetch creates a temporary preview. The user reviews and accepts it before it becomes a saved job. Refresh compares a new source snapshot with the saved working posting rather than silently replacing corrections.
+
+Before model work, [`src/shared/outbound-consent.ts`](../src/shared/outbound-consent.ts) constructs a minimized, scoped payload from the current posting and profile. [`src/main/workbench.ts`](../src/main/workbench.ts) binds authorization to a run and scope hash. Accepting a preview alone does not send the request. `startAnalysis` begins analysis for the authorized run, even when it can reuse compatible cached data. Draft generation requires the analysis and authorization for that run; a prior cached result is not permission to generate again.
+
+[`src/main/posting-analysis.ts`](../src/main/posting-analysis.ts) and [`src/main/openrouter-analysis-transport.ts`](../src/main/openrouter-analysis-transport.ts) handle bounded OpenRouter calls, model capacity, retries, and usage limits. [`src/main/source-linked-generation.ts`](../src/main/source-linked-generation.ts) uses a LangGraph state graph to score eligible evidence, select content for a one- or two-page target, and produce structured, cited wording. It rejects missing or foreign citations and incompatible recovered checkpoints. [`src/main/sqlite-checkpoint.ts`](../src/main/sqlite-checkpoint.ts) stores graph checkpoints. The model supplies content, not executable LaTeX or authority to change profile facts.
+
+## Review, export, and backup
+
+The draft's citations carry evidence identities and revisions. [`src/main/factual-verification.ts`](../src/main/factual-verification.ts), [`src/main/workbench.ts`](../src/main/workbench.ts), and [`src/shared/document.ts`](../src/shared/document.ts) connect factual checks, a canonical document, page-fit measurements, and approval. Approval is tied to current content and review state. Edits and accepted cuts require a fresh check and approval before export. Automated checks cannot establish semantic truth; the person reviews the wording and sources.
+
+The PDF uses the application-owned Letter/Lato template under [`resources/cv-template/`](../resources/cv-template/) and a bundled local pdfLaTeX toolchain. [`src/main/latex-compiler.ts`](../src/main/latex-compiler.ts) compiles in a disposable directory with bounded execution and no shell escape. [`src/main/pdf-document.ts`](../src/main/pdf-document.ts) measures the actual compiled PDF. [`src/main/docx-export.ts`](../src/main/docx-export.ts) creates an editable Word document from the same canonical content; Word pagination can differ from the PDF.
+
+Profile PDF and DOCX imports extract text in bounded workers and produce proposals for explicit review; optional AI structuring has a separate outgoing-data preview and consent. Profile JSON exchange is a separate replacement path. [`src/main/workspace-backup.ts`](../src/main/workspace-backup.ts) validates backup data; restore previews replacement and makes a safety copy. Backup excludes the OpenRouter key and does not restore authorization for cloud work. The renderer's `WorkbenchStart` implements the user-facing order.
+
+## Invariants
+
+- Shared contracts define record shapes. IPC, network, file, and provider boundaries validate external input.
+- Consent binds to the operation and current source revisions. A cache hit does not waive new-run authorization.
+- Posting source snapshots, accepted posting revisions, profile evidence, and draft wording remain distinct. Posting keywords are not career facts.
+- The app-owned canonical document, citation checks, PDF page measurement, and approval guard constrain export.
+- The [frontend design contract](../design%20system/README.md) governs renderer changes. Prototype state is design evidence, not production data or a supported feature.

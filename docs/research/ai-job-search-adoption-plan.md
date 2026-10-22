@@ -1,6 +1,6 @@
 # Adopting useful AI Job Search capabilities in CV Tailor
 
-**Status:** research-backed product proposal, not an approved implementation specification.\
+**Status:** historical research-backed proposal, not a current implementation specification. Link intake and profile upload have since shipped in narrower forms; check [current workflows](../workflows.md) and code before treating an item here as unimplemented.\
 **Date:** 2026-10-21.\
 **User direction confirmed during research:** expand into a **phased job-search workspace**; cover discovery/ranking, application writing/review, tracking/interviews, and profile enrichment/learning; prioritize **Egypt/MENA**. **Requested addition:** paste a job-posting link and automatically extract its details instead of copying the posting text. **B1 behavior was confirmed through four design-interview rounds and a final shared-understanding confirmation; its spec and approved child tickets were subsequently published without starting implementation.** **Additional confirmed feature:** upload a text PDF or DOCX in My profile, automatically map it into compatible profile data, review add/update/skip proposals, and fill the profile after confirmation; local first, with optional separately authorized AI structuring.\
 **Local baseline:** commit `4b301370ea8fa0cae49517a91b529e64302f58c6`, plus the working tree inspected during research. Existing `package.json`, `package-lock.json`, and `CV/` changes were not modified.
@@ -53,11 +53,11 @@ The detailed evidence is in [the pinned source audit](ai-job-search-source-audit
 
 Upstream's reported hiring success is a self-reported anecdote, not evidence of causal benefit. Its factuality instructions and reviewer are not proof that generated claims are true. Its privacy documents also conflict: SECURITY describes profile data as gitignored, while README warns that setup personalizes tracked files; the actual ignore rules do not protect those tracked profile files. Do not copy that storage/public-fork pattern. Its MIT license does not grant permission to scrape job boards or redistribute their datasets. See the source audit for exact limitations and licensing references.
 
-## 3. What CV Tailor already has—and what is genuinely missing
+## 3. Baseline at the time of research
 
-The current source, not old ticket completion comments or prototype fixtures, determines the baseline. Evidence pointers are in §16.
+This table records the source inspected on 2026-10-21. It is not maintained as the current feature inventory. Link intake, PDF/DOCX profile import, and full-profile qualification comparison shipped later in narrower forms. For current behavior, read [shipped workflows](../workflows.md) and the cited source. Evidence pointers for the original baseline are in §16.
 
-| Area | Current implementation | Real gap |
+| Area | Implementation at research baseline | Gap proposed at research baseline |
 | --- | --- | --- |
 | Profile | Local structured CRUD, stable evidence revisions, historical snapshots, JSON exchange | General career-document ingestion, source passages, merge proposals, confirmed interview stories, target-role preferences |
 | Saved jobs | Title, company, original description, timestamps, reopening | Automatic extraction from a pasted posting URL; source URL/ID, location/work arrangement, deadlines, deduplication, independent posting revisions and acquisition state |
@@ -70,7 +70,7 @@ The current source, not old ticket completion comments or prototype fixtures, de
 | Reliability/privacy | Minimized outgoing bundle, run-specific consent, encrypted key, request/time budgets, cancellation, durable checkpoints, explicit recovery | Purpose-specific authorization for new data categories and destinations; aggregate batch budgets; token/cost observations |
 | Backup | Full workspace format with explicit tables/schema validation and secret exclusion | Forward migration and backward-compatible backup import before new tables/assets are introduced |
 
-**Important profile-import nuance:** older issue #6 describes a reference-PDF importer, but [merged PR #24](https://github.com/MakCoder-2004/ATS-CV-Creator/pull/24) deliberately removed its UI and application interfaces. The current public bridge does not expose it and the current Electron test explicitly expects no reference-PDF-import region. The user has now explicitly requested a redesigned upload-to-profile feature and confirmed text PDF/DOCX, local-first optional AI, add/update/skip, and review-before-apply. This is new scope replacing that absence requirement when implemented—not a claim that the removed importer is already available or should be restored unchanged.
+**Profile-import history:** older issue #6 describes a reference-PDF importer, but [merged PR #24](https://github.com/MakCoder-2004/ATS-CV-Creator/pull/24) removed its UI and application interfaces. At the time of this research, the public bridge did not expose it. A redesigned PDF/DOCX upload with review-before-apply and optional separately authorized AI structuring has since shipped; it is not the removed importer restored unchanged.
 
 **Important document nuance:** our actual compiled PDF text/reading-order checks already cover a large part of upstream's “ATS parseability” story. The missing value is better diagnostics and content selection, not another third-party ATS upload or an invented ATS score.
 
@@ -117,9 +117,11 @@ These are proposed behavior and acceptance directions. Final screens, schemas, a
 
 **User value:** paste a job-posting link and let the app collect the details, instead of manually copying the description; maintain one trustworthy queue of opportunities from regional boards and employer sites.
 
-#### B1. Import a single posting from its link — early-release requirement
+#### B1. Single-posting link import history
 
-**Published specification:** [#26 — Import a job posting from a supported link](https://github.com/MakCoder-2004/ATS-CV-Creator/issues/26), labeled `ready-for-agent`. The issue is the self-contained delivery specification; publishing it did not create child tickets or start implementation.
+Lever-only link intake and explicit preview/accept/refresh later shipped. The following is the original proposal, not a claim that every proposed source or workflow is supported today. See [shipped workflows](../workflows.md) and [link release validation](../validation/link-11-release-2026-10-22.md).
+
+**Published specification at the time:** [#26 — Import a job posting from a supported link](https://github.com/MakCoder-2004/ATS-CV-Creator/issues/26). Publication had not started implementation at that point.
 
 **Confirmed design:** the behavior below was agreed in four grilling rounds and a final confirmation. Remaining source-specific feasibility, exact safety ceilings, and UI prototyping are implementation prerequisites, not permission to change these product decisions silently.
 

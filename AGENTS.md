@@ -12,7 +12,7 @@ Use `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, and `won
 
 ### Domain docs
 
-This is a single-context repo; read the root `GLOSSARY.md` and relevant ADRs under `docs/adr/` when present. See `docs/agents/domain.md`.
+This is a single-context repo; read the root `GLOSSARY.md` and relevant ADRs under `docs/adr/` when present. See `docs/agents/domain.md`. Start at `docs/README.md` for current architecture, shipped workflows, development checks, and the status of older research and validation. Use source and tests to resolve conflicts with historical reports. When shipped behavior changes, update the relevant current guide and keep dated validation reports as historical evidence.
 
 ### Frontend design system
 

@@ -2,6 +2,8 @@
 
 Personal Windows Workbench for managing local profile evidence (contact details, skills, experience, projects, education, certificates, summary, languages and extras), saved job postings, appearance, and OpenRouter API key and model ID preferences. Evidence changes are validated, versioned, and stored locally. A consent-bounded, source-linked draft can be generated, saved, checked, edited, measured for actual PDF page fit, and approved as an exact canonical document; approval and review state persist locally and reopen offline. Deterministic checks are limited and do not prove semantic truth. Approved CVs export as a selectable PDF or editable DOCX using the same canonical content; Word pagination may differ. The approved browser-only prototype remains under `prototypes/cv-tailor-ui/` as design evidence, never part of the installed app.
 
+For changes, start at the [documentation map](docs/README.md). It separates the current [architecture](docs/architecture.md), [shipped workflows](docs/workflows.md), and [development checks](docs/development.md) from dated research and validation.
+
 ## Create a tailored CV
 
 1. **Job posting:** add or open a saved role with its requirements.
