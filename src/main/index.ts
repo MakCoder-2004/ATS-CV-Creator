@@ -19,6 +19,7 @@ import { experienceSaveInputSchema, experienceSnapshotSchema, experienceMutation
 import { jobRecordSchema, jobSaveInputSchema, jobSaveResultSchema } from '../shared/jobs'
 import { registerProfileExchangeIpc } from './profile-exchange-ipc'
 import { registerProfilePdfImportIpc } from './profile-pdf-import-ipc'
+import { registerProfileDocxImportIpc } from './profile-docx-import-ipc'
 import { registerWorkspaceBackupIpc } from './workspace-backup-ipc'
 import { outboundConsentActionSchema, outboundConsentPreviewSchema } from '../shared/outbound-consent-contract'
 import { analysisBudgetsSchema, analysisIdSchema, analysisResultSchema, analysisStartInputSchema, analysisUsageSchema, generationRecoverySchema, recoveryChoiceSchema } from '../shared/posting-analysis'
@@ -150,7 +151,8 @@ app.whenReady().then(() => {
   })
   registerProfileExchangeIpc(() => window!, () => workspace!.api, trusted)
   const profilePdfImport = registerProfilePdfImportIpc(() => window!, () => workspace!.api, trusted)
-  app.on('before-quit', () => profilePdfImport.clear())
+  const profileDocxImport = registerProfileDocxImportIpc(() => window!, () => workspace!.api, trusted)
+  app.on('before-quit', () => { profilePdfImport.clear(); profileDocxImport.clear() })
   ipcMain.handle('profile:get', async (event, ...args: unknown[]) => {
     trusted(event)
     if (args.length) throw new Error('Unexpected arguments')

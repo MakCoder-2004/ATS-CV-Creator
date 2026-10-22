@@ -5,7 +5,7 @@ import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
 export default defineConfig({
-  main: { plugins: [externalizeDepsPlugin(), { name: 'copy-profile-pdf-worker', closeBundle() { const target = join(process.cwd(), 'out', 'main'); mkdirSync(target, { recursive: true }); copyFileSync(join(process.cwd(), 'src', 'main', 'profile-pdf-worker.cjs'), join(target, 'profile-pdf-worker.cjs')) } }] },
+  main: { plugins: [externalizeDepsPlugin(), { name: 'copy-profile-parser-workers', closeBundle() { const target = join(process.cwd(), 'out', 'main'); mkdirSync(target, { recursive: true }); for (const worker of ['profile-pdf-worker.cjs', 'profile-docx-worker.cjs']) copyFileSync(join(process.cwd(), 'src', 'main', worker), join(target, worker)) } }] },
   preload: { build: { externalizeDeps: false } },
   renderer: { plugins: [react(), tailwindcss()] }
 })

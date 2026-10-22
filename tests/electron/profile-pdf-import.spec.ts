@@ -3,8 +3,18 @@ import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import JSZip from 'jszip'
 import { makeEncryptedProfilePdf } from '../fixtures/encrypted-profile-pdf'
 import { makeLayoutProfilePdf } from '../fixtures/layout-profile-pdf'
+
+async function makeDocx() {
+  const zip = new JSZip()
+  zip.file('[Content_Types].xml', '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>')
+  zip.file('_rels/.rels', '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>')
+  zip.file('word/document.xml', '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>NAME: Ada Example</w:t></w:r></w:p><w:p><w:r><w:t>EMAIL: ada@example.test</w:t></w:r></w:p><w:p><w:r><w:t>SKILLS: Python, SQL</w:t></w:r></w:p><w:p><w:r><w:t>EXPERIENCE: Example Labs | Engineer | 2020-01 – 2022-03</w:t></w:r></w:p><w:p><w:r><w:t>FACT: Built accessible software for customers across multiple teams</w:t></w:r></w:p><w:p><w:r><w:t>SUMMARY: Reliable engineer with substantial experience building useful software products</w:t></w:r></w:p></w:body></w:document>')
+  zip.file('word/_rels/document.xml.rels', '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>')
+  return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' })
+}
 
 function makePdf(lines: string[]) {
   const objects: string[] = []
@@ -19,6 +29,34 @@ function makePdf(lines: string[]) {
   const xref = pdf.length; let table = `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`; offsets.slice(1).forEach(offset => { table += `${String(offset).padStart(10, '0')} 00000 n \n` })
   return Buffer.concat([pdf, Buffer.from(`${table}trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`)])
 }
+
+test('imports DOCX proposals through visible review and applies them to the existing profile contract', async () => {
+  test.setTimeout(60000)
+  const root = mkdtempSync(join(tmpdir(), 'cv-tailor-docx-import-')), userData = join(root, 'workspace'), sourceFile = join(root, 'synthetic-cv.docx')
+  writeFileSync(sourceFile, await makeDocx())
+  const original = readFileSync(sourceFile)
+  let running: ElectronApplication | undefined
+  try {
+    running = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData } })
+    const page = await running.firstWindow()
+    await expect(page.locator('[data-ui-ready="true"]')).toBeVisible({ timeout: 15000 })
+    await page.getByRole('button', { name: 'My profile' }).click()
+    await running.evaluate(({ dialog }, selectedPath) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selectedPath] }); return true }, sourceFile)
+    await page.getByRole('button', { name: 'Upload Word CV' }).click()
+    const review = page.getByRole('region', { name: 'Review proposed profile details' })
+    await expect(review).toBeVisible({ timeout: 15000 })
+    await expect(review.getByLabel('Full name')).toHaveValue('Ada Example')
+    await expect(review.getByLabel('Skill name').first()).toHaveValue('Python')
+    await expect(review.getByText('Built accessible software for customers across multiple teams')).toBeVisible()
+    await review.getByRole('button', { name: 'Apply accepted details' }).click()
+    await expect(page.getByRole('status')).toContainText('added to your profile')
+    expect(await page.evaluate(() => window.workbench.getProfile())).toMatchObject({ contact: { fullName: 'Ada Example' }, skills: [{ name: 'Python' }, { name: 'SQL' }] })
+    expect(await page.evaluate(() => window.workbench.getExperience())).toMatchObject({ experience: [{ title: 'Engineer', organization: 'Example Labs', factualItems: [{ text: 'Built accessible software for customers across multiple teams' }] }] })
+    expect(readFileSync(sourceFile)).toEqual(original)
+    expect((await page.evaluate(() => window.workbench.getAnalysisUsage())).attempts).toBe(0)
+    await running.close(); running = undefined
+  } finally { await running?.close(); await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }) }
+})
 
 test('imports PDF proposals through review, atomically applies supported profile sections, then backs up/restores and reopens SQLite', async () => {
   test.setTimeout(120000)
