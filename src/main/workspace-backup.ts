@@ -3,7 +3,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { MAX_WORKSPACE_BACKUP_BYTES, MAX_WORKSPACE_BACKUP_POSTING_REVISIONS, MAX_WORKSPACE_BACKUP_ROW_BYTES, WORKSPACE_BACKUP_SIZE_TABLE, WORKSPACE_BACKUP_STATE_TABLE, WORKSPACE_BACKUP_TABLE_ROW_LIMITS, workspaceBackupSchema, workspaceBackupStatusSchema, workspaceBackupWarning, type WorkspaceBackupEngine, type WorkspaceRestorePreview } from '../shared/workspace-backup'
 import { contactRecordSchema, skillRecordSchema, profileEntrySchema, evidenceRevisionSchema, uuidSchema } from '../shared/profile'
 import { experienceRecordSchema, projectRecordSchema } from '../shared/experience'
-import { jobRecordSchema, MAX_JOB_RECORD_UTF8_BYTES, legacyDraftTargetBaseline } from '../shared/jobs'
+import { emptyPostingOptionalDetails, jobRecordSchema, MAX_JOB_RECORD_UTF8_BYTES, legacyDraftTargetBaseline, releasedV2JobRecordSchema } from '../shared/jobs'
 import { draftRevisionSchema } from '../shared/draft'
 import { analysisResultSchema, analysisBudgetsSchema, postingAnalysisSchema } from '../shared/posting-analysis'
 import { regenerationProposalSchema } from '../shared/regeneration'
@@ -104,7 +104,7 @@ export function createWorkspaceBackupEngine(db: Database.Database, maxBackupByte
   }
   const installBackupAccountingTriggers = () => {
     const names = actualTables()
-    const emptySnapshot = { format: 'cv-tailor-workspace-backup', version: 2 as const, createdAt: new Date().toISOString(), warning: workspaceBackupWarning, tables: Object.fromEntries(names.map(name => [name, { schema: tableSchema(name), rows: [] }])) }
+    const emptySnapshot = { format: 'cv-tailor-workspace-backup', version: 3 as const, createdAt: new Date().toISOString(), warning: workspaceBackupWarning, tables: Object.fromEntries(names.map(name => [name, { schema: tableSchema(name), rows: [] }])) }
     const baseBytes = Buffer.byteLength(JSON.stringify(emptySnapshot), 'utf8')
     for (const name of names) for (const suffix of ['insert', 'update', 'delete']) db.exec(`DROP TRIGGER IF EXISTS "cv_backup_${name}_${suffix}"`)
     db.prepare(`DELETE FROM ${WORKSPACE_BACKUP_SIZE_TABLE}`).run()
@@ -138,6 +138,28 @@ export function createWorkspaceBackupEngine(db: Database.Database, maxBackupByte
       END;`)
     }
     const currentSnapshot = { ...emptySnapshot, tables: Object.fromEntries(names.map(name => [name, { schema: tableSchema(name), rows: rowsFor(name) }])) }
+    // An over-cap label is recovery mode for valid historical data, never a blanket excuse for corrupt rows.
+    for (const row of currentSnapshot.tables.jobs?.rows ?? []) {
+      let parsed: unknown
+      try { parsed = JSON.parse(String(row.data)) } catch { throw new Error('Workspace contains corrupt saved-job data; it was not classified as a recoverable legacy workspace.') }
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Workspace contains corrupt saved-job data; it was not classified as a recoverable legacy workspace.')
+      const job = structuredClone(parsed) as Record<string, unknown>
+      const sanitizeText = (record: Record<string, unknown>, allowEmpty = false) => {
+        if (typeof record.description !== 'string' || (!allowEmpty && !record.description.trim())) throw new Error('Workspace contains corrupt saved-job data; it was not classified as a recoverable legacy workspace.')
+        record.description = 'Legacy posting text omitted for structural validation.'
+      }
+      sanitizeText(job)
+      if (Array.isArray(job.revisions)) for (const revision of job.revisions) {
+        if (!revision || typeof revision !== 'object' || Array.isArray(revision)) throw new Error('Workspace contains corrupt saved-job history; it was not classified as recoverable legacy data.')
+        sanitizeText(revision as Record<string, unknown>)
+      }
+      if (job.sourceSnapshot && typeof job.sourceSnapshot === 'object' && !Array.isArray(job.sourceSnapshot)) sanitizeText(job.sourceSnapshot as Record<string, unknown>, true)
+      if (Array.isArray(job.sourceHistory)) for (const snapshot of job.sourceHistory) {
+        if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) throw new Error('Workspace contains corrupt saved-job history; it was not classified as recoverable legacy data.')
+        sanitizeText(snapshot as Record<string, unknown>, true)
+      }
+      if (!jobRecordSchema.safeParse(job).success) throw new Error('Workspace contains corrupt saved-job data; it was not classified as a recoverable legacy workspace.')
+    }
     let legacyOverCap = false
     try { validateRawBounds(currentSnapshot) } catch { legacyOverCap = true }
     const snapshotBytes = Buffer.byteLength(JSON.stringify(currentSnapshot), 'utf8')
@@ -147,7 +169,7 @@ export function createWorkspaceBackupEngine(db: Database.Database, maxBackupByte
     const bytes = backupBytesFromLedger().bytes
     if (bytes !== snapshotBytes) throw new Error(`Workspace backup byte ledger is inconsistent with stored rows (${bytes} accounted, ${snapshotBytes} serialized).`)
     if (bytes > maxBackupBytes) { legacyOverCap = true; db.prepare(`UPDATE ${WORKSPACE_BACKUP_STATE_TABLE} SET legacy_over_cap=1 WHERE singleton=1`).run() }
-    if (Object.entries(WORKSPACE_BACKUP_TABLE_ROW_LIMITS).some(([name, maxRows]) => (db.prepare(`SELECT COUNT(*) AS count FROM "${name}"`).get() as { count: number }).count > maxRows)) { legacyOverCap = true; db.prepare(`UPDATE ${WORKSPACE_BACKUP_STATE_TABLE} SET legacy_over_cap=1 WHERE singleton=1`).run() }
+    if (actualTables().some(name => (db.prepare(`SELECT COUNT(*) AS count FROM "${name}"`).get() as { count: number }).count > WORKSPACE_BACKUP_TABLE_ROW_LIMITS[name]!)) { legacyOverCap = true; db.prepare(`UPDATE ${WORKSPACE_BACKUP_STATE_TABLE} SET legacy_over_cap=1 WHERE singleton=1`).run() }
   }
   installBackupAccountingTriggers()
   const buildSnapshot = () => {
@@ -158,7 +180,7 @@ export function createWorkspaceBackupEngine(db: Database.Database, maxBackupByte
       if (count > maxRows) throw new Error(`Workspace table ${name} exceeds its ${maxRows}-row backup safety limit.`)
       return [name, { schema: tableSchema(name), rows: rowsFor(name) }]
     }))
-    const snapshot = { format: 'cv-tailor-workspace-backup', version: 2 as const, createdAt: new Date().toISOString(), warning: workspaceBackupWarning, tables }
+    const snapshot = { format: 'cv-tailor-workspace-backup', version: 3 as const, createdAt: new Date().toISOString(), warning: workspaceBackupWarning, tables }
     validateRawBounds(snapshot)
     const encoded = JSON.stringify(snapshot)
     if (Buffer.byteLength(encoded, 'utf8') > maxBackupBytes) throw new Error(`Backup exceeds the ${Math.round(maxBackupBytes / (1024 * 1024))} MiB workspace safety limit.`)
@@ -260,6 +282,23 @@ export function createWorkspaceBackupEngine(db: Database.Database, maxBackupByte
         row.data = JSON.stringify({ ...value, provenance: 'legacy-unknown', sourceSnapshot: null, revisions: [] })
       }
       upgraded.version = 2
+      backup = upgraded
+    }
+    if (backup.version === 2) {
+      const upgraded = structuredClone(backup) as typeof backup
+      const jobs = upgraded.tables.jobs
+      if (!jobs) throw new Error('Backup is invalid or incompatible with this workspace schema.')
+      for (const row of jobs.rows) {
+        let rawJob: unknown
+        try { rawJob = JSON.parse(String(row.data)) } catch { throw new Error('Backup contains corrupt JSON: jobs') }
+        const oldJob = releasedV2JobRecordSchema.safeParse(rawJob)
+        if (!oldJob.success) throw new Error('Backup row violates the released v2 jobs domain schema.')
+        const emptyDetails = emptyPostingOptionalDetails()
+        const value = oldJob.data
+        const upgradeSnapshot = (snapshot: typeof value.sourceSnapshot) => snapshot ? { ...snapshot, optionalDetails: emptyDetails, conflicts: [], fieldOrigins: { ...snapshot.fieldOrigins, optionalDetails: {} } } : null
+        row.data = JSON.stringify({ ...value, optionalDetails: emptyDetails, revisions: value.revisions.map(revision => ({ ...revision, optionalDetails: emptyDetails })), sourceSnapshot: upgradeSnapshot(value.sourceSnapshot), sourceHistory: value.sourceHistory.map(snapshot => upgradeSnapshot(snapshot)) })
+      }
+      upgraded.version = 3
       backup = upgraded
     }
     // Earlier released workspaces may not have the CV import provenance relation.

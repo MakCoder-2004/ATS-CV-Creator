@@ -20,7 +20,14 @@
 .posting-history li { min-width: 0; }
 .posting-history h4 { font-size: 13px; }
 .posting-history h4 span { color: var(--muted); font-weight: 450; }
-.posting-history pre { max-height: 220px; overflow: auto; margin: 0; padding: 12px; border: 1px solid var(--line); border-radius: 6px; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
+.posting-history dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 16px; margin: 0; }
+.posting-history dl div { min-width: 0; }
+.posting-history dt { color: var(--muted); font-size: 12px; }
+.posting-history dd { margin: 0; overflow-wrap: anywhere; }
+.posting-history pre, .posting-captured-source pre { max-height: 320px; overflow: auto; margin: 0; padding: 12px; border: 1px solid var(--line); border-radius: 6px; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
+.posting-captured-source { display: grid; gap: 8px; min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
+.posting-captured-source h4 { font-size: 13px; font-weight: 650; }
+.posting-preview-fields .field-help { color: var(--muted); font-size: 12px; font-weight: 450; line-height: 1.5; }
 .saved-job-description { display: grid; min-width: 0; gap: 2px; overflow-wrap: anywhere; }
 .saved-job-title { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .saved-job-description strong { font-size: 14px; font-weight: 700; }
@@ -51,6 +58,32 @@
 .posting-preview-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; min-width: 0; }
 .posting-preview-fields .wide-field { grid-column: 1 / -1; }
 .posting-preview-fields textarea { min-height: 260px; line-height: 1.55; resize: vertical; white-space: pre-wrap; }
+.posting-optional-details { display: grid; gap: 12px; min-width: 0; padding: 12px 16px; border: 1px solid var(--line); border-radius: 6px; }
+.posting-optional-details legend { padding: 0 4px; color: var(--muted); font-size: 13px; font-weight: 650; }
+.posting-source-conflict { display: grid; gap: 8px; min-width: 0; padding: 12px 16px; border: 1px solid var(--warning-border); border-radius: 6px; background: var(--warning-surface); color: var(--warning-ink); }
+.posting-source-conflict legend { padding: 0 4px; font-weight: 650; }
+.posting-source-conflict label, .posting-completeness-review { display: flex; align-items: flex-start; gap: 8px; min-width: 0; line-height: 1.55; }
+.posting-source-conflict label span { color: var(--muted); }
+.posting-source-conflict input, .posting-completeness-review input { flex: 0 0 auto; margin-top: 4px; accent-color: var(--blue); }
+.posting-completeness-review { font-weight: 650; }
+.posting-refresh-comparison { display: grid; gap: 16px; min-width: 0; padding: 16px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
+.posting-refresh-comparison h4 { font: 700 16px/1.4 'Sora Variable', sans-serif; }
+.posting-refresh-columns { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.posting-refresh-columns section { min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--canvas); }
+.posting-refresh-columns h5 { font-size: 13px; font-weight: 700; }
+.posting-refresh-columns pre { max-width: 100%; margin-top: 8px; overflow-wrap: anywhere; white-space: pre-wrap; font: inherit; line-height: 1.55; }
+.posting-refresh-columns dl { display: grid; gap: 4px; margin-top: 8px; }
+.posting-refresh-columns dl > div { display: grid; grid-template-columns: minmax(90px, 1fr) minmax(0, 2fr); gap: 8px; font-size: 12px; }
+.posting-refresh-columns dt { color: var(--muted); }
+.posting-refresh-columns dd { overflow-wrap: anywhere; }
+.posting-refresh-comparison fieldset { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--line); border-radius: 6px; }
+.posting-refresh-comparison legend { padding: 0 4px; font-weight: 650; }
+.posting-refresh-choice { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; min-width: 0; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.posting-refresh-choice strong { min-width: 130px; }
+.posting-refresh-choice label { display: inline-flex; align-items: center; gap: 6px; min-height: 40px; }
+.posting-refresh-comparison input { accent-color: var(--blue); }
+.posting-refresh-comparison :is(button, input):focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+@media (max-width: 1000px) { .posting-refresh-columns { grid-template-columns: minmax(0, 1fr); } }
 .posting-preview-fields input[readonly], .posting-preview-fields textarea[readonly] { background: var(--surface); }
 .saved-jobs-intake :is(input, textarea):focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
 .saved-jobs-empty > svg { color: var(--link); }
@@ -110,6 +143,7 @@
   .job-dialog-actions { justify-content: stretch; }
   .job-dialog-actions button { flex: 1; }
   .posting-preview-fields { grid-template-columns: minmax(0, 1fr); }
+  .posting-history dl { grid-template-columns: minmax(0, 1fr); }
   .posting-preview-fields .wide-field { grid-column: auto; }
   .saved-jobs-intake .job-dialog-actions { flex-wrap: wrap; }
 }

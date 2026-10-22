@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import { MAX_POSTING_REVISIONS } from './jobs'
 
-export const WORKSPACE_BACKUP_VERSION = 2 as const
+export const WORKSPACE_BACKUP_VERSION = 3 as const
 export const MAX_WORKSPACE_BACKUP_BYTES = 64 * 1024 * 1024
 export const MAX_WORKSPACE_BACKUP_ROW_BYTES = 16 * 1024 * 1024
 // Retain pre-limit histories from earlier workspace files; never set this below the accepted-write ceiling.
@@ -20,7 +20,7 @@ export const workspaceBackupWarning = 'This file contains personal profile and a
 
 export const workspaceBackupSchema = z.object({
   format: z.literal('cv-tailor-workspace-backup'),
-  version: z.union([z.literal(1), z.literal(WORKSPACE_BACKUP_VERSION)]),
+  version: z.union([z.literal(1), z.literal(2), z.literal(WORKSPACE_BACKUP_VERSION)]),
   createdAt: z.string().datetime(),
   warning: z.literal(workspaceBackupWarning),
   tables: z.record(z.string(), z.object({

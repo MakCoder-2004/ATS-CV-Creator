@@ -5,6 +5,21 @@ const MAX_HTML_NODES = 100_000
 const MAX_HTML_DEPTH = 256
 const IGNORED_HTML_TAGS = new Set(['script', 'style', 'nav', 'footer', 'aside', 'form', 'button', 'noscript'])
 
+function assertDeadlineNotPassed(value) {
+  if (typeof value !== 'string') return
+  const trimmed = value.trim()
+  const dateOnly = trimmed.match(/^(\d{4}-\d{2}-\d{2})$/)
+  if (dateOnly) {
+    const parsed = new Date(`${dateOnly[1]}T00:00:00.000Z`)
+    if (!Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === dateOnly[1] && dateOnly[1] < new Date().toISOString().slice(0, 10)) throw new Error('The source states that the application deadline has passed; it was not treated as an open role.')
+    return
+  }
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})$/.test(trimmed)) {
+    const parsed = Date.parse(trimmed)
+    if (Number.isFinite(parsed) && parsed < Date.now()) throw new Error('The source states that the application deadline has passed; it was not treated as an open role.')
+  }
+}
+
 function fragmentText(root, { format = true, ignorePageNoise = true } = {}) {
   const output = [], stack = [{ node: root, depth: 0, closing: false }]
   let nodes = 0
@@ -90,26 +105,76 @@ function extractHtml(text) {
   })
   if (jsonBlocks.length > 1) throw new Error('The page describes multiple roles and cannot be selected safely.')
   const posting = jsonBlocks[0] || null
+  assertDeadlineNotPassed(posting?.validThrough)
+  const visiblePageText = fragmentText(document).toLocaleLowerCase()
+  if (/(?:this|the) (?:job|position|posting) (?:has been|is) (?:removed|closed|filled|expired|taken down|no longer available)/i.test(visiblePageText) || /(?:discontinued|outofstock|expired|closed)/i.test(String(posting?.availability ?? posting?.jobStatus ?? ''))) throw new Error('The source explicitly identifies this posting as removed or closed; it was not imported as an active job.')
   const articles = elements.filter(node => node.tagName === 'article' && (['posting','job-description'].some(name => attr(node, 'class').split(/\s+/).includes(name)) || attr(node, 'id') === 'posting'))
-  const visibleArticle = articles.length === 1 ? articles[0] : null
+  if (articles.length > 1) throw new Error('The page contains multiple posting sections and cannot be selected safely.')
+  const visibleArticle = articles[0] || null
+  if (!visibleArticle && !posting) throw new Error('The page does not contain a supported single-posting detail section; paste posting text instead.')
   const visible = node => fragmentText(node)
   const visibleTitleNode = elements.find(node => node.tagName === 'h1')
   const visibleCompanyNode = elements.find(node => attr(node, 'class').split(/\s+/).includes('company'))
   const visibleTitleValue = visibleTitleNode ? textContent(visibleTitleNode).trim() : ''
   const visibleCompanyValue = visibleCompanyNode ? textContent(visibleCompanyNode).trim() : ''
-  const title = (typeof posting?.title === 'string' ? posting.title.trim() : '') || visibleTitleValue
-  const company = (typeof posting?.hiringOrganization?.name === 'string' ? posting.hiringOrganization.name.trim() : '') || visibleCompanyValue || null
-  const structured = typeof posting?.description === 'string' ? fragmentText(parse5.parseFragment(posting.description), { format: false }).replace(/\s+/g,' ').trim() : ''
-  const description = visibleArticle ? visible(visibleArticle).replace(/[ \t]+/g,' ').replace(/\n{3,}/g,'\n\n').trim() : ''
-  if (!visibleArticle || !title || !company || !description || [...description].length < 100) throw new Error('The page is incomplete or lacks the supported single-posting detail shape; use the manual text fallback.')
-  const notices = [`Extracted from ${posting ? 'inert Lever-hosted JobPosting JSON-LD and readable static text' : 'the supported Lever-hosted static posting article'}; scripts and linked content were not executed or fetched. Review all wording; completeness and vacancy status are not guaranteed.`]
+  const structuredTitle = typeof posting?.title === 'string' ? posting.title.trim() : ''
+  const structuredCompany = typeof posting?.hiringOrganization?.name === 'string' ? posting.hiringOrganization.name.trim() : ''
+  const title = structuredTitle || visibleTitleValue
+  const company = structuredCompany || visibleCompanyValue || null
+  const structured = typeof posting?.description === 'string' ? fragmentText(parse5.parseFragment(posting.description)).trim() : ''
+  const visibleDescription = visibleArticle ? visible(visibleArticle).replace(/[ \t]+/g,' ').replace(/\n{3,}/g,'\n\n').trim() : ''
+  const description = visibleDescription || structured
+  const metadataText = value => typeof value === 'string' && value.trim() ? value.trim() : typeof value === 'number' && Number.isFinite(value) ? String(value) : null
+  const addressValue = value => {
+    const addresses = Array.isArray(value) ? value : value ? [value] : []
+    const parts = addresses.flatMap(address => {
+      const item = address?.address ?? address
+      return [item?.streetAddress, item?.addressLocality, item?.addressRegion, item?.postalCode, item?.addressCountry].map(metadataText).filter(Boolean)
+    })
+    return parts.length ? [...new Set(parts)].join(', ') : null
+  }
+  const baseSalary = posting?.baseSalary
+  const salaryValue = baseSalary && typeof baseSalary === 'object' ? baseSalary.value : null
+  const salaryRange = salaryValue && typeof salaryValue === 'object'
+    ? [baseSalary.currency, salaryValue.minValue ?? salaryValue.value, salaryValue.maxValue, salaryValue.unitText].map(metadataText).filter(Boolean).join(' ')
+    : [baseSalary?.currency, metadataText(salaryValue), metadataText(baseSalary?.unitText)].filter(Boolean).join(' ')
+  const rawDetails = {
+    location: [addressValue(posting?.jobLocation), 'Lever JSON-LD jobLocation'],
+    workArrangement: [metadataText(posting?.jobLocationType), 'Lever JSON-LD jobLocationType'],
+    employmentType: [Array.isArray(posting?.employmentType) ? posting.employmentType.map(metadataText).filter(Boolean).join(', ') : metadataText(posting?.employmentType), 'Lever JSON-LD employmentType'],
+    compensation: [salaryRange || null, 'Lever JSON-LD baseSalary'],
+    language: [metadataText(posting?.inLanguage), 'Lever JSON-LD inLanguage'],
+    postedDate: [metadataText(posting?.datePosted), 'Lever JSON-LD datePosted'],
+    deadline: [metadataText(posting?.validThrough), 'Lever JSON-LD validThrough'],
+    applicationUrl: [null, null]
+  }
+  const optionalDetails = Object.fromEntries(Object.entries(rawDetails).map(([field, [value, source]]) => [field, { value, source: value ? source : null, origin: value ? 'source' : 'unknown', uncertainty: value && /(?:today|yesterday|\d+\s+(?:days?|weeks?|months?)\s+ago)/i.test(value) ? 'relative-date' : 'none' }]))
+  assertDeadlineNotPassed(optionalDetails.deadline.value)
   const conflicts = []
-  if (posting && visibleTitleValue && visibleTitleValue !== title) conflicts.push('title')
-  if (posting && visibleCompanyValue && visibleCompanyValue !== company) conflicts.push('company')
+  const addConflict = (id, field, left, leftSource, right, rightSource) => {
+    if (!left || !right || left.trim().toLocaleLowerCase() === right.trim().toLocaleLowerCase()) return
+    conflicts.push({ id, field, values: [{ value: left, source: leftSource }, { value: right, source: rightSource }] })
+  }
+  addConflict('title', 'title', structuredTitle, 'Lever JSON-LD JobPosting.title', visibleTitleValue, 'Readable page h1')
+  addConflict('company', 'company', structuredCompany, 'Lever JSON-LD hiringOrganization.name', visibleCompanyValue, 'Readable page company label')
   const normalizeWording = value => value.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '')
-  if (structured && normalizeWording(structured) !== normalizeWording(description)) conflicts.push('description')
-  if (conflicts.length) notices.push(`Unresolved source conflict: structured metadata and readable page disagree on ${conflicts.join(', ')}. Paste or correct the posting text manually; it cannot be saved as-is.`)
-  return { title, company, description, notices, extractionMethod: posting ? 'lever-html-jsonld-v1' : 'lever-html-static-v1' }
+  if (structured && visibleDescription && normalizeWording(structured) !== normalizeWording(visibleDescription)) conflicts.push({ id: 'description', field: 'description', values: [{ value: structured, source: 'Lever JSON-LD JobPosting.description' }, { value: visibleDescription, source: 'Readable posting article' }] })
+  const readableLabels = { location: ['location'], workArrangement: ['work arrangement', 'workplace'], employmentType: ['employment type'], compensation: ['compensation', 'salary'], language: ['language', 'languages'], postedDate: ['posted', 'posted date'], deadline: ['deadline', 'apply by'] }
+  for (const [field, labels] of Object.entries(readableLabels)) {
+    const structuredValue = optionalDetails[field].value
+    const readableValue = description.split('\n').map(line => line.trim().replace(/^[•-]\s*/, '')).map(line => {
+      const match = line.match(new RegExp(`^(?:${labels.join('|')})\\s*:\\s*(.+)$`, 'i'))
+      return match ? match[1].trim() : null
+    }).find(Boolean)
+    const candidate = rawDetails[field][1]
+    addConflict(field, field, structuredValue, candidate, readableValue, `Readable posting: ${labels[0]} heading`)
+  }
+  const notices = [`Extracted from ${posting ? 'inert Lever-hosted JobPosting JSON-LD and readable static text' : 'the supported Lever-hosted static posting article'}; scripts and linked content were not executed or fetched. Review all wording; completeness and vacancy status are not guaranteed.`]
+  if (!title) notices.push('The source did not provide a job title; this preview is incomplete.')
+  if (!company) notices.push('Employer name was not provided by this source; this preview is incomplete.')
+  if (!description || [...description].length < 200) notices.push('The response lacks enough posting-detail structure to establish complete source text; this preview is incomplete.')
+  if (conflicts.length) notices.push('The source provides conflicting source values; choose one before saving.')
+  return { title, company, description, optionalDetails, conflicts, notices, extractionMethod: posting ? 'lever-html-jsonld-v1' : 'lever-html-static-v1' }
 }
 
 function extract(text, expectedId) {
@@ -128,11 +193,21 @@ function extract(text, expectedId) {
     } else if (char === '}' || char === ']') depth--
   }
   const data = JSON.parse(text)
-  if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('The posting response was not valid posting JSON.')
-  if (data.id !== expectedId) throw new Error('The source response did not match the requested posting.')
+  if (Array.isArray(data) || data && typeof data === 'object' && (Array.isArray(data.jobs) || Array.isArray(data.results) || Array.isArray(data.postings))) throw new Error('The source returned a listing or multiple roles, not one job detail. Paste the specific posting text instead.')
+  if (!data || typeof data !== 'object') throw new Error('The posting response was not valid posting JSON.')
+  if (/^(?:removed|closed|expired|deleted)$/i.test(String(data.status ?? data.state ?? ''))) throw new Error('The source explicitly identifies this posting as removed or closed; it was not imported as an active job.')
+  if (data.id !== expectedId) throw new Error('The source response did not match the requested posting; this may be an unrelated job.')
+  assertDeadlineNotPassed(data.deadline ?? data.applicationDeadline ?? data.validThrough)
 
-  const title = typeof data.text === 'string' ? data.text.trim() : ''
-  const company = typeof data.company === 'string' && data.company.trim() ? data.company.trim() : null
+  const titleCandidates = [['Title field', data.text], ['Alternate title field', data.title]].filter(([, value]) => typeof value === 'string' && value.trim()).map(([source, value]) => ({ value: value.trim(), source }))
+  const uniqueTitles = [...new Map(titleCandidates.map(candidate => [candidate.value.toLocaleLowerCase(), candidate])).values()]
+  const title = uniqueTitles[0]?.value ?? ''
+  const companyCandidates = [
+    ['Company field', data.company], ['Company name field', data.companyName],
+    ['Hiring organization', data.hiringOrganization && typeof data.hiringOrganization === 'object' ? data.hiringOrganization.name : null]
+  ].filter(([, value]) => typeof value === 'string' && value.trim()).map(([source, value]) => ({ value: value.trim(), source }))
+  const uniqueCompanies = [...new Map(companyCandidates.map(candidate => [candidate.value.toLocaleLowerCase(), candidate])).values()]
+  const company = uniqueCompanies[0]?.value ?? null
   const segments = [], segmentSet = new Set()
   const addSegment = value => {
     if (typeof value !== 'string' || !value.trim()) return
@@ -179,10 +254,49 @@ function extract(text, expectedId) {
   }
 
   const description = [...baseLines, ...extras].join('\n').trim()
+  const asText = value => typeof value === 'string' && value.trim() ? value.trim() : typeof value === 'number' && Number.isFinite(value) ? String(value) : null
+  const salary = typeof data.salaryRange === 'object' && data.salaryRange !== null
+    ? [data.salaryRange.currency, data.salaryRange.min, data.salaryRange.max, data.salaryRange.interval].filter(value => value !== undefined && value !== null && value !== '').join(' ')
+    : asText(data.salaryDescription) || asText(data.compensation)
+  const rawFields = {
+    location: [asText(data.categories?.location) || asText(data.location), 'Lever categories.location/location'],
+    workArrangement: [asText(data.workplaceType) || asText(data.workArrangement), 'Lever workplaceType/workArrangement'],
+    employmentType: [asText(data.categories?.commitment) || asText(data.employmentType), 'Lever categories.commitment/employmentType'],
+    compensation: [salary || null, 'Lever salaryRange/salaryDescription'],
+    language: [asText(data.language), 'Lever language'],
+    postedDate: [asText(data.datePosted) || asText(data.createdAt), 'Lever datePosted/createdAt'],
+    deadline: [asText(data.deadline) || asText(data.applicationDeadline), 'Lever deadline/applicationDeadline'],
+    applicationUrl: [asText(data.applyUrl) || asText(data.applicationUrl), 'Lever applyUrl/applicationUrl']
+  }
+  const optionalDetails = Object.fromEntries(Object.entries(rawFields).map(([field, [value, source]]) => [field, {
+    value, source: value ? source : null, origin: value ? 'source' : 'unknown',
+    uncertainty: value && /(?:today|yesterday|\d+\s+(?:minutes?|hours?|days?|weeks?|months?)\s+ago|(?:last|this)\s+(?:week|month))/i.test(value) ? 'relative-date' : 'none'
+  }]))
+  assertDeadlineNotPassed(optionalDetails.deadline.value)
+  const conflicts = [
+    ...(uniqueTitles.length > 1 ? [{ id: 'title', field: 'title', values: uniqueTitles }] : []),
+    ...(uniqueCompanies.length > 1 ? [{ id: 'company', field: 'company', values: uniqueCompanies }] : [])
+  ]
+  const readableLabels = { title: ['job title', 'position'], company: ['company', 'employer'], location: ['location'], workArrangement: ['work arrangement', 'workplace'], employmentType: ['employment type'], compensation: ['compensation', 'salary'], language: ['language', 'languages'], postedDate: ['posted', 'posted date'], deadline: ['deadline', 'apply by'], applicationUrl: ['application url', 'apply url'] }
+  for (const [field, labels] of Object.entries(readableLabels)) {
+    const structured = field === 'title' ? title : field === 'company' ? company : optionalDetails[field].value
+    if (!structured) continue
+    const readable = description.split('\n').map(line => line.trim().replace(/^[•-]\s*/, '')).map(line => {
+      const match = line.match(new RegExp(`^(?:${labels.map(label => label.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')).join('|')})\\s*:\\s*(.+)$`, 'i'))
+      return match ? match[1].trim() : null
+    }).find(Boolean)
+    if (readable && structured && readable.toLocaleLowerCase() !== structured.toLocaleLowerCase()) {
+      const structuredSource = field === 'title' ? titleCandidates[0]?.source ?? 'Lever title field' : field === 'company' ? companyCandidates[0]?.source ?? 'Lever company field' : rawFields[field][1]
+      const alreadyConflicted = conflicts.find(conflict => conflict.field === field)
+      if (alreadyConflicted) alreadyConflicted.values.push({ value: readable, source: `Readable posting: ${labels[0]} heading` })
+      else conflicts.push({ id: field, field, values: [{ value: structured, source: structuredSource }, { value: readable, source: `Readable posting: ${labels[0]} heading` }] })
+    }
+  }
   if ([...title].length > 200 || (company && [...company].length > 200) || [...description].length > 200_000 || Buffer.byteLength(description, 'utf8') > 1024 * 1024) throw new Error('The posting text exceeds the safe preview limit; no partial preview was created.')
   const hasStructuredSections = lists.some(item => item && typeof item === 'object' && typeof item.content === 'string')
   const hasSectionHeadings = /\b(responsibilities|requirements|qualifications|what you(?:'|’)ll do|what we(?:'|’)re looking for)\b/i.test(description)
   const notices = [
+    conflicts.length ? 'The source provides conflicting source values; choose one before saving.' : '',
     !company ? 'Employer name was not provided by this source; this preview is incomplete.' : '',
     malformedSection ? 'Some structured source sections could not be interpreted; this preview is incomplete.' : '',
     !title ? 'The source did not provide a job title; this preview is incomplete.' : '',
@@ -190,7 +304,7 @@ function extract(text, expectedId) {
     [...description].length < 200 || (!hasStructuredSections && !hasSectionHeadings) ? 'The response lacks enough posting-detail structure to establish complete source text; this preview is incomplete.' : ''
   ].filter(Boolean)
   notices.push('Extraction cannot guarantee posting completeness or that the role remains open. Review the full source before relying on it.')
-  return { title, company, description, notices, extractionMethod: 'lever-json-v1' }
+  return { title, company, description, optionalDetails, notices, conflicts, extractionMethod: 'lever-json-v1' }
 }
 
 try {

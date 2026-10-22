@@ -1,10 +1,17 @@
 import React, { FormEvent, useEffect, useRef, useState } from 'react'
 import { FolderOpen, Plus } from 'lucide-react'
-import type { JobInput, JobRecord } from '../shared/jobs'
+import type { JobInput, JobRecord, PostingRefreshChoice } from '../shared/jobs'
+import type { PostingPreview } from '../shared/posting-import'
+import { samePostingSource } from '../shared/posting-identity'
 import type { DraftRevision } from '../shared/draft'
 import './jobs.css'
 
 type DraftLabel = 'No draft' | 'Needs review' | 'Earlier target' | 'Blocked' | 'Approved'
+const defaultRefreshChoices = (): PostingRefreshChoice => ({ title: 'working', company: 'working', description: 'working', optionalDetails: {} })
+const optionalPostingFields = [
+  ['location', 'Location'], ['workArrangement', 'Work arrangement'], ['employmentType', 'Employment type'], ['compensation', 'Compensation'],
+  ['language', 'Language'], ['postedDate', 'Posted date'], ['deadline', 'Deadline'], ['applicationUrl', 'Application URL']
+] as const
 
 export function SavedJobs({ jobs, activeJob, onSaved, onOpened, onNavigate }: { jobs: JobRecord[]; activeJob: JobRecord | null; onSaved: (job: JobRecord) => void; onOpened: (job: JobRecord) => void; onNavigate: (page: 'Tailor CV') => void }) {
   const [input, setInput] = useState<JobInput>({ title: '', company: '', description: '' })
@@ -22,11 +29,18 @@ export function SavedJobs({ jobs, activeJob, onSaved, onOpened, onNavigate }: { 
   const [fetchToken, setFetchToken] = useState<string>()
   const [preview, setPreview] = useState<import('../shared/posting-import').PostingPreview | null>(null)
   const [capturedPreview, setCapturedPreview] = useState<import('../shared/posting-import').PostingPreview | null>(null)
+  const [completenessConfirmed, setCompletenessConfirmed] = useState(false)
+  const [conflictResolutions, setConflictResolutions] = useState<Record<string, string>>({})
+  const [refreshComparison, setRefreshComparison] = useState<{ ok: boolean; unchanged?: boolean; previousSource?: JobRecord['sourceSnapshot']; working?: JobInput; newSource?: PostingPreview; message?: string } | null>(null)
+  const [refreshChoices, setRefreshChoices] = useState<PostingRefreshChoice>(defaultRefreshChoices)
   const [discardIntent, setDiscardIntent] = useState<'close' | 'manual' | 'discard' | 'new' | 'open-existing' | null>(null)
   const [discardTargetJobId, setDiscardTargetJobId] = useState<string>()
   const dialogRef = useRef<HTMLDialogElement>(null)
   const discardDialogRef = useRef<HTMLDialogElement>(null)
   const fetchOperationRef = useRef(0)
+  const editRevisionRef = useRef(0)
+  const refreshComparisonKeyRef = useRef('')
+  const editQueueRef = useRef<Promise<void>>(Promise.resolve())
   const titleRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -66,8 +80,44 @@ export function SavedJobs({ jobs, activeJob, onSaved, onOpened, onNavigate }: { 
     return () => { current = false }
   }, [jobs])
 
-  function previewWasEdited() { return !!preview && !!capturedPreview && (preview.title !== capturedPreview.title || preview.company !== capturedPreview.company || preview.description !== capturedPreview.description) }
-  function discardFetchPreview() { fetchOperationRef.current++; if (fetchToken) void window.workbench.cancelPostingFetch(fetchToken); setFetching(false); setFetchToken(undefined); setPreview(null); setCapturedPreview(null) }
+  function previewWasEdited() { return !!preview && !!capturedPreview && JSON.stringify(preview) !== JSON.stringify(capturedPreview) }
+  function enqueuePreviewEdit(next: import('../shared/posting-import').PostingPreview) {
+    setPreview(next); setCompletenessConfirmed(false)
+    const token = fetchToken
+    if (!token) return
+    const expectedRevision = editRevisionRef.current++
+    editQueueRef.current = editQueueRef.current.catch(() => {}).then(async () => {
+      const result = await window.workbench.updatePostingPreview(token, expectedRevision, { title: next.title, company: next.company ?? '', description: next.description, optionalDetails: next.optionalDetails })
+      if (!result.ok || result.revision !== expectedRevision + 1) {
+        setMessage(result.message ?? 'The preview changed concurrently. Fetch it again before saving.'); setMessageError(true)
+        throw new Error('Preview edit was not accepted.')
+      }
+    })
+  }
+  function selectConflictValue(field: import('../shared/posting-import').PostingFieldConflict['field'], value: string) {
+    if (!preview) return
+    const next = field === 'title' || field === 'company' ? { ...preview, [field]: value }
+      : field === 'description' ? { ...preview, description: value }
+      : { ...preview, optionalDetails: { ...preview.optionalDetails, [field]: { ...preview.optionalDetails[field], value, origin: 'user-correction' as const } } }
+    setConflictResolutions(current => ({ ...current, [field]: value })); enqueuePreviewEdit(next)
+  }
+  function updateOptionalDetail(field: typeof optionalPostingFields[number][0], value: string) {
+    if (!preview) return
+    setConflictResolutions(current => { const next = { ...current }; delete next[field]; return next })
+    const previous = preview.optionalDetails[field]
+    enqueuePreviewEdit({ ...preview, optionalDetails: { ...preview.optionalDetails, [field]: { ...previous, value: value.trim() ? value : null, origin: value.trim() ? previous.value === value ? previous.origin : 'user-correction' : 'unknown' } } })
+  }
+  async function confirmPostingReview(checked: boolean) {
+    if (!fetchToken) return
+    if (!checked) { setCompletenessConfirmed(false); await editQueueRef.current.catch(() => {}); await window.workbench.reviewPostingPreview(fetchToken, editRevisionRef.current, { completenessConfirmed: false, conflictResolutions }); return }
+    try {
+      await editQueueRef.current
+      const result = await window.workbench.reviewPostingPreview(fetchToken, editRevisionRef.current, { completenessConfirmed: true, conflictResolutions })
+      if (!result.ok) { setCompletenessConfirmed(false); setMessage(result.message ?? 'Review the current posting before saving.'); setMessageError(true); return }
+      setCompletenessConfirmed(true); setMessageError(false)
+    } catch { setCompletenessConfirmed(false); setMessage('The preview edit was not accepted. Fetch it again before saving.'); setMessageError(true) }
+  }
+  function discardFetchPreview() { fetchOperationRef.current++; refreshComparisonKeyRef.current = ''; if (fetchToken) void window.workbench.cancelPostingFetch(fetchToken); setRefreshChoices(defaultRefreshChoices()); setFetching(false); setFetchToken(undefined); setPreview(null); setCapturedPreview(null); setCompletenessConfirmed(false); setConflictResolutions({}); editRevisionRef.current = 0; editQueueRef.current = Promise.resolve() }
   function cancelDiscard() { setDiscardIntent(null); setDiscardTargetJobId(undefined) }
   function completeDiscard(intent: 'close' | 'manual' | 'discard' | 'new' | 'open-existing') {
     const targetJobId = intent === 'open-existing' ? discardTargetJobId : undefined
@@ -84,7 +134,7 @@ export function SavedJobs({ jobs, activeJob, onSaved, onOpened, onNavigate }: { 
   function closeIntake() { requestDiscard('close') }
   async function fetchPosting() {
     const operation = ++fetchOperationRef.current
-    setFetching(true); setPreview(null); setFetchToken(undefined); setMessage('Fetching one Lever job detail…'); setMessageError(false)
+    setRefreshChoices(defaultRefreshChoices()); setFetching(true); setPreview(null); setFetchToken(undefined); setMessage('Fetching one Lever job detail…'); setMessageError(false)
     try {
       const { token } = await window.workbench.startPostingFetch(sourceUrl)
       if (operation !== fetchOperationRef.current) { void window.workbench.cancelPostingFetch(token); return }
@@ -93,7 +143,7 @@ export function SavedJobs({ jobs, activeJob, onSaved, onOpened, onNavigate }: { 
         const state = await window.workbench.readPostingPreview(token)
         if (operation !== fetchOperationRef.current) return
         if (state.status === 'fetching') { await new Promise(resolve => window.setTimeout(resolve, 150)); continue }
-        if (state.status === 'ready' || state.status === 'incomplete') { setPreview(state.preview); setCapturedPreview(state.preview); setMessage(state.status === 'incomplete' ? 'The source is incomplete and needs review. Nothing has been saved.' : 'Temporary preview loaded; extraction cannot guarantee completeness. Nothing has been saved.'); setMessageError(state.status === 'incomplete'); break }
+        if (state.status === 'ready' || state.status === 'incomplete') { setPreview(state.preview); setCapturedPreview(state.preview); setCompletenessConfirmed(false); setConflictResolutions({}); editRevisionRef.current = 0; editQueueRef.current = Promise.resolve(); setMessage(state.status === 'incomplete' ? 'The source is incomplete and needs review. Nothing has been saved.' : 'Temporary preview loaded; extraction cannot guarantee completeness. Nothing has been saved.'); setMessageError(state.status === 'incomplete'); break }
         if (state.status === 'cancelled') { setMessage('Fetch cancelled.'); setMessageError(false); break }
         setMessage(state.message); setMessageError(true); break
       }
@@ -102,7 +152,7 @@ export function SavedJobs({ jobs, activeJob, onSaved, onOpened, onNavigate }: { 
   }
   function newJob() {
     if (previewWasEdited()) { requestDiscard('new'); return }
-    const hasUnfinishedEntry = !editingId && Object.values(input).some(value => value.trim())
+    const hasUnfinishedEntry = !editingId && [input.title, input.company, input.description].some(value => value.trim())
     setEditingId(undefined)
     if (!hasUnfinishedEntry) setInput({ title: '', company: '', description: '' })
     discardFetchPreview(); setSourceUrl(''); setCaptureMode('manual')
@@ -125,11 +175,23 @@ export function SavedJobs({ jobs, activeJob, onSaved, onOpened, onNavigate }: { 
       onOpened(job); onNavigate('Tailor CV')
     } catch { setMessage('The saved job could not be opened. Try again.'); setMessageError(true) }
   }
+  async function acceptRefreshedPosting() {
+    if (!fetchToken || !preview || !sourceMatch) return
+    setBusy(true); setMessage('Accepting selected posting changes…'); setMessageError(false)
+    try {
+      await editQueueRef.current
+      const result = await window.workbench.acceptPostingRefresh(fetchToken, editRevisionRef.current, sourceMatch.id, sourceMatch.updatedAt, sourceMatch.revisions.at(-1)?.revision ?? 0, refreshChoices)
+      if (!result.ok) { setMessage(result.error.message); setMessageError(true); return }
+      onSaved(result.value); setMessage('Posting refresh accepted. No analysis or model request was started.'); setIntakeOpen(false); discardFetchPreview()
+    } catch { setMessage('The refreshed posting could not be accepted. Your saved posting is unchanged.'); setMessageError(true) }
+    finally { setBusy(false) }
+  }
   async function saveImportedPosting() {
     if (!fetchToken || !preview) return
     setBusy(true); setErrors({}); setMessage('Saving reviewed job posting…'); setMessageError(false)
     try {
-      const result = await window.workbench.acceptPostingImport(fetchToken, { title: preview.title, company: preview.company ?? '', description: preview.description })
+      await editQueueRef.current
+      const result = await window.workbench.acceptPostingImport(fetchToken, editRevisionRef.current)
       if (!result.ok) { setMessage(result.error.message); setErrors(result.error.fieldErrors ?? {}); setMessageError(true); return }
       onSaved(result.value); setMessage('Job saved on this device.'); setMessageError(false); setIntakeOpen(false); setPreview(null); setCapturedPreview(null); setFetchToken(undefined)
     } catch { setMessage('The reviewed posting could not be saved. No partial job history was retained.'); setMessageError(true) }
@@ -149,7 +211,7 @@ export function SavedJobs({ jobs, activeJob, onSaved, onOpened, onNavigate }: { 
     finally { setBusy(false) }
   }
   const sourceHostname = (() => { try { return new URL(sourceUrl).hostname } catch { return '' } })()
-  const field = (key: keyof JobInput) => ({ value: input[key], onChange: (event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => { setInput(value => ({ ...value, [key]: event.target.value })); setErrors(value => ({ ...value, [key]: '' })) }, 'aria-invalid': !!errors[key], 'aria-describedby': errors[key] ? `job-${key}-error` : undefined })
+  const field = (key: 'title' | 'company' | 'description') => ({ value: input[key], onChange: (event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => { setInput(value => ({ ...value, [key]: event.target.value })); setErrors(value => ({ ...value, [key]: '' })) }, 'aria-invalid': !!errors[key], 'aria-describedby': errors[key] ? `job-${key}-error` : undefined })
   const renderFields = () => <div className="form-grid">
     <label>Job title<input id="job-field-title" ref={titleRef} required {...field('title')} />{errors.title && <span id="job-title-error" className="field-error">{errors.title}</span>}</label>
     <label>Company<input id="job-field-company" required {...field('company')} />{errors.company && <span id="job-company-error" className="field-error">{errors.company}</span>}</label>
@@ -157,24 +219,23 @@ export function SavedJobs({ jobs, activeJob, onSaved, onOpened, onNavigate }: { 
   </div>
   const editedJob = editingId ? jobs.find(job => job.id === editingId) : undefined
   const intakeVisible = intakeOpen || jobs.length === 0
-  const sourceMatch = (() => {
-    if (!preview) return undefined
-    const urls = new Set([preview.submittedUrl, preview.finalUrl])
-    const identities = new Set<string>()
-    for (const url of urls) {
-      try {
-        const parsed = new URL(url), parts = parsed.pathname.split('/').filter(Boolean)
-        if (parsed.hostname === 'api.lever.co' && parts[0] === 'v0' && parts[1] === 'postings' && parts.length === 4) identities.add(`lever:${parts[2]}/${parts[3]}`)
-        else if (parsed.hostname === 'jobs.lever.co' && parts.length === 2) identities.add(`lever:${parts[0]}/${parts[1]}`)
-      } catch { /* Untrusted URLs do not match a saved source identity. */ }
-    }
-    return jobs.find(job => job.sourceSnapshot && (identities.has(job.sourceSnapshot.sourceIdentity) || urls.has(job.sourceSnapshot.submittedUrl) || urls.has(job.sourceSnapshot.finalUrl)))
-  })()
-  const sourceMatchIsUnchanged = !!sourceMatch?.sourceSnapshot && sourceMatch.sourceSnapshot.title === capturedPreview?.title && sourceMatch.sourceSnapshot.company === capturedPreview?.company && sourceMatch.sourceSnapshot.description === capturedPreview?.description
+  const sourceMatch = (() => { if (!preview) return undefined; return jobs.find(job => job.sourceSnapshot && samePostingSource(job.sourceSnapshot, preview)) })()
+  const sourceMatchIsUnchanged = !!refreshComparison?.ok && refreshComparison.unchanged
+  const sourceMatchRevision = sourceMatch?.revisions.at(-1)?.revision ?? 0
+  useEffect(() => {
+    if (!preview || !fetchToken || !sourceMatch) { setRefreshComparison(null); return }
+    const comparisonKey = `${fetchToken}:${sourceMatch.id}:${sourceMatch.updatedAt}:${sourceMatchRevision}`
+    if (refreshComparisonKeyRef.current !== comparisonKey) { refreshComparisonKeyRef.current = comparisonKey; setRefreshChoices(defaultRefreshChoices()) }
+    let current = true
+    setRefreshComparison(null)
+    window.workbench.comparePostingRefresh(fetchToken, sourceMatch.id, sourceMatch.updatedAt, sourceMatch.revisions.at(-1)?.revision ?? 0).then(result => { if (current) setRefreshComparison(result) }).catch(() => { if (current) setRefreshComparison({ ok: false, message: 'The saved posting could not be compared. Reopen it and try again.' }) })
+    return () => { current = false }
+  }, [preview, fetchToken, sourceMatch?.id, sourceMatch?.updatedAt, sourceMatchRevision])
+
   const renderIntake = (insideEmptyState = false) => <section className={`saved-jobs-intake${insideEmptyState ? ' is-inside-empty' : ''}`} aria-labelledby="posting-intake-title">
     <header className="saved-jobs-intake-heading"><div><p className="context">New job</p><h2 id="posting-intake-title">Add a job posting</h2></div>{jobs.length > 0 && <button type="button" className="secondary-button" onClick={closeIntake}>Cancel</button>}</header>
     <fieldset><legend>Choose how to add a posting</legend><div className="job-dialog-actions"><button type="button" className="secondary-button" aria-pressed={captureMode === 'link'} onClick={() => setCaptureMode('link')}>Import from link</button><button type="button" className="secondary-button" aria-pressed={captureMode === 'manual'} onClick={() => { if (fetching) discardFetchPreview(); if (previewWasEdited()) requestDiscard('manual'); else { setPreview(null); setCapturedPreview(null); setCaptureMode('manual') } }}>Paste posting text instead</button></div></fieldset>
-    {captureMode === 'link' ? <section className="posting-link-entry" aria-label="Import from link"><label htmlFor="posting-source-url">Public Lever posting link</label><input id="posting-source-url" type="url" disabled={fetching} value={sourceUrl} onChange={event => setSourceUrl(event.target.value)} placeholder="https://jobs.lever.co/company/posting-id" /><p>{sourceHostname ? `Source hostname: ${sourceHostname}` : 'Paste a public HTTPS posting link.'} Supported sources: named Lever-hosted HTML job pages and exact Lever posting-detail API URLs. Choose a URL to select the extraction route; other sources are unsupported. Fetch contacts the source and exposes your normal network address and request metadata. No profile or model data is sent.</p><div className="job-dialog-actions"><button type="button" className="primary-button" disabled={fetching || !sourceUrl.trim()} onClick={() => void fetchPosting()}>{fetching ? 'Fetching…' : 'Fetch posting'}</button>{fetching && <button type="button" className="secondary-button" disabled={!fetchToken} onClick={() => { discardFetchPreview(); setMessage('Fetch cancelled.'); setMessageError(false) }}>Cancel fetch</button>}<button type="button" className="secondary-button" disabled={fetching || !sourceUrl.trim()} onClick={() => void window.workbench.openPostingSource(sourceUrl).then(result => { setMessage(result.message); setMessageError(false) }).catch(error => { setMessage(String(error)); setMessageError(true) })}>Open original posting</button></div>{message && intakeVisible && <p className={`saved-jobs-message${messageError ? ' is-error' : ''}`} role={messageError ? 'alert' : 'status'}>{message}</p>}{preview && <section className="posting-import-preview" aria-label="Posting import preview"><h3>Temporary posting import preview</h3><p>Submitted: {preview.submittedUrl}</p><p>Fetched from: {preview.finalUrl}</p><div className="posting-preview-fields"><label>Job title<input value={preview.title} onChange={event => setPreview(value => value ? { ...value, title: event.target.value } : value)} /></label><label>Company<input value={preview.company ?? ''} placeholder="Enter the employer name" onChange={event => setPreview(value => value ? { ...value, company: event.target.value } : value)} /></label><label className="wide-field">Posting and requirements<textarea rows={12} value={preview.description} onChange={event => setPreview(value => value ? { ...value, description: event.target.value } : value)} /></label></div>{preview.notices.map(notice => <p role="status" key={notice}>{notice}</p>)}<p>Source extraction: {preview.extractionMethod === 'lever-html-jsonld-v1' ? 'Lever-hosted page structured data and readable static text' : preview.extractionMethod === 'lever-html-static-v1' ? 'Lever-hosted static readable posting text' : 'Lever posting detail API data'}. Review and correct the complete posting before saving. Company names are not inferred when the source omits them. Saving does not contact the source or start model analysis.</p>{sourceMatch && <div className="saved-jobs-message" role="status">{sourceMatchIsUnchanged ? 'This exact posting is already saved.' : 'This source identity is already saved with different captured details. It will not be overwritten or duplicated.'}<div className="job-dialog-actions"><button type="button" className="secondary-button" onClick={() => openExisting(sourceMatch.id)}>Open existing</button></div></div>}<div className="job-dialog-actions"><button type="button" className="primary-button" disabled={busy || fetching || !!sourceMatch || preview.notices.some(notice => notice.startsWith('Unresolved source conflict:'))} onClick={() => void saveImportedPosting()}>{busy ? 'Saving…' : 'Save job'}</button>{!sourceMatch && <button type="button" className="secondary-button" disabled={busy} onClick={() => requestDiscard('discard')}>Discard preview</button>}</div></section>}</section> : <form className="job-dialog-form" onSubmit={event => void save(event)} noValidate>{renderFields()}<p className="job-form-guidance">Manual posting text has unknown source provenance and is saved on this device.</p>{message && intakeVisible && <p className={`saved-jobs-message${messageError ? ' is-error' : ''}`} role={messageError ? 'alert' : 'status'}>{message}</p>}<footer className="job-dialog-actions">{jobs.length > 0 && <button className="secondary-button" type="button" onClick={closeIntake}>Cancel</button>}<button className="primary-button" type="submit" disabled={busy}>{busy ? 'Saving…' : 'Save job'}</button></footer></form>}
+    {captureMode === 'link' ? <section className="posting-link-entry" aria-label="Import from link"><label htmlFor="posting-source-url">Public Lever posting link</label><input id="posting-source-url" type="url" disabled={fetching} value={sourceUrl} onChange={event => setSourceUrl(event.target.value)} placeholder="https://jobs.lever.co/company/posting-id" /><p>{sourceHostname ? `Source hostname: ${sourceHostname}` : 'Paste a public HTTPS posting link.'} Supported links: named Lever-hosted pages and exact Lever posting-detail API URLs only. Fetch contacts the source and exposes your normal network address and request metadata. No profile or model data is sent.</p><div className="job-dialog-actions"><button type="button" className="primary-button" disabled={fetching || !sourceUrl.trim()} onClick={() => void fetchPosting()}>{fetching ? 'Fetching…' : 'Fetch posting'}</button>{fetching && <button type="button" className="secondary-button" disabled={!fetchToken} onClick={() => { discardFetchPreview(); setMessage('Fetch cancelled.'); setMessageError(false) }}>Cancel fetch</button>}<button type="button" className="secondary-button" disabled={fetching || !sourceUrl.trim()} onClick={() => void window.workbench.openPostingSource(sourceUrl).then(result => { setMessage(result.message); setMessageError(false) }).catch(error => { setMessage(String(error)); setMessageError(true) })}>Open original posting</button></div>{message && intakeVisible && <p className={`saved-jobs-message${messageError ? ' is-error' : ''}`} role={messageError ? 'alert' : 'status'}>{message}</p>}{preview && <section className="posting-import-preview" aria-label="Posting import preview"><h3>Temporary posting import preview</h3><p>Submitted: {preview.submittedUrl}</p><p>Fetched from: {preview.finalUrl}</p>{capturedPreview && <section className="posting-captured-source" aria-label="Captured source wording"><h4>Captured source wording (read-only)</h4><pre>{capturedPreview.description}</pre></section>}<div className="posting-preview-fields"><label>Job title<input value={preview.title} onChange={event => { if (preview) { setConflictResolutions(value => { const next = { ...value }; delete next.title; return next }); enqueuePreviewEdit({ ...preview, title: event.target.value }) } }} /></label><label>Company<input value={preview.company ?? ''} placeholder="Enter the employer name" onChange={event => { if (preview) { setConflictResolutions(value => { const next = { ...value }; delete next.company; return next }); enqueuePreviewEdit({ ...preview, company: event.target.value }) } }} />{capturedPreview?.company === null && <span className="field-help">The source did not provide an employer name. Any value you enter is your correction, not captured source text.</span>}</label><label className="wide-field">Posting and requirements<textarea rows={12} value={preview.description} onChange={event => { if (preview) enqueuePreviewEdit({ ...preview, description: event.target.value }) }} /><span className="field-help">Edits are your working wording; the captured source above remains unchanged.</span></label></div><fieldset className="posting-optional-details"><legend>Optional details — unknown unless the source provided a value</legend><div className="posting-preview-fields">{optionalPostingFields.map(([field, label]) => { const detail = preview.optionalDetails[field]; return <label key={field}>{label}<input value={detail.value ?? ''} placeholder="Unknown" onChange={event => updateOptionalDetail(field, event.target.value)} /><span className="field-help">{detail.origin === 'user-correction' ? `Your correction; captured source: ${capturedPreview?.optionalDetails[field].value ?? 'Unknown'}.` : detail.value === null ? 'Unknown — not provided by source.' : `Source: ${detail.source ?? detail.origin}${detail.uncertainty === 'relative-date' ? ' · Relative date; kept as written.' : ''}`}</span></label> })}</div></fieldset>{preview.conflicts.map(conflict => <fieldset className="posting-source-conflict" key={conflict.id}><legend>Conflicting {conflict.field} values — choose one source value</legend>{conflict.values.map(candidate => <label key={`${candidate.source}:${candidate.value}`}><input type="radio" name={`posting-conflict-${conflict.id}`} value={candidate.value} checked={conflictResolutions[conflict.id] === candidate.value} onChange={() => selectConflictValue(conflict.field, candidate.value)} /> {candidate.value} <span>Source: {candidate.source}</span></label>)}</fieldset>)}{preview.notices.map(notice => <p role="status" key={notice}>{notice}</p>)}<label className="posting-completeness-review"><input type="checkbox" checked={completenessConfirmed} onChange={event => void confirmPostingReview(event.target.checked)} /> I reviewed the full posting and corrected missing or partial content. I understand completeness cannot be guaranteed.</label><p>Extraction method: {preview.extractionMethod === 'lever-html-jsonld-v1' ? 'Lever-hosted structured data and readable page text' : preview.extractionMethod === 'lever-html-static-v1' ? 'Lever-hosted readable static text' : 'Lever posting detail data'}. Review and correct the complete posting before saving. Company names are not inferred when the source omits them. Saving does not contact the source or start model analysis.</p>{sourceMatch && <div className="saved-jobs-message" role="status">{!refreshComparison ? 'Checking the saved source against this refresh…' : !refreshComparison.ok ? refreshComparison.message : sourceMatchIsUnchanged ? 'This exact posting is already saved. No new revision is needed.' : 'This exact source has changed. Review the previous source, your current wording, and the new source before accepting anything.'}{refreshComparison?.ok && refreshComparison.unchanged && <div className="job-dialog-actions"><button type="button" className="secondary-button" onClick={() => openExisting(sourceMatch.id)}>Open existing</button></div>}{refreshComparison?.ok && !refreshComparison.unchanged && refreshComparison.previousSource && refreshComparison.working && refreshComparison.newSource && <section className="posting-refresh-comparison" aria-label="Refresh comparison"><h4>Review changes</h4><div className="posting-refresh-columns"><section aria-label="Previous source"><h5>Previous source</h5><p>{refreshComparison.previousSource.title} — {refreshComparison.previousSource.company}</p><dl>{optionalPostingFields.map(([field, label]) => <div key={field}><dt>{label}</dt><dd>{refreshComparison.previousSource?.optionalDetails[field].value ?? 'Unknown'}</dd></div>)}</dl><pre>{refreshComparison.previousSource.description}</pre></section><section aria-label="Current working posting"><h5>Your current working posting</h5><p>{refreshComparison.working.title} — {refreshComparison.working.company}</p><dl>{optionalPostingFields.map(([field, label]) => <div key={field}><dt>{label}</dt><dd>{refreshComparison.working?.optionalDetails?.[field]?.value ?? 'Unknown'}</dd></div>)}</dl><pre>{refreshComparison.working.description}</pre></section><section aria-label="New source"><h5>New source</h5><p>{refreshComparison.newSource.title} — {refreshComparison.newSource.company ?? 'Unknown company'}</p><dl>{optionalPostingFields.map(([field, label]) => <div key={field}><dt>{label}</dt><dd>{refreshComparison.newSource?.optionalDetails[field].value ?? 'Unknown'}</dd></div>)}</dl><pre>{refreshComparison.newSource.description}</pre></section></div><fieldset><legend>Choose wording for the accepted working posting. Your current wording is kept by default.</legend>{(['title', 'company', 'description'] as const).map(field => <div className="posting-refresh-choice" key={field}><strong>{field === 'description' ? 'Posting text' : field === 'title' ? 'Job title' : 'Company'}</strong><label><input type="radio" name={`refresh-${field}`} checked={refreshChoices[field] === 'working'} onChange={() => setRefreshChoices(value => ({ ...value, [field]: 'working' }))} /> Keep current</label><label><input type="radio" name={`refresh-${field}`} checked={refreshChoices[field] === 'source'} onChange={() => setRefreshChoices(value => ({ ...value, [field]: 'source' }))} /> Use new source</label></div>)}{optionalPostingFields.map(([field, label]) => <div className="posting-refresh-choice" key={field}><strong>{label}</strong><label><input type="radio" name={`refresh-${field}`} checked={refreshChoices.optionalDetails[field] !== 'source'} onChange={() => setRefreshChoices(value => ({ ...value, optionalDetails: { ...value.optionalDetails, [field]: 'working' } }))} /> Keep current</label><label><input type="radio" name={`refresh-${field}`} checked={refreshChoices.optionalDetails[field] === 'source'} onChange={() => setRefreshChoices(value => ({ ...value, optionalDetails: { ...value.optionalDetails, [field]: 'source' } }))} /> Use new source</label></div>)}</fieldset><p>Only accepted changes to the job title, company, or posting text can make current targeting and CV approval stale. Refreshing never starts a model request.</p><button type="button" className="primary-button" disabled={busy || fetching || !completenessConfirmed || !preview.title.trim() || !preview.company?.trim() || !preview.description.trim() || preview.conflicts.some(conflict => !conflictResolutions[conflict.id])} onClick={() => void acceptRefreshedPosting()}>{busy ? 'Accepting…' : 'Accept selected changes'}</button></section>}</div>}<div className="job-dialog-actions"><button type="button" className="primary-button" disabled={busy || fetching || !!sourceMatch || !completenessConfirmed || !preview.title.trim() || !preview.company?.trim() || !preview.description.trim() || preview.conflicts.some(conflict => !conflictResolutions[conflict.id])} onClick={() => void saveImportedPosting()}>{busy ? 'Saving…' : 'Save job'}</button>{!sourceMatch && <button type="button" className="secondary-button" disabled={busy} onClick={() => requestDiscard('discard')}>Discard preview</button>}</div></section>}</section> : <form className="job-dialog-form" onSubmit={event => void save(event)} noValidate>{renderFields()}<p className="job-form-guidance">Manual posting text has unknown source provenance and is saved on this device.</p>{message && intakeVisible && <p className={`saved-jobs-message${messageError ? ' is-error' : ''}`} role={messageError ? 'alert' : 'status'}>{message}</p>}<footer className="job-dialog-actions">{jobs.length > 0 && <button className="secondary-button" type="button" onClick={closeIntake}>Cancel</button>}<button className="primary-button" type="submit" disabled={busy}>{busy ? 'Saving…' : 'Save job'}</button></footer></form>}
   </section>
 
   return <div className="saved-jobs-page">
@@ -203,9 +264,9 @@ export function SavedJobs({ jobs, activeJob, onSaved, onOpened, onNavigate }: { 
         {editedJob && <section className="posting-history" aria-label="Posting source and revision history">
           <h3>Posting versions</h3>
           <p><strong>Source snapshot:</strong> {editedJob.sourceSnapshot ? 'Captured source wording is retained.' : 'Unknown — this manual posting has no captured source snapshot.'}</p>
-          {editedJob.sourceSnapshot && <pre>{editedJob.sourceSnapshot.description}</pre>}
-          <p><strong>Working posting:</strong> The editable fields above are the accepted wording.</p>
-          {editedJob.revisions.length > 0 ? <ol>{editedJob.revisions.map(revision => <li key={revision.revision}><h4>Revision {revision.revision} <span>· {revision.provenance === 'manual' ? 'Manual edit' : 'Legacy provenance unknown'}</span></h4><p>{revision.title} — {revision.company}</p><pre>{revision.description}</pre></li>)}</ol> : <p>No accepted revision history is available for this legacy posting.</p>}
+          {editedJob.sourceSnapshot && <>{editedJob.sourceHistory.length > 0 && <ol aria-label="Earlier posting source snapshots">{editedJob.sourceHistory.map((snapshot, index) => <li key={`${snapshot.capturedAt}-${index}`}><h4>Earlier source snapshot {index + 1}</h4><p>{snapshot.title} — {snapshot.company ?? 'Unknown company'}</p><pre>{snapshot.description}</pre><p>Captured {new Date(snapshot.capturedAt).toLocaleString()}</p></li>)}</ol>}<pre>{editedJob.sourceSnapshot.description}</pre>{editedJob.sourceSnapshot.conflicts.length > 0 && <section aria-label="Captured source disagreements"><h4>Captured source disagreements</h4><ul>{editedJob.sourceSnapshot.conflicts.map(conflict => <li key={conflict.id}><strong>{conflict.field}</strong>: {conflict.values.map(candidate => `${candidate.value} — ${candidate.source}`).join(' / ')}</li>)}</ul></section>}<dl aria-label="Captured source details">{optionalPostingFields.map(([field, label]) => <div key={field}><dt>{label}</dt><dd>{editedJob.sourceSnapshot?.optionalDetails[field].value ?? 'Unknown'}</dd></div>)}</dl></>}
+          <p><strong>Working posting:</strong> The editable fields above are the accepted wording.</p><dl aria-label="Accepted working details">{optionalPostingFields.map(([field, label]) => <div key={field}><dt>{label}</dt><dd>{editedJob.optionalDetails[field].value ?? 'Unknown'}{editedJob.optionalDetails[field].origin === 'user-correction' ? ' · Your correction' : ''}</dd></div>)}</dl>
+          {editedJob.revisions.length > 0 ? <ol>{editedJob.revisions.map(revision => <li key={revision.revision}><h4>Revision {revision.revision} <span>· {revision.provenance === 'manual' ? 'Manual edit' : 'Legacy provenance unknown'}</span></h4><p>{revision.title} — {revision.company}</p><pre>{revision.description}</pre><dl>{optionalPostingFields.map(([field, label]) => <div key={field}><dt>{label}</dt><dd>{revision.optionalDetails[field].value ?? 'Unknown'}</dd></div>)}</dl></li>)}</ol> : <p>No accepted revision history is available for this legacy posting.</p>}
         </section>}
         <p className="job-form-guidance">Job postings are saved on this device.</p>
         {message && <p className={`saved-jobs-message${messageError ? ' is-error' : ''}`} role={messageError ? 'alert' : 'status'}>{message}</p>}

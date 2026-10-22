@@ -8,7 +8,7 @@ import { join } from 'node:path'
 import { URL } from 'node:url'
 import { isIP } from 'node:net'
 
-export type PostingPreview = { title: string; company: string | null; description: string; submittedUrl: string; finalUrl: string; notices: string[]; extractionMethod: 'lever-json-v1' | 'lever-html-jsonld-v1' | 'lever-html-static-v1' }
+export type PostingPreview = import('../shared/posting-import').PostingPreview
 export type Address = { address: string; family: number }
 export type SafePostingFetchOptions = {
   lookup?: (hostname: string) => Promise<Address[]>
@@ -67,7 +67,8 @@ function parseSubmitted(value: string): { submitted: URL; api: URL; html: boolea
   if (typeof value !== 'string' || Buffer.byteLength(value, 'utf8') > MAX_URL_BYTES) throw new Error('The link is invalid or longer than 2,048 bytes.')
   let submitted: URL
   try { submitted = new URL(value) } catch { throw new Error('Enter a valid Lever posting link.') }
-  if (submitted.protocol !== 'https:' || submitted.username || submitted.password || submitted.port || submitted.hash || submitted.search) throw new Error('Only public HTTPS Lever posting links without credentials, query strings, or fragments are supported.')
+  const knownTracking = (key: string) => /^utm_[a-z0-9_]+$/i.test(key) || ['gclid', 'fbclid', 'li_fat_id', 'mc_cid', 'mc_eid'].includes(key.toLowerCase())
+  if (submitted.protocol !== 'https:' || submitted.username || submitted.password || submitted.port || submitted.hash || [...submitted.searchParams.keys()].some(key => !knownTracking(key))) throw new Error('Only public HTTPS Lever posting links without credentials, identity-bearing query strings, or fragments are supported.')
   const hosted = submitted.hostname === 'jobs.lever.co' && /^\/[A-Za-z0-9_-]{1,100}\/[A-Za-z0-9_-]{1,150}$/.test(submitted.pathname)
   const api = submitted.hostname === HOST && /^\/v0\/postings\/[A-Za-z0-9_-]{1,100}\/[A-Za-z0-9_-]{1,150}$/.test(submitted.pathname)
   if (!hosted && !api) throw new Error('Only a named Lever hosted job page or documented posting-detail API URL is supported. Paste posting text instead for other sources.')
@@ -93,9 +94,9 @@ async function decodeBounded(body: Buffer, encoding: string, signal: AbortSignal
   finally { signal.removeEventListener('abort', abort) }
   return Buffer.concat(output, bytes)
 }
-type ExtractedPosting = { title: string; company: string | null; description: string; notices: string[]; extractionMethod: 'lever-json-v1' | 'lever-html-jsonld-v1' | 'lever-html-static-v1' }
-async function extractPostingBounded(text: string, expectedId: string, signal: AbortSignal): Promise<ExtractedPosting> {
-  const worker = new Worker(join(__dirname, 'posting-extraction-worker.cjs'), { workerData: { text, expectedId, mode: expectedId === '__html__' ? 'html' : 'json' } })
+type ExtractedPosting = Omit<PostingPreview, 'submittedUrl' | 'finalUrl'>
+async function extractPostingBounded(text: string, expectedId: string, signal: AbortSignal, mode: 'html' | 'json'): Promise<ExtractedPosting> {
+  const worker = new Worker(join(__dirname, 'posting-extraction-worker.cjs'), { workerData: { text, expectedId, mode } })
   return await new Promise((resolve, reject) => {
     const finish = () => { clearTimeout(timer); signal.removeEventListener('abort', cancel); void worker.terminate() }
     const timer = setTimeout(() => { finish(); reject(new Error('Posting parsing and extraction exceeded the 2-second budget.')) }, 2_000)
@@ -152,7 +153,8 @@ export async function fetchLeverPosting(input: string, options: SafePostingFetch
   const timeout = setTimeout(() => controller.abort(new Error('Fetch exceeded the 30-second deadline.')), TOTAL_TIMEOUT_MS)
   const lookup = options.lookup ?? defaultLookup, request = options.request ?? defaultRequest, wait = options.wait ?? defaultWait, now = options.now ?? Date.now
   try {
-    let current = html || sourceRoute === 'api' ? submitted : api, response: Awaited<ReturnType<Request>> | undefined
+    let current = new URL(html || sourceRoute === 'api' ? submitted : api), response: Awaited<ReturnType<Request>> | undefined
+    for (const key of [...current.searchParams.keys()]) current.searchParams.delete(key)
     const visited = new Set<string>()
     for (let hop = 0; hop <= 3; hop++) {
       if (controller.signal.aborted) throw options.signal?.aborted ? new Error('Fetch cancelled.') : controller.signal.reason instanceof Error ? controller.signal.reason : new Error('Fetch timed out.')
@@ -194,13 +196,14 @@ export async function fetchLeverPosting(input: string, options: SafePostingFetch
       }
       break
     }
-    if (!response || response.status !== 200) throw new Error(response?.status === 403 || response?.status === 429 ? 'The source denied or rate-limited access. Try opening it or paste the posting text instead.' : `The posting source returned HTTP ${response?.status ?? 'error'}.`)
+    if (!response || response.status !== 200) throw new Error(response?.status === 403 || response?.status === 429 ? 'The source denied or rate-limited access. Try opening it or paste the posting text instead.' : response?.status === 404 ? 'The posting could not be reached (HTTP 404). This does not confirm that the role was removed; open the source or paste its text.' : `The posting source returned HTTP ${response?.status ?? 'error'}.`)
     let body: Buffer
     try { body = await decodeBounded(response.body, String(response.headers['content-encoding'] ?? 'identity').toLowerCase(), controller.signal) }
     catch (error) { throw error instanceof Error && error.message === 'oversized' ? new Error('The posting response exceeded the 8 MiB expanded limit.') : error }
     if (body.length > MAX_DECOMPRESSED) throw new Error('The posting response exceeded the 8 MiB expanded limit.')
     const contentType = String(response.headers['content-type'] ?? '').toLowerCase()
-    if (html ? !contentType.includes('text/html') : !contentType.includes('json')) {
+    const isHtml = contentType.includes('text/html') || contentType.includes('application/xhtml+xml')
+    if (html ? !isHtml : !contentType.includes('json')) {
       const sample = response.body.subarray(0, 64 * 1024).toString('utf8').toLowerCase()
       if (/captcha|verify you are human|sign in|log in|paywall/.test(sample)) throw new Error('The source requires sign-in or presents a CAPTCHA/paywall. Access will not be bypassed; open the posting or paste its text instead.')
       throw new Error('The source returned a webpage instead of the supported posting-detail JSON. Script-rendered and generic pages are not supported; paste posting text instead.')
@@ -208,7 +211,7 @@ export async function fetchLeverPosting(input: string, options: SafePostingFetch
     let jsonText: string
     try { jsonText = new TextDecoder('utf-8', { fatal: true }).decode(body) } catch { throw new Error('The posting response was not valid UTF-8 JSON.') }
     const expectedId = api.pathname.split('/').at(-1) ?? ''
-    const extracted = await extractPostingBounded(jsonText, contentType.includes('json') ? expectedId : '__html__', controller.signal)
+    const extracted = await extractPostingBounded(jsonText, expectedId, controller.signal, html ? 'html' : 'json')
     if (controller.signal.aborted) throw new Error(options.signal?.aborted ? 'Fetch cancelled.' : 'Fetch exceeded the 30-second deadline.')
     return { ...extracted, submittedUrl: submitted.href, finalUrl: current.href }
   } finally { clearTimeout(timeout); options.signal?.removeEventListener('abort', abort) }
