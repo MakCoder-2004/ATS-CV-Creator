@@ -17,7 +17,7 @@
 - Focus indicator is always visible: 3px solid semantic focus color, 2–3px offset, not clipped or obscured. Do not remove browser focus without an equal or stronger replacement.
 - Provide skip-to-content and a focusable main content target. Use landmarks, semantic headings with no skipped levels, fieldset/legend for grouped form choices and table semantics for actual tabular data.
 - Dialogs have an accessible title, sensible initial focus, contained focus while open and focus restoration on close. Status announcements should not move focus unexpectedly.
-- Minimum target is 40px for desktop actions and 44px for frequently used/touch controls; leave at least 8px between distinct touch targets. Icon-only action targets are at least 42px square.
+- Minimum target is 40px for desktop actions and 44px for frequently used/touch controls; leave at least 8px between distinct touch targets. Icon-only action targets are at least 42px square. The desktop sidebar collapse control names its current action and exposes expanded state; collapsed page-navigation icons retain their full accessible names and visible selected state. The control is absent from the compact top shell, where page labels remain visible.
 - Text contrast meets WCAG AA (4.5:1 normal, 3:1 large); focus/selected/control boundaries meet 3:1 against adjacent colors. Verify both themes; don't infer contrast from appearance.
 
 ## Motion and responsive behavior

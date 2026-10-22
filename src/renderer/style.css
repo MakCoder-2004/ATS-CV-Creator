@@ -63,7 +63,9 @@ h2 { font-size: 16px; font-weight: 700; }
   display: flex; flex-direction: column; background: var(--surface);
   border-right: 1px solid var(--line); padding: 27px 15px; gap: 32px;
 }
-.sidebar-top { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.sidebar-top { display: grid; gap: 8px; }
+.sidebar-toggle { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 8px 12px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font-size: 12px; font-weight: 650; text-align: left; }
+.sidebar-toggle:hover { background: var(--raised); color: var(--link); }
 .brand { display: flex; gap: 10px; align-items: center; min-width: 0; padding: 0 7px; }
 .brand-icon {
   display: grid; place-items: center; background: var(--blue); color: #fff;
@@ -109,6 +111,19 @@ nav button:hover, nav button[aria-current=page] { background: var(--raised); col
 }
 .appearance button[aria-pressed=true] { background: var(--surface); color: var(--ink); box-shadow: 0 1px 3px #0002; }
 .sidebar-appearance { display: none; }
+@media (min-width: 761px) {
+  .workbench[data-sidebar-collapsed=true] { grid-template-columns: 64px minmax(0, 1fr); }
+  .workbench[data-sidebar-collapsed=true] .sidebar { padding-inline: 8px; gap: 24px; }
+  .workbench[data-sidebar-collapsed=true] .brand { justify-content: center; padding: 0; }
+  .workbench[data-sidebar-collapsed=true] .brand-name,
+  .workbench[data-sidebar-collapsed=true] .sidebar-toggle-label,
+  .workbench[data-sidebar-collapsed=true] .sidebar-nav-label,
+  .workbench[data-sidebar-collapsed=true] .sidebar-jobs,
+  .workbench[data-sidebar-collapsed=true] .sidebar-bottom { display: none; }
+  .workbench[data-sidebar-collapsed=true] .sidebar-toggle,
+  .workbench[data-sidebar-collapsed=true] .sidebar nav button { justify-content: center; width: 44px; min-height: 44px; padding: 0; }
+  .workbench[data-sidebar-collapsed=true] .sidebar nav button svg { flex: none; }
+}
 .error { margin: 16px 28px; border: 1px solid #b42335; background: #fff1f2; color: #8c1626; padding: 12px; }
 .title { padding: 26px 28px 23px; }
 .context { color: var(--link); font-size: 12px; font-weight: 650; }
@@ -299,7 +314,8 @@ nav button:hover, nav button[aria-current=page] { background: var(--raised); col
 @media (max-width: 760px) {
   .workbench { display: block; }
   .sidebar { position: static; height: auto; padding: 15px 16px 14px; gap: 15px; }
-  .sidebar-top { min-height: 42px; }
+  .sidebar-top { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 42px; }
+  .sidebar-toggle { display: none; }
   .sidebar .brand { padding: 0; }
   .sidebar nav { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
   .sidebar nav button { justify-content: center; min-width: 0; min-height: 46px; gap: 7px; padding: 8px; white-space: nowrap; color: var(--ink); }

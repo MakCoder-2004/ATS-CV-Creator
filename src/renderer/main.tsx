@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import { BriefcaseBusiness, FileText, LayoutPanelLeft, Moon, Plus, Settings2, Sun, UserRound } from 'lucide-react'
+import { BriefcaseBusiness, FileText, LayoutPanelLeft, Moon, PanelLeftClose, PanelLeftOpen, Plus, Settings2, Sun, UserRound } from 'lucide-react'
 import type { Appearance } from '../shared/appearance'
 import { OpenRouterSettingsPanel } from './OpenRouterSettings'
 import { WorkspaceBackup } from './WorkspaceBackup'
@@ -23,6 +23,10 @@ function AppearanceControls({ appearance, change, className }: { appearance: App
 function App() {
   const [appearance, setAppearance] = useState<Appearance>('light')
   const [page, setPage] = useState<Page>('Tailor CV')
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    try { return window.localStorage.getItem('cv-tailor-sidebar-collapsed') === 'true' }
+    catch { return false }
+  })
   const [error, setError] = useState('')
   const [ready, setReady] = useState(false)
   const [jobs, setJobs] = useState<JobRecord[]>([])
@@ -50,16 +54,20 @@ function App() {
     catch { setError('The selected saved posting could not be opened.') }
   }
   useEffect(() => { document.documentElement.dataset.appearance = appearance }, [appearance])
+  useEffect(() => {
+    try { window.localStorage.setItem('cv-tailor-sidebar-collapsed', String(sidebarCollapsed)) }
+    catch { /* Keep the choice for this session if browser storage is unavailable. */ }
+  }, [sidebarCollapsed])
   async function changeAppearance(value: Appearance) {
     try { const saved = await window.workbench.setAppearance(value); setAppearance(saved.appearance); setError('') }
     catch { setError('Appearance could not be saved. Try again.') }
   }
   if (!ready && !error) return <div className="loading" role="status">Opening your workspace…</div>
-  return <div className="workbench" data-ui-ready={ready ? 'true' : undefined}>
+  return <div className="workbench" data-sidebar-collapsed={sidebarCollapsed} data-ui-ready={ready ? 'true' : undefined}>
     <a className="skip" href="#content">Skip to content</a>
-    <aside className="sidebar" aria-label="Workspace navigation">
-      <div className="sidebar-top"><div className="brand"><span className="brand-icon"><LayoutPanelLeft aria-hidden="true" size={20} /></span><div><strong>CV Tailor</strong><small>Your experience, supported.</small></div></div><AppearanceControls className="sidebar-appearance" appearance={appearance} change={value => void changeAppearance(value)} /></div>
-      <nav aria-label="Main navigation">{pages.map(({ label, icon: Icon }) => <button type="button" key={label} aria-current={page === label ? 'page' : undefined} onClick={() => setPage(label)}><Icon size={18} aria-hidden="true" />{label}</button>)}</nav>
+    <aside id="workspace-sidebar" className="sidebar" aria-label="Workspace navigation">
+      <div className="sidebar-top"><div className="brand"><span className="brand-icon"><LayoutPanelLeft aria-hidden="true" size={20} /></span><div className="brand-name"><strong>CV Tailor</strong><small>Your experience, supported.</small></div></div><button type="button" className="sidebar-toggle" aria-controls="workspace-sidebar" aria-expanded={!sidebarCollapsed} aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'} title={sidebarCollapsed ? 'Expand sidebar' : undefined} onClick={() => setSidebarCollapsed(value => !value)}>{sidebarCollapsed ? <PanelLeftOpen size={18} aria-hidden="true" /> : <PanelLeftClose size={18} aria-hidden="true" />}<span className="sidebar-toggle-label">Collapse sidebar</span></button><AppearanceControls className="sidebar-appearance" appearance={appearance} change={value => void changeAppearance(value)} /></div>
+      <nav aria-label="Main navigation">{pages.map(({ label, icon: Icon }) => <button type="button" key={label} aria-label={label} title={sidebarCollapsed ? label : undefined} aria-current={page === label ? 'page' : undefined} onClick={() => setPage(label)}><Icon size={18} aria-hidden="true" /><span className="sidebar-nav-label">{label}</span></button>)}</nav>
       <div className="sidebar-jobs"><div className="section-label">Saved jobs <span>{jobs.length}</span></div>{jobs.length > 0 && <div className="sidebar-job-items">{jobs.map(job => <button type="button" key={job.id} aria-current={activeJob?.id === job.id ? 'true' : undefined} onClick={() => { setPage('Tailor CV'); void activateJob(job.id) }}>{job.title}<small>{job.company}</small></button>)}</div>}<button type="button" className="sidebar-new-job" onClick={() => setPage('Saved jobs')}><Plus size={16} aria-hidden="true" /> New job</button></div>
       <div className="sidebar-bottom"><div className="storage-note">Personal workspace<br /><span>Saved on this device</span></div></div>
     </aside>

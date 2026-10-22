@@ -68,7 +68,7 @@ Semantic status must never rely on color alone. Pair with a plain-language label
 
 Use a 4px base grid and these permitted steps: `4, 8, 12, 16, 20, 24, 28, 32, 40, 48, 56, 64px`. Use 4/8 for inline/icon gaps, 12/16 for control interiors, 16/24 for panel gaps, 24/32 for section separation, 40+ for major page breathing room. Do not apply arbitrary one-off spacing values except when matching an existing documented page metric.
 
-- Desktop shell: 220px fixed sidebar + `minmax(0, 1fr)` main column. Sidebar remains full viewport height and sticky; scroll within it only when content overflows.
+- Desktop shell: 220px expanded sidebar or 64px collapsed icon rail + `minmax(0, 1fr)` main column. Sidebar remains full viewport height and sticky; scroll within it only when content overflows. At 760px and below, use the existing compact top shell regardless of the stored desktop collapse preference.
 - Main header: 68px minimum height; horizontal padding 28px; content vertically centered.
 - Page title band: 26px top, 28px horizontal, 23px bottom. Page content aligns to the same 28px left/right content edge.
 - Content containers use `min-width: 0`; avoid horizontal overflow. Long text wraps with `overflow-wrap:anywhere` only for untrusted/user-provided strings.

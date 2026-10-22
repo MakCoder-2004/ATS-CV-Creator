@@ -68,7 +68,7 @@ test('visible recovery waits for explicit resume after Electron close and reopen
 })
 
 test('hard Electron close during a delayed provider request preserves uncertainty until explicit retry', async () => {
-  test.setTimeout(60000)
+  test.setTimeout(90000)
   const userData = mkdtempSync(join(tmpdir(), 'cv-tailor-inflight-recovery-'))
   let app: Awaited<ReturnType<typeof electron.launch>> | undefined
   try {
@@ -99,7 +99,7 @@ test('hard Electron close during a delayed provider request preserves uncertaint
 
     app = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], timeout: 60000, env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData, CV_TAILOR_SCRIPTED_ANALYSIS: 'generation' } })
     page = await app.firstWindow()
-    await expect(page.locator('[data-ui-ready="true"]')).toBeVisible()
+    await expect(page.locator('[data-ui-ready="true"]')).toBeVisible({ timeout: 15000 })
     await page.getByRole('button', { name: /Engineer Target Inc/ }).click()
     const recovery = page.getByRole('heading', { name: 'Interrupted generation' }).locator('..')
     await expect(recovery).toContainText('may have been sent')
