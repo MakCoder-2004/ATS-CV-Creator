@@ -1,11 +1,11 @@
 import { z } from 'zod'
 
-export const WORKSPACE_BACKUP_VERSION = 1 as const
+export const WORKSPACE_BACKUP_VERSION = 2 as const
 export const workspaceBackupWarning = 'This file contains personal profile and accepted CV source passages, job, draft, evidence, review, consent, checkpoint, usage, and settings data. Store it securely; it excludes encrypted credentials and API keys.'
 
 export const workspaceBackupSchema = z.object({
   format: z.literal('cv-tailor-workspace-backup'),
-  version: z.literal(WORKSPACE_BACKUP_VERSION),
+  version: z.union([z.literal(1), z.literal(WORKSPACE_BACKUP_VERSION)]),
   createdAt: z.string().datetime(),
   warning: z.literal(workspaceBackupWarning),
   tables: z.record(z.string(), z.object({

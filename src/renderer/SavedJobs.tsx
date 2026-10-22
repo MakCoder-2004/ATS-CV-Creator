@@ -109,6 +109,13 @@ export function SavedJobs({ jobs, activeJob, onSaved, onOpened, onNavigate }: { 
       <header className="job-dialog-heading"><div><p className="context">{editingId ? 'Saved job' : 'New job'}</p><h2 id="job-dialog-title">{editingId ? 'Edit job posting' : 'Add a job posting'}</h2></div><button type="button" className="icon-button" aria-label="Close job form" onClick={closeDialog}>×</button></header>
       <form className="job-dialog-form" onSubmit={event => void save(event)} noValidate>
         {renderFields()}
+        {editingId && activeJob?.id === editingId && <section className="posting-history" aria-label="Posting source and revision history">
+          <h3>Posting versions</h3>
+          <p><strong>Source snapshot:</strong> {activeJob.sourceSnapshot ? 'Captured source wording is retained.' : 'Unknown — this manual posting has no captured source snapshot.'}</p>
+          {activeJob.sourceSnapshot && <pre>{activeJob.sourceSnapshot.description}</pre>}
+          <p><strong>Working posting:</strong> The editable fields above are the accepted wording.</p>
+          {activeJob.revisions.length > 0 ? <ol>{activeJob.revisions.map(revision => <li key={revision.revision}><h4>Revision {revision.revision} <span>· {revision.provenance === 'manual' ? 'Manual edit' : 'Legacy provenance unknown'}</span></h4><p>{revision.title} — {revision.company}</p><pre>{revision.description}</pre></li>)}</ol> : <p>No accepted revision history is available for this legacy posting.</p>}
+        </section>}
         <p className="job-form-guidance">Job postings are saved on this device.</p>
         {message && dialogOpen && <p className={`saved-jobs-message${messageError ? ' is-error' : ''}`} role={messageError ? 'alert' : 'status'}>{message}</p>}
         <footer className="job-dialog-actions"><button className="secondary-button" type="button" onClick={closeDialog}>Cancel</button><button className="primary-button" type="submit" disabled={busy}>{busy ? 'Saving…' : editingId ? 'Save changes' : 'Save job'}</button></footer>

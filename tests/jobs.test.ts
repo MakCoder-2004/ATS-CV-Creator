@@ -18,7 +18,7 @@ test('saved jobs preserve original posting text, have stable IDs, and reopen aft
   const saved = await workbench.api.saveJob({ title: 'Engineer', company: 'Fictional Co', description: original })
   expect(saved.ok).toBe(true)
   if (!saved.ok) throw Error(saved.error.message)
-  expect(saved.value).toMatchObject({ title: 'Engineer', company: 'Fictional Co', description: original })
+  expect(saved.value).toMatchObject({ title: 'Engineer', company: 'Fictional Co', description: original, provenance: 'manual', sourceSnapshot: null, revisions: [{ title: 'Engineer', company: 'Fictional Co', description: original, revision: 1, provenance: 'manual' }] })
   const id = saved.value.id
   expect(await workbench.api.listJobs()).toEqual([saved.value])
   workbench.close()
@@ -48,7 +48,8 @@ test('opening another job returns only its posting and updating one keeps its id
   expect(await workbench.api.openJob(first.value.id)).toMatchObject({ title: 'Engineer', company: 'Northwind', description: 'Design compiler tools.' })
   expect(await workbench.api.openJob(second.value.id)).toMatchObject({ title: 'Analyst', company: 'Contoso', description: 'Review fictional datasets.' })
   const updated = await workbench.api.saveJob({ id: first.value.id, title: 'Senior Engineer', company: 'Northwind', description: 'Design compiler tools with a fictional team.' })
-  expect(updated).toMatchObject({ ok: true, value: { id: first.value.id, createdAt: first.value.createdAt, title: 'Senior Engineer' } })
+  expect(updated).toMatchObject({ ok: true, value: { id: first.value.id, createdAt: first.value.createdAt, title: 'Senior Engineer', revisions: [{ title: 'Engineer', revision: 1, provenance: 'manual' }, { title: 'Senior Engineer', revision: 2, provenance: 'manual' }] } })
+  expect(await workbench.api.openJob(first.value.id)).toMatchObject({ revisions: [{ description: 'Design compiler tools.' }, { description: 'Design compiler tools with a fictional team.' }] })
   expect(await workbench.api.listJobs()).toHaveLength(2)
   expect(await workbench.api.openJob(second.value.id)).toEqual(second.value)
   workbench.close()

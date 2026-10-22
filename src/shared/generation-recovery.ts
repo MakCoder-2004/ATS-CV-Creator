@@ -29,7 +29,7 @@ export const generationRecoverySnapshotSchema = z.object({
   version: z.literal(1), runId: uuidSchema, jobId: uuidSchema, consentId: uuidSchema, scopeHash: z.string().regex(/^[a-f0-9]{64}$/),
   analysis: analysisResultSchema, job: jobRecordSchema, profile: profileSnapshotSchema, experience: experienceSnapshotSchema,
   draftInputs: z.object({ items: z.array(generationItemSchema), lockedFields: lockedFieldsSchema }).strict(),
-  safeItems: z.array(generationItemSchema), identity: z.object({ id: uuidSchema, jobId: uuidSchema, revision: z.number().int().positive(), createdAt: z.string().datetime(), lockedFields: lockedFieldsSchema }).strict(),
+  safeItems: z.array(generationItemSchema), identity: z.object({ id: uuidSchema, jobId: uuidSchema, revision: z.number().int().positive(), targetPostingUpdatedAt: z.string().datetime().optional(), createdAt: z.string().datetime(), lockedFields: lockedFieldsSchema }).strict(),
   pageTarget: z.union([z.literal(1), z.literal(2)]), source: consentSourceSchema, faithfulnessCheck: z.boolean(), budgets: analysisBudgetsSchema
 }).strict()
 export type GenerationRecoverySnapshot = z.infer<typeof generationRecoverySnapshotSchema>

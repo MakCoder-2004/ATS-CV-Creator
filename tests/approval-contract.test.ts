@@ -207,6 +207,23 @@ test('new factual wording requires an explicitly saved cited source and keeps se
   expect(cited).toMatchObject({ content: { skills: [{ name: 'TypeScript', citations: [{ evidenceId: skillId, revision: 1 }] }] }, progress: expect.stringContaining('user-declared') })
 })
 
+test('accepting a material job edit immediately revokes current approval and export readiness without changing CV wording', async () => {
+  const { workspace, jobId } = await fixture()
+  await workspace.api.checkDraft(jobId)
+  await measure(workspace, jobId)
+  expect(await workspace.api.approveDraft(jobId)).toMatchObject({ ok: true })
+  const before = await workspace.api.getDraft(jobId)
+  const job = await workspace.api.openJob(jobId)
+  if (!job) throw new Error('Job fixture unavailable')
+  expect(await workspace.api.saveJob({ id: jobId, title: job.title, company: job.company, description: `${job.description} Additional requirement.` })).toMatchObject({ ok: true })
+  expect(await workspace.api.getDraft(jobId)).toMatchObject({ id: before?.id, content: before?.content, approved: false, status: 'blocked' })
+  expect((await workspace.api.getDraft(jobId))?.approval).toBeUndefined()
+  expect((await workspace.api.getDraft(jobId))?.checkReport).toBeUndefined()
+  expect(await workspace.api.checkDraft(jobId)).toMatchObject({ passed: false })
+  expect(await workspace.api.approveDraft(jobId)).toMatchObject({ ok: false })
+  expect(await workspace.api.assertDraftExportable(jobId)).toMatchObject({ ok: false })
+})
+
 test('approval requires a persisted current check after accepting cuts, not merely a fresh measure', async () => {
   const { workspace, jobId } = await fixture()
   const before = await workspace.api.getDraft(jobId)
