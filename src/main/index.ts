@@ -27,13 +27,10 @@ import { addDraftItemInputSchema, draftCorrectionInputSchema, draftGenerationSch
 import { factualCheckReportSchema } from '../shared/factual-report'
 import { regenerationProposalSchema, regenerationResultSchema, regenerationTargetSchema } from '../shared/regeneration'
 import { mutateDraftRecordInputSchema } from '../shared/draft-records'
-import { fetchLeverPosting, validateLeverPostingUrl } from './safe-posting-fetch'
-import { postingPreviewSchema } from '../shared/posting-import'
+import { validateLeverPostingUrl } from './safe-posting-fetch'
 
 let window: BrowserWindow | undefined
 let workspace: ReturnType<typeof createWorkbench> | undefined
-const postingPreviews = new Map<string, Awaited<ReturnType<typeof fetchLeverPosting>>>()
-const postingFetches = new Map<string, AbortController>()
 
 function invalidProfileInput(error: ZodError, kind: string) {
   const fieldErrors: Record<string, string> = {}
@@ -112,9 +109,13 @@ app.whenReady().then(() => {
     if (process.env.CV_TAILOR_SCRIPTED_ANALYSIS === 'tailored-flow') return JSON.stringify({ required: ['Python', 'RASA', 'Google Cloud Platform', 'NLP'], preferred: ['Docker'], tools: ['Python', 'RASA', 'Google Cloud Platform', 'spaCy', 'Git', 'Docker'], responsibilities: ['Build Python APIs and conversational AI solutions'], keywords: ['Python', 'NLP', 'intent classification', 'model evaluation', 'backend services'] })
     return JSON.stringify({ required: ['TypeScript', 'Kubernetes'], preferred: ['Cloud architecture'], tools: ['TypeScript'], responsibilities: ['Build reliable services'], keywords: ['TypeScript', 'Kubernetes', 'Cloud architecture'] })
   } } : undefined
-  workspace = createWorkbench(app.getPath('userData'), safeStorage, scriptedAnalysis)
+  const scriptedPostingFetch = !app.isPackaged && process.env.CV_TAILOR_SCRIPTED_POSTING_FETCH === '1' ? {
+    lookup: async () => [{ address: '8.8.8.8', family: 4 }],
+    request: async (url: URL) => ({ status: 200, headers: { 'content-type': 'application/json' }, body: Buffer.from(JSON.stringify({ id: url.pathname.split('/').at(-1), text: 'Synthetic Reliability Engineer', company: 'Example Research', descriptionPlain: 'Responsibilities\nBuild and maintain fictional systems, document operational decisions, collaborate with the synthetic engineering team, and review reliability outcomes across a clearly invented service environment.', lists: [{ text: 'Requirements', content: '<li>Experience with testing.</li>' }] })) })
+  } : undefined
+  workspace = createWorkbench(app.getPath('userData'), safeStorage, scriptedAnalysis, undefined, scriptedPostingFetch)
   registerWorkspaceBackupIpc(() => window!, () => workspace!, () => {
-    const reopened = createWorkbench(app.getPath('userData'), safeStorage, scriptedAnalysis)
+    const reopened = createWorkbench(app.getPath('userData'), safeStorage, scriptedAnalysis, undefined, scriptedPostingFetch)
     const previous = workspace!
     workspace = reopened
     previous.close()
@@ -258,27 +259,17 @@ app.whenReady().then(() => {
     if (args.length) throw new Error('Unexpected arguments')
     return jobRecordSchema.array().parse(await workspace!.api.listJobs())
   })
-  ipcMain.handle('posting-import:fetch', async (event, ...args: unknown[]) => {
-    trusted(event)
-    if (args.length !== 1 || typeof args[0] !== 'string' || !validateLeverPostingUrl(args[0])) throw new Error('Only a named HTTPS Lever job-detail link is supported.')
-    const token = randomUUID(), controller = new AbortController()
-    postingFetches.set(token, controller)
-    try {
-      const preview = await fetchLeverPosting(args[0], { signal: controller.signal })
-      if (controller.signal.aborted) throw new Error('Fetch cancelled.')
-      postingPreviews.set(token, preview)
-      return { token, preview: postingPreviewSchema.parse(preview) }
-    } finally { postingFetches.delete(token) }
+  ipcMain.handle('posting-import:start', async (event, ...args: unknown[]) => {
+    trusted(event); if (args.length !== 1 || typeof args[0] !== 'string') throw new Error('Expected a posting link')
+    return await workspace!.api.startPostingFetch(args[0])
   })
-  ipcMain.handle('posting-import:read', (event, ...args: unknown[]) => {
+  ipcMain.handle('posting-import:read', async (event, ...args: unknown[]) => {
     trusted(event); if (args.length !== 1) throw new Error('Expected preview token')
-    return postingPreviewSchema.nullable().parse(postingPreviews.get(uuidSchema.parse(args[0])) ?? null)
+    return await workspace!.api.readPostingPreview(uuidSchema.parse(args[0]))
   })
-  ipcMain.handle('posting-import:cancel', (event, ...args: unknown[]) => {
-    trusted(event); if (args.length > 1) throw new Error('Expected optional fetch token')
-    if (args.length === 0) for (const controller of postingFetches.values()) controller.abort()
-    else { const token = uuidSchema.parse(args[0]); postingFetches.get(token)?.abort(); postingPreviews.delete(token) }
-    return { ok: true }
+  ipcMain.handle('posting-import:cancel', async (event, ...args: unknown[]) => {
+    trusted(event); if (args.length !== 1) throw new Error('Expected fetch token')
+    return await workspace!.api.cancelPostingFetch(uuidSchema.parse(args[0]))
   })
   ipcMain.handle('posting-import:open-source', async (event, ...args: unknown[]) => {
     trusted(event); if (args.length !== 1 || typeof args[0] !== 'string' || !validateLeverPostingUrl(args[0])) throw new Error('Only a validated HTTPS Lever posting can be opened.')

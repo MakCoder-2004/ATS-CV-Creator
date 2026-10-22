@@ -3,7 +3,7 @@ import { fetchLeverPosting, isPublicAddress, validateLeverPostingUrl } from '../
 
 const url = 'https://jobs.lever.co/acme/role-123'
 const headers = { 'content-type': 'application/json' }
-const response = (body: unknown, status = 200) => ({ status, headers, body: Buffer.from(JSON.stringify(body)) })
+const response = (body: unknown, status = 200) => ({ status, headers, body: Buffer.from(JSON.stringify({ id: 'role-123', ...body as object })) })
 const lookup = vi.fn(async () => [{ address: '8.8.8.8', family: 4 }])
 
 describe('bounded Lever posting fetch', () => {
@@ -15,7 +15,8 @@ describe('bounded Lever posting fetch', () => {
     const request = vi.fn(async () => response({ text: 'Engineer', descriptionPlain: 'Build systems\nOwn reliability', hostedUrl: 'https://evil.test/' }))
     const preview = await fetchLeverPosting(url, { lookup, request })
     expect(request).toHaveBeenCalledTimes(1)
-    expect(preview).toMatchObject({ title: 'Engineer', company: null, description: 'Build systems\nOwn reliability', submittedUrl: url, notices: [expect.stringContaining('Employer name')] })
+    expect(preview).toMatchObject({ title: 'Engineer', company: null, description: 'Build systems\nOwn reliability', submittedUrl: url })
+    expect(preview.notices).toContainEqual(expect.stringContaining('Employer name'))
     expect(preview.finalUrl).toBe('https://api.lever.co/v0/postings/acme/role-123')
   })
   it('rejects private DNS answers before requesting and never follows external redirects', async () => {
@@ -25,8 +26,8 @@ describe('bounded Lever posting fetch', () => {
     await expect(fetchLeverPosting(url, { lookup, request: async () => ({ status: 302, headers: {}, body: Buffer.alloc(0), location: 'https://evil.test/path' }) })).rejects.toThrow('outside the approved')
   })
   it('rejects special-use address ranges', () => {
-    for (const ip of ['10.0.0.1', '169.254.1.1', '192.168.1.1', '100.64.0.1']) expect(isPublicAddress(ip, 4)).toBe(false)
-    for (const ip of ['::1', 'fc00::1', 'fe80::1', '2001:db8::1', '::ffff:127.0.0.1']) expect(isPublicAddress(ip, 6)).toBe(false)
+    for (const ip of ['10.0.0.1', '169.254.1.1', '192.168.1.1', '100.64.0.1', '192.0.2.1', '192.88.99.4', '198.51.100.2', '203.0.113.1', '240.0.0.1']) expect(isPublicAddress(ip, 4)).toBe(false)
+    for (const ip of ['::1', 'fc00::1', 'fe80::1', '2001:db8::1', '2001:1::1', '2001:20::1', '::ffff:127.0.0.1', '::ffff:192.168.1.1']) expect(isPublicAddress(ip, 6), ip).toBe(false)
     expect(isPublicAddress('8.8.8.8', 4)).toBe(true)
     expect(isPublicAddress('2606:4700:4700::1111', 6)).toBe(true)
   })
