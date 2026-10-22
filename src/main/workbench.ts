@@ -783,9 +783,17 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
         const priorRevisions = prior && prior.revisions.length === 0 && changed ? [{ title: prior.title, company: prior.company, description: prior.description, revision: 1, acceptedAt: prior.updatedAt, provenance: 'legacy-unknown' as const }] : prior?.revisions ?? []
         const acceptedRevision = changed ? { ...parsed.data, revision: (priorRevisions.at(-1)?.revision ?? 0) + 1, acceptedAt: now, provenance: 'manual' as const } : undefined
         const revisions = acceptedRevision ? [...priorRevisions, acceptedRevision] : priorRevisions
+        if (changed && input.id && activeAnalysisByJob.has(input.id)) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'A provider operation is active for this saved job. Cancel it before changing the posting.' } })
         const record = jobRecordSchema.parse({ ...parsed.data, id: input.id ?? randomUUID(), createdAt: existingRow?.created_at ?? now, updatedAt: changed ? now : prior!.updatedAt, provenance: changed ? 'manual' : prior?.provenance ?? 'manual', sourceSnapshot: prior?.sourceSnapshot ?? null, revisions })
         db.prepare('INSERT INTO jobs (id, created_at, updated_at, data) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET updated_at=excluded.updated_at, data=excluded.data').run(record.id, record.createdAt, record.updatedAt, JSON.stringify(record))
         if (changed && prior) {
+          for (const [token, pending] of pendingOutbound) if (pending.jobId === record.id) {
+            if (pending.consentId) {
+              outboundEngine.revoke(pending.consentId)
+              db.prepare('UPDATE outbound_consents SET revoked = 1 WHERE id = ?').run(pending.consentId)
+            }
+            pendingOutbound.delete(token)
+          }
           const analysisRow = db.prepare('SELECT data FROM analysis_run_state WHERE job_id = ?').get(record.id) as { data: string } | undefined
           const earlierAnalysis = currentAnalysis.get(record.id) ?? (analysisRow ? analysisResultSchema.parse(JSON.parse(analysisRow.data)) : undefined)
           if (earlierAnalysis?.analysis) saveAnalysisState({ ...earlierAnalysis, status: 'stale', targetPostingUpdatedAt: prior.updatedAt, progress: 'This posting analysis is retained for history but targets an earlier accepted posting. Review outgoing data and explicitly reassess the current posting.' })
@@ -873,14 +881,17 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       try {
         result = await dispatcher.analyze({ runId: pending.runId, jobId: pending.jobId, model: openRouterModelSchema.parse(pending.source.model.name), prompt: `Extract only explicit qualifications from this authorized minimized posting. Do not infer missing requirements. Return JSON with required, preferred, tools, responsibilities, keywords.\n${JSON.stringify(approvedPayload)}`, consentId: pending.consentId })
       } catch (error) {
+        const stillCurrentRun = activeAnalysisByJob.get(pending.jobId) === pending.runId && pendingOutbound.get(token) === pending
         if (activeAnalysisByJob.get(pending.jobId) === pending.runId) activeAnalysisByJob.delete(pending.jobId)
         const failure = error instanceof AnalysisError ? error : new AnalysisError('PROVIDER', 'Analysis could not complete. Check Settings and try again.')
+        if (!stillCurrentRun) return analysisResultSchema.parse({ jobId: pending.jobId, runId: pending.runId, targetPostingUpdatedAt: pending.source.job.revision, status: 'cancelled', analysis: null, progress: 'Analysis was cancelled. Its late response was discarded.', attempts: failure.usage?.attempts ?? 0, cacheHit: false })
         const status = failure.code === 'CANCELLED' ? 'cancelled' : 'failed'
         const value = analysisResultSchema.parse({ jobId: pending.jobId, runId: pending.runId, status, analysis: null, progress: failure.message, attempts: failure.usage?.attempts ?? 0, error: failure.message, cacheHit: false })
         saveAnalysisState(value)
         return value
       }
-      if (activeAnalysisByJob.get(pending.jobId) === pending.runId) activeAnalysisByJob.delete(pending.jobId)
+      if (activeAnalysisByJob.get(pending.jobId) !== pending.runId || pendingOutbound.get(token) !== pending) return analysisResultSchema.parse({ jobId: pending.jobId, runId: pending.runId, targetPostingUpdatedAt: pending.source.job.revision, status: 'cancelled', analysis: null, progress: 'Analysis was cancelled. Its late response was discarded.', attempts: result.usage.attempts, cacheHit: false })
+      activeAnalysisByJob.delete(pending.jobId)
       db.prepare('INSERT OR REPLACE INTO posting_analysis_cache (cache_key, job_id, run_id, data) VALUES (?, ?, ?, ?)').run(cacheKey, pending.jobId, pending.runId, JSON.stringify(result.analysis))
       db.prepare('UPDATE provider_attempt_outcomes SET checkpointed_at=? WHERE run_id=? AND checkpointed_at IS NULL').run(new Date().toISOString(), pending.runId)
       const value = analysisResultSchema.parse({ jobId: pending.jobId, runId: pending.runId, status: 'complete', analysis: result.analysis, displayAnalysis: displayAnalysis(result.analysis), progress: 'Posting analysis complete.', attempts: result.usage.attempts, cacheHit: false, generationStep: 'parse-posting', completedSteps: ['parse-posting'] })
@@ -1546,7 +1557,10 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       const activeRunId = activeAnalysisByJob.get(jobId)
       const previous = currentAnalysis.get(jobId)
       if (!activeRunId && previous) return analysisResultSchema.parse(previous)
-      if (activeRunId) dispatcher.cancel(activeRunId)
+      if (activeRunId) {
+        dispatcher.cancel(activeRunId)
+        if (activeAnalysisByJob.get(jobId) === activeRunId) activeAnalysisByJob.delete(jobId)
+      }
       const value = analysisResultSchema.parse({ jobId, ...(activeRunId ? { runId: activeRunId } : {}), status: 'cancelled', analysis: null, progress: 'Analysis cancelled. No further requests will be sent.', attempts: previous?.attempts ?? 0, cacheHit: false })
       saveAnalysisState(value)
       return value

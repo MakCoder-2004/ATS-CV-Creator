@@ -165,6 +165,48 @@ test('compatible persisted posting analysis is readable offline after restart wi
   expect(await reopened.api.getAnalysis(job.value.id)).toMatchObject({ jobId: job.value.id, runId: expect.any(String), status: 'complete', cacheHit: false, progress: 'Posting analysis complete.', analysis: { required: ['TypeScript'] } })
 })
 
+test('accepted posting edits invalidate consent and block stale-token analysis and generation before dispatch', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'analysis-stale-token-')); dirs.push(dir)
+  const requests: string[] = []
+  const transport: AnalysisTransport = { async generate(input) { requests.push(input.prompt); return JSON.stringify({ required: ['TypeScript'], preferred: [], tools: [], responsibilities: [], keywords: [] }) } }
+  const wb = createWorkbench(dir, undefined, transport); opened.push(wb)
+  const job = await wb.api.saveJob({ title: 'Developer', company: 'Local Corp', description: 'TypeScript required.' })
+  if (!job.ok) throw Error('job fixture')
+  const preview = await wb.api.prepareOutboundConsent(job.value.id)
+  if (!preview.ok) throw Error('preview fixture')
+  await wb.api.acceptOutboundConsent(preview.token, true, true)
+  const saved = await wb.api.openJob(job.value.id)
+  if (!saved) throw Error('saved job missing')
+  expect((await wb.api.saveJob({ id: saved.id, title: saved.title, company: saved.company, description: 'Rust required.' })).ok).toBe(true)
+  await expect(wb.api.startAnalysis(preview.token)).rejects.toThrow(/stale|authorize/i)
+  expect(await wb.api.generateDraft(preview.token)).toMatchObject({ ok: false, message: expect.stringMatching(/authorize/i) })
+  expect(requests).toHaveLength(0)
+})
+
+test('an active analysis blocks material posting edits and a cancelled late response cannot be current for the next target', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'analysis-edit-in-flight-')); dirs.push(dir)
+  let started!: () => void, finish!: (value: string) => void
+  const startedPromise = new Promise<void>(resolve => { started = resolve })
+  const transport: AnalysisTransport = { generate() { started(); return new Promise(resolve => { finish = resolve }) } }
+  const wb = createWorkbench(dir, undefined, transport); opened.push(wb)
+  await wb.api.setAnalysisBudgets({ ...analysisBudgetValues(await wb.api.getAnalysisUsage()), minimumSpacingMs: 0 })
+  const job = await wb.api.saveJob({ title: 'Developer', company: 'Local Corp', description: 'TypeScript required.' })
+  if (!job.ok) throw Error('job fixture')
+  const preview = await wb.api.prepareOutboundConsent(job.value.id)
+  if (!preview.ok) throw Error('preview fixture')
+  await wb.api.acceptOutboundConsent(preview.token, true, true)
+  const pending = wb.api.startAnalysis(preview.token)
+  await startedPromise
+  expect(await wb.api.saveJob({ id: job.value.id, title: job.value.title, company: job.value.company, description: 'Rust required.' })).toMatchObject({ ok: false, error: { code: 'CONFLICT', message: expect.stringMatching(/provider operation is active/i) } })
+  expect(await wb.api.openJob(job.value.id)).toMatchObject({ description: 'TypeScript required.' })
+  await wb.api.cancelAnalysis(job.value.id)
+  expect(await wb.api.saveJob({ id: job.value.id, title: job.value.title, company: job.value.company, description: 'Rust required.' })).toMatchObject({ ok: true })
+  finish(JSON.stringify({ required: ['TypeScript'], preferred: [], tools: [], responsibilities: [], keywords: [] }))
+  expect(await pending).toMatchObject({ status: 'cancelled', analysis: null })
+  expect(await wb.api.openJob(job.value.id)).toMatchObject({ description: 'Rust required.' })
+  expect(await wb.api.getAnalysis(job.value.id)).not.toMatchObject({ status: 'complete', analysis: { required: ['TypeScript'] } })
+})
+
 test('accepted target edits expose prior posting analysis as stale until explicit reassessment', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'analysis-target-stale-')); dirs.push(dir)
   const requests: string[] = []
