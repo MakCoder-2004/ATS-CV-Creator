@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3'
 import { createHash, randomUUID } from 'node:crypto'
-import { workspaceBackupSchema, workspaceBackupWarning, type WorkspaceBackupEngine, type WorkspaceRestorePreview } from '../shared/workspace-backup'
+import { MAX_WORKSPACE_BACKUP_BYTES, MAX_WORKSPACE_BACKUP_POSTING_REVISIONS, MAX_WORKSPACE_BACKUP_ROW_BYTES, WORKSPACE_BACKUP_TABLE_ROW_LIMITS, workspaceBackupSchema, workspaceBackupWarning, type WorkspaceBackupEngine, type WorkspaceRestorePreview } from '../shared/workspace-backup'
 import { contactRecordSchema, skillRecordSchema, profileEntrySchema, evidenceRevisionSchema, uuidSchema } from '../shared/profile'
 import { experienceRecordSchema, projectRecordSchema } from '../shared/experience'
 import { jobRecordSchema } from '../shared/jobs'
@@ -45,6 +45,36 @@ export function createWorkspaceBackupEngine(db: Database.Database): WorkspaceBac
   }
   const assertValid = <T>(schema: { safeParse(value: unknown): { success: boolean } }, value: unknown, table: string) => {
     if (!schema.safeParse(value).success) throw new Error(`Backup row violates the ${table} domain schema.`)
+  }
+  const validateRawBounds = (input: unknown) => {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) return
+    const tablesValue = (input as Record<string, unknown>).tables
+    if (!tablesValue || typeof tablesValue !== 'object' || Array.isArray(tablesValue)) return
+    for (const [name, rawTable] of Object.entries(tablesValue)) {
+      const maxRows = WORKSPACE_BACKUP_TABLE_ROW_LIMITS[name]
+      if (maxRows === undefined) throw new Error(`Backup contains an unsupported table: ${name}`)
+      if (!rawTable || typeof rawTable !== 'object' || Array.isArray(rawTable)) continue
+      const table = rawTable as Record<string, unknown>
+      if (!Array.isArray(table.rows)) continue
+      if (table.rows.length > maxRows) throw new Error(`Backup table ${name} exceeds its ${maxRows}-row safety limit.`)
+      if (typeof table.schema === 'string' && Buffer.byteLength(table.schema, 'utf8') > 64 * 1024) throw new Error(`Backup table schema ${name} exceeds its safety limit.`)
+      for (const row of table.rows) {
+        let encoded: string
+        try { encoded = JSON.stringify(row) } catch { throw new Error(`Backup table ${name} contains an invalid row.`) }
+        if (Buffer.byteLength(encoded, 'utf8') > MAX_WORKSPACE_BACKUP_ROW_BYTES) throw new Error(`Backup row ${name} exceeds the 8 MiB safety limit.`)
+        if (name === 'jobs' && row && typeof row === 'object' && !Array.isArray(row)) {
+          const value = (row as Record<string, unknown>).data
+          if (typeof value === 'string') {
+            let job: unknown
+            try { job = JSON.parse(value) } catch { continue }
+            if (job && typeof job === 'object' && !Array.isArray(job)) {
+              const revisions = (job as Record<string, unknown>).revisions
+              if (Array.isArray(revisions) && revisions.length > MAX_WORKSPACE_BACKUP_POSTING_REVISIONS) throw new Error(`Backup job posting history exceeds the ${MAX_WORKSPACE_BACKUP_POSTING_REVISIONS}-revision safety limit.`)
+            }
+          }
+        }
+      }
+    }
   }
   const validateDomainRows = (backup: ReturnType<typeof workspaceBackupSchema.parse>) => {
     const rows = backup.tables
@@ -113,18 +143,27 @@ export function createWorkspaceBackupEngine(db: Database.Database): WorkspaceBac
       ? hash(JSON.stringify(rowsFor('encrypted_credentials'))) : null
   })
   const createBackup = () => {
+    const names = actualTables()
+    for (const name of names) {
+      const maxRows = WORKSPACE_BACKUP_TABLE_ROW_LIMITS[name]!
+      const count = (db.prepare(`SELECT COUNT(*) AS count FROM "${name}"`).get() as { count: number }).count
+      if (count > maxRows) throw new Error(`Workspace table ${name} exceeds its ${maxRows}-row backup safety limit.`)
+    }
     const snapshot = {
       format: 'cv-tailor-workspace-backup', version: 2 as const,
       createdAt: new Date().toISOString(), warning: workspaceBackupWarning,
-      tables: Object.fromEntries(actualTables().map(name => [name, { schema: tableSchema(name), rows: rowsFor(name) }]))
+      tables: Object.fromEntries(names.map(name => [name, { schema: tableSchema(name), rows: rowsFor(name) }]))
     }
+    validateRawBounds(snapshot)
     const result = JSON.stringify(snapshot)
     validate(result)
     return result
   }
   const validate = (text: string) => {
+    if (Buffer.byteLength(text, 'utf8') > MAX_WORKSPACE_BACKUP_BYTES) throw new Error('Backup exceeds the 64 MiB workspace safety limit; no workspace data was changed.')
     let parsed: unknown
     try { parsed = JSON.parse(text) } catch { throw new Error('Backup is invalid or incompatible.') }
+    validateRawBounds(parsed)
     const result = workspaceBackupSchema.safeParse(parsed)
     if (!result.success) throw new Error('Backup is invalid or incompatible.')
     let backup = result.data

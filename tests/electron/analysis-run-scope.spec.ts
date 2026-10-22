@@ -18,6 +18,7 @@ test('analysis that cannot start reports the error without claiming the run is i
     await page.getByRole('button', { name: 'Save job' }).click()
     await page.getByRole('button', { name: 'Tailor CV', exact: true }).click()
     await page.getByRole('button', { name: 'Inspect outgoing data' }).click()
+    await expect(page.getByText(/asks OpenRouter for model and endpoint capacity metadata using only the selected model ID/i)).toBeVisible()
     await page.getByRole('checkbox', { name: /reviewed what is sent/ }).check()
     await page.getByRole('button', { name: 'Authorize this run' }).click()
     await expect(page.getByRole('alert')).toContainText('OpenRouter API key')

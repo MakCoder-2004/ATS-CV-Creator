@@ -77,7 +77,7 @@ function preserveKnownFindings(checked: ReturnType<typeof checkDraftFacts>, prio
   return factualCheckReportSchema.parse({ ...checked, passed: checked.passed && known.length === 0, findings })
 }
 
-export function createWorkbench(userData: string, secureStorage: SecureStorage = unavailableSecureStorage, scriptedTransport?: AnalysisTransport, recoveryHooks?: { beforeGraphCheckpoint?: (metadata: import('@langchain/langgraph').CheckpointMetadata) => void }): { api: WorkbenchStorageAPI; authorizeOutboundPayload<T>(runId: string, payload: T): T; backup: WorkspaceBackupEngine; hasActiveWork(): boolean; close(): void } {
+export function createWorkbench(userData: string, secureStorage: SecureStorage = unavailableSecureStorage, scriptedTransport?: AnalysisTransport, recoveryHooks?: { beforeGraphCheckpoint?: (metadata: import('@langchain/langgraph').CheckpointMetadata) => void; modelCatalogFetcher?: typeof fetch }): { api: WorkbenchStorageAPI; authorizeOutboundPayload<T>(runId: string, payload: T): T; backup: WorkspaceBackupEngine; hasActiveWork(): boolean; close(): void } {
   mkdirSync(userData, { recursive: true })
   const db = new Database(join(userData, 'workbench.sqlite'))
   db.pragma('journal_mode = WAL')
@@ -223,7 +223,9 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
   const activeProfileAiRuns = new Set<string>()
   // The injected scripted transport is an offline test seam; absent metadata there means fixture-sized capacity, never production model metadata.
   const fixtureTransport: AnalysisTransport | undefined = scriptedTransport && {
-    validateCapacity: scriptedTransport.validateCapacity ?? (async () => true),
+    validateCapacity: scriptedTransport.validateCapacity ?? (recoveryHooks?.modelCatalogFetcher
+      ? input => createOpenRouterAnalysisTransport('', recoveryHooks.modelCatalogFetcher).validateCapacity!(input)
+      : async () => true),
     generate: input => scriptedTransport.generate(input)
   }
   const dispatcher = createAnalysisDispatcher({ ...readAnalysisBudgets(), maxAttempts: readAnalysisBudgets().runLimit, maxElapsedMs: readAnalysisBudgets().runTimeLimitMs, maxDailyAttempts: readAnalysisBudgets().configuredDailyLimit, observedAttempts: previousAttempts, observedRunAttempts: persistedRunCounts, observedRunStartedAt: persistedRunStarts, transport: fixtureTransport ?? {
@@ -851,7 +853,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
         const token = randomUUID(), runId = randomUUID()
         const faithfulnessRow = db.prepare('SELECT value FROM settings WHERE key = ?').get('faithfulness-check') as { value: string } | undefined
         pendingOutbound.set(token, { jobId, source, bundle, runId, faithfulnessCheck: faithfulnessRow?.value === 'true' })
-        return outboundConsentPreviewSchema.parse({ ok: true, token, jobTitle: source.job.title, jobCompany: source.job.company, outgoing: bundle.outgoing, warning: bundle.preview.residualSensitivityNotice, termsNotice: 'OpenRouter routes requests to third-party model providers. Provider data-use policies depend on the chosen model and endpoint. Do not submit personal, sensitive, or confidential information. Redaction cannot guarantee anonymity.' })
+        return outboundConsentPreviewSchema.parse({ ok: true, token, jobTitle: source.job.title, jobCompany: source.job.company, outgoing: bundle.outgoing, warning: bundle.preview.residualSensitivityNotice, termsNotice: 'Before a model request, CV Tailor requests OpenRouter model and endpoint capacity metadata using only the selected model ID—no job posting, profile content, or API key. This metadata check is separate from your reviewed outgoing data; the authorized model request is sent only after you approve this panel. OpenRouter routes model requests to third-party providers. Provider data-use policies depend on the chosen model and endpoint. Do not submit personal, sensitive, or confidential information. Redaction cannot guarantee anonymity.' })
       } catch { return outboundConsentPreviewSchema.parse({ ok: false, message: 'Outgoing data could not be prepared safely. Review your profile and model settings, then try again.' }) }
     },
     async acceptOutboundConsent(token: string, accepted: boolean, freeTierTermsAcknowledged: boolean): Promise<OutboundConsentAction> {

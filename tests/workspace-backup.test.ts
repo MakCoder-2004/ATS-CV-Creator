@@ -7,6 +7,7 @@ import { createWorkbench } from '../src/main/workbench'
 import Database from 'better-sqlite3'
 import type { AnalysisTransport } from '../src/main/posting-analysis'
 import { analysisBudgetValues } from '../src/shared/posting-analysis'
+import { MAX_WORKSPACE_BACKUP_BYTES, MAX_WORKSPACE_BACKUP_POSTING_REVISIONS, MAX_WORKSPACE_BACKUP_ROW_BYTES, WORKSPACE_BACKUP_TABLE_ROW_LIMITS } from '../src/shared/workspace-backup'
 
 const directories: string[] = []
 const instances: Array<ReturnType<typeof createWorkbench>> = []
@@ -132,6 +133,33 @@ test('released version-1 job backups without provenance upgrade to honest legacy
   expect(await reopened.api.openJob(saved.value.id)).toMatchObject({ provenance: 'legacy-unknown', sourceSnapshot: null, revisions: [] })
   const edited = await reopened.api.saveJob({ id: saved.value.id, title: 'Engineer', company: 'Example', description: 'Corrected wording.' })
   expect(edited).toMatchObject({ ok: true, value: { revisions: [{ description: 'Original wording.', revision: 1, provenance: 'legacy-unknown' }, { description: 'Corrected wording.', revision: 2, provenance: 'manual' }] } })
+})
+
+test('restore rejects oversized aggregate, table, row, and posting-revision inputs before replacing workspace data', async () => {
+  const { dir, workbench } = fixture()
+  const saved = await workbench.api.saveJob({ title: 'Preserved job', company: 'Example', description: 'Unchanged source.' })
+  if (!saved.ok) throw new Error('Job fixture failed')
+  const base = JSON.parse(workbench.backup.createBackup())
+
+  const aggregateOversized = ' '.repeat(MAX_WORKSPACE_BACKUP_BYTES + 1)
+  expect(() => workbench.backup.previewRestore(aggregateOversized)).toThrow(/64 MiB/)
+
+  const tooManyRows = structuredClone(base)
+  tooManyRows.tables.schema_migrations.rows = Array.from({ length: WORKSPACE_BACKUP_TABLE_ROW_LIMITS.schema_migrations + 1 }, (_, version) => ({ version }))
+  expect(() => workbench.backup.previewRestore(JSON.stringify(tooManyRows))).toThrow(/schema_migrations.*row safety limit/i)
+
+  const tooWideRow = structuredClone(base)
+  tooWideRow.tables.jobs.rows[0].data = 'x'.repeat(MAX_WORKSPACE_BACKUP_ROW_BYTES + 1)
+  expect(() => workbench.backup.previewRestore(JSON.stringify(tooWideRow))).toThrow(/row jobs.*8 MiB/i)
+
+  const tooManyRevisions = structuredClone(base)
+  const jobData = JSON.parse(tooManyRevisions.tables.jobs.rows[0].data)
+  jobData.revisions = Array.from({ length: MAX_WORKSPACE_BACKUP_POSTING_REVISIONS + 1 }, (_, index) => ({ title: 'Role', company: 'Example', description: 'Archived text.', revision: index + 1, acceptedAt: jobData.updatedAt, provenance: 'manual' }))
+  tooManyRevisions.tables.jobs.rows[0].data = JSON.stringify(jobData)
+  expect(() => workbench.backup.previewRestore(JSON.stringify(tooManyRevisions))).toThrow(/256-revision safety limit/i)
+  expect(await workbench.api.openJob(saved.value.id)).toEqual(saved.value)
+  workbench.close(); instances.pop()
+  expect(await open(dir).api.openJob(saved.value.id)).toEqual(saved.value)
 })
 
 test('failed database write rolls back the full replacement, including current credentials', async () => {

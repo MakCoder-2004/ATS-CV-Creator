@@ -3,15 +3,16 @@ import type { AnalysisTransport } from './posting-analysis'
 
 const endpoint = 'https://openrouter.ai/api/v1/chat/completions'
 export const MAX_OPENROUTER_REQUEST_BODY_BYTES = 64 * 1024
+export const MAX_OPENROUTER_RESPONSE_BYTES = 4 * 1024 * 1024
 
-export function serializeOpenRouterRequestBody(input: { model: string; prompt: string; responseSchema: import('zod').ZodTypeAny; maxTokens?: number }) {
-  return JSON.stringify({ model: input.model, stream: false, ...(input.maxTokens ? { max_tokens: input.maxTokens } : {}), messages: [{ role: 'user', content: `${input.prompt}\nReturn only a JSON object conforming to this schema. Do not include markdown or explanations.\n${JSON.stringify(z.toJSONSchema(input.responseSchema))}` }] })
+export function serializeOpenRouterRequestBody(input: { model: string; prompt: string; responseSchema: import('zod').ZodTypeAny; maxTokens?: number; providerOnly?: string[] }) {
+  return JSON.stringify({ model: input.model, stream: false, ...(input.maxTokens ? { max_tokens: input.maxTokens } : {}), ...(input.providerOnly?.length ? { provider: { only: input.providerOnly, allow_fallbacks: false } } : {}), messages: [{ role: 'user', content: `${input.prompt}\nReturn only a JSON object conforming to this schema. Do not include markdown or explanations.\n${JSON.stringify(z.toJSONSchema(input.responseSchema))}` }] })
 }
 
 const modelCatalogEndpoint = 'https://openrouter.ai/api/v1/models'
-type Capacity = { contextLength: number; maxCompletionTokens: number }
-type CatalogPayload = { data: Array<{ id: string; context_length: number; top_provider: { context_length: number; max_completion_tokens: number } }> }
-const catalogSchema = z.object({ data: z.array(z.object({ id: z.string(), context_length: z.number().int().positive(), top_provider: z.object({ context_length: z.number().int().positive(), max_completion_tokens: z.number().int().positive() }).passthrough() }).passthrough()) }).passthrough()
+type Capacity = { contextLength: number; maxCompletionTokens: number; providers: string[] }
+const catalogSchema = z.object({ data: z.array(z.object({ id: z.string(), context_length: z.number().int().positive(), architecture: z.object({ tokenizer: z.string().nullable() }).passthrough(), top_provider: z.object({ context_length: z.number().int().positive(), max_completion_tokens: z.number().int().positive() }).passthrough() }).passthrough()) }).passthrough()
+const endpointCatalogSchema = z.object({ data: z.object({ id: z.string(), endpoints: z.array(z.object({ context_length: z.number().int().positive(), max_completion_tokens: z.number().int().positive(), tag: z.string().min(1) }).passthrough()) }).passthrough() }).passthrough()
 const capacityCache = new Map<string, Map<string, Capacity | null>>()
 async function fetchCapacity(model: string, runId: string, signal: AbortSignal, fetcher: typeof fetch): Promise<Capacity | null> {
   let runCache = capacityCache.get(runId)
@@ -24,13 +25,27 @@ async function fetchCapacity(model: string, runId: string, signal: AbortSignal, 
     const body = await boundedBody(response, 2 * 1024 * 1024)
     const parsed = catalogSchema.safeParse(JSON.parse(body))
     const entry = parsed.success ? parsed.data.data.find(item => item.id === model) : undefined
-    const capacity = entry ? { contextLength: Math.min(entry.context_length, entry.top_provider.context_length), maxCompletionTokens: entry.top_provider.max_completion_tokens } : null
+    if (!entry) { runCache.set(model, null); return null }
+    const [author, ...slugParts] = model.split('/')
+    if (!author || !slugParts.length) { runCache.set(model, null); return null }
+    const endpointUrl = `${modelCatalogEndpoint}/${encodeURIComponent(author)}/${encodeURIComponent(slugParts.join('/'))}/endpoints`
+    const endpointResponse = await fetcher(endpointUrl, { method: 'GET', signal: catalogSignal, headers: { Accept: 'application/json' } })
+    if (!endpointResponse.ok) { runCache.set(model, null); return null }
+    const endpointBody = await boundedBody(endpointResponse, 2 * 1024 * 1024)
+    const endpointParsed = endpointCatalogSchema.safeParse(JSON.parse(endpointBody))
+    const endpoints = endpointParsed.success && endpointParsed.data.data.id === model ? endpointParsed.data.data.endpoints : []
+    if (!endpoints.length) { runCache.set(model, null); return null }
+    const capacity = {
+      contextLength: Math.min(entry.context_length, entry.top_provider.context_length, ...endpoints.map(item => item.context_length)),
+      maxCompletionTokens: Math.min(entry.top_provider.max_completion_tokens, ...endpoints.map(item => item.max_completion_tokens)),
+      providers: [...new Set(endpoints.map(item => item.tag))].sort()
+    }
     runCache.set(model, capacity)
     return capacity
   } catch { runCache.set(model, null); return null }
 }
 function fitsCapacity(input: { model: string; prompt: string; responseSchema: import('zod').ZodTypeAny; maxTokens: number }, capacity: Capacity): boolean {
-  const completeBody = serializeOpenRouterRequestBody(input)
+  const completeBody = serializeOpenRouterRequestBody({ ...input, providerOnly: capacity.providers })
   // Every tokenizer token represents at least one UTF-8 byte; this deliberately overestimates tokens.
   const inputUpperBound = new TextEncoder().encode(completeBody).byteLength
   const outputReservation = Math.max(input.maxTokens, 1)
@@ -67,16 +82,16 @@ export function createOpenRouterAnalysisTransport(apiKey: string, fetcher: typeo
   return {
     async validateCapacity({ runId, model, prompt, responseSchema, maxTokens, signal }) {
       const capacity = await fetchCapacity(model, runId, signal, fetcher)
-      try { return capacity !== null && fitsCapacity({ model, prompt, responseSchema, maxTokens }, capacity) }
-      catch { return false }
+      try { return capacity && fitsCapacity({ model, prompt, responseSchema, maxTokens }, capacity) ? { fits: true, providers: capacity.providers } : { fits: false, providers: [] } }
+      catch { return { fits: false, providers: [] } }
     },
-    async generate({ model, prompt, signal, responseSchema, maxTokens = 2048, maxResponseChars }) {
+    async generate({ model, prompt, signal, responseSchema, maxTokens = 2048, maxResponseChars, providerOnly }) {
       let response: Response
       try {
         response = await fetcher(endpoint, {
           method: 'POST', signal,
           headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-          body: serializeOpenRouterRequestBody({ model, prompt, responseSchema, maxTokens })
+          body: serializeOpenRouterRequestBody({ model, prompt, responseSchema, maxTokens, providerOnly })
         })
       } catch (error) {
         // Preserve network codes for the dispatcher's offline/cancellation handling; never surface request headers.
@@ -85,7 +100,8 @@ export function createOpenRouterAnalysisTransport(apiKey: string, fetcher: typeo
       }
       if (!response.ok) throw Object.assign(new Error('OpenRouter request failed.'), { status: response.status, retryAfter: response.headers.get('retry-after') ?? undefined })
       try {
-        const responseText = await boundedBody(response, maxResponseChars === undefined ? undefined : maxResponseChars + 20_000)
+        const responseLimit = maxResponseChars === undefined ? MAX_OPENROUTER_RESPONSE_BYTES : Math.min(MAX_OPENROUTER_RESPONSE_BYTES, maxResponseChars + 20_000)
+        const responseText = await boundedBody(response, responseLimit)
         const payload: unknown = JSON.parse(responseText)
         const result = z.object({ choices: z.array(z.object({ message: z.object({ content: z.string().nullable() }) })).min(1) }).safeParse(payload)
         const content = result.success ? result.data.choices[0].message.content : null

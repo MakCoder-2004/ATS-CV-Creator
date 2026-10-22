@@ -5,8 +5,8 @@ import type { ZodTypeAny } from 'zod'
 export { postingAnalysisSchema }
 export type { PostingAnalysis }
 export interface AnalysisTransport {
-  generate(input: { model: OpenRouterModel; prompt: string; signal: AbortSignal; responseSchema: ZodTypeAny; maxTokens?: number; maxResponseChars?: number }): Promise<string>
-  validateCapacity?(input: { runId: string; model: OpenRouterModel; prompt: string; responseSchema: ZodTypeAny; maxTokens: number; signal: AbortSignal }): Promise<boolean>
+  generate(input: { model: OpenRouterModel; prompt: string; signal: AbortSignal; responseSchema: ZodTypeAny; maxTokens?: number; maxResponseChars?: number; providerOnly?: string[] }): Promise<string>
+  validateCapacity?(input: { runId: string; model: OpenRouterModel; prompt: string; responseSchema: ZodTypeAny; maxTokens: number; signal: AbortSignal }): Promise<boolean | { fits: boolean; providers: string[] }>
 }
 export interface AnalysisInput { runId: string; jobId: string; prompt: string; model: OpenRouterModel }
 export interface AnalysisUsage { runId: string; jobId: string; attempts: number; status: 'complete' | 'failed' | 'cancelled'; startedAt: number; finishedAt: number }
@@ -73,12 +73,13 @@ export function createAnalysisDispatcher(options: Options) {
         const wait = Math.max(spacingWait, rateWait)
         if (wait) { const boundedWait = Math.min(wait, Math.max(0, runBudgets.runTimeLimitMs - (now() - startedAt))); options.onProgress?.(input.runId, input.jobId, 'Waiting for shared request pacing before the next attempt.', usage.attempts); await sleep(boundedWait, controller.signal) }
         checkBudget()
-        if (!options.transport.validateCapacity || !await options.transport.validateCapacity({ runId: input.runId, model: input.model, prompt, responseSchema: postingAnalysisSchema, maxTokens: 2048, signal: controller.signal })) throw capacityFailure()
+        const capacity = options.transport.validateCapacity && await options.transport.validateCapacity({ runId: input.runId, model: input.model, prompt, responseSchema: postingAnalysisSchema, maxTokens: 2048, signal: controller.signal })
+        if (!capacity || (typeof capacity === 'object' && !capacity.fits)) throw capacityFailure()
         const timestamp = now()
         dispatched.push(timestamp); usage.attempts++; attemptCounts.set(input.runId, (attemptCounts.get(input.runId) ?? 0) + 1); options.onAttempt?.(timestamp, input.runId)
         options.onProgress?.(input.runId, input.jobId, `Sending posting-analysis request ${usage.attempts} within this run's configured budget.`, usage.attempts)
         try {
-          const response = await options.transport.generate({ model: input.model, prompt, signal: controller.signal, responseSchema: postingAnalysisSchema, maxTokens: 2048 })
+          const response = await options.transport.generate({ model: input.model, prompt, signal: controller.signal, responseSchema: postingAnalysisSchema, maxTokens: 2048, ...(typeof capacity === 'object' ? { providerOnly: capacity.providers } : {}) })
           options.onAttemptComplete?.(input.runId, true)
           return response
         } catch (error) { options.onAttemptComplete?.(input.runId, false); throw error }
@@ -147,11 +148,12 @@ export function createAnalysisDispatcher(options: Options) {
           const wait = Math.max(spacingWait, rateWait)
           if (wait) { options.onProgress?.(input.runId, input.jobId, 'Waiting for shared request pacing before the next attempt.', attempts); await sleep(Math.min(wait, Math.max(0, runBudgets.runTimeLimitMs - (now() - startedAt))), controller.signal) }
           if (controller.signal.aborted) throw cancelledError()
-          if (!options.transport.validateCapacity || !await options.transport.validateCapacity({ runId: input.runId, model: input.model, prompt: input.prompt, responseSchema: input.responseSchema, maxTokens: input.maxTokens ?? 2048, signal: controller.signal })) throw capacityFailure()
+          const capacity = options.transport.validateCapacity && await options.transport.validateCapacity({ runId: input.runId, model: input.model, prompt: input.prompt, responseSchema: input.responseSchema, maxTokens: input.maxTokens ?? 2048, signal: controller.signal })
+          if (!capacity || (typeof capacity === 'object' && !capacity.fits)) throw capacityFailure()
           const timestamp = now(); dispatched.push(timestamp); attempts++; attemptCounts.set(input.runId, (attemptCounts.get(input.runId) ?? 0) + 1); options.onAttempt?.(timestamp, input.runId)
           options.onProgress?.(input.runId, input.jobId, `Sending source-linked generation request ${attempts} within the shared run budget.`, attempts)
           try {
-            const response = await options.transport.generate({ model: input.model, prompt: input.prompt, signal: controller.signal, responseSchema: input.responseSchema, ...(input.maxTokens ? { maxTokens: input.maxTokens } : {}), ...(input.maxResponseChars !== undefined ? { maxResponseChars: input.maxResponseChars } : {}) })
+            const response = await options.transport.generate({ model: input.model, prompt: input.prompt, signal: controller.signal, responseSchema: input.responseSchema, ...(input.maxTokens ? { maxTokens: input.maxTokens } : {}), ...(input.maxResponseChars !== undefined ? { maxResponseChars: input.maxResponseChars } : {}), ...(typeof capacity === 'object' ? { providerOnly: capacity.providers } : {}) })
             options.onAttemptComplete?.(input.runId, true)
             return response
           } catch (error) { options.onAttemptComplete?.(input.runId, false); throw error }

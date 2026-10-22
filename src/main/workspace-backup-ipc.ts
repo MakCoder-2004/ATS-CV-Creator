@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { basename, dirname, extname, join } from 'node:path'
 import { uuidSchema } from '../shared/profile'
+import { MAX_WORKSPACE_BACKUP_BYTES } from '../shared/workspace-backup'
 import type { WorkspaceRestorePreview } from '../shared/workspace-backup'
 import type { createWorkbench } from './workbench'
 
@@ -56,7 +57,7 @@ export function registerWorkspaceBackupIpc(getWindow: () => BrowserWindow, getWo
       if (selected.canceled || !selected.filePaths[0]) return { ok: false, cancelled: true, message: 'Workspace restore cancelled.' }
       idle()
       const path = selected.filePaths[0], size = statSync(path)
-      if (!size.isFile() || size.size > 512 * 1024 * 1024) throw new Error('Choose a readable workspace backup smaller than 512 MB.')
+      if (!size.isFile() || size.size > MAX_WORKSPACE_BACKUP_BYTES) throw new Error('Choose a readable workspace backup no larger than 64 MiB.')
       const preview = getWorkspace().backup.previewRestore(readFileSync(path, 'utf8'))
       return { ok: true, preview: { token: preview.token, effects: effects(preview) } }
     } catch (cause) { return { ok: false, cancelled: false, message: cause instanceof Error ? cause.message : 'The backup is invalid or incompatible. Your workspace was not changed.' } }
