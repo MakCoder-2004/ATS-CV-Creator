@@ -221,15 +221,16 @@ export function SavedJobs({ jobs, activeJob, onSaved, onOpened, onNavigate }: { 
   const intakeVisible = intakeOpen || jobs.length === 0
   const sourceMatch = (() => { if (!preview) return undefined; return jobs.find(job => job.sourceSnapshot && samePostingSource(job.sourceSnapshot, preview)) })()
   const sourceMatchIsUnchanged = !!refreshComparison?.ok && refreshComparison.unchanged
+  const sourceMatchRevision = sourceMatch?.revisions.at(-1)?.revision ?? 0
   useEffect(() => {
     if (!preview || !fetchToken || !sourceMatch) { setRefreshComparison(null); return }
-    const comparisonKey = `${fetchToken}:${sourceMatch.id}:${sourceMatch.updatedAt}:${sourceMatch.revisions.at(-1)?.revision ?? 0}`
+    const comparisonKey = `${fetchToken}:${sourceMatch.id}:${sourceMatch.updatedAt}:${sourceMatchRevision}`
     if (refreshComparisonKeyRef.current !== comparisonKey) { refreshComparisonKeyRef.current = comparisonKey; setRefreshChoices(defaultRefreshChoices()) }
     let current = true
     setRefreshComparison(null)
     window.workbench.comparePostingRefresh(fetchToken, sourceMatch.id, sourceMatch.updatedAt, sourceMatch.revisions.at(-1)?.revision ?? 0).then(result => { if (current) setRefreshComparison(result) }).catch(() => { if (current) setRefreshComparison({ ok: false, message: 'The saved posting could not be compared. Reopen it and try again.' }) })
     return () => { current = false }
-  }, [preview, fetchToken, sourceMatch?.id, sourceMatch?.updatedAt])
+  }, [preview, fetchToken, sourceMatch?.id, sourceMatch?.updatedAt, sourceMatchRevision])
   const renderIntake = (insideEmptyState = false) => <section className={`saved-jobs-intake${insideEmptyState ? ' is-inside-empty' : ''}`} aria-labelledby="posting-intake-title">
     <header className="saved-jobs-intake-heading"><div><p className="context">New job</p><h2 id="posting-intake-title">Add a job posting</h2></div>{jobs.length > 0 && <button type="button" className="secondary-button" onClick={closeIntake}>Cancel</button>}</header>
     <fieldset><legend>Choose how to add a posting</legend><div className="job-dialog-actions"><button type="button" className="secondary-button" aria-pressed={captureMode === 'link'} onClick={() => setCaptureMode('link')}>Import from link</button><button type="button" className="secondary-button" aria-pressed={captureMode === 'manual'} onClick={() => { if (fetching) discardFetchPreview(); if (previewWasEdited()) requestDiscard('manual'); else { setPreview(null); setCapturedPreview(null); setCaptureMode('manual') } }}>Paste posting text instead</button></div></fieldset>
