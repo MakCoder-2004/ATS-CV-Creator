@@ -98,6 +98,7 @@ test('a source-missing company can be supplied deliberately while incomplete pos
     for (let attempt = 0; attempt < 300 && state.status === 'fetching'; attempt++) { await new Promise(resolve => setTimeout(resolve, 10)); state = await wb.api.readPostingPreview(started.token) }
     expect(state).toMatchObject({ status: 'incomplete', preview: { company: null } })
     if (state.status !== 'incomplete') throw Error('Expected the source to omit its employer name')
+    expect(await wb.api.acceptPostingImport(started.token, { title: state.preview.title, company: 'User-reviewed Example Employer', description: 'A replacement description cannot bypass incomplete source notices.' })).toMatchObject({ ok: false, error: { code: 'CONFLICT' } })
     const accepted = await wb.api.acceptPostingImport(started.token, { title: state.preview.title, company: 'User-reviewed Example Employer', description: state.preview.description })
     if (!accepted.ok) throw new Error(`Company correction rejected: ${accepted.error.message}`)
     expect(accepted).toMatchObject({ ok: true, value: { company: 'User-reviewed Example Employer', sourceSnapshot: { company: null, hashes: { company: null }, fieldOrigins: { company: 'user-correction' } } } })
@@ -108,13 +109,14 @@ test('a source-missing company can be supplied deliberately while incomplete pos
 test('an incomplete teaser cannot be accepted by supplying missing fields alone', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'cv-tailor-import-teaser-'))
   directories.push(directory)
-  const body = JSON.stringify({ id: 'teaser', text: 'Source Engineer', company: 'Example', descriptionPlain: 'A short teaser.' })
+  const body = JSON.stringify({ id: 'teaser', text: 'Source Engineer', descriptionPlain: 'A short teaser.' })
   const wb = createWorkbench(directory, undefined, undefined, undefined, { lookup: async () => [{ address: '8.8.8.8', family: 4 }], request: async () => ({ status: 200, headers: { 'content-type': 'application/json' }, body: Buffer.from(body) }) })
   try {
     const started = await wb.api.startPostingFetch('https://jobs.lever.co/example-board/teaser')
     let state = await wb.api.readPostingPreview(started.token)
     for (let attempt = 0; attempt < 300 && state.status === 'fetching'; attempt++) { await new Promise(resolve => setTimeout(resolve, 10)); state = await wb.api.readPostingPreview(started.token) }
-    expect(state.status).toBe('incomplete')
+    expect(state).toMatchObject({ status: 'incomplete', preview: { company: null } })
+    expect(await wb.api.acceptPostingImport(started.token, { title: 'Engineer', company: 'User-reviewed Example', description: 'A complete posting description supplied by the caller cannot override source teaser warnings by itself.' })).toMatchObject({ ok: false, error: { code: 'CONFLICT' } })
     expect(await wb.api.acceptPostingImport(started.token, { title: 'Engineer', company: 'Example', description: 'I supplied a replacement but no full posting.' })).toMatchObject({ ok: false, error: { code: 'CONFLICT' } })
     expect(await wb.api.listJobs()).toEqual([])
   } finally { wb.close() }

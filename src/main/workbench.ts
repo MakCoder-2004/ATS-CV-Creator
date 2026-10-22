@@ -838,6 +838,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       }
       const source = pendingState.status === 'ready' || pendingState.status === 'incomplete' ? pendingState.preview : null
       if (!source) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'This posting preview is no longer saveable. Fetch it again before saving.' } })
+      if (companyOnlyIncomplete && (parsed.data.title !== source.title || parsed.data.description !== source.description)) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'This source only allows a reviewed employer-name correction; its incomplete posting content cannot be replaced here.' } })
       const sourceIdentity = new URL(source.finalUrl).pathname
       const known = (db.prepare('SELECT data FROM jobs').all() as { data: string }[]).map(row => jobRecordSchema.parse(JSON.parse(row.data)))
       if (known.some(job => job.sourceSnapshot?.sourceIdentity === sourceIdentity || job.sourceSnapshot?.finalUrl === source.finalUrl)) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'This exact source is already saved. Open the existing posting instead; no duplicate was created.' } })
