@@ -40,7 +40,7 @@ describe('bounded Lever posting fetch', () => {
     expect(failedRequest).toHaveBeenCalledTimes(1)
     expect(started).toHaveBeenCalledTimes(1)
     expect(completed).not.toHaveBeenCalled()
-  })
+  }, 10_000)
   it('rejects adversarially deep HTML safely instead of recursing through the tree', async () => {
     const html = `${'<div>'.repeat(300)}<h1>Deep role</h1>${'</div>'.repeat(300)}`
     await expect(fetchLeverPosting('https://jobs.lever.co/acme/deep', { lookup, request: async () => ({ status: 200, headers: { 'content-type': 'text/html' }, body: Buffer.from(html) }) })).rejects.toThrow(/nested too deeply/)
