@@ -109,7 +109,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
     CREATE TABLE IF NOT EXISTS document_fit_reports (job_id TEXT PRIMARY KEY, data TEXT NOT NULL);`)
   const providerOutcomeColumns = db.pragma('table_info(provider_attempt_outcomes)') as Array<{ name: string }>
   if (!providerOutcomeColumns.some(column => column.name === 'checkpointed_at')) db.exec('ALTER TABLE provider_attempt_outcomes ADD COLUMN checkpointed_at TEXT')
-  db.prepare('INSERT OR IGNORE INTO schema_migrations (version) VALUES (1), (2), (4), (5), (6)').run()
+  db.prepare('INSERT OR IGNORE INTO schema_migrations (version) VALUES (1), (2), (4), (5), (6), (7)').run()
 
   const readProfile = (): ProfileSnapshot => {
     const contactRow = db.prepare('SELECT data FROM profile_contact WHERE singleton = 1').get() as { data: string } | undefined
@@ -196,7 +196,10 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
   const pendingOutbound = new Map<string, { jobId: string; source: ConsentSource; bundle: OutboundBundle; runId: string; faithfulnessCheck: boolean; consentId?: string }>()
   const currentAnalysis = new Map<string, ReturnType<typeof analysisResultSchema.parse>>()
   const saveAnalysisState = (input: unknown) => {
-    const value = analysisResultSchema.parse(input)
+    const parsed = analysisResultSchema.parse(input)
+    const prior = currentAnalysis.get(parsed.jobId)
+    const job = db.prepare('SELECT updated_at FROM jobs WHERE id = ?').get(parsed.jobId) as { updated_at: string } | undefined
+    const value = analysisResultSchema.parse({ ...parsed, targetPostingUpdatedAt: parsed.targetPostingUpdatedAt ?? (prior && prior.runId === parsed.runId ? prior.targetPostingUpdatedAt : job?.updated_at) })
     currentAnalysis.set(value.jobId, value)
     if (value.runId) db.prepare('INSERT INTO analysis_run_state (job_id, run_id, data) VALUES (?, ?, ?) ON CONFLICT(job_id) DO UPDATE SET run_id=excluded.run_id, data=excluded.data').run(value.jobId, value.runId, JSON.stringify(value))
     return value
@@ -811,11 +814,42 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       }
       if (input.id !== undefined && !uuidSchema.safeParse(input.id).success) return jobSaveResultSchema.parse({ ok: false, error: { code: 'VALIDATION_ERROR', message: 'Job ID must be a UUID.', fieldErrors: { id: 'Invalid ID' } } })
       const tx = db.transaction(() => {
-        const existing = input.id ? db.prepare('SELECT created_at FROM jobs WHERE id = ?').get(input.id) as { created_at: string } | undefined : undefined
-        if (input.id && !existing) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'This saved job no longer exists.' } })
-        const now = new Date().toISOString()
-        const record = jobRecordSchema.parse({ ...parsed.data, id: input.id ?? randomUUID(), createdAt: existing?.created_at ?? now, updatedAt: now })
+        const existingRow = input.id ? db.prepare('SELECT created_at, data FROM jobs WHERE id = ?').get(input.id) as { created_at: string; data: string } | undefined : undefined
+        if (input.id && !existingRow) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'This saved job no longer exists.' } })
+        const prior = existingRow ? jobRecordSchema.parse(JSON.parse(existingRow.data)) : undefined
+        const changed = !prior || prior.title !== parsed.data.title || prior.company !== parsed.data.company || prior.description !== parsed.data.description
+        const now = new Date(Math.max(Date.now(), prior ? Date.parse(prior.updatedAt) + 1 : 0)).toISOString()
+        const priorRevisions = prior && prior.revisions.length === 0 && changed ? [{ title: prior.title, company: prior.company, description: prior.description, revision: 1, acceptedAt: prior.updatedAt, provenance: 'legacy-unknown' as const }] : prior?.revisions ?? []
+        const acceptedRevision = changed ? { ...parsed.data, revision: (priorRevisions.at(-1)?.revision ?? 0) + 1, acceptedAt: now, provenance: 'manual' as const } : undefined
+        const revisions = acceptedRevision ? [...priorRevisions, acceptedRevision] : priorRevisions
+        if (changed && input.id && activeAnalysisByJob.has(input.id)) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'A provider operation is active for this saved job. Cancel it before changing the posting.' } })
+        const record = jobRecordSchema.parse({ ...parsed.data, id: input.id ?? randomUUID(), createdAt: existingRow?.created_at ?? now, updatedAt: changed ? now : prior!.updatedAt, provenance: changed ? 'manual' : prior?.provenance ?? 'manual', sourceSnapshot: prior?.sourceSnapshot ?? null, revisions })
         db.prepare('INSERT INTO jobs (id, created_at, updated_at, data) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET updated_at=excluded.updated_at, data=excluded.data').run(record.id, record.createdAt, record.updatedAt, JSON.stringify(record))
+        if (changed && prior) {
+          const unresolved = (db.prepare('SELECT COUNT(*) AS count FROM provider_attempt_outcomes WHERE checkpointed_at IS NULL AND run_id IN (SELECT run_id FROM generation_recovery WHERE job_id = ?)').get(record.id) as { count: number }).count
+          db.prepare("UPDATE outbound_consents SET revoked = 1 WHERE run_id IN (SELECT run_id FROM generation_recovery WHERE job_id = ? AND status IN ('running','paused')) OR run_id = (SELECT run_id FROM analysis_run_state WHERE job_id = ?)").run(record.id, record.id)
+          db.prepare("UPDATE generation_recovery SET status = 'cancelled', updated_at = ? WHERE job_id = ? AND status IN ('running','paused')").run(now, record.id)
+          for (const [token, pending] of pendingOutbound) if (pending.jobId === record.id) {
+            if (pending.consentId) {
+              outboundEngine.revoke(pending.consentId)
+              db.prepare('UPDATE outbound_consents SET revoked = 1 WHERE id = ?').run(pending.consentId)
+            }
+            pendingOutbound.delete(token)
+          }
+          const analysisRow = db.prepare('SELECT data FROM analysis_run_state WHERE job_id = ?').get(record.id) as { data: string } | undefined
+          const earlierAnalysis = currentAnalysis.get(record.id) ?? (analysisRow ? analysisResultSchema.parse(JSON.parse(analysisRow.data)) : undefined)
+          if (earlierAnalysis?.analysis) saveAnalysisState({ ...earlierAnalysis, status: 'stale', targetPostingUpdatedAt: prior.updatedAt, progress: `This posting analysis is retained for history but targets an earlier accepted posting. ${unresolved ? `${unresolved} provider request outcome(s) from the cancelled run may be uncertain; this old run cannot resume. ` : ''}Review outgoing data and explicitly reassess the current posting.` })
+          // Retain historical CV content, but revoke the current document's readiness immediately.
+          const drafts = db.prepare('SELECT id, revision, data FROM draft_revisions WHERE job_id = ? ORDER BY revision DESC').all(record.id) as Array<{ id: string; revision: number; data: string }>
+          if (drafts[0]) {
+            const draft = draftRevisionSchema.parse(JSON.parse(drafts[0].data))
+            const priorAnalysis = earlierAnalysis?.analysis
+            const previousCoverage = draft.coverage ?? (priorAnalysis ? qualificationCoverage(earlierAnalysis?.runId ?? record.id, earlierAnalysis.displayAnalysis ?? priorAnalysis, draft, prepareDraftInputs(readProfile(), readExperience()).items.map(item => ({ evidenceId: item.id, revision: item.revision, snapshot: item.snapshot }))) : undefined)
+            const stale = draftRevisionSchema.parse({ ...draft, ...(previousCoverage ? { coverage: { ...previousCoverage, stale: true } } : {}), targetPostingUpdatedAt: draft.targetPostingUpdatedAt ?? prior.updatedAt, approved: false, approval: undefined, checkReport: undefined, status: 'blocked', progress: 'The accepted job posting changed. Review targeting against the current posting and create a renewed draft before approval.' })
+            db.prepare('UPDATE draft_revisions SET data = ? WHERE id = ?').run(JSON.stringify(stale), drafts[0].id)
+            db.prepare('DELETE FROM document_fit_reports WHERE job_id = ?').run(record.id)
+          }
+        }
         return jobSaveResultSchema.parse({ ok: true, value: record })
       })
       try { return tx() } catch { return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'The job could not be saved.' } }) }
@@ -889,14 +923,17 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       try {
         result = await dispatcher.analyze({ runId: pending.runId, jobId: pending.jobId, model: openRouterModelSchema.parse(pending.source.model.name), prompt: `Extract only explicit qualifications from this authorized minimized posting. Do not infer missing requirements. Return JSON with required, preferred, tools, responsibilities, keywords.\n${JSON.stringify(approvedPayload)}`, consentId: pending.consentId })
       } catch (error) {
+        const stillCurrentRun = activeAnalysisByJob.get(pending.jobId) === pending.runId && pendingOutbound.get(token) === pending
         if (activeAnalysisByJob.get(pending.jobId) === pending.runId) activeAnalysisByJob.delete(pending.jobId)
         const failure = error instanceof AnalysisError ? error : new AnalysisError('PROVIDER', 'Analysis could not complete. Check Settings and try again.')
+        if (!stillCurrentRun) return analysisResultSchema.parse({ jobId: pending.jobId, runId: pending.runId, targetPostingUpdatedAt: pending.source.job.revision, status: 'cancelled', analysis: null, progress: 'Analysis was cancelled. Its late response was discarded.', attempts: failure.usage?.attempts ?? 0, cacheHit: false })
         const status = failure.code === 'CANCELLED' ? 'cancelled' : 'failed'
         const value = analysisResultSchema.parse({ jobId: pending.jobId, runId: pending.runId, status, analysis: null, progress: failure.message, attempts: failure.usage?.attempts ?? 0, error: failure.message, cacheHit: false })
         saveAnalysisState(value)
         return value
       }
-      if (activeAnalysisByJob.get(pending.jobId) === pending.runId) activeAnalysisByJob.delete(pending.jobId)
+      if (activeAnalysisByJob.get(pending.jobId) !== pending.runId || pendingOutbound.get(token) !== pending) return analysisResultSchema.parse({ jobId: pending.jobId, runId: pending.runId, targetPostingUpdatedAt: pending.source.job.revision, status: 'cancelled', analysis: null, progress: 'Analysis was cancelled. Its late response was discarded.', attempts: result.usage.attempts, cacheHit: false })
+      activeAnalysisByJob.delete(pending.jobId)
       db.prepare('INSERT OR REPLACE INTO posting_analysis_cache (cache_key, job_id, run_id, data) VALUES (?, ?, ?, ?)').run(cacheKey, pending.jobId, pending.runId, JSON.stringify(result.analysis))
       db.prepare('UPDATE provider_attempt_outcomes SET checkpointed_at=? WHERE run_id=? AND checkpointed_at IS NULL').run(new Date().toISOString(), pending.runId)
       const value = analysisResultSchema.parse({ jobId: pending.jobId, runId: pending.runId, status: 'complete', analysis: result.analysis, displayAnalysis: displayAnalysis(result.analysis), progress: 'Posting analysis complete.', attempts: result.usage.attempts, cacheHit: false, generationStep: 'parse-posting', completedSteps: ['parse-posting'] })
@@ -952,7 +989,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       for (const date of exactLocalDates) minimizedStringPairs.push([date, ''])
       const minimizeRestoredText = (text: string) => minimizedStringPairs.reduce((value, [restored, minimized]) => value.replaceAll(restored, minimized), text)
       activeAnalysisByJob.set(pending.jobId, pending.runId)
-      const failedDraftIdentity = frozen?.identity ?? { id: randomUUID(), jobId: pending.jobId, revision: ((db.prepare('SELECT MAX(revision) AS revision FROM draft_revisions WHERE job_id = ?').get(pending.jobId) as { revision: number | null }).revision ?? 0) + 1, createdAt: new Date().toISOString(), lockedFields: draftInputs.lockedFields }
+      const failedDraftIdentity = frozen?.identity ?? { id: randomUUID(), jobId: pending.jobId, revision: ((db.prepare('SELECT MAX(revision) AS revision FROM draft_revisions WHERE job_id = ?').get(pending.jobId) as { revision: number | null }).revision ?? 0) + 1, targetPostingUpdatedAt: pending.source.job.revision, createdAt: new Date().toISOString(), lockedFields: draftInputs.lockedFields }
       if (!resumeRunId) {
         const snapshot = generationRecoverySnapshotSchema.parse({ version: 1, runId: pending.runId, jobId: pending.jobId, consentId: pending.consentId, scopeHash: pending.bundle.scopeHash, analysis, job, profile, experience, draftInputs, safeItems, identity: failedDraftIdentity, pageTarget, source: pending.source, faithfulnessCheck: pending.faithfulnessCheck, budgets: readAnalysisBudgets() })
         db.prepare('INSERT OR REPLACE INTO generation_recovery (run_id,job_id,consent_id,scope_hash,status,snapshot,updated_at) VALUES (?,?,?,?,?,?,?)').run(pending.runId,pending.jobId,pending.consentId,pending.bundle.scopeHash,'running',JSON.stringify(snapshot),new Date().toISOString())
@@ -1444,7 +1481,9 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       const draft = draftRevisionSchema.parse(JSON.parse(row.data))
       let report = preserveKnownFindings(checkDraftFacts(draft), draft)
       const stale = currentSourceStatus(draft)
-      if (stale.length) report = factualCheckReportSchema.parse({ ...report, passed: false, findings: [...report.findings, ...stale.map(evidenceId => ({ code: 'stale-source' as const, itemPath: 'sources', evidenceId, message: 'A cited profile source changed or was deleted after this draft was created.', correction: 'Review the current source and regenerate or remove the affected wording.' }))] })
+      const jobRow = db.prepare('SELECT updated_at FROM jobs WHERE id = ?').get(jobId) as { updated_at: string } | undefined
+      const staleTarget = Boolean(draft.targetPostingUpdatedAt && jobRow && draft.targetPostingUpdatedAt !== jobRow.updated_at)
+      if (stale.length || staleTarget) report = factualCheckReportSchema.parse({ ...report, passed: false, findings: [...report.findings, ...stale.map(evidenceId => ({ code: 'stale-source' as const, itemPath: 'sources', evidenceId, message: 'A cited profile source changed or was deleted after this draft was created.', correction: 'Review the current source and regenerate or remove the affected wording.' })), ...(staleTarget ? [{ code: 'stale-source' as const, itemPath: 'job-posting', message: 'The accepted job posting changed after this draft was created.', correction: 'Create a renewed draft for the current posting before approval.' }] : [])] })
       const updated = draftRevisionSchema.parse({ ...draft, status: report.passed ? 'unverified' : 'blocked', checkReport: report, progress: report.passed ? 'Current factual checks passed; citations do not establish semantic truth. Human review remains required.' : `Blocked by ${report.findings.length} factual or source revision finding(s). Correct the draft and check again.` })
       db.prepare('UPDATE draft_revisions SET data = ? WHERE id = ?').run(JSON.stringify(updated), draft.id)
       return report
@@ -1456,10 +1495,12 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       const savedReport = draft.checkReport
       const expectedEvidenceHash = createHash('sha256').update(JSON.stringify([...draft.evidence].sort((a, b) => a.evidenceId.localeCompare(b.evidenceId)))).digest('hex')
       const stale = currentSourceStatus(draft)
+      const jobRow = db.prepare('SELECT updated_at FROM jobs WHERE id = ?').get(jobId) as { updated_at: string } | undefined
+      const staleTarget = Boolean(draft.targetPostingUpdatedAt && jobRow && draft.targetPostingUpdatedAt !== jobRow.updated_at)
       if (!savedReport?.passed || savedReport.draftId !== draft.id || savedReport.draftRevision !== draft.revision || savedReport.evidenceRevisionHash !== expectedEvidenceHash || draft.status === 'blocked') return { ok: false, message: 'Recheck the current draft and cited source revisions before approval.' }
       let report = preserveKnownFindings(checkDraftFacts(draft), draft)
       if (stale.length) report = factualCheckReportSchema.parse({ ...report, passed: false, findings: [...report.findings, ...stale.map(evidenceId => ({ code: 'stale-source' as const, itemPath: 'sources', evidenceId, message: 'A cited profile source changed or was deleted after this draft was created.', correction: 'Review the current source and regenerate or remove the affected wording.' }))] })
-      if (!report.passed || report.draftId !== draft.id || report.draftRevision !== draft.revision || report.evidenceRevisionHash !== expectedEvidenceHash || stale.length) return { ok: false, message: 'Current factual checks and cited source revisions must pass before approval.' }
+      if (staleTarget || !report.passed || report.draftId !== draft.id || report.draftRevision !== draft.revision || report.evidenceRevisionHash !== expectedEvidenceHash || stale.length) return { ok: false, message: staleTarget ? 'This draft targets an earlier job posting. Create a renewed draft for the current posting before approval.' : 'Current factual checks and cited source revisions must pass before approval.' }
       const canonical = await this.getCanonicalDocument(jobId)
       const fit = await this.getDocumentFitReport(jobId)
       if (!canonical || !fit || fit.overflow || fit.actualPages > fit.targetPages) return { ok: false, message: 'Measure the current document and resolve page overflow before approval.' }
@@ -1473,6 +1514,8 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       const draft = await this.getDraft(jobId), canonical = await this.getCanonicalDocument(jobId)
       if (!draft || !canonical || !draft.approved || !draft.approval) return { ok: false, message: 'Approve the current canonical document before export.' }
       if ((draft.suggestedSkills ?? []).some(skill => skill.status === 'pending')) return { ok: false, message: 'Confirm or remove every suggested skill before export.' }
+      const jobRow = db.prepare('SELECT updated_at FROM jobs WHERE id = ?').get(jobId) as { updated_at: string } | undefined
+      if (draft.targetPostingUpdatedAt && jobRow && draft.targetPostingUpdatedAt !== jobRow.updated_at) return { ok: false, message: 'This draft targets an earlier job posting. Create a renewed draft for the current posting before export.' }
       const report = await this.checkDraft(jobId), fit = await this.getDocumentFitReport(jobId)
       const contentHash = createHash('sha256').update(JSON.stringify(canonical)).digest('hex')
       if (!report?.passed || !fit || fit.overflow || fit.actualPages > fit.targetPages || draft.approval.contentHash !== contentHash || draft.approval.evidenceHash !== report.evidenceRevisionHash || draft.approval.targetPages !== canonical.targetPages || draft.approval.checkHash !== createHash('sha256').update(JSON.stringify({ draftId: report.draftId, draftRevision: report.draftRevision, evidenceRevisionHash: report.evidenceRevisionHash, passed: report.passed, findings: report.findings })).digest('hex')) return { ok: false, message: 'Approval is stale or current checks/page fit no longer pass. Review and approve the current document again.' }
@@ -1487,9 +1530,10 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       // Advisory local comparison is refreshed without a provider request or mutation of historical drafts.
       const analysis = await this.getAnalysis(jobId)
       if (!analysis?.analysis) return draft
+      if (analysis.status === 'stale') return draftRevisionSchema.parse({ ...draft, coverage: draft.coverage ? { ...draft.coverage, stale: true } : undefined })
       const sources = prepareDraftInputs(readProfile(), readExperience()).items.map(item => ({ evidenceId: item.id, revision: item.revision, snapshot: item.snapshot }))
       const coverage = qualificationCoverage(draft.coverage?.analysisId ?? analysis.runId ?? jobId, analysis.displayAnalysis ?? analysis.analysis, draft, sources)
-      return draftRevisionSchema.parse({ ...draft, coverage: { ...coverage, repairAttempts: draft.coverage?.repairAttempts ?? 0, factualChecksRerun: draft.coverage?.factualChecksRerun ?? !!draft.checkReport } })
+      return draftRevisionSchema.parse({ ...draft, coverage: { ...coverage, stale: false, repairAttempts: draft.coverage?.repairAttempts ?? 0, factualChecksRerun: draft.coverage?.factualChecksRerun ?? !!draft.checkReport } })
     },
     async getCanonicalDocument(jobId: string) {
       const draft = await this.getDraft(jobId)
@@ -1555,7 +1599,10 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       const activeRunId = activeAnalysisByJob.get(jobId)
       const previous = currentAnalysis.get(jobId)
       if (!activeRunId && previous) return analysisResultSchema.parse(previous)
-      if (activeRunId) dispatcher.cancel(activeRunId)
+      if (activeRunId) {
+        dispatcher.cancel(activeRunId)
+        if (activeAnalysisByJob.get(jobId) === activeRunId) activeAnalysisByJob.delete(jobId)
+      }
       const value = analysisResultSchema.parse({ jobId, ...(activeRunId ? { runId: activeRunId } : {}), status: 'cancelled', analysis: null, progress: 'Analysis cancelled. No further requests will be sent.', attempts: previous?.attempts ?? 0, cacheHit: false })
       saveAnalysisState(value)
       return value

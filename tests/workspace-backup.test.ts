@@ -86,6 +86,7 @@ test('complete workspace backup restores draft revisions, evidence, posting, pre
   const reopened = createWorkbench(dir, undefined, capture); instances.push(reopened)
   expect((await reopened.api.getProfile()).skills.map(item => item.name)).toEqual(['TypeScript'])
   expect(await reopened.api.getEvidenceHistory(skillId)).toMatchObject([{ revision: 1, action: 'created' }, { revision: 2, action: 'updated' }])
+  expect(await reopened.api.openJob(job.value.id)).toMatchObject({ title: 'Engineer', provenance: 'manual', revisions: [{ revision: 1, description: 'TypeScript required.', provenance: 'manual' }] })
   expect((await reopened.api.listJobs()).map(item => item.title)).toEqual(['Engineer'])
   expect((await reopened.api.getDraft(job.value.id))?.id).toBe(original.id)
   expect((await reopened.api.getDraft(job.value.id))?.evidence).toEqual(original.evidence)
@@ -100,6 +101,23 @@ test('complete workspace backup restores draft revisions, evidence, posting, pre
   expect(await reopened.api.assertDraftExportable(job.value.id)).toMatchObject({ ok: true })
   await expect(reopened.api.startAnalysis(consent.token)).rejects.toThrow()
   expect(requests.length).toBe(attemptsBeforeReopen)
+})
+
+test('released version-1 job backups without provenance upgrade to honest legacy records on restore', async () => {
+  const { dir, workbench } = fixture()
+  const saved = await workbench.api.saveJob({ title: 'Engineer', company: 'Example', description: 'Original wording.' })
+  if (!saved.ok) throw new Error('Job fixture failed')
+  const old = JSON.parse(workbench.backup.createBackup())
+  old.version = 1
+  old.tables.schema_migrations.rows = old.tables.schema_migrations.rows.filter((row: { version: number }) => row.version !== 7)
+  old.tables.jobs.rows[0].data = JSON.stringify({ id: saved.value.id, title: 'Engineer', company: 'Example', description: 'Original wording.', createdAt: saved.value.createdAt, updatedAt: saved.value.updatedAt })
+  const preview = workbench.backup.previewRestore(JSON.stringify(old))
+  workbench.backup.applyRestore(preview.token, safetyBackup(dir))
+  workbench.close(); instances.pop()
+  const reopened = open(dir)
+  expect(await reopened.api.openJob(saved.value.id)).toMatchObject({ provenance: 'legacy-unknown', sourceSnapshot: null, revisions: [] })
+  const edited = await reopened.api.saveJob({ id: saved.value.id, title: 'Engineer', company: 'Example', description: 'Corrected wording.' })
+  expect(edited).toMatchObject({ ok: true, value: { revisions: [{ description: 'Original wording.', revision: 1, provenance: 'legacy-unknown' }, { description: 'Corrected wording.', revision: 2, provenance: 'manual' }] } })
 })
 
 test('failed database write rolls back the full replacement, including current credentials', async () => {

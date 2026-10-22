@@ -118,8 +118,9 @@ export function SavedJobs({ jobs, activeJob, onSaved, onOpened, onNavigate }: { 
   const renderFields = () => <div className="form-grid">
     <label>Job title<input id="job-field-title" ref={titleRef} required {...field('title')} />{errors.title && <span id="job-title-error" className="field-error">{errors.title}</span>}</label>
     <label>Company<input id="job-field-company" required {...field('company')} />{errors.company && <span id="job-company-error" className="field-error">{errors.company}</span>}</label>
-    <label className="wide-field">Posting and requirements<textarea id="job-field-description" rows={9} required {...field('description')} />{errors.description && <span id="job-description-error" className="field-error">{errors.description}</span>}</label>
+    <label className="wide-field">Posting and requirements<textarea id="job-field-description" rows={9} required maxLength={30000} {...field('description')} />{errors.description && <span id="job-description-error" className="field-error">{errors.description}</span>}</label>
   </div>
+  const editedJob = editingId ? jobs.find(job => job.id === editingId) : undefined
   const intakeVisible = intakeOpen || jobs.length === 0
   const renderIntake = (insideEmptyState = false) => <section className={`saved-jobs-intake${insideEmptyState ? ' is-inside-empty' : ''}`} aria-labelledby="posting-intake-title">
     <header className="saved-jobs-intake-heading"><div><p className="context">New job</p><h2 id="posting-intake-title">Add a job posting</h2></div>{jobs.length > 0 && <button type="button" className="secondary-button" onClick={closeIntake}>Cancel</button>}</header>
@@ -144,7 +145,19 @@ export function SavedJobs({ jobs, activeJob, onSaved, onOpened, onNavigate }: { 
     {!dialogOpen && !intakeOpen && message && jobs.length > 0 && <p className={`saved-jobs-message${messageError ? ' is-error' : ''}`} role={messageError ? 'alert' : 'status'}>{message}</p>}
     {dialogOpen && editingId && <dialog ref={dialogRef} className="job-dialog" aria-labelledby="job-dialog-title" onCancel={event => { event.preventDefault(); closeDialog() }} onClose={() => setDialogOpen(false)}>
       <header className="job-dialog-heading"><div><p className="context">Saved job</p><h2 id="job-dialog-title">Edit job posting</h2></div><button type="button" className="icon-button" aria-label="Close job form" onClick={closeDialog}>×</button></header>
-      <form className="job-dialog-form" onSubmit={event => void save(event)} noValidate>{renderFields()}<p className="job-form-guidance">Job postings are saved on this device.</p>{message && <p className={`saved-jobs-message${messageError ? ' is-error' : ''}`} role={messageError ? 'alert' : 'status'}>{message}</p>}<footer className="job-dialog-actions"><button className="secondary-button" type="button" onClick={closeDialog}>Cancel</button><button className="primary-button" type="submit" disabled={busy}>{busy ? 'Saving…' : 'Save changes'}</button></footer></form>
+      <form className="job-dialog-form" onSubmit={event => void save(event)} noValidate>
+        {renderFields()}
+        {editedJob && <section className="posting-history" aria-label="Posting source and revision history">
+          <h3>Posting versions</h3>
+          <p><strong>Source snapshot:</strong> {editedJob.sourceSnapshot ? 'Captured source wording is retained.' : 'Unknown — this manual posting has no captured source snapshot.'}</p>
+          {editedJob.sourceSnapshot && <pre>{editedJob.sourceSnapshot.description}</pre>}
+          <p><strong>Working posting:</strong> The editable fields above are the accepted wording.</p>
+          {editedJob.revisions.length > 0 ? <ol>{editedJob.revisions.map(revision => <li key={revision.revision}><h4>Revision {revision.revision} <span>· {revision.provenance === 'manual' ? 'Manual edit' : 'Legacy provenance unknown'}</span></h4><p>{revision.title} — {revision.company}</p><pre>{revision.description}</pre></li>)}</ol> : <p>No accepted revision history is available for this legacy posting.</p>}
+        </section>}
+        <p className="job-form-guidance">Job postings are saved on this device.</p>
+        {message && <p className={`saved-jobs-message${messageError ? ' is-error' : ''}`} role={messageError ? 'alert' : 'status'}>{message}</p>}
+        <footer className="job-dialog-actions"><button className="secondary-button" type="button" onClick={closeDialog}>Cancel</button><button className="primary-button" type="submit" disabled={busy}>{busy ? 'Saving…' : 'Save changes'}</button></footer>
+      </form>
     </dialog>}
   </div>
 }

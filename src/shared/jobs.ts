@@ -7,10 +7,18 @@ export const jobInputSchema = z.object({
   description: requiredText(30000)
 }).strict()
 export const jobSaveInputSchema = jobInputSchema.extend({ id: z.string().uuid().optional() }).strict()
+export const postingRevisionSchema = jobInputSchema.extend({
+  revision: z.number().int().positive(),
+  acceptedAt: z.string().datetime(),
+  provenance: z.enum(['manual', 'legacy-unknown']),
+}).strict()
 export const jobRecordSchema = jobInputSchema.extend({
   id: z.string().uuid(),
   createdAt: z.string().datetime(),
-  updatedAt: z.string().datetime()
+  updatedAt: z.string().datetime(),
+  provenance: z.enum(['manual', 'legacy-unknown']).default('legacy-unknown'),
+  sourceSnapshot: jobInputSchema.nullable().default(null),
+  revisions: z.array(postingRevisionSchema).default([]),
 }).strict()
 export const jobSaveResultSchema = z.discriminatedUnion('ok', [
   z.object({ ok: z.literal(true), value: jobRecordSchema }).strict(),

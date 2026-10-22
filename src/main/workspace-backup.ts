@@ -114,7 +114,7 @@ export function createWorkspaceBackupEngine(db: Database.Database): WorkspaceBac
   })
   const createBackup = () => {
     const snapshot = {
-      format: 'cv-tailor-workspace-backup', version: 1 as const,
+      format: 'cv-tailor-workspace-backup', version: 2 as const,
       createdAt: new Date().toISOString(), warning: workspaceBackupWarning,
       tables: Object.fromEntries(actualTables().map(name => [name, { schema: tableSchema(name), rows: rowsFor(name) }]))
     }
@@ -128,12 +128,34 @@ export function createWorkspaceBackupEngine(db: Database.Database): WorkspaceBac
     const result = workspaceBackupSchema.safeParse(parsed)
     if (!result.success) throw new Error('Backup is invalid or incompatible.')
     let backup = result.data
-    // Version-1 backups created before CV import have no provenance relation; upgrade the candidate
-    // in memory and its migration ledger before validation/restore, leaving the file untouched.
+    // Version-1 was the released workspace representation before posting provenance/revisions.
+    // Upgrade only this known shape in memory; leave the supplied file and live workspace untouched.
+    if (backup.version === 1) {
+      const upgraded = structuredClone(backup) as typeof backup
+      const jobs = upgraded.tables.jobs
+      if (!jobs) throw new Error('Backup is invalid or incompatible with this workspace schema.')
+      for (const row of jobs.rows) {
+        let oldJob: unknown
+        try { oldJob = JSON.parse(String(row.data)) } catch { throw new Error('Backup contains corrupt JSON: jobs') }
+        if (!oldJob || typeof oldJob !== 'object' || Array.isArray(oldJob)) throw new Error('Backup row violates the jobs domain schema.')
+        const value = oldJob as Record<string, unknown>
+        const knownLegacy = ['id', 'title', 'company', 'description', 'createdAt', 'updatedAt']
+        if (Object.keys(value).some(key => !knownLegacy.includes(key))) throw new Error('Backup row violates the jobs domain schema.')
+        row.data = JSON.stringify({ ...value, provenance: 'legacy-unknown', sourceSnapshot: null, revisions: [] })
+      }
+      upgraded.version = 2
+      backup = upgraded
+    }
+    // Earlier released workspaces may not have the CV import provenance relation.
     if (!backup.tables.profile_import_provenance && db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='profile_import_provenance'").get()) {
       const upgraded = structuredClone(backup) as typeof backup
       upgraded.tables.profile_import_provenance = { schema: tableSchema('profile_import_provenance'), rows: [] }
-      if (upgraded.tables.schema_migrations) upgraded.tables.schema_migrations.rows.push({ version: 6 })
+      if (upgraded.tables.schema_migrations && !upgraded.tables.schema_migrations.rows.some(row => row.version === 6)) upgraded.tables.schema_migrations.rows.push({ version: 6 })
+      backup = upgraded
+    }
+    if (backup.tables.schema_migrations && !backup.tables.schema_migrations.rows.some(row => row.version === 7)) {
+      const upgraded = structuredClone(backup) as typeof backup
+      upgraded.tables.schema_migrations!.rows.push({ version: 7 })
       backup = upgraded
     }
     const expected = actualTables().sort()

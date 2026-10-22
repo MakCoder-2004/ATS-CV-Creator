@@ -13,6 +13,14 @@
 .saved-job-row + .saved-job-row td { border-top: 1px solid var(--line); }
 .saved-job-row[aria-current=true] td { background: var(--selected-job); }
 .saved-job-row[aria-current=true] td:first-child { border-left: 3px solid var(--blue); padding-left: 17px; }
+.posting-history { display: grid; gap: 8px; padding-top: 16px; border-top: 1px solid var(--line); }
+.posting-history h3, .posting-history h4, .posting-history p { margin: 0; }
+.posting-history h3 { font-size: 15px; }
+.posting-history ol { display: grid; gap: 12px; margin: 0; padding-left: 24px; }
+.posting-history li { min-width: 0; }
+.posting-history h4 { font-size: 13px; }
+.posting-history h4 span { color: var(--muted); font-weight: 450; }
+.posting-history pre { max-height: 220px; overflow: auto; margin: 0; padding: 12px; border: 1px solid var(--line); border-radius: 6px; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
 .saved-job-description { display: grid; min-width: 0; gap: 2px; overflow-wrap: anywhere; }
 .saved-job-title { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .saved-job-description strong { font-size: 14px; font-weight: 700; }

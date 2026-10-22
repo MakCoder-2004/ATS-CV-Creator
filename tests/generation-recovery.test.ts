@@ -37,7 +37,42 @@ function recoveryTransport(onTailor?: () => Promise<string>): AnalysisTransport 
   } }
 }
 
-test('public recovery restores frozen consent and resumes a confirmed checkpoint after workspace reopen', async () => {
+test('public recovery resumes frozen consent after restart when the accepted posting is unchanged', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'cv-tailor-public-recovery-')); dirs.push(directory)
+  let offlineOnce = true
+  const prompts: string[] = []
+  const transport = recoveryTransport(async () => {
+    if (offlineOnce) { offlineOnce = false; throw Object.assign(new Error('offline'), { code: 'ECONNRESET' }) }
+    return ''
+  })
+  const capturing: AnalysisTransport = { async generate(input) { prompts.push(input.prompt); const answer = await transport.generate(input); if (answer) return answer; const { selected } = JSON.parse(input.prompt.slice(input.prompt.indexOf('{'))); return JSON.stringify({ headline: 'Engineer', summary: { text: 'Engineer with relevant evidence.', evidence: [selected[0].index], rationale: 'Selected profile evidence.' }, education: [], experience: selected.filter((item: { category: string }) => item.category === 'experience').map((item: { index: number; text: string }) => ({ text: item.text, evidence: [item.index], rationale: 'Relevant.' })), projects: [], skills: [], certificates: [] }) } }
+  let workspace = createWorkbench(directory, undefined, capturing); opened.push(workspace)
+  const { jobId, token } = await seed(workspace, 3)
+  expect(await workspace.api.generateDraft(token)).toMatchObject({ ok: false })
+  const recovery = await workspace.api.getGenerationRecovery(jobId)
+  expect(recovery).toMatchObject({ status: 'uncertain', attempts: 3, uncertainAttempts: 1, canResume: true })
+  workspace.close(); opened.pop()
+
+  workspace = createWorkbench(directory, undefined, capturing); opened.push(workspace)
+  expect((await workspace.api.getGenerationRecovery(jobId))?.runId).toBe(recovery?.runId)
+  expect(prompts).toHaveLength(3)
+  const savedBudget = await workspace.api.getAnalysisUsage()
+  await workspace.api.setAnalysisBudgets({ ...analysisBudgetValues(savedBudget), runLimit: 4 })
+  const resumed = await workspace.api.resumeGeneration(recovery!.runId, 'retry-uncertain')
+  expect(resumed.ok).toBe(true)
+  expect((await workspace.api.openJob(jobId))?.description).toBe('Original posting wording.')
+  expect((await workspace.api.getDraft(jobId))?.content.experience).toHaveLength(1)
+  expect(prompts.filter(prompt => prompt.startsWith('Score these numbered'))).toHaveLength(1)
+  expect(prompts.at(-1)).toContain('Original posting wording.')
+  expect(await workspace.api.getGenerationRecovery(jobId)).toBeNull()
+  workspace.close(); opened.pop()
+  const extensionDb = new Database(join(directory, 'workbench.sqlite'))
+  expect(extensionDb.prepare('SELECT prior_run_limit,new_run_limit FROM generation_recovery_extensions WHERE run_id=?').get(recovery!.runId)).toEqual({ prior_run_limit: 3, new_run_limit: 4 })
+  expect(extensionDb.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id=?').get(recovery!.runId)).toMatchObject({ count: 4 })
+  extensionDb.close()
+}, 20000)
+
+test('accepted target edits after restart revoke paused recovery consent without dispatching stale inputs', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'cv-tailor-public-recovery-')); dirs.push(directory)
   let offlineOnce = true
   const prompts: string[] = []
@@ -59,20 +94,18 @@ test('public recovery restores frozen consent and resumes a confirmed checkpoint
   expect(prompts).toHaveLength(3)
   const changedJob = await workspace.api.saveJob({ id: jobId, title: 'Changed target', company: 'New company', description: 'Changed posting must not replace frozen inputs.' })
   expect(changedJob.ok).toBe(true)
+  expect(await workspace.api.getAnalysis(jobId)).toMatchObject({ status: 'stale', progress: expect.stringMatching(/may be uncertain.*cannot resume/i) })
   const savedBudget = await workspace.api.getAnalysisUsage()
   await workspace.api.setAnalysisBudgets({ ...analysisBudgetValues(savedBudget), runLimit: 4 })
+  const requestsBeforeResume = prompts.length
+  const attemptsBeforeResume = (await workspace.api.getAnalysisUsage()).attempts
   const resumed = await workspace.api.resumeGeneration(recovery!.runId, 'retry-uncertain')
-  expect(resumed.ok).toBe(true)
-  expect((await workspace.api.getDraft(jobId))?.content.experience).toHaveLength(1)
-  expect(prompts.filter(prompt => prompt.startsWith('Score these numbered'))).toHaveLength(1)
-  expect(prompts.at(-1)).toContain('Original posting wording.')
-  expect(prompts.join('\n')).not.toContain('Changed posting must not replace frozen inputs.')
+  expect(resumed).toMatchObject({ ok: false, message: expect.stringMatching(/no longer resumable|no recoverable|consent.*revoked/i) })
+  expect(prompts).toHaveLength(requestsBeforeResume)
+  expect((await workspace.api.getAnalysisUsage()).attempts).toBe(attemptsBeforeResume)
   expect(await workspace.api.getGenerationRecovery(jobId)).toBeNull()
+  expect(await workspace.api.getDraft(jobId)).toBeNull()
   workspace.close(); opened.pop()
-  const extensionDb = new Database(join(directory, 'workbench.sqlite'))
-  expect(extensionDb.prepare('SELECT prior_run_limit,new_run_limit FROM generation_recovery_extensions WHERE run_id=?').get(recovery!.runId)).toEqual({ prior_run_limit: 3, new_run_limit: 4 })
-  expect(extensionDb.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id=?').get(recovery!.runId)).toMatchObject({ count: 4 })
-  extensionDb.close()
 }, 20000)
 
 test('a provider response without its graph checkpoint remains uncertain after restart', async () => {

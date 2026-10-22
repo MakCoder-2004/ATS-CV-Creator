@@ -13,7 +13,7 @@ test('public coverage checks unselected profile facts and refreshes after profil
   let calls = 0
   const transport: AnalysisTransport = { async generate({ prompt }) {
     calls++
-    if (prompt.includes('Extract only explicit qualifications')) return JSON.stringify({ required: [degreeRequirement, 'Solid understanding of machine learning algorithms, model training, evaluation, and optimization', 'Experience building and deploying machine learning models in production environments', '3–6 years of experience in software engineering'], preferred: [], tools: [], responsibilities: [], keywords: [] })
+    if (prompt.includes('Extract only explicit qualifications')) return JSON.stringify({ required: prompt.includes('Rust required') ? ['Rust'] : [degreeRequirement, 'Solid understanding of machine learning algorithms, model training, evaluation, and optimization', 'Experience building and deploying machine learning models in production environments', '3–6 years of experience in software engineering'], preferred: [], tools: [], responsibilities: [], keywords: [] })
     if (prompt.startsWith('Score these numbered')) { const { items } = JSON.parse(prompt.slice(prompt.indexOf('{'))); return JSON.stringify({ relevance: items.map((item: { index: number; text: string }) => ({ index: item.index, score: item.text.includes('Built services') ? 1 : 0, rationale: 'Only service experience goes into the CV.' })) }) }
     const { selected } = JSON.parse(prompt.slice(prompt.indexOf('{')))
     const role = selected.find((item: { category: string }) => item.category === 'experience')
@@ -48,10 +48,20 @@ test('public coverage checks unselected profile facts and refreshes after profil
     const draft = (await api.getDraft(job.value.id))!
     const added = await api.mutateDraftRecord({ jobId: job.value.id, draftId: draft.id, sourceRevision: draft.revision, section: 'education', operation: 'add', scope: 'cv-only', value: { section: 'education', title: 'B.Sc. in Data Science', endDate: '2024' } })
     expect(added.ok, added.message).toBe(true)
-    workspace.close(); workspace = createWorkbench(dir)
+    workspace.close(); workspace = createWorkbench(dir, undefined, transport)
     expect(await workspace.api.getDraft(job.value.id)).toMatchObject({ coverage: { assessments: expect.arrayContaining([expect.objectContaining({ qualification: degreeRequirement, status: 'supported', inDraft: true })]) } })
     expect(calls).toBe(priorCalls)
     expect((await workspace.api.getProfile()).education).toHaveLength(1)
     expect((await workspace.api.getProfile()).education[0].title).toBe('Bachelor of Biology')
+    const beforeTargetChange = await workspace.api.openJob(job.value.id)
+    if (!beforeTargetChange) throw Error('job missing before accepted target edit')
+    expect((await workspace.api.saveJob({ id: beforeTargetChange.id, title: beforeTargetChange.title, company: beforeTargetChange.company, description: 'Rust required.' })).ok).toBe(true)
+    expect(await workspace.api.getAnalysis(job.value.id)).toMatchObject({ status: 'stale' })
+    expect(await workspace.api.getDraft(job.value.id)).toMatchObject({ coverage: { stale: true, assessments: expect.arrayContaining([expect.objectContaining({ qualification: degreeRequirement })]) } })
+    const acceptedTarget = await workspace.api.prepareOutboundConsent(job.value.id)
+    if (!acceptedTarget.ok) throw Error('new target preview')
+    await workspace.api.acceptOutboundConsent(acceptedTarget.token, true, true)
+    expect(await workspace.api.startAnalysis(acceptedTarget.token)).toMatchObject({ status: 'complete', analysis: { required: ['Rust'] } })
+    expect(await workspace.api.getDraft(job.value.id)).toMatchObject({ coverage: { stale: false, assessments: expect.arrayContaining([expect.objectContaining({ qualification: 'Rust' })]) } })
   } finally { workspace?.close(); rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) }
 })
