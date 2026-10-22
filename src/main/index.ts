@@ -52,6 +52,14 @@ function trusted(event: Electron.IpcMainInvokeEvent): void {
   if (!isTrusted(event)) throw new Error('Untrusted IPC sender')
 }
 
+async function openOriginalPosting(url: string): Promise<void> {
+  if (!app.isPackaged && process.env.CV_TAILOR_SCRIPTED_OPEN_ORIGINAL === '1') {
+    if (url !== 'https://jobs.lever.co/example-board/smoke-id') throw new Error('The scripted browser opener received an unexpected posting URL.')
+    return
+  }
+  await shell.openExternal(url)
+}
+
 // The test override is disabled in packaged builds; production always uses Electron's userData.
 if (!app.isPackaged && process.env.CV_TAILOR_TEST_USER_DATA_DIR) {
   mkdirSync(process.env.CV_TAILOR_TEST_USER_DATA_DIR, { recursive: true })
@@ -276,7 +284,7 @@ app.whenReady().then(() => {
   })
   ipcMain.handle('posting-import:open-source', async (event, ...args: unknown[]) => {
     trusted(event); if (args.length !== 1 || typeof args[0] !== 'string' || !validateLeverPostingUrl(args[0])) throw new Error('Only a validated HTTPS Lever posting can be opened.')
-    await shell.openExternal(args[0]); return { ok: true, message: 'Opened the posting in your default browser.' }
+    await openOriginalPosting(args[0]); return { ok: true, message: 'Opened the posting in your default browser.' }
   })
   ipcMain.handle('consent:outbound:preview', async (event, ...args: unknown[]) => {
     trusted(event); if (args.length !== 1) throw new Error('Expected saved job ID')

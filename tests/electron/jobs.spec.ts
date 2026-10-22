@@ -8,7 +8,7 @@ test('saved jobs follow the design-system list, support editing, and reopen for 
   const userData = mkdtempSync(join(tmpdir(), 'cv-tailor-jobs-'))
   let running: ElectronApplication | undefined
   const launch = async () => {
-    running = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData, CV_TAILOR_SCRIPTED_POSTING_FETCH: '1' } })
+    running = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData, CV_TAILOR_SCRIPTED_POSTING_FETCH: '1', CV_TAILOR_SCRIPTED_OPEN_ORIGINAL: '1' } })
     return running
   }
   try {
@@ -29,6 +29,8 @@ test('saved jobs follow the design-system list, support editing, and reopen for 
     await page.getByRole('button', { name: 'Open original posting' }).click()
     await expect(page.getByRole('alert')).toContainText(/validated HTTPS Lever posting/i)
     await page.getByLabel('Public Lever posting link').fill('https://jobs.lever.co/example-board/smoke-id')
+    await page.getByRole('button', { name: 'Open original posting' }).click()
+    await expect(page.getByRole('status')).toContainText('Opened the posting in your default browser.')
     await page.getByRole('button', { name: 'Fetch posting' }).click()
     await expect(page.getByRole('heading', { name: 'Temporary posting import preview' })).toBeVisible({ timeout: 10000 })
     await expect(page.getByLabel('Job title')).toHaveValue('Synthetic Reliability Engineer')
