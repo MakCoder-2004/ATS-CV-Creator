@@ -171,7 +171,16 @@ test('shortened working posting scope persists through import, generation, reope
   wb = createWorkbench(dir, undefined, transport, undefined, fetchOptions); opened.push(wb)
   expect((await wb.api.openJob(imported.value.id))?.sourceSnapshot?.description).toBe(sourceSnapshot.description)
   expect((await wb.api.getDraft(imported.value.id))?.progress).toContain('source snapshot differs')
-  expect((await wb.api.getRegenerationProposal(imported.value.id))?.progress).toContain('source snapshot differs')
+  const restoredProposal = await wb.api.getRegenerationProposal(imported.value.id)
+  expect(restoredProposal?.progress).toContain('source snapshot differs')
+  if (!restoredProposal) throw new Error('Regeneration proposal was not restored.')
+  const expandedToSource = await wb.api.saveJob({ id: imported.value.id, title: imported.value.title, company: imported.value.company, description: sourceSnapshot.description })
+  if (!expandedToSource.ok) throw new Error(expandedToSource.error.message)
+  const staleProposal = await wb.api.resolveRegenerationProposal(imported.value.id, restoredProposal.id, 'accept')
+  expect(staleProposal).toMatchObject({ ok: false, proposal: { status: 'stale', progress: expect.stringContaining('source snapshot differs') } })
+  const backup = JSON.parse(wb.backup.createBackup())
+  const persistedProposalRow = backup.tables.regeneration_proposals.rows.find((row: { id: string }) => row.id === restoredProposal.id)
+  expect(JSON.parse(persistedProposalRow.data)).toMatchObject({ status: 'stale', postingScopeNote: expect.stringContaining('source snapshot differs'), progress: expect.stringContaining('source snapshot differs') })
   expect(modelPrompts).toHaveLength(promptsBeforeRegeneration + 1)
 })
 
@@ -229,7 +238,7 @@ test('an extra foreign parent entry triggers a bounded retry instead of disappea
   expect(result.draft.content.experience).toHaveLength(2)
 })
 
-test('shortened working posting scope persists through generation, reopen, and regeneration without source-text dispatch', async () => {
+test('full-source proposal does not gain a shortened-scope label after later posting edits', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'shortened-working-posting-scope-')); dirs.push(dir)
   const modelPrompts: string[] = []
   const transport: AnalysisTransport = { async generate({ prompt }) {
@@ -252,7 +261,7 @@ test('shortened working posting scope persists through generation, reopen, and r
   const fetchOptions = { lookup: async () => [{ address: '8.8.8.8', family: 4 }], request: async () => ({ status: 200, headers: { 'content-type': 'application/json' }, body: Buffer.from(body) }) }
   let wb = createWorkbench(dir, undefined, transport, undefined, fetchOptions); opened.push(wb)
   await wb.api.setAnalysisBudgets({ ...analysisBudgetValues(await wb.api.getAnalysisUsage()), minimumSpacingMs: 0, rateLimitAttempts: 100, rateLimitWindowMs: 1000 })
-  await wb.api.saveSkill({ name: 'WORKING_TEXT_CANARY', category: 'Programming' })
+  await wb.api.saveSkill({ name: 'TypeScript', category: 'Programming' })
   const { token: fetchToken } = await wb.api.startPostingFetch('https://api.lever.co/v0/postings/example-board/scope-long-role')
   let fetchState = await wb.api.readPostingPreview(fetchToken)
   for (let attempt = 0; attempt < 300 && fetchState.status === 'fetching'; attempt++) { await new Promise(resolve => setTimeout(resolve, 10)); fetchState = await wb.api.readPostingPreview(fetchToken) }
@@ -262,9 +271,9 @@ test('shortened working posting scope persists through generation, reopen, and r
   if (!imported.ok) throw new Error(imported.error.message)
   const sourceSnapshot = imported.value.sourceSnapshot
   if (!sourceSnapshot) throw new Error('Imported source snapshot was not retained')
-  const workingText = 'WORKING_TEXT_CANARY\nRequirements\nTypeScript is required.'
-  const shortened = await wb.api.saveJob({ id: imported.value.id, title: imported.value.title, company: imported.value.company, description: workingText })
-  if (!shortened.ok) throw new Error(shortened.error.message)
+  const workingText = sourceSnapshot.description
+  const unchangedWorking = await wb.api.saveJob({ id: imported.value.id, title: imported.value.title, company: imported.value.company, description: workingText })
+  if (!unchangedWorking.ok) throw new Error(unchangedWorking.error.message)
   expect((await wb.api.openJob(imported.value.id))?.sourceSnapshot?.description).toBe(sourceSnapshot.description)
 
   const authorize = async () => {
@@ -275,31 +284,43 @@ test('shortened working posting scope persists through generation, reopen, and r
   }
   const token = await authorize()
   const analysis = await wb.api.startAnalysis(token)
-  expect(analysis).toMatchObject({ status: 'complete', progress: expect.stringContaining('source snapshot differs') })
+  expect(analysis.status).toBe('complete')
+  expect(analysis.progress).not.toContain('source snapshot differs')
   expect(modelPrompts).toHaveLength(1)
   expect(JSON.parse(modelPrompts[0].slice(modelPrompts[0].indexOf('{'))).job.description).toBe(workingText)
-  expect(modelPrompts[0]).not.toContain('SOURCE_ONLY_REQUIREMENT_CANARY')
+  expect(modelPrompts[0]).toContain('SOURCE_ONLY_REQUIREMENT_CANARY')
   const generated = await wb.api.generateDraft(token)
   expect(generated.ok).toBe(true)
   if (!generated.ok || !generated.draft) throw new Error(generated.message)
-  expect(generated.draft.progress).toContain('source snapshot differs')
+  expect(generated.draft.progress).not.toContain('source snapshot differs')
   const promptCountBeforeRegeneration = modelPrompts.length
 
   const regenerationToken = await authorize()
   const proposal = await wb.api.regenerateDraft(regenerationToken, { kind: 'section', section: 'skills' })
   expect(proposal.ok).toBe(true)
   if (!proposal.ok || !proposal.proposal) throw new Error(proposal.message)
-  expect(proposal.message).toContain('source snapshot differs')
-  expect(proposal.proposal.progress).toContain('source snapshot differs')
+  expect(proposal.message).not.toContain('source snapshot differs')
+  expect(proposal.proposal.progress).not.toContain('source snapshot differs')
   expect(modelPrompts).toHaveLength(promptCountBeforeRegeneration + 1)
   expect(JSON.parse(modelPrompts.at(-1)!.slice(modelPrompts.at(-1)!.indexOf('{'))).job.description).toBe(workingText)
-  expect(modelPrompts.at(-1)).not.toContain('SOURCE_ONLY_REQUIREMENT_CANARY')
+  expect(modelPrompts.at(-1)).toContain('SOURCE_ONLY_REQUIREMENT_CANARY')
+
+  const shorterAfterProposal = await wb.api.saveJob({ id: imported.value.id, title: imported.value.title, company: imported.value.company, description: 'WORKING_TEXT_SHORTENED_AFTER_PROPOSAL\\nTypeScript.' })
+  if (!shorterAfterProposal.ok) throw new Error(shorterAfterProposal.error.message)
+  const rejectedProposal = await wb.api.resolveRegenerationProposal(imported.value.id, proposal.proposal.id, 'reject')
+  expect(rejectedProposal).toMatchObject({ ok: true, proposal: { status: 'rejected' } })
+  expect(rejectedProposal.proposal?.progress).not.toContain('source snapshot differs')
+  expect(rejectedProposal.proposal?.postingScopeNote).toBeUndefined()
+  const stored = JSON.parse(wb.backup.createBackup()).tables.regeneration_proposals.rows.find((row: { id: string }) => row.id === proposal.proposal!.id)
+  if (!stored) throw new Error('Rejected proposal was not stored in the workspace backup.')
+  expect(JSON.parse(stored.data).progress).not.toContain('source snapshot differs')
+  expect(JSON.parse(stored.data).postingScopeNote).toBeUndefined()
 
   wb.close(); opened.pop()
   wb = createWorkbench(dir, undefined, transport, undefined, fetchOptions); opened.push(wb)
   expect((await wb.api.openJob(imported.value.id))?.sourceSnapshot?.description).toBe(sourceSnapshot.description)
-  expect((await wb.api.getDraft(imported.value.id))?.progress).toContain('source snapshot differs')
-  expect((await wb.api.getRegenerationProposal(imported.value.id))?.progress).toContain('source snapshot differs')
+  expect((await wb.api.getDraft(imported.value.id))?.progress).not.toContain('source snapshot differs')
+  expect(await wb.api.getRegenerationProposal(imported.value.id)).toBeNull()
   expect(modelPrompts).toHaveLength(promptCountBeforeRegeneration + 1)
 })
 
