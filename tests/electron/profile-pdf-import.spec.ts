@@ -11,8 +11,8 @@ async function makeDocx() {
   const zip = new JSZip()
   zip.file('[Content_Types].xml', '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>')
   zip.file('_rels/.rels', '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>')
-  zip.file('word/document.xml', '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>NAME: Ada Example</w:t></w:r></w:p><w:p><w:r><w:t>EMAIL: ada@example.test</w:t></w:r></w:p><w:p><w:r><w:t>SKILLS: Python, SQL</w:t></w:r></w:p><w:p><w:r><w:t>EXPERIENCE: Example Labs | Engineer | 2020-01 – 2022-03</w:t></w:r></w:p><w:p><w:r><w:t>FACT: Built accessible software for customers across multiple teams</w:t></w:r></w:p><w:p><w:r><w:t>SUMMARY: Reliable engineer with substantial experience building useful software products</w:t></w:r></w:p></w:body></w:document>')
-  zip.file('word/_rels/document.xml.rels', '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>')
+  zip.file('word/document.xml', '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body><w:p><w:r><w:t>NAME: Ada Example</w:t></w:r></w:p><w:p><w:r><w:t>EMAIL: ada@example.test</w:t></w:r></w:p><w:p><w:r><w:t>CONTACT LINK: </w:t></w:r><w:hyperlink r:id="rId2"><w:r><w:t>Portfolio</w:t></w:r></w:hyperlink></w:p><w:p><w:r><w:t>SKILLS: Python, SQL</w:t></w:r></w:p><w:p><w:r><w:t>EXPERIENCE: Example Labs | Engineer | 2020-01 – 2022-03</w:t></w:r></w:p><w:p><w:r><w:t>FACT: Built accessible software for customers across multiple teams</w:t></w:r></w:p><w:p><w:r><w:t>SUMMARY: Reliable engineer with substantial experience building useful software products</w:t></w:r></w:p><w:p><w:r><w:t>PROJECT: Atlas | Python</w:t></w:r></w:p><w:p><w:r><w:t>Project context with repository link: </w:t></w:r><w:hyperlink r:id="rId3"><w:r><w:t>Repository</w:t></w:r></w:hyperlink></w:p></w:body></w:document>')
+  zip.file('word/_rels/document.xml.rels', '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://ada.example.test" TargetMode="External"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://atlas.example.test" TargetMode="External"/></Relationships>')
   return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' })
 }
 
@@ -48,10 +48,11 @@ test('imports DOCX proposals through visible review and applies them to the exis
     await expect(review.getByLabel('Full name')).toHaveValue('Ada Example')
     await expect(review.getByLabel('Skill name').first()).toHaveValue('Python')
     await expect(review.getByText('Built accessible software for customers across multiple teams').first()).toBeVisible()
+    await review.getByLabel('Source factual item 1').fill('Corrected wording after checking the original CV')
     await review.getByRole('button', { name: 'Apply accepted details' }).click()
     await expect(page.getByRole('status')).toContainText('added to your profile')
-    expect(await page.evaluate(() => window.workbench.getProfile())).toMatchObject({ contact: { fullName: 'Ada Example' }, skills: [{ name: 'Python' }, { name: 'SQL' }] })
-    expect(await page.evaluate(() => window.workbench.getExperience())).toMatchObject({ experience: [{ title: 'Engineer', organization: 'Example Labs', factualItems: [{ text: 'Built accessible software for customers across multiple teams' }] }] })
+    expect(await page.evaluate(() => window.workbench.getProfile())).toMatchObject({ contact: { fullName: 'Ada Example', links: [{ label: 'Portfolio', url: 'https://ada.example.test' }] }, skills: [{ name: 'Python' }, { name: 'SQL' }] })
+    expect(await page.evaluate(() => window.workbench.getExperience())).toMatchObject({ experience: [{ title: 'Engineer', organization: 'Example Labs', factualItems: [{ text: 'Corrected wording after checking the original CV' }] }], projects: [{ name: 'Atlas', links: [{ label: 'Repository', url: 'https://atlas.example.test' }] }] })
     expect(readFileSync(sourceFile)).toEqual(original)
     expect((await page.evaluate(() => window.workbench.getAnalysisUsage())).attempts).toBe(0)
     await running.evaluate(({ dialog }, target) => { dialog.showSaveDialog = async () => ({ canceled: false, filePath: target }); return true }, backupFile)
@@ -60,13 +61,17 @@ test('imports DOCX proposals through visible review and applies them to the exis
     await expect(page.getByRole('region', { name: 'Workspace backup' }).getByRole('status')).toContainText('Workspace backup saved')
     const provenance = JSON.parse(readFileSync(backupFile, 'utf8')).tables.profile_import_provenance.rows
     expect(provenance).toEqual(expect.arrayContaining([expect.objectContaining({ source_hash: expect.stringMatching(/^[a-f0-9]{64}$/), passage: expect.stringContaining('EXPERIENCE: Example Labs | Engineer') })]))
+    expect(provenance.some((row: { field: string; passage: string }) => row.field === 'experience.factualItem' && row.passage.includes('Built accessible software for customers'))).toBe(false)
+    expect(provenance.some((row: { field: string; passage: string }) => row.field === 'experience.role' && row.passage.includes('Example Labs'))).toBe(true)
+    expect(provenance.some((row: { field: string; passage: string }) => row.field === 'projects.links' && row.passage.includes('Project context with repository link') && row.passage.includes('https://atlas.example.test'))).toBe(true)
+    expect(provenance.some((row: { field: string; passage: string }) => row.field === 'contact.links' && row.passage.includes('CONTACT LINK:') && row.passage.includes('https://ada.example.test'))).toBe(true)
     await running.close(); running = undefined
     running = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData } })
     const reopened = await running.firstWindow()
     await expect(reopened.locator('[data-ui-ready="true"]')).toBeVisible({ timeout: 15000 })
     await reopened.getByRole('button', { name: 'My profile' }).click()
-    expect(await reopened.evaluate(() => window.workbench.getProfile())).toMatchObject({ contact: { fullName: 'Ada Example' }, skills: [{ name: 'Python' }, { name: 'SQL' }] })
-    expect(await reopened.evaluate(() => window.workbench.getExperience())).toMatchObject({ experience: [{ title: 'Engineer', organization: 'Example Labs', factualItems: [{ text: 'Built accessible software for customers across multiple teams' }] }] })
+    expect(await reopened.evaluate(() => window.workbench.getProfile())).toMatchObject({ contact: { fullName: 'Ada Example', links: [{ label: 'Portfolio', url: 'https://ada.example.test' }] }, skills: [{ name: 'Python' }, { name: 'SQL' }] })
+    expect(await reopened.evaluate(() => window.workbench.getExperience())).toMatchObject({ experience: [{ title: 'Engineer', organization: 'Example Labs', factualItems: [{ text: 'Corrected wording after checking the original CV' }] }], projects: [{ name: 'Atlas', links: [{ label: 'Repository', url: 'https://atlas.example.test' }] }] })
     await running.close(); running = undefined
   } finally { await running?.close(); await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }) }
 })
