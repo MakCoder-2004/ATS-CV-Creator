@@ -965,9 +965,12 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       const values = working.data
       const acceptedOptionalDetails = values.optionalDetails ?? source.optionalDetails
       const workingChanged = prior.title !== values.title || prior.company !== values.company || prior.description !== values.description || !isDeepStrictEqual(prior.optionalDetails, acceptedOptionalDetails)
+      const targetChanged = prior.title !== values.title || prior.company !== values.company || prior.description !== values.description
       const sourceChanged = prior.sourceSnapshot.title !== source.title || prior.sourceSnapshot.company !== source.company || prior.sourceSnapshot.description !== source.description || !isDeepStrictEqual(prior.sourceSnapshot.optionalDetails, source.optionalDetails) || !isDeepStrictEqual(prior.sourceSnapshot.conflicts, source.conflicts) || prior.sourceSnapshot.extractionMethod !== source.extractionMethod || normalizePostingUrl(prior.sourceSnapshot.submittedUrl) !== normalizePostingUrl(source.submittedUrl) || normalizePostingUrl(prior.sourceSnapshot.finalUrl) !== normalizePostingUrl(source.finalUrl)
       if (!sourceChanged && !workingChanged) { pending.state = { status: 'cancelled' }; pending.reviewed = undefined; return jobSaveResultSchema.parse({ ok: true, value: prior }) }
-      const now = new Date(Math.max(Date.now(), Date.parse(prior.updatedAt) + (workingChanged ? 1 : 0))).toISOString()
+      const lastAcceptedAt = Date.parse(prior.revisions.at(-1)?.acceptedAt ?? prior.updatedAt)
+      const now = new Date(Math.max(Date.now(), lastAcceptedAt + 1, targetChanged ? Date.parse(prior.updatedAt) + 1 : 0)).toISOString()
+      const targetUpdatedAt = targetChanged ? now : prior.updatedAt
       const snapshot = {
         title: source.title, company: source.company, description: source.description, optionalDetails: source.optionalDetails, conflicts: source.conflicts,
         submittedUrl: source.submittedUrl, finalUrl: source.finalUrl, sourceIdentity, capturedAt: new Date().toISOString(), extractionMethod: source.extractionMethod, extractionVersion: 1 as const,
@@ -976,8 +979,8 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       }
       const history = sourceChanged && prior.sourceSnapshot ? [...prior.sourceHistory, prior.sourceSnapshot] : prior.sourceHistory
       const newRevision = { ...values, optionalDetails: acceptedOptionalDetails, revision: (prior.revisions.at(-1)?.revision ?? 0) + 1, acceptedAt: now, provenance: 'imported' as const }
-      const record = jobRecordSchema.parse({ ...values, optionalDetails: acceptedOptionalDetails, id: prior.id, createdAt: prior.createdAt, updatedAt: workingChanged ? now : prior.updatedAt, provenance: 'imported', sourceSnapshot: snapshot, sourceHistory: history, revisions: [...prior.revisions, newRevision] })
-      if (workingChanged && activeAnalysisByJob.has(jobId)) return invalid('An analysis operation is active for this saved posting. Cancel it before accepting refresh changes.')
+      const record = jobRecordSchema.parse({ ...values, optionalDetails: acceptedOptionalDetails, id: prior.id, createdAt: prior.createdAt, updatedAt: targetUpdatedAt, provenance: 'imported', sourceSnapshot: snapshot, sourceHistory: history, revisions: [...prior.revisions, newRevision] })
+      if (targetChanged && activeAnalysisByJob.has(jobId)) return invalid('An analysis operation is active for this saved posting. Cancel it before accepting refresh changes.')
       try {
         const tx = db.transaction(() => {
           const latest = db.prepare('SELECT data FROM jobs WHERE id = ?').get(jobId) as { data: string } | undefined
@@ -985,7 +988,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
           const latestJob = jobRecordSchema.parse(JSON.parse(latest.data))
           if (latestJob.updatedAt !== expectedUpdatedAt || (latestJob.revisions.at(-1)?.revision ?? 0) !== expectedBaseRevision) throw new Error('STALE_REFRESH')
           db.prepare('UPDATE jobs SET updated_at = ?, data = ? WHERE id = ?').run(record.updatedAt, JSON.stringify(record), jobId)
-          if (workingChanged) {
+          if (targetChanged) {
             const unresolved = (db.prepare('SELECT COUNT(*) AS count FROM provider_attempt_outcomes WHERE checkpointed_at IS NULL AND run_id IN (SELECT run_id FROM generation_recovery WHERE job_id = ?)').get(jobId) as { count: number }).count
             db.prepare("UPDATE outbound_consents SET revoked = 1 WHERE run_id IN (SELECT run_id FROM generation_recovery WHERE job_id = ? AND status IN ('running','paused')) OR run_id = (SELECT run_id FROM analysis_run_state WHERE job_id = ?)").run(jobId, jobId)
             db.prepare("UPDATE generation_recovery SET status = 'cancelled', updated_at = ? WHERE job_id = ? AND status IN ('running','paused')").run(now, jobId)
