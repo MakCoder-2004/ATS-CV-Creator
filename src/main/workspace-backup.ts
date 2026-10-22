@@ -85,8 +85,8 @@ export function createWorkspaceBackupEngine(db: Database.Database): WorkspaceBac
       if (field === 'experience.factualItem') return 'text' in snapshot && nestedParentContains('factualItems', 'experience') && evidence.some(item => item.id === ownerId && item.revision === ownerRevision && 'text' in item.snapshot)
       if (field === 'projects.factualItem') return 'text' in snapshot && nestedParentContains('factualItems', 'project') && evidence.some(item => item.id === ownerId && item.revision === ownerRevision && 'text' in item.snapshot)
       if (field === 'projects.technology') return 'text' in snapshot && nestedParentContains('technologies', 'project') && evidence.some(item => item.id === ownerId && item.revision === ownerRevision && 'text' in item.snapshot)
-      const entryField = field.match(/^entries\.(education|certificates|summary|languages|extras)(\.date)?$/)
-      if (entryField) return snapshot.section === entryField[1]
+      const entryField = field.match(/^entries\.(education|certificates|summary|languages|extras)(?:\.(date|year))?$/)
+      if (entryField) return snapshot.section === entryField[1] && (!entryField[2] || (entryField[2] === 'date' && entryField[1] === 'education') || (entryField[2] === 'year' && entryField[1] === 'certificates'))
       return false
     }
     for (const row of rows.profile_import_provenance?.rows ?? []) {

@@ -81,6 +81,11 @@ export function mapProfilePdfPages(pages: Array<{ page: number; text: string; li
     const lines = page.text.split(/\n|\s{2,}/).map(line => line.trim()).filter(Boolean)
     const ambiguousReadingOrder = (page.warnings ?? []).some(warning => /multiple text columns|reading order may be ambiguous/i.test(warning))
     for (const warning of page.warnings ?? []) unmapped.push({ page: page.page, text: warning })
+    if (ambiguousReadingOrder) {
+      for (const line of lines) unmapped.push({ page: page.page, text: line })
+      for (const link of page.links ?? []) unmapped.push({ page: page.page, text: `Unassigned PDF hyperlink: ${link.label} — ${link.url}` })
+      continue
+    }
     for (const line of lines) {
       if (line.length > 4000) {
         for (let offset = 0; offset < line.length; offset += 4000) unmapped.push({ page: page.page, text: line.slice(offset, offset + 4000) })

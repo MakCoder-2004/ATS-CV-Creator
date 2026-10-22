@@ -25,7 +25,7 @@ export function mapProfileDocxPages(pages: ProfileDocxPage[]): ProfilePdfProposa
       } else if (key === 'projects') {
         activeSection = 'projects'; inProject = false
       }
-      lines.push(text)
+      if (!paragraph.links.length) lines.push(text)
       if (!activeSection && (/(?:^|\b)NAME\s*:/i.test(text) || /[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}/.test(text) || /^CONTACT LINK\s*:/i.test(text))) contactEvidence = true
       for (const link of paragraph.links) {
         const explicitContact = /^CONTACT LINK\s*:/i.test(text)
