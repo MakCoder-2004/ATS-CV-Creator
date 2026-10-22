@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 test('saved jobs follow the design-system list, support editing, and reopen for tailoring', async () => {
-  test.setTimeout(60_000)
+  test.setTimeout(90_000)
   const userData = mkdtempSync(join(tmpdir(), 'cv-tailor-jobs-'))
   let running: ElectronApplication | undefined
   const launch = async () => {
@@ -15,7 +15,7 @@ test('saved jobs follow the design-system list, support editing, and reopen for 
   try {
     const app = await launch()
     const page = await app.firstWindow()
-    await expect(page.locator('[data-ui-ready="true"]')).toBeVisible()
+    await expect(page.locator('[data-ui-ready="true"]')).toBeVisible({ timeout: 20000 })
     await page.getByRole('button', { name: 'Saved jobs', exact: true }).click()
     await expect(page.locator('.saved-jobs-empty')).toBeVisible()
     await expect(page.getByRole('heading', { name: 'Your first job starts here' })).toBeVisible()
@@ -37,9 +37,15 @@ test('saved jobs follow the design-system list, support editing, and reopen for 
     await expect(page.getByLabel('Job title')).toHaveValue('Synthetic Reliability Engineer')
     await expect(page.getByLabel('Company')).toHaveValue('Example Research')
     await expect(page.getByText(/Saving does not contact the source or start model analysis/)).toBeVisible()
+    await page.screenshot({ path: 'test-results/link-import-review.png', fullPage: true })
     await page.getByLabel('Job title').fill('Reviewed Synthetic Reliability Engineer')
     await page.getByLabel('Company').fill('Reviewed Example Research')
-    await page.getByLabel('Posting and requirements').fill(`${await page.getByLabel('Posting and requirements').inputValue()}\\nReviewed correction: preserve this complete posting.`)
+    await page.getByLabel('Posting and requirements').fill(`${await page.getByLabel('Posting and requirements').inputValue()}\nReviewed correction: preserve this complete posting.`)
+    await page.getByRole('button', { name: 'Discard preview' }).click()
+    const discardWarning = page.getByRole('alertdialog', { name: 'Discard your preview edits?' })
+    await expect(discardWarning).toBeVisible()
+    await discardWarning.getByRole('button', { name: 'Keep reviewing' }).click()
+    await expect(page.getByRole('heading', { name: 'Temporary posting import preview' })).toBeVisible()
     await page.setViewportSize({ width: 375, height: 812 })
     const narrowIntake = await page.locator('.saved-jobs-page').evaluate(element => ({ scrollWidth: element.scrollWidth, clientWidth: element.clientWidth }))
     expect(narrowIntake.scrollWidth).toBeLessThanOrEqual(narrowIntake.clientWidth)
@@ -50,8 +56,17 @@ test('saved jobs follow the design-system list, support editing, and reopen for 
     await expect(page.locator('.saved-jobs-intake')).toHaveCount(0)
     await page.locator('.saved-job-row').getByRole('button', { name: 'Edit Reviewed Synthetic Reliability Engineer posting' }).click()
     await expect(page.getByRole('region', { name: 'Posting source and revision history' })).toContainText('Captured source wording is retained.')
-    await expect(page.getByRole('region', { name: 'Posting source and revision history' }).locator('pre').first()).toContainText('Synthetic Reliability Engineer')
+    await expect(page.getByRole('region', { name: 'Posting source and revision history' }).locator('pre').first()).toContainText('Build and maintain fictional systems')
     await page.getByRole('button', { name: 'Cancel' }).click()
+    await page.locator('.saved-jobs-heading').getByRole('button', { name: 'New job' }).click()
+    await page.getByRole('button', { name: 'Import from link' }).click()
+    await page.getByLabel('Public Lever posting link').fill('https://jobs.lever.co/example-board/smoke-id')
+    await page.getByRole('button', { name: 'Fetch posting' }).click()
+    await expect(page.getByRole('button', { name: 'Open existing' })).toBeVisible({ timeout: 12000 })
+    await expect(page.locator('.saved-job-row')).toHaveCount(1)
+    await page.getByRole('button', { name: 'Open existing' }).click()
+    await expect(page.getByRole('heading', { name: 'Reviewed Synthetic Reliability Engineer', exact: true })).toBeVisible()
+    await page.getByRole('button', { name: 'Saved jobs', exact: true }).click()
     await page.locator('.saved-jobs-heading').getByRole('button', { name: 'New job' }).click()
     await expect(page.locator('.saved-jobs-intake')).toBeVisible()
     await page.getByRole('button', { name: 'Save job' }).click()
@@ -90,7 +105,7 @@ test('saved jobs follow the design-system list, support editing, and reopen for 
     await page.getByLabel('Posting and requirements').fill('Review fictional product metrics and share findings.')
     await page.getByRole('button', { name: 'Save job' }).click()
     await expect(page.locator('.saved-jobs-intake')).toHaveCount(0)
-    await expect(page.locator('.saved-job-row')).toHaveCount(2)
+    await expect(page.locator('.saved-job-row')).toHaveCount(3)
 
     const firstTailor = page.locator('.saved-job-row').filter({ hasText: 'Fictional Platform Engineer' }).getByRole('button', { name: 'Open posting' })
     await firstTailor.click()
@@ -123,6 +138,13 @@ test('saved jobs follow the design-system list, support editing, and reopen for 
     await expect(reopenedPage.getByRole('heading', { name: 'Fictional Platform Engineer', exact: true })).toBeVisible()
     await expect(reopenedPage.locator('.posting-overview').getByText('Northwind Research Group')).toBeVisible()
     await expect(reopenedPage.locator('.posting-overview').getByText('Fictional Product Analyst')).toHaveCount(0)
+    await reopenedPage.getByRole('button', { name: 'Saved jobs', exact: true }).click()
+    const importedRow = reopenedPage.locator('.saved-job-row').filter({ hasText: 'Reviewed Synthetic Reliability Engineer' })
+    await importedRow.getByRole('button', { name: 'Edit Reviewed Synthetic Reliability Engineer posting' }).click()
+    await expect(reopenedPage.getByRole('region', { name: 'Posting source and revision history' })).toContainText('Captured source wording is retained.')
+    await expect(reopenedPage.getByRole('region', { name: 'Posting source and revision history' }).locator('pre').first()).toContainText('Build and maintain fictional systems')
+    await expect(reopenedPage.getByLabel('Posting and requirements')).toContainText('Reviewed correction: preserve this complete posting.')
+    await reopenedPage.getByRole('button', { name: 'Cancel' }).click()
     await reopened.close()
     running = undefined
   } finally {

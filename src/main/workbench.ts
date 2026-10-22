@@ -828,7 +828,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       const pending = checkedToken.success ? postingFetches.get(checkedToken.data) : undefined
       if (!pending) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'This reviewed posting preview is unavailable, incomplete, cancelled, or already used. Fetch it again before saving.' } })
       const pendingState = pending.state
-      const companyOnlyIncomplete = pendingState.status === 'incomplete' && pendingState.preview.title.trim().length > 0 && pendingState.preview.description.trim().length > 0 && pendingState.preview.company === null && pendingState.preview.notices.every(notice => /employer name was not provided/i.test(notice))
+      const companyOnlyIncomplete = pendingState.status === 'incomplete' && pendingState.preview.title.trim().length > 0 && pendingState.preview.description.trim().length > 0 && pendingState.preview.company === null && pendingState.preview.notices.every(notice => /employer name was not provided|extraction cannot guarantee posting completeness or that the role remains open/i.test(notice))
       if (pendingState.status !== 'ready' && !companyOnlyIncomplete) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'This reviewed posting preview is incomplete, cancelled, or already used. Resolve missing source content before saving.' } })
       const parsed = jobInputSchema.safeParse(input)
       if (!parsed.success) {
