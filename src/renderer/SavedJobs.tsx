@@ -157,7 +157,19 @@ export function SavedJobs({ jobs, activeJob, onSaved, onOpened, onNavigate }: { 
   </div>
   const editedJob = editingId ? jobs.find(job => job.id === editingId) : undefined
   const intakeVisible = intakeOpen || jobs.length === 0
-  const sourceMatch = (() => { if (!preview) return undefined; try { const identity = new URL(preview.finalUrl).pathname; return jobs.find(job => job.sourceSnapshot?.sourceIdentity === identity) } catch { return undefined } })()
+  const sourceMatch = (() => {
+    if (!preview) return undefined
+    const urls = new Set([preview.submittedUrl, preview.finalUrl])
+    const identities = new Set<string>()
+    for (const url of urls) {
+      try {
+        const parsed = new URL(url), parts = parsed.pathname.split('/').filter(Boolean)
+        if (parsed.hostname === 'api.lever.co' && parts[0] === 'v0' && parts[1] === 'postings' && parts.length === 4) identities.add(`lever:${parts[2]}/${parts[3]}`)
+        else if (parsed.hostname === 'jobs.lever.co' && parts.length === 2) identities.add(`lever:${parts[0]}/${parts[1]}`)
+      } catch { /* Untrusted URLs do not match a saved source identity. */ }
+    }
+    return jobs.find(job => job.sourceSnapshot && (identities.has(job.sourceSnapshot.sourceIdentity) || urls.has(job.sourceSnapshot.submittedUrl) || urls.has(job.sourceSnapshot.finalUrl)))
+  })()
   const sourceMatchIsUnchanged = !!sourceMatch?.sourceSnapshot && sourceMatch.sourceSnapshot.title === capturedPreview?.title && sourceMatch.sourceSnapshot.company === capturedPreview?.company && sourceMatch.sourceSnapshot.description === capturedPreview?.description
   const renderIntake = (insideEmptyState = false) => <section className={`saved-jobs-intake${insideEmptyState ? ' is-inside-empty' : ''}`} aria-labelledby="posting-intake-title">
     <header className="saved-jobs-intake-heading"><div><p className="context">New job</p><h2 id="posting-intake-title">Add a job posting</h2></div>{jobs.length > 0 && <button type="button" className="secondary-button" onClick={closeIntake}>Cancel</button>}</header>
