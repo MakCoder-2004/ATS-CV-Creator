@@ -6,10 +6,10 @@ import { createWorkbench } from '../src/main/workbench'
 
 const directories: string[] = []
 afterEach(() => { for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true }) })
-function open() {
+function open(transport?: Parameters<typeof createWorkbench>[2]) {
   const directory = mkdtempSync(join(tmpdir(), 'cv-tailor-jobs-'))
   directories.push(directory)
-  return { directory, workbench: createWorkbench(directory) }
+  return { directory, workbench: createWorkbench(directory, undefined, transport) }
 }
 
 test('saved jobs preserve original posting text, have stable IDs, and reopen after SQLite restart', async () => {
@@ -56,6 +56,27 @@ test('opening another job returns only its posting and updating one keeps its id
   const reopened = createWorkbench(directory)
   expect(await reopened.api.openJob(first.value.id)).toMatchObject({ id: first.value.id, createdAt: first.value.createdAt, description: 'Design compiler tools with a fictional team.', revisions: [{ description: 'Design compiler tools.' }, { description: 'Design compiler tools with a fictional team.' }] })
   reopened.close()
+})
+
+test('model capacity refusal preserves long saved text and sends no scripted model request', async () => {
+  let modelDispatches = 0
+  const transport = {
+    async validateCapacity() { return false },
+    async generate() { modelDispatches++; return '{}' }
+  }
+  const { workbench } = open(transport)
+  const text = 'Complete requirements.\n'.repeat(1500)
+  const job = await workbench.api.saveJob({ title: 'Engineer', company: 'Example', description: text })
+  if (!job.ok) throw Error(job.error.message)
+  const consent = await workbench.api.prepareOutboundConsent(job.value.id)
+  if (!consent.ok) throw Error(consent.message)
+  await workbench.api.acceptOutboundConsent(consent.token, true, true)
+  const analysis = await workbench.api.startAnalysis(consent.token)
+  expect(analysis).toMatchObject({ status: 'failed', attempts: 0 })
+  expect(analysis.progress).toMatch(/model capacity|shorten/i)
+  expect(modelDispatches).toBe(0)
+  expect((await workbench.api.openJob(job.value.id))?.description).toBe(text)
+  workbench.close()
 })
 
 test('complete long postings reopen exactly and text above the shared safety ceiling is refused', async () => {

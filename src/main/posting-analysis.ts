@@ -6,6 +6,7 @@ export { postingAnalysisSchema }
 export type { PostingAnalysis }
 export interface AnalysisTransport {
   generate(input: { model: OpenRouterModel; prompt: string; signal: AbortSignal; responseSchema: ZodTypeAny; maxTokens?: number; maxResponseChars?: number }): Promise<string>
+  validateCapacity?(input: { runId: string; model: OpenRouterModel; prompt: string; responseSchema: ZodTypeAny; maxTokens: number; signal: AbortSignal }): Promise<boolean>
 }
 export interface AnalysisInput { runId: string; jobId: string; prompt: string; model: OpenRouterModel }
 export interface AnalysisUsage { runId: string; jobId: string; attempts: number; status: 'complete' | 'failed' | 'cancelled'; startedAt: number; finishedAt: number }
@@ -15,6 +16,7 @@ export class AnalysisError extends Error {
 }
 type Options = { transport: AnalysisTransport; now?: () => number; sleep?: (ms: number, signal: AbortSignal) => Promise<void>; minimumSpacingMs?: number; rateLimitAttempts?: number; rateLimitWindowMs?: number; maxAttempts?: number; maxElapsedMs?: number; maxDailyAttempts?: number; observedAttempts?: number[]; observedRunAttempts?: Record<string, number>; observedRunStartedAt?: Record<string, number>; random?: () => number; onAttempt?: (timestamp: number, runId: string) => void; onAttemptComplete?: (runId: string, succeeded: boolean) => void; onProgress?: (runId: string, jobId: string, progress: string, attempts: number) => void }
 const cancelledError = () => new AnalysisError('CANCELLED', 'Analysis cancelled.')
+const capacityFailure = () => new AnalysisError('BUDGET', 'The selected model capacity could not be confirmed for the complete request, or the authorized request exceeds its conservative context budget. Choose a model with verified capacity or consciously shorten the working posting, then review and authorize again.')
 const cancellableSleep = (ms: number, signal: AbortSignal) => new Promise<void>((resolve, reject) => {
   if (signal.aborted) return reject(cancelledError())
   const timer = setTimeout(() => { signal.removeEventListener('abort', abort); resolve() }, ms)
@@ -71,11 +73,12 @@ export function createAnalysisDispatcher(options: Options) {
         const wait = Math.max(spacingWait, rateWait)
         if (wait) { const boundedWait = Math.min(wait, Math.max(0, runBudgets.runTimeLimitMs - (now() - startedAt))); options.onProgress?.(input.runId, input.jobId, 'Waiting for shared request pacing before the next attempt.', usage.attempts); await sleep(boundedWait, controller.signal) }
         checkBudget()
+        if (!options.transport.validateCapacity || !await options.transport.validateCapacity({ runId: input.runId, model: input.model, prompt, responseSchema: postingAnalysisSchema, maxTokens: 2048, signal: controller.signal })) throw capacityFailure()
         const timestamp = now()
         dispatched.push(timestamp); usage.attempts++; attemptCounts.set(input.runId, (attemptCounts.get(input.runId) ?? 0) + 1); options.onAttempt?.(timestamp, input.runId)
         options.onProgress?.(input.runId, input.jobId, `Sending posting-analysis request ${usage.attempts} within this run's configured budget.`, usage.attempts)
         try {
-          const response = await options.transport.generate({ model: input.model, prompt, signal: controller.signal, responseSchema: postingAnalysisSchema })
+          const response = await options.transport.generate({ model: input.model, prompt, signal: controller.signal, responseSchema: postingAnalysisSchema, maxTokens: 2048 })
           options.onAttemptComplete?.(input.runId, true)
           return response
         } catch (error) { options.onAttemptComplete?.(input.runId, false); throw error }
@@ -144,6 +147,7 @@ export function createAnalysisDispatcher(options: Options) {
           const wait = Math.max(spacingWait, rateWait)
           if (wait) { options.onProgress?.(input.runId, input.jobId, 'Waiting for shared request pacing before the next attempt.', attempts); await sleep(Math.min(wait, Math.max(0, runBudgets.runTimeLimitMs - (now() - startedAt))), controller.signal) }
           if (controller.signal.aborted) throw cancelledError()
+          if (!options.transport.validateCapacity || !await options.transport.validateCapacity({ runId: input.runId, model: input.model, prompt: input.prompt, responseSchema: input.responseSchema, maxTokens: input.maxTokens ?? 2048, signal: controller.signal })) throw capacityFailure()
           const timestamp = now(); dispatched.push(timestamp); attempts++; attemptCounts.set(input.runId, (attemptCounts.get(input.runId) ?? 0) + 1); options.onAttempt?.(timestamp, input.runId)
           options.onProgress?.(input.runId, input.jobId, `Sending source-linked generation request ${attempts} within the shared run budget.`, attempts)
           try {

@@ -221,12 +221,31 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
     catch { throw new Error('The saved key could not be decrypted on this device.') }
   }
   const activeProfileAiRuns = new Set<string>()
-  const dispatcher = createAnalysisDispatcher({ ...readAnalysisBudgets(), maxAttempts: readAnalysisBudgets().runLimit, maxElapsedMs: readAnalysisBudgets().runTimeLimitMs, maxDailyAttempts: readAnalysisBudgets().configuredDailyLimit, observedAttempts: previousAttempts, observedRunAttempts: persistedRunCounts, observedRunStartedAt: persistedRunStarts, transport: scriptedTransport ?? { generate: async input => {
-    let key: string
-    try { key = readStoredOpenRouterKey() }
-    catch { throw Object.assign(new Error('OpenRouter API key is unavailable.'), { status: 401 }) }
-    return createOpenRouterAnalysisTransport(key).generate(input)
-  } }, onAttempt: (timestamp, runId) => { previousAttempts.push(timestamp); const dispatchedAt = new Date(timestamp).toISOString(); db.prepare('INSERT INTO analysis_attempts (run_id, attempted_at) VALUES (?, ?)').run(runId, dispatchedAt); db.prepare('INSERT INTO provider_attempt_outcomes (run_id, dispatched_at, outcome) VALUES (?, ?, \'dispatched\')').run(runId, dispatchedAt) }, onAttemptComplete: (runId, succeeded) => { if (succeeded) db.prepare(`UPDATE provider_attempt_outcomes SET outcome='response', settled_at=? WHERE id=(SELECT id FROM provider_attempt_outcomes WHERE run_id=? AND outcome='dispatched' AND checkpointed_at IS NULL ORDER BY id DESC LIMIT 1)`).run(new Date().toISOString(), runId) }, onProgress: (runId, jobId, progress, attempts) => { if (jobId.startsWith('profile-import:')) return; const observed = (db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id = ?').get(runId) as { count: number }).count; const prior = currentAnalysis.get(jobId), sameRun = prior?.runId === runId; saveAnalysisState({ jobId, runId, status: 'running', analysis: sameRun ? prior.analysis : null, progress, attempts: observed || attempts, cacheHit: sameRun ? prior.cacheHit : false, ...(sameRun && prior.generationStep ? { generationStep: prior.generationStep } : {}), ...(sameRun && prior.completedSteps ? { completedSteps: prior.completedSteps } : {}) }) } })
+  // The injected scripted transport is an offline test seam; absent metadata there means fixture-sized capacity, never production model metadata.
+  const fixtureTransport: AnalysisTransport | undefined = scriptedTransport && {
+    validateCapacity: scriptedTransport.validateCapacity ?? (async () => true),
+    generate: input => scriptedTransport.generate(input)
+  }
+  const dispatcher = createAnalysisDispatcher({ ...readAnalysisBudgets(), maxAttempts: readAnalysisBudgets().runLimit, maxElapsedMs: readAnalysisBudgets().runTimeLimitMs, maxDailyAttempts: readAnalysisBudgets().configuredDailyLimit, observedAttempts: previousAttempts, observedRunAttempts: persistedRunCounts, observedRunStartedAt: persistedRunStarts, transport: fixtureTransport ?? {
+    validateCapacity: async input => {
+      try { return await createOpenRouterAnalysisTransport(readStoredOpenRouterKey()).validateCapacity!(input) }
+      catch { return false }
+    },
+    generate: async input => {
+      let key: string
+      try { key = readStoredOpenRouterKey() }
+      catch { throw Object.assign(new Error('OpenRouter API key is unavailable.'), { status: 401 }) }
+      return createOpenRouterAnalysisTransport(key).generate(input)
+    }
+  }, onAttempt: (timestamp, runId) => { previousAttempts.push(timestamp); const dispatchedAt = new Date(timestamp).toISOString(); db.prepare('INSERT INTO analysis_attempts (run_id, attempted_at) VALUES (?, ?)').run(runId, dispatchedAt); db.prepare('INSERT INTO provider_attempt_outcomes (run_id, dispatched_at, outcome) VALUES (?, ?, \'dispatched\')').run(runId, dispatchedAt) }, onAttemptComplete: (runId, succeeded) => { if (succeeded) db.prepare(`UPDATE provider_attempt_outcomes SET outcome='response', settled_at=? WHERE id=(SELECT id FROM provider_attempt_outcomes WHERE run_id=? AND outcome='dispatched' AND checkpointed_at IS NULL ORDER BY id DESC LIMIT 1)`).run(new Date().toISOString(), runId) }, onProgress: (runId, jobId, progress, attempts) => { if (jobId.startsWith('profile-import:')) return; const observed = (db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id = ?').get(runId) as { count: number }).count; const prior = currentAnalysis.get(jobId), sameRun = prior?.runId === runId; saveAnalysisState({ jobId, runId, status: 'running', analysis: sameRun ? prior.analysis : null, progress, attempts: observed || attempts, cacheHit: sameRun ? prior.cacheHit : false, ...(sameRun && prior.generationStep ? { generationStep: prior.generationStep } : {}), ...(sameRun && prior.completedSteps ? { completedSteps: prior.completedSteps } : {}) }) } })
+  const workingTextScopeNotice = (jobId: string) => {
+    const row = db.prepare('SELECT data FROM jobs WHERE id = ?').get(jobId) as { data: string } | undefined
+    if (!row) return ''
+    const job = jobRecordSchema.parse(JSON.parse(row.data))
+    return job.sourceSnapshot && job.sourceSnapshot.description !== job.description
+      ? ' Based on your reviewed shorter working posting only; the full source snapshot is retained, and omitted source text was not analyzed.'
+      : ''
+  }
   const currentConsentSource = (jobId: string): ConsentSource | null => {
     const job = db.prepare('SELECT data FROM jobs WHERE id = ?').get(jobId) as { data: string } | undefined
     if (!job) return null
@@ -868,7 +887,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
         dispatcher.authorize(pending.runId, pending.consentId)
         startedAnalysisTokens.add(token)
         const cachedAnalysis = postingAnalysisSchema.parse(JSON.parse(cached.data))
-        const value = analysisResultSchema.parse({ jobId: pending.jobId, runId: pending.runId, status: 'complete', analysis: cachedAnalysis, displayAnalysis: displayAnalysis(cachedAnalysis), progress: 'Loaded compatible saved analysis.', attempts: 0, cacheHit: true, generationStep: 'parse-posting', completedSteps: ['parse-posting'] })
+        const value = analysisResultSchema.parse({ jobId: pending.jobId, runId: pending.runId, status: 'complete', analysis: cachedAnalysis, displayAnalysis: displayAnalysis(cachedAnalysis), progress: `Loaded compatible saved analysis.${workingTextScopeNotice(pending.jobId)}`, attempts: 0, cacheHit: true, generationStep: 'parse-posting', completedSteps: ['parse-posting'] })
         saveAnalysisState(value)
         return value
       }
@@ -897,7 +916,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       activeAnalysisByJob.delete(pending.jobId)
       db.prepare('INSERT OR REPLACE INTO posting_analysis_cache (cache_key, job_id, run_id, data) VALUES (?, ?, ?, ?)').run(cacheKey, pending.jobId, pending.runId, JSON.stringify(result.analysis))
       db.prepare('UPDATE provider_attempt_outcomes SET checkpointed_at=? WHERE run_id=? AND checkpointed_at IS NULL').run(new Date().toISOString(), pending.runId)
-      const value = analysisResultSchema.parse({ jobId: pending.jobId, runId: pending.runId, status: 'complete', analysis: result.analysis, displayAnalysis: displayAnalysis(result.analysis), progress: 'Posting analysis complete.', attempts: result.usage.attempts, cacheHit: false, generationStep: 'parse-posting', completedSteps: ['parse-posting'] })
+      const value = analysisResultSchema.parse({ jobId: pending.jobId, runId: pending.runId, status: 'complete', analysis: result.analysis, displayAnalysis: displayAnalysis(result.analysis), progress: `Posting analysis complete.${workingTextScopeNotice(pending.jobId)}`, attempts: result.usage.attempts, cacheHit: false, generationStep: 'parse-posting', completedSteps: ['parse-posting'] })
       saveAnalysisState(value)
       return value
     },
@@ -1078,7 +1097,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
         const tx = db.transaction(() => { db.prepare('INSERT INTO draft_revisions (id,job_id,revision,data) VALUES (?,?,?,?)').run(result.draft.id, result.draft.jobId, result.draft.revision, JSON.stringify(result.draft)); db.prepare('UPDATE provider_attempt_outcomes SET checkpointed_at=? WHERE run_id=? AND checkpointed_at IS NULL').run(new Date().toISOString(), pending.runId); db.prepare("UPDATE generation_recovery SET status='complete',updated_at=? WHERE run_id=?").run(new Date().toISOString(), pending.runId) })
         tx()
         if (activeAnalysisByJob.get(pending.jobId) === pending.runId) activeAnalysisByJob.delete(pending.jobId)
-        saveAnalysisState({ jobId: pending.jobId, runId: pending.runId, status: 'complete', analysis: analysis.analysis, progress: result.draft.progress, attempts: analysis.attempts + totalAttempts, cacheHit: analysis.cacheHit, generationStep: 'check-document', completedSteps: ['parse-posting', 'score-evidence', 'select-content', 'tailor-paragraphs', 'verify-claims', 'check-document'] })
+        saveAnalysisState({ jobId: pending.jobId, runId: pending.runId, status: 'complete', analysis: analysis.analysis, progress: `${result.draft.progress}${workingTextScopeNotice(pending.jobId)}`, attempts: analysis.attempts + totalAttempts, cacheHit: analysis.cacheHit, generationStep: 'check-document', completedSteps: ['parse-posting', 'score-evidence', 'select-content', 'tailor-paragraphs', 'verify-claims', 'check-document'] })
         return { ok: true, message: result.draft.status === 'blocked' ? 'Draft saved locally, editable, and blocked by factual findings.' : 'Draft saved locally. It is unverified and unapproved.', draft: result.draft }
       } catch (error) {
         if (activeAnalysisByJob.get(pending.jobId) === pending.runId) activeAnalysisByJob.delete(pending.jobId)
