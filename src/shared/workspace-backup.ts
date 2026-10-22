@@ -37,10 +37,9 @@ export type WorkspaceRestorePreview = {
   automaticRunsResumed: false
 }
 
-export type WorkspaceJobBackupRow = { id: string; created_at: string; updated_at: string; data: string }
 export interface WorkspaceBackupEngine {
   createBackup(): string
-  assertJobSaveFits(row: WorkspaceJobBackupRow): void
+  assertBackupCapacity(): void
   previewRestore(input: string): WorkspaceRestorePreview
   applyRestore(token: string, writeAndVerifySafetyBackup: (backup: string) => string): void
   cancelRestore(token: string): boolean
