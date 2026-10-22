@@ -150,18 +150,19 @@ export function WorkbenchStart({ activeJob, onNavigate }: { activeJob: JobRecord
     finally { if (selectedJob.current === jobId) setDraftBusy(false) }
   }
   async function renewDraftReview() {
-    if (!activeJob || draftBusy) return
+    if (!activeJob || draftBusy) return false
     const jobId = activeJob.id
     setDraftBusy(true); setDraftError('')
     try {
       const result = await window.workbench.renewDraftReview(jobId)
-      if (selectedJob.current !== jobId) return
-      if (!result.ok || !result.draft) { setDraftError(result.message); return }
+      if (selectedJob.current !== jobId) return false
+      if (!result.ok || !result.draft) { setDraftError(result.message); return false }
       const [document, latestAnalysis] = await Promise.all([window.workbench.getCanonicalDocument(jobId), window.workbench.getAnalysis(jobId)])
-      if (selectedJob.current !== jobId) return
+      if (selectedJob.current !== jobId) return false
       setDraft(result.draft); setCanonical(document); setFitReport(null); setAcceptedCuts([]); setAnalysis(latestAnalysis); setNewRun(false); setReviewApprovedDraft(true)
       setDraftError('Existing CV wording is now bound to this posting. Review the document, run current checks and measure page length before approving.')
-    } catch (failure) { if (selectedJob.current === jobId) setDraftError(failure instanceof Error ? failure.message : 'CV review could not be renewed.') }
+      return true
+    } catch (failure) { if (selectedJob.current === jobId) setDraftError(failure instanceof Error ? failure.message : 'CV review could not be renewed.'); return false }
     finally { if (selectedJob.current === jobId) setDraftBusy(false) }
   }
   async function addDraftItem(event: FormEvent<HTMLFormElement>) {

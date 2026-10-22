@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from 'vitest'
 import { createHash, randomUUID } from 'node:crypto'
+import Database from 'better-sqlite3'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -45,6 +46,23 @@ async function fixture(regenerationTransport?: (signal: AbortSignal) => Promise<
   const generated = await workspace.api.generateDraft(preview.token)
   if (!generated.ok || !generated.draft) throw new Error('Could not generate draft fixture')
   return { directory, workspace, jobId: job.value.id, draft: generated.draft, skillId: skill.value.skills[0].id, prompts, legacyRole: legacyRole?.ok ? legacyRole.value.experience[0] : undefined, legacyProject: legacyProject?.ok ? legacyProject.value.projects[0] : undefined }
+}
+
+async function approvedLegacyWorkspaceWithoutTargetBinding() {
+  const state = await fixture()
+  await state.workspace.api.checkDraft(state.jobId)
+  await measure(state.workspace, state.jobId)
+  expect(await state.workspace.api.approveDraft(state.jobId)).toMatchObject({ ok: true })
+  state.workspace.close(); opened.splice(opened.indexOf(state.workspace), 1)
+  const database = new Database(join(state.directory, 'workbench.sqlite'))
+  const row = database.prepare('SELECT id, data FROM draft_revisions WHERE job_id = ? ORDER BY revision DESC LIMIT 1').get(state.jobId) as { id: string; data: string }
+  const legacy = JSON.parse(row.data) as Record<string, unknown>
+  delete legacy.targetPostingUpdatedAt
+  database.prepare('UPDATE draft_revisions SET data = ? WHERE id = ?').run(JSON.stringify(legacy), row.id)
+  database.prepare('DELETE FROM schema_migrations WHERE version = 8').run()
+  database.close()
+  const reopened = createWorkbench(state.directory); opened.push(reopened)
+  return { ...state, workspace: reopened }
 }
 
 async function measure(workspace: ReturnType<typeof createWorkbench>, jobId: string, overflow = false) {
@@ -205,6 +223,17 @@ test('new factual wording requires an explicitly saved cited source and keeps se
   expect(unsupported).toBeNull()
   const cited = await workspace.api.correctDraft({ jobId, section: 'skills', index: 0, text: 'TypeScript', editIntent: 'new-fact', evidence: [{ evidenceId: skillId, revision: 1 }] })
   expect(cited).toMatchObject({ content: { skills: [{ name: 'TypeScript', citations: [{ evidenceId: skillId, revision: 1 }] }] }, progress: expect.stringContaining('user-declared') })
+})
+
+test('an approved legacy CV without a target binding remains usable until its accepted posting changes', async () => {
+  const { workspace, jobId, draft } = await approvedLegacyWorkspaceWithoutTargetBinding()
+  const job = await workspace.api.openJob(jobId)
+  expect(await workspace.api.getDraft(jobId)).toMatchObject({ id: draft.id, approved: true, targetPostingUpdatedAt: job?.updatedAt })
+  expect(await workspace.api.assertDraftExportable(jobId)).toMatchObject({ ok: true })
+  if (!job) throw new Error('Job fixture unavailable')
+  expect(await workspace.api.saveJob({ id: jobId, title: job.title, company: job.company, description: `${job.description} New requirement.` })).toMatchObject({ ok: true })
+  expect(await workspace.api.approveDraft(jobId)).toMatchObject({ ok: false })
+  expect(await workspace.api.assertDraftExportable(jobId)).toMatchObject({ ok: false })
 })
 
 test('material posting edits preserve approved history and require explicit current reassessment before renewing unchanged wording', async () => {

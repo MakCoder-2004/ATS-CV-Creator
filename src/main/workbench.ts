@@ -107,6 +107,21 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
   const providerOutcomeColumns = db.pragma('table_info(provider_attempt_outcomes)') as Array<{ name: string }>
   if (!providerOutcomeColumns.some(column => column.name === 'checkpointed_at')) db.exec('ALTER TABLE provider_attempt_outcomes ADD COLUMN checkpointed_at TEXT')
   db.prepare('INSERT OR IGNORE INTO schema_migrations (version) VALUES (1), (2), (4), (5), (6), (7)').run()
+  const migrateDraftTargetBaselines = db.transaction(() => {
+    if (db.prepare('SELECT 1 FROM schema_migrations WHERE version = 8').get()) return
+    const jobs = new Map((db.prepare('SELECT id, updated_at FROM jobs').all() as Array<{ id: string; updated_at: string }>).map(job => [job.id, job.updated_at]))
+    const drafts = db.prepare('SELECT id, job_id, data FROM draft_revisions').all() as Array<{ id: string; job_id: string; data: string }>
+    for (const row of drafts) {
+      const stored = JSON.parse(row.data) as Record<string, unknown>
+      if (typeof stored.targetPostingUpdatedAt === 'string') continue
+      const baseline = jobs.get(row.job_id)
+      if (!baseline) throw new Error('A legacy CV draft has no saved-job target to bind.')
+      const migrated = draftRevisionSchema.parse({ ...stored, pageTarget: stored.pageTarget ?? 1, targetPostingUpdatedAt: baseline })
+      db.prepare('UPDATE draft_revisions SET data = ? WHERE id = ?').run(JSON.stringify(migrated), row.id)
+    }
+    db.prepare('INSERT INTO schema_migrations (version) VALUES (8)').run()
+  })
+  migrateDraftTargetBaselines()
 
   const readProfile = (): ProfileSnapshot => {
     const contactRow = db.prepare('SELECT data FROM profile_contact WHERE singleton = 1').get() as { data: string } | undefined
@@ -1463,7 +1478,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       let report = preserveKnownFindings(checkDraftFacts(draft), draft)
       const stale = currentSourceStatus(draft)
       const jobRow = db.prepare('SELECT updated_at FROM jobs WHERE id = ?').get(jobId) as { updated_at: string } | undefined
-      const staleTarget = Boolean(draft.targetPostingUpdatedAt && jobRow && draft.targetPostingUpdatedAt !== jobRow.updated_at)
+      const staleTarget = !draft.targetPostingUpdatedAt || !jobRow || draft.targetPostingUpdatedAt !== jobRow.updated_at
       if (stale.length || staleTarget) report = factualCheckReportSchema.parse({ ...report, passed: false, findings: [...report.findings, ...stale.map(evidenceId => ({ code: 'stale-source' as const, itemPath: 'sources', evidenceId, message: 'A cited profile source changed or was deleted after this draft was created.', correction: 'Review the current source and regenerate or remove the affected wording.' })), ...(staleTarget ? [{ code: 'stale-source' as const, itemPath: 'job-posting', message: 'The accepted job posting changed after this draft was created.', correction: 'Create a renewed draft for the current posting before approval.' }] : [])] })
       const updated = draftRevisionSchema.parse({ ...draft, status: report.passed ? 'unverified' : 'blocked', checkReport: report, progress: report.passed ? 'Current factual checks passed; citations do not establish semantic truth. Human review remains required.' : `Blocked by ${report.findings.length} factual or source revision finding(s). Correct the draft and check again.` })
       if (!staleTarget) db.prepare('UPDATE draft_revisions SET data = ? WHERE id = ?').run(JSON.stringify(updated), draft.id)
@@ -1477,7 +1492,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       const expectedEvidenceHash = createHash('sha256').update(JSON.stringify([...draft.evidence].sort((a, b) => a.evidenceId.localeCompare(b.evidenceId)))).digest('hex')
       const stale = currentSourceStatus(draft)
       const jobRow = db.prepare('SELECT updated_at FROM jobs WHERE id = ?').get(jobId) as { updated_at: string } | undefined
-      const staleTarget = Boolean(draft.targetPostingUpdatedAt && jobRow && draft.targetPostingUpdatedAt !== jobRow.updated_at)
+      const staleTarget = !draft.targetPostingUpdatedAt || !jobRow || draft.targetPostingUpdatedAt !== jobRow.updated_at
       if (!savedReport?.passed || savedReport.draftId !== draft.id || savedReport.draftRevision !== draft.revision || savedReport.evidenceRevisionHash !== expectedEvidenceHash || draft.status === 'blocked') return { ok: false, message: 'Recheck the current draft and cited source revisions before approval.' }
       let report = preserveKnownFindings(checkDraftFacts(draft), draft)
       if (stale.length) report = factualCheckReportSchema.parse({ ...report, passed: false, findings: [...report.findings, ...stale.map(evidenceId => ({ code: 'stale-source' as const, itemPath: 'sources', evidenceId, message: 'A cited profile source changed or was deleted after this draft was created.', correction: 'Review the current source and regenerate or remove the affected wording.' }))] })
@@ -1496,7 +1511,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       if (!draft || !canonical || !draft.approved || !draft.approval) return { ok: false, message: 'Approve the current canonical document before export.' }
       if ((draft.suggestedSkills ?? []).some(skill => skill.status === 'pending')) return { ok: false, message: 'Confirm or remove every suggested skill before export.' }
       const jobRow = db.prepare('SELECT updated_at FROM jobs WHERE id = ?').get(jobId) as { updated_at: string } | undefined
-      if (draft.targetPostingUpdatedAt && jobRow && draft.targetPostingUpdatedAt !== jobRow.updated_at) return { ok: false, message: 'This draft targets an earlier job posting. Create a renewed draft for the current posting before export.' }
+      if (!draft.targetPostingUpdatedAt || !jobRow || draft.targetPostingUpdatedAt !== jobRow.updated_at) return { ok: false, message: 'This draft targets an earlier job posting. Create a renewed draft for the current posting before export.' }
       const report = await this.checkDraft(jobId), fit = await this.getDocumentFitReport(jobId)
       const contentHash = createHash('sha256').update(JSON.stringify(canonical)).digest('hex')
       if (!report?.passed || !fit || fit.overflow || fit.actualPages > fit.targetPages || draft.approval.contentHash !== contentHash || draft.approval.evidenceHash !== report.evidenceRevisionHash || draft.approval.targetPages !== canonical.targetPages || draft.approval.checkHash !== createHash('sha256').update(JSON.stringify({ draftId: report.draftId, draftRevision: report.draftRevision, evidenceRevisionHash: report.evidenceRevisionHash, passed: report.passed, findings: report.findings })).digest('hex')) return { ok: false, message: 'Approval is stale or current checks/page fit no longer pass. Review and approve the current document again.' }

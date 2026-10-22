@@ -9,7 +9,7 @@ import { join } from 'node:path'
   const userData = mkdtempSync(join(tmpdir(), 'cv-tailor-review-renewal-'))
   let app: Awaited<ReturnType<typeof electron.launch>> | undefined
   try {
-    app = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], timeout: 60000, env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData, CV_TAILOR_SCRIPTED_ANALYSIS: 'generation' } })
+    app = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js'), '--disable-gpu'], timeout: 60000, env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData, CV_TAILOR_SCRIPTED_ANALYSIS: 'generation' } })
     const page = await app.firstWindow()
     await expect(page.locator('[data-ui-ready="true"]')).toBeVisible({ timeout: 15000 })
     const setup = await page.evaluate(async () => {
@@ -25,7 +25,17 @@ import { join } from 'node:path'
       if (analysis.status !== 'complete') throw new Error(analysis.progress)
       const generated = await window.workbench.generateDraft(preview.token, 1)
       if (!generated.ok || !generated.draft) throw new Error(generated.message)
-      return { job: job.value, content: JSON.stringify(generated.draft.content) }
+      let draft = generated.draft
+      for (const skill of draft.suggestedSkills?.filter(item => item.status === 'pending') ?? []) {
+        const decision = await window.workbench.decideSuggestedSkill({ jobId: job.value.id, draftId: draft.id, skillId: skill.id, decision: 'removed' })
+        if (!decision.ok || !decision.draft) throw new Error(decision.message)
+        draft = decision.draft
+      }
+      await window.workbench.checkDraft(job.value.id)
+      await window.workbench.measureDocument(job.value.id)
+      const approval = await window.workbench.approveDraft(job.value.id)
+      if (!approval.ok || !approval.draft?.approval) throw new Error(approval.message)
+      return { job: job.value, content: JSON.stringify(draft.content), approval: approval.draft.approval }
     })
 
     await page.evaluate(async job => {
@@ -48,6 +58,8 @@ import { join } from 'node:path'
     await expect(notice).toBeVisible()
     expect(await page.evaluate(() => window.workbench.getAnalysisUsage().then(value => value.attempts))).toBe(attemptsBeforeRenewal)
     await page.setViewportSize({ width: 1440, height: 900 })
+    const wordingAcknowledgment = page.getByRole('checkbox', { name: 'I reviewed this CV and its wording.' })
+    await wordingAcknowledgment.check()
     expect(await page.evaluate(id => window.workbench.assertDraftExportable(id), setup.job.id)).toMatchObject({ ok: false })
     await notice.getByRole('button', { name: 'Review outgoing data for current posting' }).click()
     expect(await page.evaluate(() => window.workbench.getAnalysisUsage().then(value => value.attempts))).toBe(attemptsBeforeRenewal)
@@ -64,9 +76,18 @@ import { join } from 'node:path'
     expect(renewed.draft?.targetPostingUpdatedAt).toBe(renewed.job?.updatedAt)
     expect(renewed.draft?.approved).toBe(false)
     expect(renewed.export.ok).toBe(false)
-    expect(await page.evaluate(id => window.workbench.checkDraft(id), setup.job.id)).toMatchObject({ passed: true })
-    expect(await page.evaluate(id => window.workbench.approveDraft(id), setup.job.id)).toMatchObject({ ok: false, message: expect.stringMatching(/measure/i) })
-    await expect(page.getByRole('checkbox', { name: 'I reviewed this CV and its wording.' })).toBeVisible()
+    expect(setup.approval?.contentHash).toBeTruthy()
+    await expect(wordingAcknowledgment).toBeVisible()
+    await expect(wordingAcknowledgment).not.toBeChecked()
+    await page.getByRole('button', { name: 'Check CV for issues' }).click()
+    await expect(page.getByRole('region', { name: 'Review checklist' })).toContainText('Checks passed')
+    await page.getByRole('button', { name: 'Check page length' }).click()
+    await expect(page.getByRole('region', { name: 'Review checklist' })).toContainText(/Fits the selected target/, { timeout: 45000 })
+    await expect(page.getByRole('button', { name: 'Approve CV' })).toBeDisabled()
+    await expect(wordingAcknowledgment).not.toBeChecked()
+    await wordingAcknowledgment.check()
+    await page.getByRole('button', { name: 'Approve CV' }).click()
+    expect(await page.evaluate(id => window.workbench.assertDraftExportable(id), setup.job.id)).toMatchObject({ ok: true })
   } finally {
     await app?.close().catch(() => {})
     await rm(userData, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 })

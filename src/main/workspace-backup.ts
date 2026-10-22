@@ -158,6 +158,22 @@ export function createWorkspaceBackupEngine(db: Database.Database): WorkspaceBac
       upgraded.tables.schema_migrations!.rows.push({ version: 7 })
       backup = upgraded
     }
+    if (backup.tables.schema_migrations) {
+      const upgraded = structuredClone(backup) as typeof backup
+      const jobs = new Map((upgraded.tables.jobs?.rows ?? []).map(row => {
+        const job = jobRecordSchema.parse(parseJson('jobs', String(row.data)))
+        return [job.id, job.updatedAt] as const
+      }))
+      for (const row of upgraded.tables.draft_revisions?.rows ?? []) {
+        const stored = parseJson('draft_revisions', String(row.data)) as Record<string, unknown>
+        if (typeof stored.targetPostingUpdatedAt === 'string') continue
+        const baseline = jobs.get(String(row.job_id))
+        if (!baseline) throw new Error('A legacy CV draft has no saved-job target to bind.')
+        row.data = JSON.stringify(draftRevisionSchema.parse({ ...stored, pageTarget: stored.pageTarget ?? 1, targetPostingUpdatedAt: baseline }))
+      }
+      if (!upgraded.tables.schema_migrations!.rows.some(row => row.version === 8)) upgraded.tables.schema_migrations!.rows.push({ version: 8 })
+      backup = upgraded
+    }
     const expected = actualTables().sort()
     const names = Object.keys(backup.tables).sort()
     if (names.length !== expected.length || names.some((name, i) => name !== expected[i])) throw new Error('Backup is invalid or incompatible with this workspace schema.')
