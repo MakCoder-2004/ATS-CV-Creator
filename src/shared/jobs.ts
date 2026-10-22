@@ -24,7 +24,7 @@ export const postingRevisionSchema = jobInputSchema.extend({
   provenance: z.enum(['manual', 'legacy-unknown', 'imported']),
 }).strict()
 export const postingSourceSnapshotSchema = z.object({
-  title: requiredText(200), company: requiredText(200).nullable(), description: requiredText(30000),
+  title: z.string().max(200), company: requiredText(200).nullable(), description: z.string().max(30000),
   submittedUrl: z.string().url(), finalUrl: z.string().url(), sourceIdentity: z.string().min(1).max(500), capturedAt: z.string().datetime(),
   extractionMethod: z.literal('lever-json-v1'), extractionVersion: z.literal(1),
   optionalDetails: postingOptionalDetailsSchema,

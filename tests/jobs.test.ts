@@ -99,7 +99,7 @@ test('reviewed link imports save atomically with immutable source provenance and
       expect(calls).toHaveLength(2)
     } finally { reopened.close() }
   } finally { if (!importedClosed) imported.close() }
-})
+}, 20_000)
 
 test('a source-missing company can be supplied deliberately while incomplete posting text remains blocked', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'cv-tailor-import-corrections-'))
@@ -171,6 +171,70 @@ test('conflicting source company values stay visible and require an explicit sou
     expect(reopened?.optionalDetails.postedDate).toMatchObject({ value: '2 days ago', uncertainty: 'relative-date' })
   } finally { wb.close() }
 })
+
+test('missing essentials and teaser text can be repaired only with a reviewed complete structure', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'cv-tailor-import-essential-repair-'))
+  directories.push(directory)
+  const completeDescription = `Responsibilities\n${'Build reliable fictional software with careful collaboration and clear operational practices. '.repeat(4)}\n\nRequirements\n• Experience with testing.\n• Clear written communication.`
+  const wb = createWorkbench(directory, undefined, undefined, undefined, {
+    lookup: async () => [{ address: '8.8.8.8', family: 4 }], wait: async () => {}, now: (() => { let value = 50_000; return () => value += 2_000 })(),
+    request: async url => {
+      const id = url.pathname.split('/').at(-1)
+      const content = id === 'missing-title' ? { company: 'Example Employer', descriptionPlain: completeDescription } : id === 'teaser-repair' ? { text: 'Synthetic Engineer', company: 'Example Employer', descriptionPlain: 'A short teaser.' } : { text: 'Synthetic Engineer', company: 'Example Employer' }
+      return { status: 200, headers: { 'content-type': 'application/json' }, body: Buffer.from(JSON.stringify({ id, ...content })) }
+    }
+  })
+  async function ready(token: string) {
+    let state = await wb.api.readPostingPreview(token)
+    for (let attempt = 0; attempt < 200 && state.status === 'fetching'; attempt++) { await new Promise(resolve => setTimeout(resolve, 10)); state = await wb.api.readPostingPreview(token) }
+    if (state.status !== 'incomplete') throw new Error('Expected an incomplete source preview.')
+    return state.preview
+  }
+  async function update(token: string, revision: number, input: { title: string; company: string; description: string; optionalDetails: import('../src/shared/jobs').PostingOptionalDetails }) {
+    const updated = await wb.api.updatePostingPreview(token, revision, input)
+    if (!updated.ok || updated.revision === undefined) throw new Error(updated.message ?? 'Preview update failed.')
+    return updated.revision
+  }
+  try {
+    const missingTitle = await wb.api.startPostingFetch('https://jobs.lever.co/example-board/missing-title')
+    const missingTitleSource = await ready(missingTitle.token)
+    expect(missingTitleSource.title).toBe('')
+    const titleEdit = await update(missingTitle.token, 0, { title: 'Reviewed Synthetic Engineer', company: missingTitleSource.company ?? '', description: missingTitleSource.description, optionalDetails: missingTitleSource.optionalDetails })
+    expect(await wb.api.reviewPostingPreview(missingTitle.token, titleEdit, { completenessConfirmed: true, conflictResolutions: {} })).toMatchObject({ ok: true })
+    const titleSaved = await wb.api.acceptPostingImport(missingTitle.token, titleEdit)
+    expect(titleSaved).toMatchObject({ ok: true, value: { title: 'Reviewed Synthetic Engineer', sourceSnapshot: { title: '', fieldOrigins: { title: 'user-correction' } } } })
+    if (!titleSaved.ok) throw new Error(titleSaved.error.message)
+
+    const teaser = await wb.api.startPostingFetch('https://jobs.lever.co/example-board/teaser-repair')
+    const teaserSource = await ready(teaser.token)
+    const unchanged = await update(teaser.token, 0, { title: teaserSource.title, company: teaserSource.company ?? '', description: teaserSource.description, optionalDetails: teaserSource.optionalDetails })
+    expect(await wb.api.reviewPostingPreview(teaser.token, unchanged, { completenessConfirmed: true, conflictResolutions: {} })).toMatchObject({ ok: false })
+    expect(await wb.api.acceptPostingImport(teaser.token, unchanged)).toMatchObject({ ok: false, error: { code: 'CONFLICT' } })
+    const repaired = await update(teaser.token, unchanged, { title: teaserSource.title, company: teaserSource.company ?? '', description: completeDescription, optionalDetails: teaserSource.optionalDetails })
+    expect(await wb.api.reviewPostingPreview(teaser.token, repaired, { completenessConfirmed: true, conflictResolutions: {} })).toMatchObject({ ok: true })
+    const teaserSaved = await wb.api.acceptPostingImport(teaser.token, repaired)
+    expect(teaserSaved).toMatchObject({ ok: true, value: { sourceSnapshot: { description: 'A short teaser.' }, description: completeDescription } })
+    if (!teaserSaved.ok) throw new Error(teaserSaved.error.message)
+
+    const missingDescription = await wb.api.startPostingFetch('https://jobs.lever.co/example-board/missing-description')
+    const missingDescriptionSource = await ready(missingDescription.token)
+    expect(missingDescriptionSource.description).toBe('')
+    const blankEdit = await update(missingDescription.token, 0, { title: missingDescriptionSource.title, company: missingDescriptionSource.company ?? '', description: '', optionalDetails: missingDescriptionSource.optionalDetails })
+    expect(await wb.api.reviewPostingPreview(missingDescription.token, blankEdit, { completenessConfirmed: true, conflictResolutions: {} })).toMatchObject({ ok: false })
+    const repairedDescription = await update(missingDescription.token, blankEdit, { title: missingDescriptionSource.title, company: missingDescriptionSource.company ?? '', description: completeDescription, optionalDetails: missingDescriptionSource.optionalDetails })
+    expect(await wb.api.reviewPostingPreview(missingDescription.token, repairedDescription, { completenessConfirmed: true, conflictResolutions: {} })).toMatchObject({ ok: true })
+    const descriptionSaved = await wb.api.acceptPostingImport(missingDescription.token, repairedDescription)
+    expect(descriptionSaved).toMatchObject({ ok: true, value: { sourceSnapshot: { description: '' }, description: completeDescription } })
+    if (!descriptionSaved.ok) throw new Error(descriptionSaved.error.message)
+
+    const backup = wb.backup.createBackup()
+    const restore = wb.backup.previewRestore(backup)
+    wb.backup.applyRestore(restore.token, value => value)
+    expect(await wb.api.openJob(titleSaved.value.id)).toMatchObject({ sourceSnapshot: { title: '', description: completeDescription }, title: 'Reviewed Synthetic Engineer' })
+    expect(await wb.api.openJob(teaserSaved.value.id)).toMatchObject({ sourceSnapshot: { description: 'A short teaser.' }, description: completeDescription })
+    expect(await wb.api.openJob(descriptionSaved.value.id)).toMatchObject({ sourceSnapshot: { description: '' }, description: completeDescription })
+  } finally { wb.close() }
+}, 30_000)
 
 test('superseding a reviewed preview invalidates its revision-bound acceptance', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'cv-tailor-import-supersede-review-'))

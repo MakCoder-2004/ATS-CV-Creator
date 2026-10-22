@@ -26,7 +26,7 @@
 .posting-history dd { margin: 0; overflow-wrap: anywhere; }
 .posting-history pre, .posting-captured-source pre { max-height: 320px; overflow: auto; margin: 0; padding: 12px; border: 1px solid var(--line); border-radius: 6px; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
 .posting-captured-source { display: grid; gap: 8px; min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
-.posting-captured-source summary { cursor: pointer; font-weight: 650; }
+.posting-captured-source h4 { font-size: 13px; font-weight: 650; }
 .posting-preview-fields .field-help { color: var(--muted); font-size: 12px; font-weight: 450; line-height: 1.5; }
 .saved-job-description { display: grid; min-width: 0; gap: 2px; overflow-wrap: anywhere; }
 .saved-job-title { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }

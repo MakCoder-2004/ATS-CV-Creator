@@ -52,6 +52,20 @@ const unavailableSecureStorage: SecureStorage = {
 
 type NestedInput = { id?: string; text: string }
 type NestedRecord = { id: string; revision: number; text: string }
+function hasCompleteReviewedPostingText(value: string): boolean {
+  const text = value.trim()
+  if ([...text].length < 200) return false
+  const hasSectionHeading = /(?:^|\n)\s*(?:responsibilities|requirements|qualifications|what you(?:'|’)ll do|what we(?:'|’)re looking for)\s*:?(?:\n|$)/im.test(text)
+  const hasBullets = (text.match(/(?:^|\n)\s*[•*-]\s+\S/gm) ?? []).length > 0
+  const hasMultipleParagraphs = text.split(/\n\s*\n/).filter(paragraph => paragraph.trim()).length > 1
+  return hasSectionHeading && (hasBullets || hasMultipleParagraphs)
+}
+function repairsIncompletePosting(source: import('../shared/posting-import').PostingPreview, working: ReturnType<typeof jobInputSchema.parse>): boolean {
+  const titleIsConsciouslySupplied = !!source.title.trim() || (!!working.title.trim() && working.title !== source.title)
+  const descriptionNeedsRepair = source.notices.some(notice => /source did not provide posting text|structured source sections could not be interpreted|lacks enough posting-detail structure/i.test(notice))
+  const descriptionIsComplete = hasCompleteReviewedPostingText(working.description) && (!descriptionNeedsRepair || working.description !== source.description)
+  return titleIsConsciouslySupplied && !!working.company.trim() && descriptionIsComplete
+}
 function reconcileNestedItems(items: NestedInput[], previous: NestedRecord[], owner: string): NestedRecord[] {
   const byId = new Map(previous.map(item => [item.id, item]))
   const used = new Set<string>()
@@ -858,7 +872,8 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       if (!source || !parsed.success) return { ok: false, message: 'Enter and review a non-empty title, company, and complete posting description before confirming.' }
       const companyOnlyIncomplete = pending.state.status === 'incomplete' && !!source.title.trim() && !!source.description.trim() && source.company === null && source.notices.every(notice => /employer name was not provided|extraction cannot guarantee posting completeness or that the role remains open/i.test(notice))
       const conflictOnlyIncomplete = pending.state.status === 'incomplete' && source.conflicts.length > 0 && !!source.title.trim() && !!parsed.data.company.trim() && !!source.description.trim() && source.notices.every(notice => /conflicting source values|extraction cannot guarantee posting completeness or that the role remains open/i.test(notice))
-      if (pending.state.status !== 'ready' && !companyOnlyIncomplete && !conflictOnlyIncomplete) return { ok: false, message: 'This source is incomplete; correct missing essential content. Teaser text cannot be confirmed as complete.' }
+      const contentRepair = pending.state.status === 'incomplete' && (!source.title.trim() || source.notices.some(notice => /source did not provide posting text|structured source sections could not be interpreted|lacks enough posting-detail structure/i.test(notice))) && repairsIncompletePosting(source, parsed.data)
+      if (pending.state.status !== 'ready' && !companyOnlyIncomplete && !conflictOnlyIncomplete && !contentRepair) return { ok: false, message: 'This source is incomplete; correct missing essential content. Teaser text cannot be confirmed as complete.' }
       for (const conflict of source.conflicts) {
         const resolution = checkedReview.data.conflictResolutions[conflict.id]
         if (!resolution || !conflict.values.some(candidate => candidate.value === resolution)) return { ok: false, message: `Choose one of the listed source values for ${conflict.field}.` }
@@ -880,7 +895,8 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       const review = pending.reviewed.review
       const companyOnlyIncomplete = pendingState.status === 'incomplete' && source.title.trim().length > 0 && source.description.trim().length > 0 && source.company === null && source.notices.every(notice => /employer name was not provided|extraction cannot guarantee posting completeness or that the role remains open/i.test(notice))
       const conflictOnlyIncomplete = pendingState.status === 'incomplete' && source.conflicts.length > 0 && !!parsed.company.trim() && !!source.title.trim() && !!source.description.trim() && source.notices.every(notice => /conflicting source values|extraction cannot guarantee posting completeness or that the role remains open/i.test(notice))
-      if (pendingState.status !== 'ready' && !companyOnlyIncomplete && !conflictOnlyIncomplete) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'Resolve missing essential content before saving.' } })
+      const contentRepair = pendingState.status === 'incomplete' && (!source.title.trim() || source.notices.some(notice => /source did not provide posting text|structured source sections could not be interpreted|lacks enough posting-detail structure/i.test(notice))) && repairsIncompletePosting(source, parsed)
+      if (pendingState.status !== 'ready' && !companyOnlyIncomplete && !conflictOnlyIncomplete && !contentRepair) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'Resolve missing essential content before saving.' } })
       const workingOptionalDetails = parsed.optionalDetails ?? source.optionalDetails
       for (const conflict of source.conflicts) {
         const resolution = review.conflictResolutions[conflict.id]
