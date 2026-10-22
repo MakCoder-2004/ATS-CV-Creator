@@ -292,7 +292,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
     if (!row) return ''
     const job = jobRecordSchema.parse(JSON.parse(row.data))
     return job.sourceSnapshot && job.sourceSnapshot.description !== job.description
-      ? ' Based on your reviewed shorter working posting only; the full source snapshot is retained, and omitted source text was not analyzed.'
+      ? ' Scope note: this assessment uses only the accepted working posting. The separately retained source snapshot differs, so source requirements absent from the working text were not assessed.'
       : ''
   }
   const currentConsentSource = (jobId: string): ConsentSource | null => {
@@ -1334,13 +1334,14 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
           db.prepare("UPDATE generation_recovery SET status='cancelled',updated_at=? WHERE run_id=?").run(new Date().toISOString(), pending.runId)
           return { ok: false, message: 'Generation was cancelled. Its late response was discarded; no draft changes were saved.' }
         }
-        const checkedDraft = draftRevisionSchema.parse({ ...result.draft, status: findings.length ? 'blocked' : 'unverified', checkReport: mergedReport, coverage, attempts: totalAttempts, progress: findings.length ? `Draft saved for its ${result.draft.pageTarget}-page target; blocked by ${findings.length} unresolved finding(s). The optional semantic review is a second opinion, not proof.` : `${result.draft.progress} Automated checks passed; semantic comparison is a second opinion, not proof. Human review remains required.` })
+        const scopeNotice = workingTextScopeNotice(pending.jobId)
+        const checkedDraft = draftRevisionSchema.parse({ ...result.draft, status: findings.length ? 'blocked' : 'unverified', checkReport: mergedReport, coverage, attempts: totalAttempts, progress: `${findings.length ? `Draft saved for its ${result.draft.pageTarget}-page target; blocked by ${findings.length} unresolved finding(s). The optional semantic review is a second opinion, not proof.` : `${result.draft.progress} Automated checks passed; semantic comparison is a second opinion, not proof. Human review remains required.`}${scopeNotice}` })
         result.draft = checkedDraft
         const tx = db.transaction(() => { db.prepare('INSERT INTO draft_revisions (id,job_id,revision,data) VALUES (?,?,?,?)').run(result.draft.id, result.draft.jobId, result.draft.revision, JSON.stringify(result.draft)); db.prepare('UPDATE provider_attempt_outcomes SET checkpointed_at=? WHERE run_id=? AND checkpointed_at IS NULL').run(new Date().toISOString(), pending.runId); db.prepare("UPDATE generation_recovery SET status='complete',updated_at=? WHERE run_id=?").run(new Date().toISOString(), pending.runId) })
         tx()
         if (activeAnalysisByJob.get(pending.jobId) === pending.runId) activeAnalysisByJob.delete(pending.jobId)
-        saveAnalysisState({ jobId: pending.jobId, runId: pending.runId, status: 'complete', analysis: analysis.analysis, progress: `${result.draft.progress}${workingTextScopeNotice(pending.jobId)}`, attempts: analysis.attempts + totalAttempts, cacheHit: analysis.cacheHit, generationStep: 'check-document', completedSteps: ['parse-posting', 'score-evidence', 'select-content', 'tailor-paragraphs', 'verify-claims', 'check-document'] })
-        return { ok: true, message: result.draft.status === 'blocked' ? 'Draft saved locally, editable, and blocked by factual findings.' : 'Draft saved locally. It is unverified and unapproved.', draft: result.draft }
+        saveAnalysisState({ jobId: pending.jobId, runId: pending.runId, status: 'complete', analysis: analysis.analysis, progress: result.draft.progress, attempts: analysis.attempts + totalAttempts, cacheHit: analysis.cacheHit, generationStep: 'check-document', completedSteps: ['parse-posting', 'score-evidence', 'select-content', 'tailor-paragraphs', 'verify-claims', 'check-document'] })
+        return { ok: true, message: `${result.draft.status === 'blocked' ? 'Draft saved locally, editable, and blocked by factual findings.' : 'Draft saved locally. It is unverified and unapproved.'}${scopeNotice}`, draft: result.draft }
       } catch (error) {
         if (activeAnalysisByJob.get(pending.jobId) === pending.runId) activeAnalysisByJob.delete(pending.jobId)
         const cancelled = error instanceof AnalysisError && error.code === 'CANCELLED'
@@ -1460,7 +1461,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
         if (!currentScopeAfterDispatch || prepareOutboundBundle(currentScopeAfterDispatch).scopeHash !== pending.bundle.scopeHash) throw new Error('Authorized scope changed during regeneration.')
         const decoded = responseSchema.parse(JSON.parse(generated.text))
         if (decoded.items.length !== scoped.length) throw new Error('The provider returned a different number of replacement items.')
-        const proposal = regenerationProposalSchema.parse({ id: proposalId, jobId: base.jobId, jobRevision: String(pending.source.job.revision), baseDraftId: base.id, baseDraftRevision: base.revision, evidenceHash: createHash('sha256').update(JSON.stringify(base.evidence)).digest('hex'), target: parsedTarget.data, before: scoped.map(item => ({ text: 'text' in item ? item.text : item.name, citations: item.citations, rationale: item.rationale })), proposed: decoded.items.map((item, index) => ({ ...item, text: pending.bundle.restoreIdentifiers(item.text), citations: scoped[index].citations })), status: 'pending', attempts: generated.attempts, progress: 'Replacement proposal is ready for comparison. The draft has not changed.', createdAt: new Date().toISOString() })
+        const proposal = regenerationProposalSchema.parse({ id: proposalId, jobId: base.jobId, jobRevision: String(pending.source.job.revision), baseDraftId: base.id, baseDraftRevision: base.revision, evidenceHash: createHash('sha256').update(JSON.stringify(base.evidence)).digest('hex'), target: parsedTarget.data, before: scoped.map(item => ({ text: 'text' in item ? item.text : item.name, citations: item.citations, rationale: item.rationale })), proposed: decoded.items.map((item, index) => ({ ...item, text: pending.bundle.restoreIdentifiers(item.text), citations: scoped[index].citations })), status: 'pending', attempts: generated.attempts, progress: `Replacement proposal is ready for comparison. The draft has not changed.${workingTextScopeNotice(pending.jobId)}`, createdAt: new Date().toISOString() })
         db.prepare('INSERT INTO regeneration_proposals (id,job_id,status,data) VALUES (?,?,?,?)').run(proposal.id, proposal.jobId, proposal.status, JSON.stringify(proposal))
         saveAnalysisState({ jobId: pending.jobId, runId, status: 'complete', analysis: analysisResult.analysis, progress: proposal.progress, attempts: generated.attempts, cacheHit: analysisResult.cacheHit })
         return { ok: true, message: proposal.progress, proposal }
@@ -1481,7 +1482,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       const proposal = regenerationProposalSchema.parse(JSON.parse(row.data))
       if (proposal.status !== 'pending') return { ok: false, message: 'This proposal has already been resolved.' }
       if (decision === 'reject') {
-        const rejected = regenerationProposalSchema.parse({ ...proposal, status: 'rejected', progress: 'Proposal rejected. The current draft and approval were left unchanged.' })
+        const rejected = regenerationProposalSchema.parse({ ...proposal, status: 'rejected', progress: `Proposal rejected. The current draft and approval were left unchanged.${workingTextScopeNotice(jobId)}` })
         db.prepare('UPDATE regeneration_proposals SET status = ?, data = ? WHERE id = ?').run(rejected.status, JSON.stringify(rejected), proposal.id)
         return { ok: true, message: rejected.progress, proposal: rejected }
       }
@@ -1491,7 +1492,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       const evidenceHash = createHash('sha256').update(JSON.stringify(current.evidence)).digest('hex')
       const latestJob = await this.openJob(jobId)
       if (current.id !== proposal.baseDraftId || current.revision !== proposal.baseDraftRevision || evidenceHash !== proposal.evidenceHash || currentSourceStatus(current).length > 0 || !latestJob || latestJob.updatedAt !== proposal.jobRevision) {
-        const stale = regenerationProposalSchema.parse({ ...proposal, status: 'stale', progress: 'The draft or evidence changed after this proposal was prepared. Regenerate against the current revision.' })
+        const stale = regenerationProposalSchema.parse({ ...proposal, status: 'stale', progress: `The draft or evidence changed after this proposal was prepared. Regenerate against the current revision.${workingTextScopeNotice(jobId)}` })
         db.prepare('UPDATE regeneration_proposals SET status = ?, data = ? WHERE id = ?').run(stale.status, JSON.stringify(stale), proposal.id)
         return { ok: false, message: stale.progress, proposal: stale }
       }
@@ -1503,17 +1504,17 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
         nextContent[proposal.target.section][index] = 'text' in prior ? { ...prior, text: item.text, rationale: item.rationale, citations: item.citations } : { ...prior, name: item.text, rationale: item.rationale, citations: item.citations }
       })
       const now = new Date().toISOString()
-      const candidate = draftRevisionSchema.parse({ ...current, id: randomUUID(), revision: current.revision + 1, createdAt: now, content: nextContent, approved: false, approval: undefined, status: 'unverified', checkReport: undefined, progress: 'Replacement accepted and factual checks rerun. Actual Electron PDF page measurement is pending at the application boundary; approval remains blocked.' })
+      const candidate = draftRevisionSchema.parse({ ...current, id: randomUUID(), revision: current.revision + 1, createdAt: now, content: nextContent, approved: false, approval: undefined, status: 'unverified', checkReport: undefined, progress: `Replacement accepted and factual checks rerun. Actual Electron PDF page measurement is pending at the application boundary; approval remains blocked.${workingTextScopeNotice(jobId)}` })
       const checked = checkDraftFacts(candidate)
-      const next = draftRevisionSchema.parse({ ...candidate, status: checked.passed ? 'unverified' : 'blocked', checkReport: checked, progress: checked.passed ? candidate.progress : `Accepted replacement is blocked by ${checked.findings.length} factual finding(s). Actual Electron PDF page measurement is pending at the application boundary.` })
+      const next = draftRevisionSchema.parse({ ...candidate, status: checked.passed ? 'unverified' : 'blocked', checkReport: checked, progress: checked.passed ? candidate.progress : `Accepted replacement is blocked by ${checked.findings.length} factual finding(s). Actual Electron PDF page measurement is pending at the application boundary.${workingTextScopeNotice(jobId)}` })
       const tx = db.transaction(() => {
         db.prepare('INSERT INTO draft_revisions (id,job_id,revision,data) VALUES (?,?,?,?)').run(next.id, next.jobId, next.revision, JSON.stringify(next))
         db.prepare('DELETE FROM document_fit_reports WHERE job_id = ?').run(jobId)
-        const accepted = regenerationProposalSchema.parse({ ...proposal, status: 'accepted', progress: 'Proposal accepted as a new draft revision. Factual checks passed; application-boundary PDF measurement and renewed approval are required.' })
+        const accepted = regenerationProposalSchema.parse({ ...proposal, status: 'accepted', progress: `Proposal accepted as a new draft revision. Factual checks passed; application-boundary PDF measurement and renewed approval are required.${workingTextScopeNotice(jobId)}` })
         db.prepare('UPDATE regeneration_proposals SET status = ?, data = ? WHERE id = ?').run(accepted.status, JSON.stringify(accepted), proposal.id)
       })
       tx()
-      return { ok: false, message: next.progress, proposal: regenerationProposalSchema.parse({ ...proposal, status: 'accepted', progress: 'Proposal accepted. PDF page measurement is pending at the application boundary.' }), draft: next }
+      return { ok: false, message: next.progress, proposal: regenerationProposalSchema.parse({ ...proposal, status: 'accepted', progress: `Proposal accepted. PDF page measurement is pending at the application boundary.${workingTextScopeNotice(jobId)}` }), draft: next }
     },
     async decideSuggestedSkill(input: { jobId: string; draftId: string; skillId: string; decision: 'pending' | 'confirmed' | 'removed' }) {
       const parsed = suggestedSkillDecisionSchema.safeParse(input)

@@ -7,8 +7,16 @@ import { runSourceLinkedGraph, CitationValidationError } from '../src/main/sourc
 import { createWorkbench } from '../src/main/workbench'
 import type { AnalysisTransport } from '../src/main/posting-analysis'
 import { analysisBudgetValues } from '../src/shared/posting-analysis'
+import type { PostingReview } from '../src/shared/posting-import'
 
 const dirs: string[] = [], opened: Array<ReturnType<typeof createWorkbench>> = []
+async function acceptImportedPosting(api: ReturnType<typeof createWorkbench>['api'], token: string, input: import('../src/shared/posting-import').PostingPreview, completenessConfirmed = true) {
+  const edited = await api.updatePostingPreview(token, 0, { title: input.title, company: input.company ?? '', description: input.description, optionalDetails: input.optionalDetails })
+  if (!edited.ok || edited.revision === undefined) throw new Error(edited.message ?? 'Posting preview edit failed.')
+  const reviewed = await api.reviewPostingPreview(token, edited.revision, { completenessConfirmed, conflictResolutions: {} } satisfies PostingReview)
+  if (!reviewed.ok) throw new Error(reviewed.message ?? 'Posting review failed.')
+  return api.acceptPostingImport(token, edited.revision)
+}
 afterEach(() => { for (const item of opened.splice(0)) item.close(); for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
 
 test('cross-category model citations get one bounded correction request without weakening citation checks', async () => {
@@ -90,6 +98,83 @@ test('posting analysis restores a display copy while cached and generated provid
   expect(requests.join('\n')).not.toContain('Google')
 })
 
+test('shortened working posting scope persists through import, generation, reopen, and regeneration without source-text dispatch', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'shortened-working-posting-scope-')); dirs.push(dir)
+  const modelPrompts: string[] = []
+  const transport: AnalysisTransport = { validateCapacity: async () => true, async generate({ prompt }) {
+    modelPrompts.push(prompt)
+    if (prompt.startsWith('Extract only explicit qualifications')) return JSON.stringify({ required: ['TypeScript'], preferred: [], tools: [], responsibilities: [], keywords: [] })
+    if (prompt.startsWith('Score these numbered')) {
+      const { items } = JSON.parse(prompt.slice(prompt.indexOf('{')))
+      return JSON.stringify({ relevance: items.map((item: { index: number }) => ({ index: item.index, score: 1, rationale: 'Relevant saved evidence.' })) })
+    }
+    if (prompt.startsWith('Propose conservative replacement wording')) {
+      const { sourcesByItem } = JSON.parse(prompt.slice(prompt.indexOf('{')))
+      return JSON.stringify({ items: sourcesByItem.map(() => ({ text: 'TypeScript', rationale: 'Retains the selected saved skill.' })) })
+    }
+    if (prompt.startsWith('Factual repair cycle')) return JSON.stringify({ corrections: [] })
+    const { selected } = JSON.parse(prompt.slice(prompt.indexOf('{')))
+    const experience = selected.filter((item: { category: string }) => item.category === 'experience')
+    return JSON.stringify({ headline: 'Engineer', summary: { text: 'Engineer with TypeScript experience.', evidence: [(experience[0] ?? selected[0]).index], rationale: 'Selected saved evidence.' }, education: [], experience: experience.map((item: { index: number; text: string }) => ({ text: item.text, evidence: [item.index], rationale: 'Selected saved evidence.' })), projects: [], skills: selected.filter((item: { category: string }) => item.category === 'skills').map((item: { index: number; text: string }) => ({ name: JSON.parse(item.text).name, evidence: [item.index], rationale: 'Selected saved skill.' })), certificates: [] })
+  } }
+  const sourceDescription = `SOURCE_ONLY_REQUIREMENT_CANARY\nResponsibilities\n${'The role owns fictional services and documents operational controls. '.repeat(500)}\nRequirements\nTypeScript is required.`
+  const body = JSON.stringify({ id: 'scope-long-role', text: 'Synthetic Application Engineer', company: 'Example Systems', descriptionPlain: sourceDescription, opening: '<p>Opening information for the fictional role.</p>', lists: [{ text: 'Requirements', content: '<li>TypeScript is required.</li>' }] })
+  const fetchOptions = { lookup: async () => [{ address: '8.8.8.8', family: 4 }], request: async () => ({ status: 200, headers: { 'content-type': 'application/json' }, body: Buffer.from(body) }) }
+  let wb = createWorkbench(dir, undefined, transport, undefined, fetchOptions); opened.push(wb)
+  await wb.api.setAnalysisBudgets({ ...analysisBudgetValues(await wb.api.getAnalysisUsage()), minimumSpacingMs: 0, rateLimitAttempts: 100, rateLimitWindowMs: 1000 })
+  const savedRole = await wb.api.saveExperience({ kind: 'employment', title: 'Developer', organization: 'Example Employer', description: 'Built dependable TypeScript services.' })
+  const savedSkill = await wb.api.saveSkill({ name: 'TypeScript', category: 'Programming' })
+  if (!savedRole.ok || !savedSkill.ok) throw new Error('Profile fixture failed')
+
+  const { token: fetchToken } = await wb.api.startPostingFetch('https://api.lever.co/v0/postings/example-board/scope-long-role')
+  let fetched = await wb.api.readPostingPreview(fetchToken)
+  for (let attempt = 0; attempt < 300 && fetched.status === 'fetching'; attempt++) { await new Promise(resolve => setTimeout(resolve, 10)); fetched = await wb.api.readPostingPreview(fetchToken) }
+  if (fetched.status !== 'ready') throw new Error(`Long imported source fixture was not ready: ${JSON.stringify(fetched)}`)
+  expect(Array.from(fetched.preview.description).length).toBeGreaterThan(30_000)
+  expect(fetched.preview.description).toContain('SOURCE_ONLY_REQUIREMENT_CANARY')
+  const imported = await acceptImportedPosting(wb.api, fetchToken, { ...fetched.preview, company: fetched.preview.company ?? '' })
+  if (!imported.ok || !imported.value.sourceSnapshot) throw new Error(imported.ok ? 'Source snapshot was missing.' : imported.error.message)
+  const sourceSnapshot = imported.value.sourceSnapshot
+  const workingText = 'WORKING_TEXT_CANARY\nRequirements\nTypeScript is required.'
+  const shortened = await wb.api.saveJob({ id: imported.value.id, title: imported.value.title, company: imported.value.company, description: workingText })
+  if (!shortened.ok) throw new Error(shortened.error.message)
+  expect((await wb.api.openJob(imported.value.id))?.sourceSnapshot?.description).toBe(sourceSnapshot.description)
+
+  const authorize = async () => {
+    const preview = await wb.api.prepareOutboundConsent(imported.value.id)
+    if (!preview.ok) throw new Error(preview.message)
+    await wb.api.acceptOutboundConsent(preview.token, true, true)
+    return preview.token
+  }
+  const token = await authorize()
+  const analysis = await wb.api.startAnalysis(token)
+  expect(analysis).toMatchObject({ status: 'complete', progress: expect.stringContaining('source snapshot differs') })
+  expect(modelPrompts).toHaveLength(1)
+  expect(JSON.parse(modelPrompts[0].slice(modelPrompts[0].indexOf('{'))).job.description).toBe(workingText)
+  expect(modelPrompts[0]).not.toContain('SOURCE_ONLY_REQUIREMENT_CANARY')
+  const generated = await wb.api.generateDraft(token)
+  if (!generated.ok || !generated.draft) throw new Error(`Generation failed: ${generated.message}`)
+  expect(generated.ok).toBe(true)
+  expect(generated.draft.progress).toContain('source snapshot differs')
+  const promptsBeforeRegeneration = modelPrompts.length
+
+  const proposal = await wb.api.regenerateDraft(await authorize(), { kind: 'section', section: 'skills' })
+  expect(proposal.ok).toBe(true)
+  if (!proposal.ok || !proposal.proposal) throw new Error(proposal.message)
+  expect(proposal.message).toContain('source snapshot differs')
+  expect(proposal.proposal.progress).toContain('source snapshot differs')
+  expect(modelPrompts).toHaveLength(promptsBeforeRegeneration + 1)
+  expect(JSON.parse(modelPrompts.at(-1)!.slice(modelPrompts.at(-1)!.indexOf('{'))).job.description).toBe(workingText)
+  expect(modelPrompts.at(-1)).not.toContain('SOURCE_ONLY_REQUIREMENT_CANARY')
+
+  wb.close(); opened.pop()
+  wb = createWorkbench(dir, undefined, transport, undefined, fetchOptions); opened.push(wb)
+  expect((await wb.api.openJob(imported.value.id))?.sourceSnapshot?.description).toBe(sourceSnapshot.description)
+  expect((await wb.api.getDraft(imported.value.id))?.progress).toContain('source snapshot differs')
+  expect((await wb.api.getRegenerationProposal(imported.value.id))?.progress).toContain('source snapshot differs')
+  expect(modelPrompts).toHaveLength(promptsBeforeRegeneration + 1)
+})
+
 test('content-only generation groups role evidence and bounds concise bullets without retaining narrative fields', async () => {
   const roleId = randomUUID(), factId = randomUUID()
   const items = [
@@ -142,6 +227,80 @@ test('an extra foreign parent entry triggers a bounded retry instead of disappea
   } })
   expect(calls).toBe(2)
   expect(result.draft.content.experience).toHaveLength(2)
+})
+
+test('shortened working posting scope persists through generation, reopen, and regeneration without source-text dispatch', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'shortened-working-posting-scope-')); dirs.push(dir)
+  const modelPrompts: string[] = []
+  const transport: AnalysisTransport = { async generate({ prompt }) {
+    modelPrompts.push(prompt)
+    if (prompt.startsWith('Extract only explicit qualifications')) return JSON.stringify({ required: ['TypeScript'], preferred: [], tools: [], responsibilities: [], keywords: [] })
+    if (prompt.startsWith('Score these numbered')) {
+      const { items } = JSON.parse(prompt.slice(prompt.indexOf('{')))
+      return JSON.stringify({ relevance: items.map((item: { index: number }) => ({ index: item.index, score: 1, rationale: 'Relevant saved skill.' })) })
+    }
+    if (prompt.startsWith('Propose conservative replacement wording')) {
+      const { sourcesByItem } = JSON.parse(prompt.slice(prompt.indexOf('{')))
+      return JSON.stringify({ items: sourcesByItem.map(() => ({ text: 'TypeScript', rationale: 'Retains the selected saved skill.' })) })
+    }
+    if (prompt.startsWith('Factual repair cycle')) return JSON.stringify({ corrections: [] })
+    const { selected } = JSON.parse(prompt.slice(prompt.indexOf('{')))
+    return JSON.stringify({ headline: 'Engineer', summary: { text: 'Engineer with TypeScript experience.', evidence: [selected[0].index], rationale: 'Selected saved evidence.' }, education: [], experience: [], projects: [], skills: selected.filter((item: { category: string }) => item.category === 'skills').map((item: { index: number; text: string }) => ({ name: JSON.parse(item.text).name, evidence: [item.index], rationale: 'Selected saved skill.' })), certificates: [] })
+  } }
+  const sourceDescription = `SOURCE_ONLY_REQUIREMENT_CANARY\nResponsibilities\n${'The role owns fictional services and documents operational controls. '.repeat(500)}\nRequirements\nTypeScript is required.`
+  const body = JSON.stringify({ id: 'scope-long-role', text: 'Synthetic Engineer', company: 'Example Systems', descriptionPlain: sourceDescription, opening: '<p>Opening information for the fictional role.</p>', lists: [{ text: 'Requirements', content: '<li>TypeScript is required.</li>' }] })
+  const fetchOptions = { lookup: async () => [{ address: '8.8.8.8', family: 4 }], request: async () => ({ status: 200, headers: { 'content-type': 'application/json' }, body: Buffer.from(body) }) }
+  let wb = createWorkbench(dir, undefined, transport, undefined, fetchOptions); opened.push(wb)
+  await wb.api.setAnalysisBudgets({ ...analysisBudgetValues(await wb.api.getAnalysisUsage()), minimumSpacingMs: 0, rateLimitAttempts: 100, rateLimitWindowMs: 1000 })
+  await wb.api.saveSkill({ name: 'WORKING_TEXT_CANARY', category: 'Programming' })
+  const { token: fetchToken } = await wb.api.startPostingFetch('https://api.lever.co/v0/postings/example-board/scope-long-role')
+  let fetchState = await wb.api.readPostingPreview(fetchToken)
+  for (let attempt = 0; attempt < 300 && fetchState.status === 'fetching'; attempt++) { await new Promise(resolve => setTimeout(resolve, 10)); fetchState = await wb.api.readPostingPreview(fetchToken) }
+  if (fetchState.status !== 'ready') throw new Error(`Long imported source fixture was not ready: ${JSON.stringify(fetchState)}`)
+  expect(Array.from(fetchState.preview.description).length).toBeGreaterThan(30_000)
+  const imported = await acceptImportedPosting(wb.api, fetchToken, { ...fetchState.preview, company: fetchState.preview.company ?? '' })
+  if (!imported.ok) throw new Error(imported.error.message)
+  const sourceSnapshot = imported.value.sourceSnapshot
+  if (!sourceSnapshot) throw new Error('Imported source snapshot was not retained')
+  const workingText = 'WORKING_TEXT_CANARY\nRequirements\nTypeScript is required.'
+  const shortened = await wb.api.saveJob({ id: imported.value.id, title: imported.value.title, company: imported.value.company, description: workingText })
+  if (!shortened.ok) throw new Error(shortened.error.message)
+  expect((await wb.api.openJob(imported.value.id))?.sourceSnapshot?.description).toBe(sourceSnapshot.description)
+
+  const authorize = async () => {
+    const preview = await wb.api.prepareOutboundConsent(imported.value.id)
+    if (!preview.ok) throw new Error(preview.message)
+    await wb.api.acceptOutboundConsent(preview.token, true, true)
+    return preview.token
+  }
+  const token = await authorize()
+  const analysis = await wb.api.startAnalysis(token)
+  expect(analysis).toMatchObject({ status: 'complete', progress: expect.stringContaining('source snapshot differs') })
+  expect(modelPrompts).toHaveLength(1)
+  expect(JSON.parse(modelPrompts[0].slice(modelPrompts[0].indexOf('{'))).job.description).toBe(workingText)
+  expect(modelPrompts[0]).not.toContain('SOURCE_ONLY_REQUIREMENT_CANARY')
+  const generated = await wb.api.generateDraft(token)
+  expect(generated.ok).toBe(true)
+  if (!generated.ok || !generated.draft) throw new Error(generated.message)
+  expect(generated.draft.progress).toContain('source snapshot differs')
+  const promptCountBeforeRegeneration = modelPrompts.length
+
+  const regenerationToken = await authorize()
+  const proposal = await wb.api.regenerateDraft(regenerationToken, { kind: 'section', section: 'skills' })
+  expect(proposal.ok).toBe(true)
+  if (!proposal.ok || !proposal.proposal) throw new Error(proposal.message)
+  expect(proposal.message).toContain('source snapshot differs')
+  expect(proposal.proposal.progress).toContain('source snapshot differs')
+  expect(modelPrompts).toHaveLength(promptCountBeforeRegeneration + 1)
+  expect(JSON.parse(modelPrompts.at(-1)!.slice(modelPrompts.at(-1)!.indexOf('{'))).job.description).toBe(workingText)
+  expect(modelPrompts.at(-1)).not.toContain('SOURCE_ONLY_REQUIREMENT_CANARY')
+
+  wb.close(); opened.pop()
+  wb = createWorkbench(dir, undefined, transport, undefined, fetchOptions); opened.push(wb)
+  expect((await wb.api.openJob(imported.value.id))?.sourceSnapshot?.description).toBe(sourceSnapshot.description)
+  expect((await wb.api.getDraft(imported.value.id))?.progress).toContain('source snapshot differs')
+  expect((await wb.api.getRegenerationProposal(imported.value.id))?.progress).toContain('source snapshot differs')
+  expect(modelPrompts).toHaveLength(promptCountBeforeRegeneration + 1)
 })
 
 test('accepted frozen consent generates a batched source-linked draft that reopens offline with stable identity', async () => {

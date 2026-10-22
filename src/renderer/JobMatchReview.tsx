@@ -1,18 +1,20 @@
 import { CheckCircle2, CircleHelp, CircleDot } from 'lucide-react'
 import type { DraftRevision } from '../shared/draft'
+import type { JobRecord } from '../shared/jobs'
 import type { QualificationAssessment } from '../shared/qualification-coverage'
 import type { ProfileSnapshot } from '../shared/profile'
 import type { ExperienceSnapshot } from '../shared/experience'
 import { describeSource } from './review-copy'
 
-export function JobMatchReview({ draft, sources }: { draft: DraftRevision; sources?: { profile: ProfileSnapshot; evidence: ExperienceSnapshot } | null }) {
+export function JobMatchReview({ draft, sources, job }: { draft: DraftRevision; sources?: { profile: ProfileSnapshot; evidence: ExperienceSnapshot } | null; job?: JobRecord | null }) {
+  const scopeDiffersFromSource = !!job?.sourceSnapshot && job.sourceSnapshot.description !== job.description
   const coverage = draft.coverage as (NonNullable<DraftRevision['coverage']> & { assessments?: QualificationAssessment[]; stale?: boolean }) | undefined
   const current = sources ? [...sources.profile.education, ...sources.profile.skills, ...sources.profile.certificates, ...sources.evidence.experience, ...sources.evidence.experience.flatMap(item => item.factualItems), ...sources.evidence.projects] : []
   function evidenceLabel(evidence: { evidenceId: string; revision: number }) {
     const source = current.find(item => item.id === evidence.evidenceId && item.revision === evidence.revision) ?? draft.evidence.find(item => item.evidenceId === evidence.evidenceId && item.revision === evidence.revision)?.snapshot
     return describeSource(source)
   }
-  return <section className="coverage-disclosure job-match-panel" aria-label="Job requirement comparison"><h2>How your experience matches this job</h2><p>This compares the requirements with your profile and your own CV additions, not just the wording selected for this CV. It is guidance, not a hiring verdict or an approval blocker.</p>{coverage?.stale && <p role="status">This comparison reflects an earlier accepted job posting. Its results are retained for history; reassess the current posting explicitly before relying on them.</p>}{coverage?.assessments ? <div className="qualification-assessments">
+  return <section className="coverage-disclosure job-match-panel" aria-label="Job requirement comparison"><h2>How your experience matches this job</h2><p>This compares the requirements with your profile and your own CV additions, not just the wording selected for this CV. It is guidance, not a hiring verdict or an approval blocker.</p>{scopeDiffersFromSource && <p className="posting-scope-note" role="status">This comparison uses the accepted working posting only. Its retained source snapshot differs; requirements absent from the working text were not assessed.</p>}{coverage?.stale && <p role="status">This comparison reflects an earlier accepted job posting. Its results are retained for history; reassess the current posting explicitly before relying on them.</p>}{coverage?.assessments ? <div className="qualification-assessments">
     {coverage.assessments.map((item, index) => <article className={`qualification-assessment is-${item.status}`} key={`${item.kind}-${index}`}>
       <div className="qualification-status">{item.status === 'supported' ? <CheckCircle2 size={16} aria-hidden="true" /> : item.status === 'partial' ? <CircleDot size={16} aria-hidden="true" /> : <CircleHelp size={16} aria-hidden="true" />}<strong>{item.status === 'supported' ? 'Relevant evidence found' : item.status === 'partial' ? 'Some evidence found' : 'Needs a closer look'}</strong></div>
       <p className="qualification-requirement">{item.qualification}</p>

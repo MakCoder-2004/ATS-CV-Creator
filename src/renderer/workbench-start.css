@@ -80,6 +80,8 @@
 .cv-workbench-start .renew-review-choice p, .cv-workbench-start .stale-target-notice p { margin: 0; color: var(--warning-ink); font-size: 13px; line-height: 1.55; }
 .cv-workbench-start .renew-review-choice button, .cv-workbench-start .stale-target-notice button { justify-self: start; min-height: 44px; }
 .cv-workbench-start .stale-target-notice { margin-bottom: 16px; }
+.cv-workbench-start .posting-scope-note { margin: 0 0 12px; padding: 12px 16px; border: 1px solid var(--warning-border); border-radius: 6px; background: var(--warning-surface); color: var(--warning-ink); font-size: 13px; line-height: 1.55; overflow-wrap: anywhere; }
+.cv-workbench-start .regeneration-scope-note { margin: 8px 0 12px; padding: 10px 12px; border-left: 3px solid var(--warning-border); background: var(--warning-surface); color: var(--warning-ink); font-size: 13px; line-height: 1.55; overflow-wrap: anywhere; }
 .cv-workbench-start .stale-target-notice h2 { font: 700 16px/1.4 'Sora Variable', sans-serif; }
 .cv-workbench-start .usage-details { padding: 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--canvas); color: var(--muted); font-size: 12px; }
 .cv-workbench-start .usage-details summary { min-height: 24px; cursor: pointer; font-weight: 650; }
