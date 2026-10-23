@@ -85,12 +85,60 @@ test('maps a section-based CV with stacked work, education, project, and certifi
   expect(result.unmapped).toEqual([{ page: 1, text: 'Unassigned PDF hyperlink: Unrelated site — https://example.test/unrelated' }])
 })
 
+test('does not turn an undated later role into a fact of the preceding role', () => {
+  const result = mapProfilePdfPages([{ page: 1, text: [
+    'Ada Example', 'Software Engineer', 'ada@example.test', 'Education', 'BSc Computer Science 2020 - 2024', 'Example University',
+    'Experience', '• Engineer Remote', 'Example Labs June 2024 – Present', 'Built a compiler.',
+    '• Data Scientist Remote', 'Example Research Institute', 'Projects', 'Atlas — Python', 'Shipped a prototype.',
+    'Skills', 'Python', 'Certificates', '• Cloud Fundamentals — Sample Institute'
+  ].join('\n') }])
+  expect(result.experience).toHaveLength(1)
+  expect(result.experience[0]?.factualItems).toMatchObject([{ text: 'Built a compiler.' }])
+  expect(result.unmapped).toContainEqual({ page: 1, text: '• Data Scientist Remote' })
+})
+
+test('preserves month-year education dates for review without including them in the degree title', () => {
+  const result = mapProfilePdfPages([{ page: 1, text: [
+    'Ada Example', 'Software Engineer', 'ada@example.test', 'Education', '• BSc Computer Science Sep 2020 – Jun 2024', 'Example University',
+    'Experience', '• Engineer Remote', 'Example Labs June 2024 – Present', 'Built useful software.', 'Projects', 'Atlas — Python', 'Shipped a prototype.',
+    'Skills', 'Python', 'Certificates', '• Cloud Fundamentals — Sample Institute'
+  ].join('\n') }])
+  expect(result.entries).toContainEqual(expect.objectContaining({ section: 'education', title: 'BSc Computer Science', institution: 'Example University', startDate: '2020-09', endDate: '2024-06' }))
+})
+
+test('leaves an ambiguous second contact line unmapped rather than assuming a headline', () => {
+  const result = mapProfilePdfPages([{ page: 1, text: [
+    'Ada Example', 'Egypt', 'ada@example.test', 'Education', 'BSc Computer Science 2020 - 2024', 'Example University',
+    'Experience', '• Engineer Remote', 'Example Labs June 2024 – Present', 'Built useful software.', 'Projects', 'Atlas — Python', 'Shipped a prototype.',
+    'Skills', 'Python', 'Certificates', '• Cloud Fundamentals — Sample Institute'
+  ].join('\n') }])
+  expect(result.contact?.fullName).toBe('Ada Example')
+  expect(result.contact?.headline).toBeUndefined()
+  expect(result.unmapped).toContainEqual({ page: 1, text: 'Egypt' })
+})
+
+test('preserves day-precision education dates for review without putting them in the degree title', () => {
+  const result = mapProfilePdfPages([{ page: 1, text: [
+    'Ada Example', 'Software Engineer', 'ada@example.test',
+    'Education', '• BSc Computer Science 2020-09-14 – 2024-06-20', 'Example University',
+    'Experience', '• Engineer Remote', 'Example Labs June 2024 – Present', 'Built useful software.',
+    'Projects', 'Atlas — Python', 'Shipped a prototype.', 'Skills', 'Python', 'Certificates', '• Cloud Fundamentals — Sample Institute'
+  ].join('\n') }])
+  expect(result.entries).toContainEqual(expect.objectContaining({ section: 'education', title: 'BSc Computer Science', institution: 'Example University', requiresDateResolution: true }))
+  const education = result.entries.find(entry => entry.section === 'education')
+  expect(education?.startDate).toBeUndefined()
+  expect(education?.endDate).toBeUndefined()
+  expect(result.unmapped).toContainEqual({ page: 1, text: 'Date precision needs review: • BSc Computer Science 2020-09-14 – 2024-06-20' })
+})
+
 test('keeps a role header pending across a PDF page break until its organization and date follow', () => {
   const result = mapProfilePdfPages([
     { page: 1, text: ['Ada Example', 'Machine Learning Engineer', 'ada@example.test', 'Education', 'BSc Computer Science 2020 - 2024', 'Example University', 'Experience', '• Data Engineer Remote'].join('\n') },
     { page: 2, text: ['Example Labs'].join('\n') },
     { page: 3, text: ['June 2020 - Present', 'Built a data pipeline for internal teams.', '• Product Engineer', 'Contoso Systems', 'Jan 2018 - Dec 2019', 'Designed offline collaboration tools.', 'Projects', 'Transit Dashboard — Python, React', 'Added real-time route updates.', 'Skills', 'Languages: Python, SQL', 'Certificates', '• Cloud Fundamentals — Sample Institute'].join('\n') }
   ])
+  expect(result.contact).toMatchObject({ fullName: 'Ada Example', headline: 'Machine Learning Engineer', email: 'ada@example.test' })
+  expect(result.contact).not.toHaveProperty('location')
   expect(result.experience).toMatchObject([
     { kind: 'unresolved', title: 'Data Engineer', organization: 'Example Labs', startDate: 'June 2020', endDate: 'Present', factualItems: [{ text: 'Built a data pipeline for internal teams.' }] },
     { kind: 'unresolved', title: 'Product Engineer', organization: 'Contoso Systems', startDate: 'Jan 2018', endDate: 'Dec 2019', factualItems: [{ text: 'Designed offline collaboration tools.' }] }

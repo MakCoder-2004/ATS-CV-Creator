@@ -123,6 +123,10 @@ export function registerProfilePdfImportIpc(getWindow: () => BrowserWindow, getS
     const proposals = profilePdfProposalSchema.safeParse(args[1])
     if (!proposals.success) return profilePdfApplyResultSchema.parse({ ok: false, message: 'Resolve invalid proposal fields or skip them before applying.' })
     if (JSON.stringify(proposals.data.proposalIds) !== JSON.stringify(saved.proposals.proposalIds)) return profilePdfApplyResultSchema.parse({ ok: false, message: 'Proposal identities changed during review. Reopen the PDF to review it again.' })
+    for (const original of saved.proposals.experience) if (original.kind === 'unresolved') {
+      const selected = proposals.data.experience.find(item => item.proposalRef === original.proposalRef)
+      if (selected?.kind === 'unresolved') return profilePdfApplyResultSchema.parse({ ok: false, message: 'Choose Employment or Training for each included experience record.' })
+    }
     for (const original of saved.proposals.experience) if (original.requiresDateResolution) {
       const selected = proposals.data.experience.find(item => item.proposalRef === original.proposalRef)
       if (selected && !selected.startDate && !selected.endDate) return profilePdfApplyResultSchema.parse({ ok: false, message: `Choose a supported date for ${selected.title}, or skip that record.` })

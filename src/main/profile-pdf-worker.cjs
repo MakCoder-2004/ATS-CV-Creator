@@ -27,7 +27,8 @@ parentPort.on('message', async bytes => {
         line.pieces.push({ x: item.transform[4], text: item.str })
       }
       lines.sort((a, b) => b.y - a.y)
-      const text = lines.map(line => line.pieces.sort((a, b) => a.x - b.x).map(piece => piece.text).join(' ').replace(/[\t\u00a0]+/g, ' ').replace(/ {2,}/g, ' ').trim()).filter(Boolean).join('\n')
+      const textLines = lines.map(line => ({ y: line.y, text: line.pieces.sort((a, b) => a.x - b.x).map(piece => piece.text).join(' ').replace(/[\t\u00a0]+/g, ' ').replace(/ {2,}/g, ' ').trim() })).filter(line => line.text)
+      const text = textLines.map(line => line.text).join('\n')
       const xPositions = [...new Set(items.filter(item => item.str.trim()).map(item => Math.round(item.transform[4])))].sort((a, b) => a - b)
       let columnThreshold
       let largestGap = 0
@@ -39,8 +40,11 @@ parentPort.on('message', async bytes => {
       const links = (await page.getAnnotations({ intent: 'display' })).flatMap(annotation => {
         if (annotation.subtype !== 'Link' || typeof annotation.url !== 'string' || !/^https?:\/\//i.test(annotation.url)) return []
         const [x0, y0, x1, y1] = annotation.rect
-        const label = items.filter(item => item.transform[4] + item.width > x0 && item.transform[4] < x1 && item.transform[5] + item.height > y0 && item.transform[5] < y1).map(item => item.str.trim()).filter(Boolean).join(' ')
-        return label ? [{ label, url: annotation.url }] : []
+        const anchoredItems = items.filter(item => item.transform[4] + item.width > x0 && item.transform[4] < x1 && item.transform[5] + item.height > y0 && item.transform[5] < y1)
+        const label = anchoredItems.map(item => item.str.trim()).filter(Boolean).join(' ')
+        const anchorY = anchoredItems[0]?.transform[5]
+        const lineIndex = anchorY === undefined ? -1 : textLines.findIndex(line => Math.abs(line.y - anchorY) <= 2)
+        return label ? [{ label, url: annotation.url, ...(lineIndex >= 0 ? { lineIndex } : {}) }] : []
       })
       characterCount += [...text].length
       if (characterCount > 500_000) throw new Error('PDF text exceeds the 500,000 character limit.')

@@ -6,7 +6,7 @@ const proposalRef = z.string().min(1).max(160)
 const contactProposal = contactInputSchema.partial().extend({ fullName: z.string().min(1).max(160).optional(), proposalRef }).strict()
 const skillProposal = skillInputSchema.extend({ proposalRef }).strict()
 const factualProposal = z.object({ text: z.string().min(1).max(10_000), proposalRef }).strict()
-const experienceProposal = experienceInputSchema.extend({ proposalRef, requiresDateResolution: z.boolean().optional(), factualItems: z.array(factualProposal).max(100) }).strict()
+const experienceProposal = experienceInputSchema.extend({ kind: z.enum(['employment', 'training', 'unresolved']), proposalRef, requiresDateResolution: z.boolean().optional(), factualItems: z.array(factualProposal).max(100) }).strict()
 const projectProposal = projectInputSchema.extend({ proposalRef, factualItems: z.array(factualProposal).max(100), technologies: z.array(factualProposal).max(100) }).strict()
 const entryProposal = profileEntryInputSchema.extend({ proposalRef, requiresDateResolution: z.boolean().optional() }).strict()
 const sourceDraftSchema = z.object({ proposalRef, page: z.number().int().positive(), passage: z.string().min(1).max(4000), field: z.string().min(1).max(200) }).strict()
@@ -50,6 +50,7 @@ export const profilePdfApplyResultSchema = z.discriminatedUnion('ok', [
 export type ProfilePdfProposal = z.infer<typeof profilePdfProposalSchema>
 export type ProfilePdfProposalDraft = z.infer<typeof profilePdfProposalDraftSchema>
 export type ProfilePdfPreview = z.infer<typeof profilePdfPreviewSchema>
+export type ProfilePdfSourcePage = { page: number; text: string; links?: Array<{ label: string; url: string; lineIndex?: number }>; warnings?: string[] }
 
 const sectionNames = new Set(['experience', 'employment', 'work experience', 'professional experience', 'employment history', 'training', 'education', 'skills', 'technical skills', 'programming languages', 'tools', 'concepts', 'summary', 'professional summary', 'projects', 'personal projects', 'certificates', 'certifications', 'languages'])
 const sectionAlias = (value: string) => {
@@ -63,8 +64,279 @@ const sectionAlias = (value: string) => {
 const source = (line: string, page: number, field: string, proposalRef: string) => ({ proposalRef, page, passage: line.slice(0, 4000), field })
 const splitParts = (value: string) => value.split(/\s+[|]\s+/).map(part => part.trim())
 
-/** Conservative marker-led local mapper. Unrecognized lines remain visible as unmapped source text. */
-export function mapProfilePdfPages(pages: Array<{ page: number; text: string; links?: Array<{ label: string; url: string }>; warnings?: string[] }>): ProfilePdfProposalDraft {
+type ProfilePdfPage = ProfilePdfSourcePage
+type SectionedRoleHeader = { title: string; passage: string; page: number; organization?: { text: string; page: number } }
+
+const monthName = '(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)'
+const dateToken = `(?:${monthName}(?:\\s+(?:19|20)\\d{2})?|(?:19|20)\\d{2})`
+const dateRange = `${dateToken}(?:\\s*(?:to|[-–—])\\s*(?:present|current|${dateToken}))?`
+const dateRangeSuffix = new RegExp(`^(.+?)\\s+(${dateRange})$`, 'i')
+const dateRangeOnly = new RegExp(`^(${dateRange})$`, 'i')
+const possibleOrganization = (line: string) => line.length <= 240 && line.trim().split(/\s+/).length <= 7 && !/[.!?]$/.test(line) && !/[@/]/.test(line) && !/^page\s+\d+$/i.test(line)
+const splitDates = (value: string) => {
+  const dates = value.split(/\s+(?:to|[-–—])\s+/i)
+  if (dates.length === 2 && new RegExp(`^${monthName}$`, 'i').test(dates[0]!) && /(?:19|20)\d{2}/.test(dates[1]!)) dates[0] = `${dates[0]} ${dates[1]!.match(/(?:19|20)\d{2}/)![0]}`
+  return dates
+}
+const plainSection = (line: string) => !/^([A-Z][A-Z ]{2,}):\s*/.test(line) ? sectionAlias(line) : undefined
+const isSectionedCv = (pages: ProfilePdfPage[]) => {
+  const lines = pages.flatMap(page => page.text.split(/\n|\s{2,}/).map(line => line.trim()).filter(Boolean))
+  const headings = lines.map(plainSection).filter(Boolean)
+  return headings.length >= 3 && headings.some(section => section === 'education') && headings.some(section => section === 'experience') && lines.some(line => /^[•▪◦*-]\s/.test(line)) && lines.some(line => /(?:19|20)\d{2}/.test(line))
+}
+
+function mapSectionedProfilePdfPages(pages: ProfilePdfPage[]): ProfilePdfProposalDraft {
+  const contact: Record<string, unknown> = {}, skills: Array<z.infer<typeof skillProposal>> = []
+  const experience: Array<z.infer<typeof experienceProposal>> = [], projects: Array<z.infer<typeof projectProposal>> = []
+  const entries: Array<z.infer<typeof entryProposal>> = [], sources: Array<z.infer<typeof sourceDraftSchema>> = [], unmapped: Array<z.infer<typeof unmappedSchema>> = []
+  let section = '', currentRole: z.infer<typeof experienceProposal> | undefined, currentProject: z.infer<typeof projectProposal> | undefined
+  let currentEducation: z.infer<typeof entryProposal> | undefined, pendingRole: SectionedRoleHeader | undefined
+  let skillText = '', skillCategory = 'Technical', skillLines: Array<{ text: string; page: number }> = []
+  let contactRef: string | undefined, skillSequence = 0, summaryText = ''
+  const ensureContactRef = () => contactRef ??= 'contact:0'
+  const addSource = (text: string, page: number, field: string, ref: string) => sources.push(source(text, page, field, ref))
+  const addContactField = (field: string, value: string, text: string, page: number) => {
+    const ref = ensureContactRef()
+    contact[field] = value
+    addSource(text, page, `contact.${field}`, ref)
+  }
+  const addSkill = (name: string, category: string, sourceLines: Array<{ text: string; page: number }>) => {
+    const clean = name.trim()
+    if (!clean) return
+    let skill = skills.find(item => item.name.toLocaleLowerCase() === clean.toLocaleLowerCase() && item.category.toLocaleLowerCase() === category.toLocaleLowerCase())
+    if (!skill) { skill = { name: clean, category, proposalRef: `skill:${skillSequence++}` }; skills.push(skill) }
+    for (const line of sourceLines) addSource(line.text, line.page, `skills.${skill.name}`, skill.proposalRef)
+  }
+  const flushSkills = () => {
+    for (const name of skillText.split(/[,;|•]/).map(value => value.trim()).filter(Boolean)) addSkill(name, skillCategory, skillLines)
+    skillText = ''; skillLines = []
+  }
+  const addRoleFact = (role: z.infer<typeof experienceProposal>, text: string, page: number) => {
+    const value = text.replace(/^[•▪◦*-]\s+/, '').trim()
+    if (!value) return
+    let fact = role.factualItems.at(-1)
+    if (fact) fact.text = `${fact.text} ${value}`
+    else { const ref = `${role.proposalRef}:fact:${role.factualItems.length}`; fact = { text: value, proposalRef: ref }; role.factualItems.push(fact) }
+    addSource(text, page, 'experience.factualItem', fact.proposalRef)
+  }
+  const addProjectFact = (project: z.infer<typeof projectProposal>, text: string, page: number) => {
+    const value = text.replace(/^[•▪◦*-]\s+/, '').trim()
+    if (!value) return
+    let fact = project.factualItems.at(-1)
+    if (fact) fact.text = `${fact.text} ${value}`
+    else { const ref = `${project.proposalRef}:fact:${project.factualItems.length}`; fact = { text: value, proposalRef: ref }; project.factualItems.push(fact) }
+    addSource(text, page, 'projects.factualItem', fact.proposalRef)
+  }
+  const startRole = (header: SectionedRoleHeader, organization: string, evidenceLines: Array<{ text: string; page: number }>, dateText: string) => {
+    const ref = `experience:${experience.length}`, dates = splitDates(dateText)
+    currentRole = {
+      kind: section === 'training' ? 'training' : 'unresolved', title: header.title, organization,
+      description: [header.passage, ...evidenceLines.map(line => line.text)].join('\n'), factualItems: [], proposalRef: ref,
+      ...(dates[0] ? { startDate: dates[0] } : {}), ...(dates[1] ? { endDate: dates[1] } : {})
+    }
+    currentProject = undefined; experience.push(currentRole)
+    addSource(header.passage, header.page, 'experience.role', ref)
+    for (const line of evidenceLines) addSource(line.text, line.page, 'experience.role', ref)
+  }
+  const addProject = (name: string, text: string, page: number) => {
+    const ref = `project:${projects.length}`
+    currentProject = { name, description: text, factualItems: [], technologies: [], links: [], proposalRef: ref }
+    currentRole = undefined; projects.push(currentProject)
+    addSource(text, page, 'projects.project', ref)
+    return currentProject
+  }
+  const addCertificate = (text: string, page: number) => {
+    const clean = text.replace(/^[•▪◦*-]\s+/, '').trim()
+    const viewLabel = clean.match(/\s+(View Certificate|Certificate)\s*$/i)?.[0].trim()
+    const content = viewLabel ? clean.slice(0, -viewLabel.length).trim() : clean
+    const [title, ...issuerParts] = content.split(/\s+[–—-]\s+/)
+    const issuer = issuerParts.join(' – ').trim()
+    if (!title || (!issuer && !viewLabel)) { unmapped.push({ page, text }); return undefined }
+    const proposalRef = `entry:${entries.length}`
+    entries.push({ section: 'certificates', title, ...(issuer ? { issuer } : {}), ...(viewLabel ? { description: viewLabel } : {}), proposalRef })
+    addSource(text, page, 'entries.certificates', proposalRef)
+    return proposalRef
+  }
+  const flushPendingRole = () => {
+    if (!pendingRole) return
+    unmapped.push({ page: pendingRole.page, text: pendingRole.passage })
+    if (pendingRole.organization) unmapped.push(pendingRole.organization)
+    pendingRole = undefined
+  }
+  for (const page of pages) {
+    const lines = page.text.split(/\n|\s{2,}/).map(line => line.trim()).filter(Boolean)
+    const ambiguous = (page.warnings ?? []).some(warning => /multiple text columns|reading order may be ambiguous/i.test(warning))
+    for (const warning of page.warnings ?? []) unmapped.push({ page: page.page, text: warning })
+    if (ambiguous) {
+      if (pendingRole) flushPendingRole()
+      for (const line of lines) unmapped.push({ page: page.page, text: line })
+      continue
+    }
+    const firstHeading = lines.findIndex(line => plainSection(line))
+    const preamble = contact.fullName || firstHeading < 0 ? [] : lines.slice(0, firstHeading)
+    const inlineContact = Boolean(preamble[0]?.includes('|') && /[^\s@]+@[^\s@]+\.[^\s@]+/.test(preamble[0]))
+    if (preamble.length && !inlineContact) {
+      const nameLine = preamble[0]!
+      if (/^[\p{L}][\p{L} .'-]{1,120}$/u.test(nameLine)) addContactField('fullName', nameLine, nameLine, page.page)
+      const headlineLine = preamble[1]
+      if (headlineLine && contact.fullName) {
+        if (/^[\p{L}\p{N}][\p{L}\p{N} /&+.,()'-]{1,120}$/u.test(headlineLine) && /\b(?:engineer|developer|scientist|analyst|designer|manager|architect|consultant|researcher|specialist|trainee)\b/i.test(headlineLine)) addContactField('headline', headlineLine, headlineLine, page.page)
+        else unmapped.push({ page: page.page, text: headlineLine })
+      }
+      for (const line of preamble) {
+        const email = line.match(/[^\s@]+@[^\s@]+\.[^\s@]+/i)?.[0]
+        if (email) addContactField('email', email.replace(/[.,;]$/, ''), line, page.page)
+        const phone = line.match(/(?:\+\d{1,3}[\s.-]?)?\d[\d ()-]{6,}\d/)?.[0]
+        if (phone) addContactField('phone', phone.trim(), line, page.page)
+        const location = line.includes('|') && (email || phone) ? line.split('|').map(part => part.replace(/^[^\p{L}\p{N}]+/u, '').trim()).filter(part => part && !/[^\s@]+@[^\s@]+\.[^\s@]+/.test(part) && !/(?:\+?\d[\d ()-]{6,}\d)/.test(part) && !/^https?:\/\//i.test(part)).at(-1) : undefined
+        if (location && /^[\p{L}][\p{L} .,'-]{1,80}$/u.test(location) && location.toLocaleLowerCase() !== headlineLine?.toLocaleLowerCase()) addContactField('location', location, line, page.page)
+      }
+    }
+    const projectRefsAtLine = new Map<number, string>(), certificateRefsAtLine = new Map<number, string>()
+    for (let index = 0; index < lines.length; index++) {
+      const line = lines[index]!
+      if (preamble.includes(line)) continue
+      if (pendingRole) {
+        const dates = line.match(dateRangeOnly)
+        if (dates) {
+          if (pendingRole.organization) startRole(pendingRole, pendingRole.organization.text, [pendingRole.organization, { text: line, page: page.page }], dates[1]!)
+          else { flushPendingRole(); unmapped.push({ page: page.page, text: line }); continue }
+          pendingRole = undefined; continue
+        }
+        const match = line.match(dateRangeSuffix)
+        if (match && match[1]!.trim()) { startRole(pendingRole, match[1]!.trim(), [...(pendingRole.organization ? [pendingRole.organization] : []), { text: line, page: page.page }], match[2]!); pendingRole = undefined; continue }
+        if (line === contact.fullName || line === contact.headline) continue
+        if (!pendingRole.organization && !plainSection(line) && !/^[•▪◦*-]\s/.test(line) && possibleOrganization(line)) { pendingRole.organization = { text: line, page: page.page }; continue }
+        flushPendingRole()
+      }
+      const heading = plainSection(line)
+      if (heading) {
+        flushSkills(); section = heading; skillCategory = heading === 'programming languages' ? 'Languages' : heading === 'tools' ? 'Tools' : heading === 'concepts' ? 'Domain' : 'Technical'; currentRole = undefined; currentProject = undefined; currentEducation = undefined
+        continue
+      }
+      if (section === 'skills' || section === 'programming languages' || section === 'tools' || section === 'concepts') {
+        const categoryLine = line.match(/^([^:]{2,60}):\s*(.*)$/)
+        if (categoryLine) {
+          flushSkills()
+          const label = categoryLine[1]!.trim().toLocaleLowerCase()
+          skillCategory = ['languages', 'programming languages'].includes(label) ? 'Languages' : /tools|platforms/.test(label) ? 'Tools' : label === 'concepts' ? 'Domain' : 'Technical'
+          skillText = categoryLine[2]!.trim(); skillLines = [{ text: line, page: page.page }]
+        } else {
+          if (skillText) skillText += ` ${line}`
+          else skillText = line
+          skillLines.push({ text: line, page: page.page })
+          if (!skillCategory) skillCategory = section === 'programming languages' ? 'Languages' : section === 'tools' ? 'Tools' : section === 'concepts' ? 'Domain' : 'Technical'
+        }
+        continue
+      }
+      if (section === 'education') {
+        const educationLine = line.replace(/^[•▪◦*-]\s+/, '')
+        const monthDate = `${monthName}\\s+(?:19|20)\\d{2}`
+        const namedDates = educationLine.match(new RegExp(`^(.+?)\\s+(${monthDate})(?:\\s*[–—-]\\s*(${monthDate}))?$`, 'i'))
+        const dated = namedDates ?? educationLine.match(/^(.+?)\s+((?:19|20)\d{2}(?:-\d{2}(?:-\d{2})?)?)(?:\s*[–—-]\s*((?:19|20)\d{2}(?:-\d{2}(?:-\d{2})?)?))?$/)
+        if (dated || /^[•▪◦*-]\s/.test(line)) {
+          const title = dated?.[1]?.trim() ?? educationLine
+          if (title) {
+            const proposalRef = `entry:${entries.length}`
+            const supportedDate = (date?: string) => {
+              if (!date) return undefined
+              if (/^\d{4}(?:-(?:0[1-9]|1[0-2]))?$/.test(date)) return date
+              const monthAndYear = date.match(new RegExp(`^${monthName}\\s+((?:19|20)\\d{2})$`, 'i'))
+              if (!monthAndYear) return undefined
+              const month = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'].indexOf(date.slice(0, 3).toLowerCase()) + 1
+              return month ? `${monthAndYear[1]}-${String(month).padStart(2, '0')}` : undefined
+            }
+            const startDate = supportedDate(dated?.[2]), endDate = supportedDate(dated?.[3])
+            const requiresDateResolution = Boolean(dated && (!startDate || dated[3] && !endDate))
+            currentEducation = { section: 'education', title, ...(startDate ? { startDate } : {}), ...(endDate ? { endDate } : {}), ...(requiresDateResolution ? { requiresDateResolution: true } : {}), proposalRef }
+            entries.push(currentEducation); addSource(line, page.page, 'entries.education', proposalRef)
+            if (requiresDateResolution) { addSource(line, page.page, 'entries.education.date', proposalRef); unmapped.push({ page: page.page, text: `Date precision needs review: ${line}` }) }
+            continue
+          }
+        }
+        const grade = line.match(/(?:CGPA|GPA|Grade)\s*:?\s*[^,;]+/i)?.[0]
+        const institution = (grade ? line.slice(0, line.indexOf(grade)) : line).trim()
+        if (currentEducation && /(?:university|college|institute|school)\b/i.test(institution)) {
+          currentEducation.institution = institution
+          addSource(line, page.page, 'entries.education.institution', currentEducation.proposalRef)
+          if (grade) { currentEducation.description = grade; addSource(line, page.page, 'entries.education.description', currentEducation.proposalRef) }
+        } else unmapped.push({ page: page.page, text: line })
+        continue
+      }
+      if (section === 'experience' || section === 'training') {
+        const roleText = line.replace(/^[•▪◦*-]\s+/, '').trim()
+        const inlineRole = roleText.match(/^(.+?)\s+[—–-]\s+(.+?)\s*[|,]\s*((?:19|20)\d{2}(?:\s*[-–—]\s*(?:(?:present|current)|(?:19|20)\d{2}))?)$/i)
+        if (inlineRole) {
+          const dateParts = splitDates(inlineRole[3]!), ref = `experience:${experience.length}`
+          currentRole = { kind: section === 'training' ? 'training' : 'employment', title: inlineRole[1]!.trim(), organization: inlineRole[2]!.trim(), description: line, factualItems: [], proposalRef: ref, ...(dateParts[0] ? { startDate: dateParts[0] } : {}), ...(dateParts[1] ? { endDate: dateParts[1] } : {}) }
+          experience.push(currentRole); addSource(line, page.page, 'experience.role', ref); continue
+        }
+        const nextLine = lines[index + 1], followingLine = lines[index + 2]
+        const organizationThenDate = Boolean(nextLine && possibleOrganization(nextLine) && followingLine && dateRangeOnly.test(followingLine))
+        const undatedRole = Boolean(nextLine && possibleOrganization(nextLine) && /^[\p{L}\p{N}][\p{L}\p{N} /&+.,'-]{2,180}\s+(?:Remote|Online|Hybrid)$/iu.test(roleText))
+        if (/^[•▪◦*-]\s/.test(line) && (nextLine ? dateRangeSuffix.test(nextLine) || organizationThenDate || undatedRole : true)) {
+          const title = roleText.replace(/\s+(?:Remote|Online|Hybrid)$/i, '').trim()
+          pendingRole = { title, passage: line, page: page.page }; currentRole = undefined
+          continue
+        }
+        if (currentRole) addRoleFact(currentRole, line, page.page)
+        else unmapped.push({ page: page.page, text: line })
+        continue
+      }
+      if (section === 'projects' || section === 'personal projects') {
+        const bullet = /^[•▪◦*-]\s/.test(line)
+        const linkSuffix = bullet && page.links?.some(link => line.toLocaleLowerCase().endsWith(link.label.toLocaleLowerCase()) && /github|repository/i.test(link.label))
+        const projectText = line.replace(/^[•▪◦*-]\s+/, '').trim()
+        const repositorySuffix = projectText.match(/\s+(?:GitHub|Repository|Repo)$/i)?.[0]
+        const projectName = linkSuffix && repositorySuffix ? projectText.slice(0, -repositorySuffix.length).trim() : undefined
+        const delimitedProject = projectText.match(/^(.+?)\s+[—–-]\s+([\w.+# ,/]+)$/)
+        if (projectName || delimitedProject) {
+          if (projectName) projectRefsAtLine.set(index, addProject(projectName, line, page.page).proposalRef)
+          else {
+            const name = delimitedProject![1]!.trim(), technologyText = delimitedProject![2]!, project = addProject(name, line, page.page)
+            projectRefsAtLine.set(index, project.proposalRef)
+            for (const text of technologyText.split(/[,;]+/).map(item => item.trim()).filter(Boolean)) { const ref = `${project.proposalRef}:technology:${project.technologies.length}`; project.technologies.push({ text, proposalRef: ref }); addSource(line, page.page, 'projects.technology', ref) }
+          }
+        } else if (currentProject) addProjectFact(currentProject, line, page.page)
+        else unmapped.push({ page: page.page, text: line })
+        continue
+      }
+      if (section === 'certificates' || section === 'certifications') {
+        if (/^[•▪◦*-]\s/.test(line)) { const ref = addCertificate(line, page.page); if (ref) certificateRefsAtLine.set(index, ref) }
+        else unmapped.push({ page: page.page, text: line })
+        continue
+      }
+      if (section === 'summary') { summaryText = [summaryText, line].filter(Boolean).join('\n'); addSource(line, page.page, 'entries.summary', 'entry:summary'); continue }
+      if (section === 'languages') {
+        for (const title of line.replace(/^[•▪◦*-]\s+/, '').split(/[,;]+/).map(value => value.trim()).filter(Boolean)) {
+          const proposalRef = `entry:${entries.length}`; entries.push({ section: 'languages', title, proposalRef }); addSource(line, page.page, 'entries.languages', proposalRef)
+        }
+        continue
+      }
+      unmapped.push({ page: page.page, text: line })
+    }
+    flushSkills()
+    for (const link of page.links ?? []) {
+      const passage = `${link.label} — ${link.url}`
+      const contactLink = Boolean(contact.fullName) && /linkedin\.com|github\.com\/[^/]+\/?$/i.test(link.url)
+      const anchoredProjectRef = link.lineIndex === undefined ? undefined : projectRefsAtLine.get(link.lineIndex)
+      const anchoredProject = anchoredProjectRef ? projects.find(project => project.proposalRef === anchoredProjectRef) : undefined
+      const anchoredCertificateRef = link.lineIndex === undefined ? undefined : certificateRefsAtLine.get(link.lineIndex)
+      const anchoredCertificate = anchoredCertificateRef ? entries.find(entry => entry.proposalRef === anchoredCertificateRef) : undefined
+      if (contactLink) { const label = /linkedin\.com/i.test(link.url) ? 'LinkedIn' : /github\.com/i.test(link.url) ? 'GitHub' : link.label; contact.links = [...(Array.isArray(contact.links) ? contact.links as Array<{ label: string; url: string }> : []), { label, url: link.url }]; addSource(passage, page.page, 'contact.links', ensureContactRef()) }
+      else if (anchoredProject) { const label = /github/i.test(link.label) || /github\.com/i.test(link.url) ? 'GitHub' : /repository/i.test(link.label) ? 'Repository' : link.label; anchoredProject.links.push({ label, url: link.url }); addSource(passage, page.page, 'projects.links', anchoredProject.proposalRef) }
+      else if (anchoredCertificate) { anchoredCertificate.link = link.url; addSource(passage, page.page, 'entries.certificates.link', anchoredCertificate.proposalRef) }
+      else unmapped.push({ page: page.page, text: `Unassigned PDF hyperlink: ${passage}` })
+    }
+  }
+  if (pendingRole) flushPendingRole()
+  if (summaryText) entries.push({ section: 'summary', title: 'Summary', description: summaryText, proposalRef: 'entry:summary' })
+  const cleanContact = Object.fromEntries(Object.entries(contact).filter(([, value]) => typeof value !== 'string' || value.trim()))
+  if (Object.keys(cleanContact).length) Object.assign(cleanContact, { proposalRef: ensureContactRef() })
+  return profilePdfProposalDraftSchema.parse({ ...(Object.keys(cleanContact).length ? { contact: cleanContact } : {}), skills, experience, projects, entries, sources, unmapped })
+}
+
+function mapMarkerLedProfilePdfPages(pages: ProfilePdfPage[]): ProfilePdfProposalDraft {
   const contact: Record<string, unknown> = {}, skills: Array<z.infer<typeof skillProposal>> = []
   const experience: Array<z.infer<typeof experienceProposal>> = [], projects: Array<z.infer<typeof projectProposal>> = []
   const entries: Array<z.infer<typeof entryProposal>> = [], sources: Array<z.infer<typeof sourceDraftSchema>> = [], unmapped: Array<z.infer<typeof unmappedSchema>> = []
@@ -236,4 +508,8 @@ export function mapProfilePdfPages(pages: Array<{ page: number; text: string; li
   const cleanContact = Object.fromEntries(Object.entries(contact).filter(([, value]) => typeof value !== 'string' || value.trim()))
   if (Object.keys(cleanContact).length) Object.assign(cleanContact, { proposalRef: ensureContactRef() })
   return profilePdfProposalDraftSchema.parse({ ...(Object.keys(cleanContact).length ? { contact: cleanContact } : {}), skills, experience, projects, entries, sources, unmapped })
+}
+
+export function mapProfilePdfPages(pages: ProfilePdfPage[]): ProfilePdfProposalDraft {
+  return isSectionedCv(pages) ? mapSectionedProfilePdfPages(pages) : mapMarkerLedProfilePdfPages(pages)
 }

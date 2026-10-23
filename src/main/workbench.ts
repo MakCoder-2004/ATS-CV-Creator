@@ -437,6 +437,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       if (!validHash || !checked.success) return { ok: false, message: 'The reviewed CV proposals are invalid. Reopen the PDF and review them again.' }
       const proposals = checked.data
       if (proposals.contact && !proposals.contact.fullName?.trim()) return { ok: false, message: 'Add a full name to the contact proposal or skip it before applying.' }
+      if (proposals.experience.some(item => item.kind === 'unresolved' && proposals.decisions?.[item.proposalRef]?.action !== 'skip')) return { ok: false, message: 'Choose Employment or Training for each included experience record.' }
       const persistentId = (proposalRef: string) => proposals.proposalIds[proposalRef]
       const associate = (ownerId: string, ownerRevision: number, proposalRef: string) => {
         const proposalId = persistentId(proposalRef)
