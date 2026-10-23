@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { Worker } from 'node:worker_threads'
+import type { ProfilePdfSourcePage } from '../shared/profile-pdf-import'
 
 export const profilePdfLimits = Object.freeze({
   bytes: 15 * 1024 * 1024,
@@ -10,7 +11,7 @@ export const profilePdfLimits = Object.freeze({
   timeoutMs: 5_000
 })
 
-export type PdfSourcePage = { page: number; text: string; links: Array<{ label: string; url: string }>; warnings?: string[] }
+export type PdfSourcePage = ProfilePdfSourcePage
 export type PdfIntake = { sha256: string; pages: PdfSourcePage[]; characterCount: number }
 type WorkerResult = { ok: true; value: PdfIntake } | { ok: false; message: string }
 
