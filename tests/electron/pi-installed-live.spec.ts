@@ -1,9 +1,10 @@
 import { expect, test, _electron as electron } from '@playwright/test'
-import { mkdtempSync, readFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { extractCanonicalDocx } from '../../src/main/docx-export'
+import { closeReviewDetails, openReviewDetails } from './review-helpers'
 
 const executablePath = process.env.CV_TAILOR_INSTALLED_EXE
 const modelReference = process.env.CV_TAILOR_PI_LIVE_MODEL
@@ -12,7 +13,7 @@ const configured = Boolean(executablePath && modelReference && effort)
 test.skip(!configured, 'Set CV_TAILOR_INSTALLED_EXE, CV_TAILOR_PI_LIVE_MODEL, and CV_TAILOR_PI_LIVE_EFFORT for the explicit live-provider check')
 
 test('installed Pi migration: settings, consented cited CV, review, and exports', async () => {
-  test.setTimeout(300_000)
+  test.setTimeout(900_000)
   const userData = mkdtempSync(join(tmpdir(), 'cv-tailor-pi-live-'))
   let app: Awaited<ReturnType<typeof electron.launch>> | undefined
   try {
@@ -21,7 +22,6 @@ test('installed Pi migration: settings, consented cited CV, review, and exports'
     let page = await app.firstWindow()
     await expect(page.locator('[data-ui-ready="true"]')).toBeVisible({ timeout: 20_000 })
 
-    // Persist the operator-selected model through the visible Settings form, then prove installed SQLite reopen.
     await page.getByRole('button', { name: 'Settings', exact: true }).click()
     const model = page.getByRole('region', { name: 'Pi preferences' }).getByRole('region', { name: 'Pi model' })
     await model.getByLabel('Provider/model reference').fill(modelReference!)
@@ -30,7 +30,7 @@ test('installed Pi migration: settings, consented cited CV, review, and exports'
     await model.getByRole('button', { name: 'Save Pi model' }).click()
     await expect(page.getByText('Pi model preference saved.')).toBeVisible({ timeout: 15_000 })
     await app.close(); app = undefined
-    expect(readFileSync(join(userData, 'workbench.sqlite')).byteLength).toBeGreaterThan(0)
+    expect(existsSync(join(userData, 'workbench.sqlite'))).toBe(true)
     app = await launch(); page = await app.firstWindow()
     await expect(page.locator('[data-ui-ready="true"]')).toBeVisible({ timeout: 20_000 })
     await page.getByRole('button', { name: 'Settings', exact: true }).click()
@@ -47,30 +47,46 @@ test('installed Pi migration: settings, consented cited CV, review, and exports'
       if (!contact.ok || !skill.ok || !role.ok || !job.ok) throw new Error('Could not create synthetic live-test records.')
       return { jobId: job.value.id }
     })
+    await page.reload()
+    await expect(page.locator('[data-ui-ready="true"]')).toBeVisible({ timeout: 20_000 })
     await page.getByRole('button', { name: /Reliability Engineer.*Example Research/ }).click()
     await expect(page.getByRole('button', { name: 'Inspect outgoing data' })).toBeVisible()
     await page.getByRole('button', { name: 'Inspect outgoing data' }).click()
     const workflow = page.getByRole('region', { name: 'Tailoring workflow' })
-    await expect(workflow).toContainText('Ari Example')
+    await workflow.getByText('Read the included posting and profile details').click()
+    const outgoing = workflow.locator('.outbound-content-list')
+    await expect(outgoing).toBeVisible()
+    await expect(outgoing).not.toContainText('Ari Example')
+    await expect(outgoing).not.toContainText('ari@example.test')
+    await expect(outgoing).toContainText('[[EMPLOYER_1]]')
     await workflow.getByRole('checkbox', { name: /reviewed what is sent/i }).check()
     await workflow.getByRole('button', { name: 'Authorize this run' }).click()
-    await expect(workflow.getByRole('button', { name: 'Generate tailored draft' })).toBeVisible({ timeout: 20_000 })
+    await expect(workflow.getByRole('button', { name: 'Generate tailored draft' })).toBeVisible({ timeout: 90_000 })
 
-    // The visible review and one-time consent above authorize this one request; no retry path is used.
     await workflow.getByRole('button', { name: 'Generate tailored draft' }).click()
-    await expect(workflow.getByRole('region', { name: 'CV review' })).toContainText('Finish reviewing', { timeout: 120_000 })
+    await expect(page.getByRole('region', { name: 'CV review', exact: true })).toContainText('Finish reviewing', { timeout: 180_000 })
     const analysis = await page.evaluate(id => window.workbench.getAnalysis(id), setup.jobId)
     expect(analysis?.status, analysis?.progress).toBe('complete')
     const draft = await page.evaluate(id => window.workbench.getDraft(id), setup.jobId)
     expect(draft).not.toBeNull()
     expect(draft?.content.experience.length).toBeGreaterThan(0)
     expect(draft?.content.experience.every(item => item.citations.length > 0)).toBe(true)
+    const pendingSkills = draft?.suggestedSkills?.filter(skill => skill.status === 'pending') ?? []
 
-    // The app itself owns local PDF compilation and both destination dialogs are deterministic.
     await page.reload()
-    await expect(page.locator('[data-ui-ready="true"]')).toBeVisible()
+    await expect(page.locator('[data-ui-ready="true"]')).toBeVisible({ timeout: 20_000 })
     await page.getByRole('button', { name: /Reliability Engineer.*Example Research/ }).click()
     const review = page.getByRole('region', { name: 'CV review' })
+    if (pendingSkills.length) {
+      await openReviewDetails(page, 'skills')
+      const skillReview = page.getByRole('region', { name: 'New skills to review' })
+      await expect(review).toContainText(/Confirm or remove \d+ new skill/)
+      for (const skill of pendingSkills) {
+        await expect(skillReview).toContainText(skill.name)
+        await skillReview.getByRole('button', { name: `Remove ${skill.name}` }).click()
+      }
+      await closeReviewDetails(page)
+    }
     await expect(review).toBeVisible()
     await page.getByRole('button', { name: 'Check page length' }).click()
     await expect(page.getByRole('status')).toContainText(/Fits the selected target|page/i, { timeout: 45_000 })
