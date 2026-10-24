@@ -34,6 +34,7 @@ export interface OutboundBundle {
   readonly outgoing: Readonly<OutboundPayload>
   readonly preview: Readonly<{ warnings: readonly string[]; residualSensitivityNotice: string }>
   readonly restoreIdentifiers: (text: string) => string
+  readonly minimizeIdentifiers: (text: string) => string
   readonly containsRestoredIdentifier: (value: unknown) => boolean
   readonly isAuthorizedText: (text: string) => boolean
   readonly isAuthorizedPayload: (payload: unknown) => boolean
@@ -136,7 +137,7 @@ export function prepareOutboundBundle(source: ConsentSource): OutboundBundle {
     }
     return withinScope(payload)
   }
-  return Object.freeze({ id: scopeHash, scopeHash, outgoing: frozen, verifyIntegrity: () => digest({ outgoing: frozen, scope: frozenScope }) === scopeHash, preview: deepFreeze({ warnings: ['Unstructured posting and career text can still identify you; review the complete outgoing preview.'], residualSensitivityNotice: 'Residual sensitivity may remain in free text; this bundle does not guarantee anonymity.' }), restoreIdentifiers: (text: string) => [...restore].reduce((result, [token, value]) => result.replaceAll(token, value), text), containsRestoredIdentifier, isAuthorizedText, isAuthorizedPayload })
+  return Object.freeze({ id: scopeHash, scopeHash, outgoing: frozen, verifyIntegrity: () => digest({ outgoing: frozen, scope: frozenScope }) === scopeHash, preview: deepFreeze({ warnings: ['Unstructured posting and career text can still identify you; review the complete outgoing preview.'], residualSensitivityNotice: 'Residual sensitivity may remain in free text; this bundle does not guarantee anonymity.' }), restoreIdentifiers: (text: string) => [...restore].reduce((result, [token, value]) => result.replaceAll(token, value), text), minimizeIdentifiers: scrub, containsRestoredIdentifier, isAuthorizedText, isAuthorizedPayload })
 }
 
 export const hashOutboundScope = digest
