@@ -12,7 +12,7 @@ These files describe the current code or govern changes to it.
 | [Project README](../README.md) | Product scope and a short setup and release summary. |
 | [Glossary](../GLOSSARY.md) | Terms for career facts, posting sources, drafts, and approval. |
 | [Architecture](architecture.md) | Electron boundaries, storage, model dispatch, and invariants. |
-| [Implemented workflows](workflows.md) | Current source flows; the Pi migration still needs installed-app validation. |
+| [Implemented workflows](workflows.md) | Current shipped flows; see the installed Pi migration validation below. |
 | [Develop and verify](development.md) | Setup, tests, native bindings, packaging, and installed Windows checks. |
 | [Design system index](design-system.md) | Repository entry point for the UI contract. |
 | [Design system](../design%20system/README.md) | Normative design reading order and prototype boundary. |
@@ -55,6 +55,7 @@ These reports record tests, artifacts, and claims at the stated version or issue
 | [Review workspace](validation/review-workspace.md) | v0.3.0 review, manual records, and qualification comparison. |
 | [Pi migration baseline](validation/pi-sdk-baseline.md) | Pre-change Settings screenshots, offline model-work checks, and installed SQLite reopen for issue #64. |
 | [Installed Pi SDK proof](validation/pi-sdk-proof.md) | Tool-free request, local auth failures, and cancellation from installed Electron for issue #65. |
+| [Installed Pi migration 0.4.0](validation/pi-sdk-installed-0.4.0.md) | Real provider CV, regeneration, faithfulness, old-PDF/DOCX proposals, login gates, backup/reopen, and Settings screenshots. |
 
 ## Prototype design evidence
 

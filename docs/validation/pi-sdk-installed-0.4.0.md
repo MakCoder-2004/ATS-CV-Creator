@@ -1,0 +1,27 @@
+# Pi migration: installed Windows 0.4.0 validation
+
+Validation used the user's confirmed fresh Windows test machine, an actual NSIS installation of CV Tailor 0.4.0, and isolated synthetic workspaces. No personal CV or Pi credential was opened, copied, logged, or altered. The real model used for the successful requests was `openai-codex/gpt-6-luna`; CV generation and optional faithfulness used **low** thinking, and old-CV structuring used **high**. These are tested selections, not a claim that every provider or thinking level will return valid data.
+
+## Installation and release checks
+
+The installer was built with physical dependencies in `E:/cv-pi-rel` using `npm run dist:win`, then installed from `release/CV-Tailor-Setup-0.4.0.exe` with NSIS. Installer exit was zero, Windows identified CV Tailor 0.4.0, and the installed `app.asar` changed after each rebuilt installation. The last package included source commit `d7400df` (cherry-picked as `571a266`). Packaging verified native SQLite under Electron ABI 140 and the bundled LaTeX toolchain. The installed app was exercised at `C:/Users/Makrious/AppData/Local/Programs/CV Tailor/CV Tailor.exe` with temporary `--user-data-dir` directories, never the user's existing workspace.
+
+| Installed check | Result | Evidence |
+|---|---|---|
+| Settings save, close/reopen, Pi model and effort persistence; posting analysis; cited CV generation; review/approval; measured page fit; approved PDF and editable DOCX export | **Pass**, one real-provider test | `tests/electron/pi-installed-live.spec.ts`; release log `.pi-release-live-cv-r3.log` |
+| Optional batched faithfulness, fresh consent for one paragraph regeneration, pending comparison, reject without changing the draft, reopen with same revision | **Pass**, one real-provider test | `tests/electron/pi-installed-regeneration-live.spec.ts`; release log `.pi-release-live-regeneration-r2.log` |
+| Synthetic old PDF and DOCX uploaded separately; exact outgoing preview and one-time consent; Pi proposals returned for review without applying profile facts | **Pass**, one request per format with high thinking | `tests/electron/pi-installed-old-cv-proposals.spec.ts`; release log `.pi-release-live-old-cv-r3.log` |
+| Unsupported effort on a registered non-reasoning model | **Pass**, rejected before saving or dispatch | `tests/electron/pi-installed-negative.spec.ts`; release log `.pi-release-installed-negative.log` |
+| Saved Pi selection with empty isolated Pi agent directory and no credential environment | **Pass**, installed analysis failed with zero attempts, no provider request | Same negative spec and log; did not modify the user's Pi directory |
+| SQLite reopen, released v1/v2 backup upgrade, v3 restore, bundled LaTeX compilation using a generated draft | **Pass**, three installed checks | `tests/electron/installed.spec.ts`; release log `.pi-release-installed-offline-final.log` |
+| Legacy app-owned encrypted OpenRouter key deletion, transactional rollback, unrelated credential row preservation, legacy run non-resumption | **Pass in synthetic source tests**; the user's actual workspace was not opened | `tests/pi-settings-migration.test.ts`; source unit run pending final integration |
+
+No test automatically retried a potentially charged request. The first live CV test stopped **before** consent on a brittle placeholder assertion; no call occurred. The next completed scoring request returned prose because the Pi prompt omitted its response schema, and the app rejected that response; bounded schema system instructions fixed it. An old-PDF structuring request at low thinking returned an invalid structured response, preserved the local proposals, and did not run DOCX. Bounded direct Pi probes with only synthetic text identified blank descriptions and unsupported citation/category fields. A stronger task-specific prompt and high thinking passed both shape and provenance validation, then the separately consented installed PDF and DOCX paths succeeded. The failed low-thinking outcome is not represented as a pass.
+
+## Settings visual comparison
+
+The installed Settings layout was captured in fresh, blank workspaces. Compared with the [0.3.0 baseline](pi-sdk-baseline.md), the desktop two-column and narrow single-column structure, faithfulness panel, backup controls, labels, navigation, and appearance behavior remain intact. The old API-key and usage-budget blocks are replaced by Pi model and sign-in guidance. Both themes at 1440 and 375 pixels are readable, show no page-level horizontal overflow, and persist appearance across SQLite reopen. Images: [light desktop](pi-sdk-installed-0.4.0/installed-settings-light-1440.png), [light narrow](pi-sdk-installed-0.4.0/installed-settings-light-375.png), [dark desktop](pi-sdk-installed-0.4.0/installed-settings-dark-1440.png), [dark narrow](pi-sdk-installed-0.4.0/installed-settings-dark-375.png). The installed capture log is `.pi-release-installed-settings-screenshots.log` in the disposable release worktree.
+
+## Remaining integration gate
+
+Before closing #69, #71, and parent #63: integrate the source and test-only branches to main; run the complete Node, build, Electron, link and release checks in the documented ABI order; record those results here. A real provider-side quota rejection cannot be forced safely; source-level failure/recovery tests are the reproducible quota gate. The installed run verifies successful Pi authentication without examining Pi's credential files.

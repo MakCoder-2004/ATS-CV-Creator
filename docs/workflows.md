@@ -1,6 +1,6 @@
 # Implemented workflows
 
-This page describes the current source code. The Pi migration has not passed an installed 0.4.0 release check. The earlier installed 0.3.0 app still uses OpenRouter. This is a reference for product changes, not a description of the browser-only prototype or a plan for future job discovery. The [architecture map](architecture.md) identifies the code that owns each boundary.
+This page describes the current Pi-powered source code and the [installed 0.4.0 validation](validation/pi-sdk-installed-0.4.0.md). Earlier 0.3.0 validation reports remain historical evidence for the former OpenRouter release. This is a reference for product changes, not a description of the browser-only prototype or a plan for future job discovery. The [architecture map](architecture.md) identifies the code that owns each boundary.
 
 ## Prepare a tailored CV
 
