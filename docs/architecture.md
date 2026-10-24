@@ -48,7 +48,7 @@ The Saved jobs link flow accepts only named, public HTTPS Lever posting detail U
 
 Before model work, [`src/shared/outbound-consent.ts`](../src/shared/outbound-consent.ts) constructs a minimized, scoped payload from the current posting and profile. [`src/main/workbench.ts`](../src/main/workbench.ts) binds authorization to a run and scope hash. Accepting a preview alone does not send the request. `startAnalysis` begins analysis for the authorized run, even when it can reuse compatible cached data. Draft generation requires the analysis and authorization for that run; a prior cached result is not permission to generate again.
 
-[`src/main/posting-analysis.ts`](../src/main/posting-analysis.ts) and [`src/main/openrouter-analysis-transport.ts`](../src/main/openrouter-analysis-transport.ts) handle bounded OpenRouter calls, model capacity, retries, and usage limits. The dispatcher rechecks generation limits inside the shared request queue before each physical provider call, so concurrent jobs cannot consume the same remaining local attempt. [`src/main/source-linked-generation.ts`](../src/main/source-linked-generation.ts) uses a LangGraph state graph to score eligible evidence, select content for a one- or two-page target, and produce structured, cited wording. It rejects missing or foreign citations and incompatible recovered checkpoints. [`src/main/sqlite-checkpoint.ts`](../src/main/sqlite-checkpoint.ts) stores graph checkpoints. The model supplies content, not executable LaTeX or authority to change profile facts.
+[`src/main/posting-analysis.ts`](../src/main/posting-analysis.ts) and [`src/main/openrouter-analysis-transport.ts`](../src/main/openrouter-analysis-transport.ts) handle bounded OpenRouter calls, model capacity, retries, and usage limits. [`src/main/source-linked-generation.ts`](../src/main/source-linked-generation.ts) uses a LangGraph state graph to score eligible evidence, select content for a one- or two-page target, and produce structured, cited wording. It rejects missing or foreign citations and incompatible recovered checkpoints. [`src/main/sqlite-checkpoint.ts`](../src/main/sqlite-checkpoint.ts) stores graph checkpoints. The model supplies content, not executable LaTeX or authority to change profile facts.
 
 ## Review, export, and backup
 
@@ -62,6 +62,7 @@ Profile PDF and DOCX imports extract text in bounded workers and produce proposa
 
 - Shared contracts define record shapes. IPC, network, file, and provider boundaries validate external input.
 - Consent binds to the operation and current source revisions. A cache hit does not waive new-run authorization.
+- The dispatcher checks generation budgets inside its shared request queue before each physical provider call.
 - Posting source snapshots, accepted posting revisions, profile evidence, and draft wording remain distinct. Posting keywords are not career facts.
 - The app-owned canonical document, citation checks, PDF page measurement, and approval guard constrain export.
 - The [frontend design contract](../design%20system/README.md) governs renderer changes. Prototype state is design evidence, not production data or a supported feature.
