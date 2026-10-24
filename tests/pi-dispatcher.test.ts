@@ -13,7 +13,7 @@ function setup(complete = vi.fn(async () => result())) {
   const hooks = { onAttempt: vi.fn(), onAttemptComplete: vi.fn() }
   const dispatcher = createPiDispatcher(runtime, hooks)
   const input = (overrides: Record<string, unknown> = {}) => ({ runId: "run", consentId: "consent", jobId: "job", selection, prompt: "authorized prompt", responseSchema: z.object({ ok: z.boolean() }), maxOutputTokens: 32, maxResponseBytes: 100, ...overrides })
-  return { dispatcher, hooks, complete, input }
+  return { dispatcher, runtime, hooks, complete, input }
 }
 
 describe("Pi dispatcher", () => {
@@ -22,6 +22,14 @@ describe("Pi dispatcher", () => {
     await expect(s.dispatcher.dispatch(s.input())).rejects.toMatchObject({ attempts: 0 })
     s.dispatcher.authorize("run", "new-consent")
     await expect(s.dispatcher.dispatch(s.input())).rejects.toMatchObject({ attempts: 0 })
+    expect(s.complete).not.toHaveBeenCalled()
+  })
+  it("does not record an attempt when the selected model has no local authentication", async () => {
+    const s = setup(); s.dispatcher.authorize("run", "consent")
+    vi.spyOn(s.runtime, "getAvailable").mockResolvedValue([])
+    await expect(s.dispatcher.dispatch(s.input())).rejects.toMatchObject({ attempts: 0 })
+    expect(s.hooks.onAttempt).not.toHaveBeenCalled()
+    expect(s.hooks.onAttemptComplete).not.toHaveBeenCalled()
     expect(s.complete).not.toHaveBeenCalled()
   })
   it("parses valid response and accounts for exactly one physical attempt", async () => {
@@ -57,7 +65,7 @@ describe("Pi dispatcher", () => {
       const s = setup(vi.fn(async () => response)); s.dispatcher.authorize("run", "consent")
       const maxResponseBytes = response.stopReason === "stop" && response.content[0].text.startsWith("{") ? 4 : 100
       await expect(s.dispatcher.dispatch(s.input({ maxResponseBytes }))).rejects.toBeInstanceOf(PiDispatchError)
-      expect(s.hooks.onAttemptComplete).toHaveBeenCalledWith("run", false)
+      expect(s.hooks.onAttemptComplete).toHaveBeenCalledWith("run", response.stopReason === "stop")
       expect(s.hooks.onAttempt).toHaveBeenCalledTimes(1)
     }
     const malformed = setup(vi.fn(async () => result('{"ok":"wrong"}'))); malformed.dispatcher.authorize("run", "consent")

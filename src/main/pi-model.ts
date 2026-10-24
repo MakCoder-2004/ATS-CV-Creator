@@ -7,6 +7,7 @@ export interface PiTaskRequest {
   readonly prompt: string
   readonly signal: AbortSignal
   readonly maxOutputTokens: number
+  readonly onDispatch?: () => void
 }
 
 export type PiModelRuntime = Pick<ModelRuntime, "getProviders" | "getPhysicalModel" | "getAvailable" | "getAuth" | "completeSimple">
@@ -26,7 +27,7 @@ export async function resolvePiModel(runtime: Pick<ModelRuntime, "getPhysicalMod
 }
 
 export async function completePiTask(runtime: PiModelRuntime, request: PiTaskRequest): Promise<string> {
-  const { selection, prompt, signal, maxOutputTokens } = request
+  const { selection, prompt, signal, maxOutputTokens, onDispatch } = request
   if (!Number.isSafeInteger(maxOutputTokens) || maxOutputTokens <= 0) throw new Error("The task output limit must be a positive, finite token count.")
   if (!prompt.trim()) throw new Error("The task prompt is empty. Provide the authorized task prompt.")
   if (signal.aborted) throw new Error("The task was cancelled before it started.")
@@ -41,6 +42,7 @@ export async function completePiTask(runtime: PiModelRuntime, request: PiTaskReq
   if (signal.aborted) throw new Error("The task was cancelled before it started.")
 
   const context: Context = { messages: [{ role: "user", content: prompt, timestamp: Date.now() }], tools: [] }
+  onDispatch?.()
   let message
   try {
     message = await runtime.completeSimple(model, context, {
