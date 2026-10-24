@@ -73,6 +73,45 @@ test('public recovery resumes frozen consent after restart when the accepted pos
   extensionDb.close()
 }, 20000)
 
+test('a recovered run cannot extend another job’s configured attempt limit', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'cv-tailor-recovery-budget-')); dirs.push(directory)
+  let tailorCalls = 0, otherAnalysisCalls = 0
+  let announceResume!: () => void, releaseResume!: () => void
+  const resumeStarted = new Promise<void>(resolve => { announceResume = resolve })
+  const resumeGate = new Promise<void>(resolve => { releaseResume = resolve })
+  const ordinary = recoveryTransport()
+  const transport: AnalysisTransport = { async generate(input) {
+    if (input.prompt.startsWith('Extract only explicit qualifications') && input.prompt.includes('SECOND_POSTING_CANARY')) {
+      otherAnalysisCalls++
+      return otherAnalysisCalls === 1 ? '{bad' : JSON.stringify({ required: [], preferred: [], tools: [], responsibilities: [], keywords: [] })
+    }
+    if (input.prompt.startsWith('Write concise')) {
+      tailorCalls++
+      if (tailorCalls === 1) throw Object.assign(new Error('offline'), { code: 'ECONNRESET' })
+      if (tailorCalls === 2) { announceResume(); await resumeGate }
+    }
+    return ordinary.generate(input)
+  } }
+  const workspace = createWorkbench(directory, undefined, transport); opened.push(workspace)
+  const { jobId, token } = await seed(workspace, 4)
+  expect((await workspace.api.generateDraft(token)).ok).toBe(false)
+  const recovery = await workspace.api.getGenerationRecovery(jobId)
+  expect(recovery?.status).toBe('uncertain')
+  await workspace.api.setAnalysisBudgets({ ...analysisBudgetValues(await workspace.api.getAnalysisUsage()), runLimit: 1 })
+  const other = await workspace.api.saveJob({ title: 'Second role', company: 'Example', description: 'SECOND_POSTING_CANARY' })
+  if (!other.ok) throw Error('Second job fixture failed')
+  const preview = await workspace.api.prepareOutboundConsent(other.value.id)
+  if (!preview.ok) throw Error(preview.message)
+  await workspace.api.acceptOutboundConsent(preview.token, true, true)
+  const resumed = workspace.api.resumeGeneration(recovery!.runId, 'retry-uncertain')
+  await resumeStarted
+  const otherAnalysis = workspace.api.startAnalysis(preview.token)
+  releaseResume()
+  expect((await resumed).ok).toBe(true)
+  expect(await otherAnalysis).toMatchObject({ status: 'failed', attempts: 1 })
+  expect(otherAnalysisCalls).toBe(1)
+}, 20000)
+
 test('accepted target edits after restart revoke paused recovery consent without dispatching stale inputs', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'cv-tailor-public-recovery-')); dirs.push(directory)
   let offlineOnce = true

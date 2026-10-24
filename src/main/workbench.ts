@@ -1177,6 +1177,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       }
       const latestScope = resumeRunId ? null : currentConsentSource(pending.jobId)
       if (!resumeRunId && (!latestScope || prepareOutboundBundle(latestScope).scopeHash !== pending.bundle.scopeHash)) return { ok: false, message: 'Your job, profile, or model settings changed after consent. Review the outgoing data again.' }
+      const runBudgetOverride = frozen ? { runLimit: frozen.budgets.runLimit, runTimeLimitMs: frozen.budgets.runTimeLimitMs } : undefined
       const analysis = frozen?.analysis ?? await this.getAnalysis(pending.jobId)
       if (!analysis || analysis.status !== 'complete' || !analysis.analysis) return { ok: false, message: 'Complete posting analysis before generating a draft.' }
       if (!resumeRunId && (!startedAnalysisTokens.has(token) || analysis.runId !== pending.runId)) return { ok: false, message: 'Complete posting analysis for this run before generating a draft. Saved analysis can be reused without another provider request.' }
@@ -1221,7 +1222,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       try {
         const result = await runSourceLinkedGraph({ job: approvedPayload.job, analysis: analysis.analysis, items: safeItems, savedSkillNames: profile.skills.map(skill => skill.name), sourceJobRevision: pending.source.job.revision, pageTarget, restoreText: pending.bundle.restoreIdentifiers, checkpointer: graphCheckpointer, threadId: pending.runId, resume: Boolean(resumeRunId), onProgress: (progress, generationStep, completedSteps) => { const observed = (db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id = ?').get(pending.runId) as { count: number }).count; saveAnalysisState({ jobId: pending.jobId, runId: pending.runId, status: 'running', analysis: analysis.analysis, progress, attempts: observed, cacheHit: analysis.cacheHit, generationStep, completedSteps }) }, identity: failedDraftIdentity, call: async (prompt, responseSchema) => {
           authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
-          const generated = await dispatcher.generate({ runId: pending.runId, jobId: pending.jobId, model: openRouterModelSchema.parse(pending.source.model.name), prompt, consentId: pending.consentId!, responseSchema })
+          const generated = await dispatcher.generate({ runId: pending.runId, jobId: pending.jobId, model: openRouterModelSchema.parse(pending.source.model.name), prompt, consentId: pending.consentId!, responseSchema, runBudgetOverride })
           authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
           return { value: responseSchema.parse(JSON.parse(generated.text)), attempts: generated.attempts }
         } })
@@ -1240,7 +1241,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
             return { finding, section, index, text: item && ('text' in item ? item.text : item.name), citedEvidence: item?.citations.map(citation => ({ ...citation, text: safeItems.find(source => source.id === citation.evidenceId)?.text ?? '' })) }
           })
           authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
-          const repair = await dispatcher.generate({ runId: pending.runId, jobId: pending.jobId, model: openRouterModelSchema.parse(pending.source.model.name), consentId: pending.consentId!, responseSchema: repairSchema, prompt: `Factual repair cycle ${cycle + 1} of 2. Correct only the listed failing draft items using only their cited evidence. Preserve every unaffected item. Never infer facts or use uncited evidence. Return corrections for failed item paths only; keep citation IDs/revisions from the supplied evidence. If no safe correction is possible, remove that item by returning no correction for it.\n${JSON.stringify({ findings: failedItems })}` })
+          const repair = await dispatcher.generate({ runId: pending.runId, jobId: pending.jobId, model: openRouterModelSchema.parse(pending.source.model.name), consentId: pending.consentId!, responseSchema: repairSchema, runBudgetOverride, prompt: `Factual repair cycle ${cycle + 1} of 2. Correct only the listed failing draft items using only their cited evidence. Preserve every unaffected item. Never infer facts or use uncited evidence. Return corrections for failed item paths only; keep citation IDs/revisions from the supplied evidence. If no safe correction is possible, remove that item by returning no correction for it.\n${JSON.stringify({ findings: failedItems })}` })
           authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
           repairAttempts += repair.attempts
           const response = repairSchema.parse(JSON.parse(repair.text))
@@ -1262,7 +1263,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
             const priorItem = result.draft.content[eligible.section][eligible.index]
             const priorText = 'text' in priorItem ? priorItem.text : priorItem.name
             authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
-            const coverageRepair = await dispatcher.generate({ runId: pending.runId, jobId: pending.jobId, model: openRouterModelSchema.parse(pending.source.model.name), consentId: pending.consentId!, responseSchema: repairSchema, prompt: `Supported-keyword coverage repair (single exact item). Add only the explicitly supported term to this authored text. Preserve all existing wording, responsibility, scope, ownership, skill level, certainty, and citations exactly; do not change any other item. Return zero or one correction, only for the supplied section/index.\n${JSON.stringify({ opportunity: { qualification: opportunity.qualification, matchedAs: opportunity.matchedAs, section: eligible.section, index: eligible.index, evidenceId: eligible.evidenceId, revision: eligible.revision }, text: priorText, evidence: safeItems.find(source => source.id === eligible.evidenceId)?.text })}` })
+            const coverageRepair = await dispatcher.generate({ runId: pending.runId, jobId: pending.jobId, model: openRouterModelSchema.parse(pending.source.model.name), consentId: pending.consentId!, responseSchema: repairSchema, runBudgetOverride, prompt: `Supported-keyword coverage repair (single exact item). Add only the explicitly supported term to this authored text. Preserve all existing wording, responsibility, scope, ownership, skill level, certainty, and citations exactly; do not change any other item. Return zero or one correction, only for the supplied section/index.\n${JSON.stringify({ opportunity: { qualification: opportunity.qualification, matchedAs: opportunity.matchedAs, section: eligible.section, index: eligible.index, evidenceId: eligible.evidenceId, revision: eligible.revision }, text: priorText, evidence: safeItems.find(source => source.id === eligible.evidenceId)?.text })}` })
             authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
             coverageRepairAttempts = coverageRepair.attempts
             const response = repairSchema.parse(JSON.parse(coverageRepair.text))
@@ -1303,7 +1304,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
             const attemptsBeforeReview = (db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id = ?').get(pending.runId) as { count: number }).count
             try {
               authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
-              const review = await dispatcher.generate({ runId: pending.runId, jobId: pending.jobId, model: openRouterModelSchema.parse(pending.source.model.name), consentId: pending.consentId!, responseSchema: semanticSchema, prompt: `Compare all rewritten/source pairs in this single structured batch. Report each exact itemPath once. Mark unsupported only when the rewrite adds or strengthens factual meaning beyond its cited source. This is a second opinion, not proof. Do not rewrite content or request more data.\n${JSON.stringify({ pairs: finalSemanticPairs })}` })
+              const review = await dispatcher.generate({ runId: pending.runId, jobId: pending.jobId, model: openRouterModelSchema.parse(pending.source.model.name), consentId: pending.consentId!, responseSchema: semanticSchema, runBudgetOverride, prompt: `Compare all rewritten/source pairs in this single structured batch. Report each exact itemPath once. Mark unsupported only when the rewrite adds or strengthens factual meaning beyond its cited source. This is a second opinion, not proof. Do not rewrite content or request more data.\n${JSON.stringify({ pairs: finalSemanticPairs })}` })
               authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
               semanticAttempts += review.attempts
               const parsed = semanticSchema.parse(JSON.parse(review.text))
@@ -1898,14 +1899,11 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
         frozen.budgets = effectiveBudgets
         db.prepare('UPDATE generation_recovery SET snapshot=?,updated_at=? WHERE run_id=?').run(JSON.stringify(frozen), new Date().toISOString(), runId)
       }
-      dispatcher.setBudgets(effectiveBudgets)
       recoveredRunIds.add(runId)
       const resume = api.generateDraft as (token: string, pageTarget: 1 | 2, runId: string) => Promise<{ ok: boolean; message: string }>
-      try {
-        const result = await resume(token, frozen.pageTarget, runId)
-        if (result.ok) recoveredRunIds.delete(runId)
-        return result
-      } finally { dispatcher.setBudgets(configuredBudgets) }
+      const result = await resume(token, frozen.pageTarget, runId)
+      if (result.ok) recoveredRunIds.delete(runId)
+      return result
     },
     async cancelGenerationRecovery(runId: string) {
       const row = db.prepare("SELECT job_id,consent_id FROM generation_recovery WHERE run_id=? AND status IN ('running','paused')").get(runId) as { job_id: string; consent_id: string } | undefined
