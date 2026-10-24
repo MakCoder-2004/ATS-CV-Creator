@@ -11,6 +11,7 @@ import { generationRecoverySnapshotSchema } from '../shared/generation-recovery'
 import { documentFitReportSchema } from '../shared/document'
 import { appearanceSchema } from '../shared/appearance'
 import { openRouterModelSchema } from '../shared/openrouter-settings'
+import { piModelSelectionSchema } from '../shared/pi-model'
 
 // Keep this explicit: credentials are never serialized; all workspace persistence tables, including
 // migrations and LangGraph checkpoints, are represented in the versioned format.
@@ -190,12 +191,13 @@ export function createWorkspaceBackupEngine(db: Database.Database, maxBackupByte
     const rows = backup.tables
     const fail = (table: string): never => { throw new Error(`Backup row violates the ${table} domain schema.`) }
     for (const row of rows.settings?.rows ?? []) {
-      const allowed = ['appearance', 'openrouter-model', 'faithfulness-check', 'analysis-budgets']
+      const allowed = ['appearance', 'openrouter-model', 'faithfulness-check', 'analysis-budgets', 'pi-model']
       if (!allowed.includes(String(row.key))) fail('settings')
       if (row.key === 'appearance' && !appearanceSchema.safeParse(row.value).success) fail('settings')
       if (row.key === 'openrouter-model' && !openRouterModelSchema.safeParse(row.value).success) fail('settings')
       if (row.key === 'faithfulness-check' && row.value !== 'true' && row.value !== 'false') fail('settings')
       if (row.key === 'analysis-budgets') assertValid(analysisBudgetsSchema, parseJson('settings', row.value as string), 'settings')
+      if (row.key === 'pi-model') assertValid(piModelSelectionSchema, parseJson('settings', row.value as string), 'settings')
     }
     for (const row of rows.profile_contact?.rows ?? []) { const data = parseJson('profile_contact', row.data as string); assertValid(contactRecordSchema, data, 'profile_contact'); if ((data as { id: string }).id !== row.id || (data as { revision: number }).revision !== row.revision || row.singleton !== 1) fail('profile_contact') }
     for (const row of rows.profile_skills?.rows ?? []) { const data = parseJson('profile_skills', row.data as string); assertValid(skillRecordSchema, data, 'profile_skills'); if ((data as { id: string }).id !== row.id || (data as { revision: number }).revision !== row.revision) fail('profile_skills') }
@@ -330,6 +332,13 @@ export function createWorkspaceBackupEngine(db: Database.Database, maxBackupByte
       if (!upgraded.tables.schema_migrations!.rows.some(row => row.version === 8)) upgraded.tables.schema_migrations!.rows.push({ version: 8 })
       backup = upgraded
     }
+    if (backup.tables.schema_migrations && rowsFor('schema_migrations').some(row => row.version === 9)) {
+      const upgraded = structuredClone(backup) as typeof backup
+      upgraded.tables.schema_migrations!.rows = upgraded.tables.schema_migrations!.rows.filter(row => row.version !== 9)
+      upgraded.tables.schema_migrations!.rows.push({ version: 9 })
+      if (upgraded.tables.settings) upgraded.tables.settings.rows = upgraded.tables.settings.rows.filter(row => row.key !== 'openrouter-model' && row.key !== 'analysis-budgets')
+      backup = upgraded
+    }
     const expected = actualTables().sort()
     const names = Object.keys(backup.tables).sort()
     if (names.length !== expected.length || names.some((name, i) => name !== expected[i])) throw new Error('Backup is invalid or incompatible with this workspace schema.')
@@ -432,6 +441,7 @@ export function createWorkspaceBackupEngine(db: Database.Database, maxBackupByte
           for (const row of rows) insert.run(...columns.map(column => row[column.name] as never))
         }
         // The restored history remains inspectable, but old authorizations and paused work cannot run.
+        if (names.includes('settings')) db.exec("DELETE FROM settings WHERE key IN ('openrouter-model','analysis-budgets')")
         if (names.includes('outbound_consents')) db.exec('UPDATE outbound_consents SET revoked=1')
         if (names.includes('generation_recovery')) db.exec("UPDATE generation_recovery SET status='cancelled' WHERE status IN ('running','paused')")
         if (db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='encrypted_credentials'").get()) db.exec('DELETE FROM encrypted_credentials')

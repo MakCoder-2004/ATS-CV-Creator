@@ -39,7 +39,6 @@ export function WorkbenchStart({ activeJob, onNavigate }: { activeJob: JobRecord
   const [addSection, setAddSection] = useState<'education' | 'experience' | 'projects' | 'skills' | 'certificates'>('experience')
   const [addEvidence, setAddEvidence] = useState('')
   const [pageTarget, setPageTarget] = useState<1 | 2>(1)
-  const [usage, setUsage] = useState<Awaited<ReturnType<typeof window.workbench.getAnalysisUsage>> | null>(null)
   const pendingToken = useRef<string | null>(null)
   const selectedJob = useRef(activeJob?.id)
   selectedJob.current = activeJob?.id
@@ -111,7 +110,7 @@ export function WorkbenchStart({ activeJob, onNavigate }: { activeJob: JobRecord
     try {
       const result = await window.workbench.startAnalysis(token)
       if (selectedJob.current !== jobId || pendingToken.current !== token) return
-      setAnalysis(result); setUsage(await window.workbench.getAnalysisUsage())
+      setAnalysis(result)
     } catch (failure) {
       if (selectedJob.current !== jobId || pendingToken.current !== token) return
       setAnalysis(null); setConsentError(readableFailure(failure, 'Analysis could not start. Check Settings and try again.'))
@@ -145,7 +144,6 @@ export function WorkbenchStart({ activeJob, onNavigate }: { activeJob: JobRecord
       else if (!result.ok) setDraftError(result.message)
       const latest = await window.workbench.getAnalysis(jobId)
       if (latest && selectedJob.current === jobId) setAnalysis(latest)
-      if (selectedJob.current === jobId) setUsage(await window.workbench.getAnalysisUsage())
     } catch (failure) { if (selectedJob.current === jobId) setDraftError(failure instanceof Error ? failure.message : 'Draft generation failed.') }
     finally { if (selectedJob.current === jobId) setDraftBusy(false) }
   }
@@ -301,7 +299,7 @@ export function WorkbenchStart({ activeJob, onNavigate }: { activeJob: JobRecord
     const poll = async () => {
       try {
         const latest = await window.workbench.getAnalysis(activeJob.id)
-        if (mounted && latest) { setAnalysis(latest); if (latest.status !== 'running') setUsage(await window.workbench.getAnalysisUsage()) }
+        if (mounted && latest) setAnalysis(latest)
       } catch { /* The initiating request still reports its final state. */ }
     }
     const timer = window.setInterval(() => void poll(), 250)
@@ -331,7 +329,7 @@ export function WorkbenchStart({ activeJob, onNavigate }: { activeJob: JobRecord
     activeJob={activeJob} onNavigate={page => onNavigate(page)} error={error} retry={() => setAttempt(value => value + 1)} activePhase={activePhase}
     review={review} consentAccepted={consentAccepted} termsAcknowledged={termsAcknowledged} setTermsAcknowledged={setTermsAcknowledged} consentError={consentError} consentBusy={consentBusy}
     analysis={displayedAnalysis} recovery={recovery} recoveryBusy={recoveryBusy} resumeSavedGeneration={resumeSavedGeneration} cancelSavedGeneration={cancelSavedGeneration} draft={draft} canonical={canonical} fitReport={fitReport} fitBusy={fitBusy} acceptedCuts={acceptedCuts} setAcceptedCuts={setAcceptedCuts} draftBusy={draftBusy} draftError={draftError}
-    pageTarget={pageTarget} setPageTarget={setPageTarget} usage={usage} addSection={addSection} setAddSection={setAddSection} addEvidence={addEvidence} setAddEvidence={setAddEvidence} sources={sources} outgoingProfileCounts={outgoingProfileCounts}
+    pageTarget={pageTarget} setPageTarget={setPageTarget} addSection={addSection} setAddSection={setAddSection} addEvidence={addEvidence} setAddEvidence={setAddEvidence} sources={sources} outgoingProfileCounts={outgoingProfileCounts}
     inspectOutgoing={inspectOutgoing} cancelOutgoing={cancelOutgoing} authorizeOutgoing={authorizeOutgoing} startAnalysis={startAnalysis} generateDraft={generateDraft} cancelAnalysis={async () => { if (activeJob) setAnalysis(await window.workbench.cancelAnalysis(activeJob.id)) }}
     returnToReview={() => setReviewApprovedDraft(true)} renewDraftReview={renewDraftReview} decideSuggestedSkill={decideSuggestedSkill}
     mutateRecord={mutateRecord} measurePageFit={measurePageFit} applyPageCuts={applyPageCuts} addDraftItem={addDraftItem} correctDraft={correctDraft} checkDraftNow={checkDraftNow} approveCurrentDraft={approveCurrentDraft} exportDocx={exportDocx} docxBusy={docxBusy}

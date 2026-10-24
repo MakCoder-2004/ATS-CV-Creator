@@ -6,8 +6,8 @@ import { postingAnalysisSchema, type PostingAnalysis } from "../shared/posting-a
 
 const ANALYSIS_MAX_TOKENS = 4096
 const ANALYSIS_MAX_BYTES = 500_000
-const GENERATION_MAX_TOKENS = 2048
-const GENERATION_TOKEN_CEILING = 4096
+const GENERATION_MAX_TOKENS = 8192
+const GENERATION_TOKEN_CEILING = 16384
 const GENERATION_MAX_BYTES = 500_000
 
 export interface PiWorkbenchDispatcherHooks {
@@ -17,7 +17,7 @@ export interface PiWorkbenchDispatcherHooks {
 }
 
 export interface PiWorkbenchDispatcherOptions extends PiWorkbenchDispatcherHooks {
-  runtime: PiModelRuntime | Promise<PiModelRuntime>
+  runtime: PiModelRuntime | Promise<PiModelRuntime | null>
   selectionForRun: (runId: string) => PiModelSelection | null
 }
 
@@ -70,14 +70,15 @@ export function createPiWorkbenchDispatcher(options: PiWorkbenchDispatcherOption
       if (!selection) throw new AnalysisError("PROVIDER", "No Pi model selection was authorized for this run.")
       check()
       const runtime = await runtimePromise
+      if (!runtime) throw new AnalysisError("PROVIDER", "Pi model access is unavailable. Check Pi setup and retry.")
       const text = await completePiTask(runtime, {
         selection,
         prompt,
         signal: controller.signal,
         maxOutputTokens: maxTokens,
         onDispatch: () => {
-          attempts = 1
           options.onAttempt?.(Date.now(), runId)
+          attempts = 1
         },
         onResponse: () => {
           responseReceived = true
@@ -144,5 +145,7 @@ export function createPiWorkbenchDispatcher(options: PiWorkbenchDispatcherOption
     return { text, attempts: result.attempts }
   }
 
-  return { authorize, cancel, isCancelled, analyze, generate }
+  const getUsage = () => 0
+  const setBudgets = () => { throw new AnalysisError("PROVIDER", "Local model-usage limits are no longer configurable.") }
+  return { authorize, cancel, isCancelled, analyze, generate, getUsage, setBudgets }
 }
