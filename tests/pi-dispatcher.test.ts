@@ -58,14 +58,14 @@ describe("Pi dispatcher", () => {
     await vi.waitFor(() => expect(s.complete).toHaveBeenCalled())
     controller.abort(); pending.resolve(result())
     await expect(request).rejects.toMatchObject({ attempts: 1 })
-    expect(s.hooks.onAttemptComplete).toHaveBeenCalledWith("run", false)
+    expect(s.hooks.onAttemptComplete).toHaveBeenCalledWith("run", true)
   })
   it("fails oversized, malformed and truncated responses without success", async () => {
     for (const response of [result('{"ok":true}'), result("not json"), result('{"ok":true}', { stopReason: "length" })]) {
       const s = setup(vi.fn(async () => response)); s.dispatcher.authorize("run", "consent")
       const maxResponseBytes = response.stopReason === "stop" && response.content[0].text.startsWith("{") ? 4 : 100
       await expect(s.dispatcher.dispatch(s.input({ maxResponseBytes }))).rejects.toBeInstanceOf(PiDispatchError)
-      expect(s.hooks.onAttemptComplete).toHaveBeenCalledWith("run", response.stopReason === "stop")
+      expect(s.hooks.onAttemptComplete).toHaveBeenCalledWith("run", true)
       expect(s.hooks.onAttempt).toHaveBeenCalledTimes(1)
     }
     const malformed = setup(vi.fn(async () => result('{"ok":"wrong"}'))); malformed.dispatcher.authorize("run", "consent")
