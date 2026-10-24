@@ -1,5 +1,11 @@
 import { expect, test } from 'vitest'
+import { existsSync } from 'node:fs'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
 import { canonicalDocumentTextParts, createCanonicalDocument } from '../src/shared/document'
+import { createLatexCompiler } from '../src/main/latex-compiler'
+import { assertCompiledContent, inspectCompiledPdf } from '../src/main/pdf-document'
 import { renderLatexSections } from '../src/shared/latex'
 import { extractCanonicalDocx, renderCanonicalDocx } from '../src/main/docx-export'
 
@@ -21,6 +27,63 @@ test('education moves supported CGPA below the dates without repeating chronolog
   expect(latex['education.tex']).not.toContain('\\resumeItem{CGPA')
   expect(latex['education.tex'].match(/2023/g)).toHaveLength(1)
 })
+test('repeated education heading, institution, grade and matching years occupy only two metadata rows', async () => {
+  const { draft, profile, experience } = fixture('B.S. in Applied Statistics (Analytics), Fictional State University, Testland; CGPA 3.3; 2023-2027')
+  draft.lockedFields.education[0].title = 'B.S. in Applied Statistics(Analytics)'
+  draft.lockedFields.education[0].institution = 'Fictional State University, Testland'
+  const document = createCanonicalDocument(draft as never, profile, experience as never)
+  expect(document.sections[0].entries[0]).toMatchObject({ organization: 'Fictional State University, Testland', heading: 'B.S. in Applied Statistics(Analytics)', dates: '2023 – 2027', grade: 'CGPA: 3.3', text: '', bullets: [] })
+  const latex = renderLatexSections(document)['education.tex']
+  expect(latex).not.toContain('\\resumeItem{')
+  expect(latex.match(/Fictional State University/g)).toHaveLength(1)
+  expect(latex.match(/CGPA: 3.3/g)).toHaveLength(1)
+  const docx = await extractCanonicalDocx(await renderCanonicalDocx(document))
+  expect(docx.text.filter(value => value.includes('Fictional State University'))).toHaveLength(1)
+  expect(docx.text.filter(value => value.includes('CGPA: 3.3'))).toHaveLength(1)
+})
+
+test('education dedup keeps unique details and does not erase unrelated mentions or nonmatching dates', () => {
+  const { draft, profile, experience } = fixture('B.S. in Applied Statistics, Fictional State University, Testland; CGPA: 3.3; 2023-2027; Presented a capstone project.\nWorked with Fictional State University, Testland mentors.\nCGPA: 3.3 | 2021 - 2022')
+  draft.lockedFields.education[0].title = 'B.S. in Applied Statistics'
+  draft.lockedFields.education[0].institution = 'Fictional State University, Testland'
+  const document = createCanonicalDocument(draft as never, profile, experience as never)
+  expect(document.sections[0].entries[0]).toMatchObject({ grade: 'CGPA: 3.3', text: 'Presented a capstone project.\nWorked with Fictional State University, Testland mentors.\n2021 - 2022' })
+  expect(draft.content.education[0].text).toContain('B.S. in Applied Statistics, Fictional State University')
+})
+
+test.skipIf(process.platform !== 'win32' || !existsSync(resolve('.tools/latex/cv-tailor-toolchain.json')))('compiled CV has two education metadata rows without a repeated bullet', async () => {
+  const { draft, profile, experience } = fixture('B.S. in Applied Statistics (Analytics), Fictional State University, Testland; CGPA 3.3; 2023-2027')
+  draft.lockedFields.education[0].title = 'B.S. in Applied Statistics(Analytics)'
+  draft.lockedFields.education[0].institution = 'Fictional State University, Testland'
+  const document = createCanonicalDocument(draft as never, profile, experience as never)
+  const tempRoot = await mkdtemp(join(tmpdir(), 'cv-education-layout-'))
+  try {
+    const compiler = createLatexCompiler({ toolchainRoot: resolve('.tools/latex'), templateRoot: resolve('resources/cv-template'), tempRoot })
+    const compiled = await compiler.compile(document)
+    const inspected = await inspectCompiledPdf(compiled.pdf)
+    expect(inspected.actualPages).toBe(1)
+    expect(() => assertCompiledContent(document, inspected)).not.toThrow()
+    const text = inspected.extractedText.join(' ')
+    expect(text.match(/Fictional State University/g)).toHaveLength(1)
+    expect(text.match(/B\.S\. in Applied Statistics/g)).toHaveLength(1)
+    expect(text.match(/CGPA/g)).toHaveLength(1)
+    expect(text.match(/2023/g)).toHaveLength(1)
+    const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs')
+    const loading = getDocument({ data: new Uint8Array(compiled.pdf) })
+    try {
+      const page = await (await loading.promise).getPage(1)
+      const items = (await page.getTextContent()).items.filter((item): item is typeof item & { str: string; transform: number[]; width: number } => 'str' in item)
+      const school = items.find(item => item.str.includes('Fictional State University'))!
+      const dates = items.find(item => item.str.includes('2023'))!
+      const degree = items.find(item => item.str.includes('B.S. in Applied Statistics'))!
+      const grade = items.find(item => item.str.includes('CGPA'))!
+      expect(school.transform[5]).toBeGreaterThan(degree.transform[5])
+      expect(grade.transform[5]).toBeCloseTo(degree.transform[5], 0)
+      expect(grade.transform[4] + grade.width).toBeCloseTo(dates.transform[4] + dates.width, 0)
+    } finally { await loading.destroy() }
+  } finally { await rm(tempRoot, { recursive: true, force: true }) }
+}, 60_000)
+
 test('grade extraction preserves denominators, substantive clauses and nonmatching years', () => {
   expect(fixture('GPA: 3.75/4.0; Graduated with honors.').document.sections[0].entries[0]).toMatchObject({ grade: 'GPA: 3.75/4.0', text: 'Graduated with honors.' })
   expect(fixture('CGPA: 3.3 | 2021 - 2022').document.sections[0].entries[0]).toMatchObject({ grade: 'CGPA: 3.3', text: '2021 - 2022' })

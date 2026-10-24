@@ -44,25 +44,42 @@ export function removeRepeatedEntryHeading(text: string, heading: string, organi
     return labels.some(label => new RegExp(`^${label}$`, 'iu').test(line)) ? '' : line
   }).filter(Boolean).join('\n')
 }
-/** Reposition an explicit grade, removing only a duplicate authoritative date range. */
-function educationDetails(text: string, start?: string, end?: string): { text: string; grade?: string } {
-  const lines = splitDocumentBullets(text)
+/** Strip only repeated locked education metadata; keep any distinct source-backed details. */
+function educationDetails(text: string, heading: string, organization?: string, start?: string, end?: string): { text: string; grade?: string } {
+  const labels = [heading, organization].filter((value): value is string => Boolean(value?.trim())).map(value => {
+    const literal = value.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s*').replace(/\\\(/g, '\\s*\\(')
+    return new RegExp(`^${literal}(?=$|\\s*[,;|:]|\\s+[–—-]\\s+)\\s*(?:[,;|:]|[–—-])?\\s*`, 'iu')
+  })
+  const stripPrefix = (value: string) => {
+    let remaining = value.trim(), removed = false
+    for (let index = 0; index < labels.length; index++) {
+      const pattern = labels.find(label => label.test(remaining))
+      if (!pattern) break
+      remaining = remaining.replace(pattern, '').trim()
+      removed = true
+    }
+    return { remaining, removed }
+  }
+  const duplicateYears = start && end ? new RegExp(`^${start.slice(0, 4)}\\s*[–—-]\\s*${end.slice(0, 4)}[.]?$`) : null
+  const fragments = splitDocumentBullets(text).flatMap(line => {
+    const prefix = stripPrefix(line)
+    const parts = prefix.removed || /^(?:C?GPA|Cumulative GPA)\s*[:=]?\s*\d/i.test(prefix.remaining) || duplicateYears?.test(prefix.remaining)
+      ? prefix.remaining.split(/\s*[;|]\s*/)
+      : [prefix.remaining]
+    return parts.map(part => stripPrefix(part).remaining).filter(Boolean)
+  })
   const pattern = /^(C?GPA|Cumulative GPA)\s*[:=]?\s*(\d+(?:\.\d+)?(?:\s*(?:\/|out of)\s*\d+(?:\.\d+)?)?)(?=$|[\s.;,|–—-])(.*)$/i
-  const matches = lines.map(line => {
-    const match = pattern.exec(line)
+  const matches = fragments.map(fragment => {
+    const match = pattern.exec(fragment)
     return match && (!match[3].trim() || /^[|;,:.–—-]/.test(match[3].trim())) ? match : null
   })
   const grades = [...new Set(matches.flatMap(match => match ? [`${match[1].toUpperCase()}: ${match[2].trim()}`] : []))]
-  // Conflicting grades remain explicit prose for review, never silently choose one.
-  if (grades.length !== 1) return { text }
-  const duplicateYears = start && end ? new RegExp(`^${start.slice(0, 4)}\\s*[–—-]\\s*${end.slice(0, 4)}[.]?$`) : null
-  const remaining = lines.flatMap((line, index) => {
-    const match = matches[index]
-    if (!match) return [line]
-    const rest = match[3].trim().replace(/^[|;,:–—-]\s*/, '').trim()
-    return !rest || rest === '.' || /^\[(?:REDACTED_PHONE|DATE_OMITTED)\]$/.test(rest) || duplicateYears?.test(rest) ? [] : [rest]
+  if (grades.length > 1) return { text }
+  const remaining = fragments.flatMap((fragment, index) => {
+    const rest = matches[index] ? matches[index]![3].trim().replace(/^[|;,:–—-]\s*/, '').trim() : fragment
+    return !rest || rest === '.' || duplicateYears?.test(rest) || (grades.length && /^\[(?:REDACTED_PHONE|DATE_OMITTED)\]$/.test(rest)) ? [] : [rest]
   })
-  return { grade: grades[0], text: remaining.join('\n') }
+  return { ...(grades[0] ? { grade: grades[0] } : {}), text: remaining.join('\n') }
 }
 export function skillGroupFor(name: string, category = ''): typeof skillGroups[number] {
   if (/^(languages?|programming languages?)$/i.test(category) || /^(?:C\+\+|C#|C|CSS|HTML|JavaScript|TypeScript|Python|Java|Go|Golang|Rust|Ruby|PHP|Swift|Kotlin|Scala|R|SQL|Dart|Perl|Haskell|Lua|Bash|Shell|PowerShell|Julia|MATLAB|Groovy|Elixir|Erlang|F#|Objective-C|Assembly|COBOL|Fortran)$/i.test(name.trim())) return 'Languages'
@@ -101,7 +118,7 @@ export function createCanonicalDocument(draft: DraftRevision, profile: ProfileSn
     }
     const prose = documentText(item.text)
     const cleaned = removeRepeatedEntryHeading(prose, heading, organization)
-    const { text, grade } = section === 'education' ? educationDetails(cleaned, startDate, educationEnd) : { text: cleaned, grade: undefined }
+    const { text, grade } = section === 'education' ? educationDetails(cleaned, heading, organization, startDate, educationEnd) : { text: cleaned, grade: undefined }
     return { entry: { id: `${section}-${index}`, heading, ...(grade ? { grade } : {}), ...(organization ? { organization } : {}), ...(dates ? { dates } : {}), text, bullets: splitDocumentBullets(text), ...(technologies?.length ? { technologies } : {}), links }, index, startDate, parentId: section === 'education' ? undefined : parentId }
   }).sort((left, right) => (right.startDate ?? '').localeCompare(left.startDate ?? '') || left.index - right.index)
     .reduce<Array<{ entry: CanonicalDocumentEntry; index: number; startDate?: string; parentId?: string }>>((grouped, current) => {
