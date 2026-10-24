@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import { gzipSync } from 'node:zlib'
-import { fetchLeverPosting, isPublicAddress, validateLeverPostingUrl } from '../src/main/safe-posting-fetch'
+import { createServer } from 'node:net'
+import { request as httpsRequest } from 'node:https'
+import { fetchLeverPosting, isPublicAddress, pinnedAddressLookup, validateLeverPostingUrl } from '../src/main/safe-posting-fetch'
 
 const url = 'https://api.lever.co/v0/postings/acme/role-123'
 const headers = { 'content-type': 'application/json' }
@@ -11,6 +13,23 @@ describe('bounded Lever posting fetch', () => {
   it('validates only named hosted detail URLs without fetching', () => {
     expect(validateLeverPostingUrl(url)).toBe(true)
     for (const value of ['http://jobs.lever.co/acme/role', 'https://evil.test/acme/role', 'https://jobs.lever.co/acme', 'https://user@jobs.lever.co/acme/role', 'https://jobs.lever.co/acme/role?token=x']) expect(validateLeverPostingUrl(value)).toBe(false)
+  })
+  it('connects through a pinned address when HTTPS requests all DNS addresses', async () => {
+    let connections = 0
+    const server = createServer(socket => { connections++; socket.destroy() })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    try {
+      const listener = server.address()
+      if (!listener || typeof listener === 'string') throw new Error('Test socket has no TCP port.')
+      const error = await new Promise<Error>((resolve, reject) => {
+        const request = httpsRequest(`https://api.lever.co:${listener.port}/test`, { agent: false, lookup: pinnedAddressLookup({ address: '127.0.0.1', family: 4 }) }, response => { response.destroy(); reject(new Error('Unexpected HTTPS response from the raw test socket.')) })
+        request.setTimeout(3_000, () => request.destroy(new Error('Local transport test timed out.')))
+        request.once('error', resolve)
+        request.end()
+      })
+      expect(error.message).not.toMatch(/invalid IP address/i)
+      expect(connections).toBe(1)
+    } finally { await new Promise<void>(resolve => server.close(() => resolve())) }
   })
   it('resolves one named detail, preserves complete plain text, and reports missing company', async () => {
     const request = vi.fn(async () => response({ text: 'Engineer', descriptionPlain: 'Build systems\nOwn reliability', hostedUrl: 'https://evil.test/' }))

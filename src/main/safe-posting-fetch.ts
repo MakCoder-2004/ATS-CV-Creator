@@ -133,12 +133,19 @@ function bounded<T>(operation: Promise<T>, milliseconds: number, signal: AbortSi
     operation.then(value => finish(() => resolve(value)), error => finish(() => reject(error)))
   })
 }
+export function pinnedAddressLookup({ address, family }: Address) {
+  return (_hostname: string, options: { all?: boolean }, callback: (error: NodeJS.ErrnoException | null, value: string | Address[], family?: number) => void) => {
+    if (options.all) callback(null, [{ address, family }])
+    else callback(null, address, family)
+  }
+}
+
 const defaultRequest: Request = (url, address, signal, headers) => new Promise((resolve, reject) => {
   let complete = false
   const connectTimer = setTimeout(() => req.destroy(new Error('Connection/TLS handshake exceeded 5 seconds.')), 5_000)
   const responseTimer = setTimeout(() => req.destroy(new Error('Source response exceeded 15 seconds.')), 15_000)
   const finishError = (error: Error) => { if (complete) return; complete = true; clearTimeout(connectTimer); clearTimeout(responseTimer); reject(error) }
-  const req = httpsRequest(url, { method: 'GET', signal, headers, servername: url.hostname, rejectUnauthorized: true, agent: false, lookup: (_host, _options, cb) => cb(null, address.address, address.family) }, res => {
+  const req = httpsRequest(url, { method: 'GET', signal, headers, servername: url.hostname, rejectUnauthorized: true, agent: false, lookup: pinnedAddressLookup(address) }, res => {
     clearTimeout(connectTimer)
     const chunks: Buffer[] = []; let size = 0
     res.on('data', (chunk: Buffer) => { size += chunk.length; if (size > MAX_COMPRESSED) { req.destroy(new Error('Response exceeded the 2 MiB download limit.')); return } chunks.push(chunk) })
