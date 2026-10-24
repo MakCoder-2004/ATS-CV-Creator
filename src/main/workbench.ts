@@ -5,8 +5,8 @@ import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import { appearanceSchema, settingsSchema, type WorkbenchStorageAPI } from '../shared/appearance'
-import { piModelSelectionSchema, type PiModelSelection } from '../shared/pi-model'
-import { resolvePiModel, type PiModelRuntime } from './pi-model'
+import { piModelPreferenceInputSchema, piModelSelectionSchema, parsePiModelReference, type PiModelSelection } from '../shared/pi-model'
+import { listPiModelReferences, resolvePiModel, type PiModelRuntime } from './pi-model'
 import { defaultOpenRouterModel, openRouterKeyInputSchema, openRouterModelSchema, type OpenRouterModel } from '../shared/openrouter-settings'
 import { contactInputSchema, contactRecordSchema, evidenceRevisionSchema, profileEntryInputSchema, profileEntrySchema, profileMutationResultSchema, profileSnapshotSchema, skillInputSchema, skillRecordSchema, uuidSchema, type ContactRecord, type EvidenceRevision, type ProfileEntry, type ProfileSnapshot, type SkillRecord } from '../shared/profile'
 import { experienceInputSchema, experienceRecordSchema, experienceSnapshotSchema, experienceMutationResultSchema, projectInputSchema, projectRecordSchema, type ExperienceRecord, type ProjectRecord, type FactualItemRecord, type ExperienceSnapshot } from '../shared/experience'
@@ -393,9 +393,11 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       saveSetting('openrouter-model', openRouterModelSchema.parse(value))
       return this.getSettings()
     },
-    async setPiModel(input: PiModelSelection) {
-      const selection = piModelSelectionSchema.parse(input)
+    async setPiModel(input) {
+      const value = piModelPreferenceInputSchema.parse(input)
       if (!piRuntime) throw new Error('Pi model validation is unavailable. Your selection was not saved.')
+      const reference = parsePiModelReference(value.reference, listPiModelReferences(piRuntime))
+      const selection = piModelSelectionSchema.parse({ ...reference, thinkingLevel: value.thinkingLevel })
       const provider = piRuntime.getProviders().find(candidate => candidate.id === selection.providerId)
       if (!provider?.getModels().some(candidate => candidate.id === selection.modelId)) throw new Error('The selected Pi model is unavailable. Choose another model in Settings.')
       const model = await resolvePiModel(piRuntime, selection)

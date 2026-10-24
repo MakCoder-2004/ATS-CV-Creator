@@ -13,17 +13,18 @@ afterEach(() => bridge.invoke.mockReset())
 
 test('preload sends a typed Pi selection only through the Settings IPC channel', async () => {
   const selection = { providerId: 'provider/with/slash', modelId: 'author/chat/model', thinkingLevel: 'low' as const }
+  const input = { reference: `${selection.providerId}/${selection.modelId}`, thinkingLevel: selection.thinkingLevel }
   bridge.invoke.mockResolvedValue({
     appearance: 'light',
     openRouter: { model: 'legacy/model', faithfulnessCheck: false, credential: { configured: false, secureStorageAvailable: false } },
     pi: selection,
   })
   expect(bridge.api).toBeDefined()
-  await expect(bridge.api!.setPiModel(selection)).resolves.toMatchObject({ pi: selection })
-  expect(bridge.invoke).toHaveBeenCalledWith('settings:pi-model', selection)
+  await expect(bridge.api!.setPiModel(input)).resolves.toMatchObject({ pi: selection })
+  expect(bridge.invoke).toHaveBeenCalledWith('settings:pi-model', input)
 })
 
 test('preload rejects malformed Pi selections before invoking IPC', async () => {
-  await expect(bridge.api!.setPiModel({ providerId: 'provider', modelId: 'model', thinkingLevel: 'invalid' } as never)).rejects.toThrow()
+  await expect(bridge.api!.setPiModel({ reference: 'provider/model', thinkingLevel: 'invalid' } as never)).rejects.toThrow()
   expect(bridge.invoke).not.toHaveBeenCalled()
 })

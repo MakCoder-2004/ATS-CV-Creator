@@ -19,6 +19,11 @@ export const piModelSelectionSchema = z.object({
   modelId: z.string().min(1),
   thinkingLevel: z.enum(PI_THINKING_LEVELS),
 }).strict()
+export const piModelPreferenceInputSchema = z.object({
+  reference: z.string().trim().min(3).max(400),
+  thinkingLevel: z.enum(PI_THINKING_LEVELS),
+}).strict()
+export type PiModelPreferenceInput = z.infer<typeof piModelPreferenceInputSchema>
 
 export function parsePiModelReference(reference: string, candidates: readonly PiModelReference[]): PiModelReference {
   const matches = candidates.filter(candidate => `${candidate.providerId}/${candidate.modelId}` === reference)

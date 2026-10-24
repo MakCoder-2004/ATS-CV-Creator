@@ -12,7 +12,7 @@ import { renderCanonicalDocx } from './docx-export'
 import { z } from 'zod'
 import { createWorkbench } from './workbench'
 import { ModelRuntime } from '@earendil-works/pi-coding-agent'
-import { piModelSelectionSchema } from '../shared/pi-model'
+import { piModelPreferenceInputSchema } from '../shared/pi-model'
 import type { AnalysisTransport } from './posting-analysis'
 import { appearanceSchema } from '../shared/appearance'
 import { openRouterKeyInputSchema, openRouterModelSchema } from '../shared/openrouter-settings'
@@ -170,7 +170,7 @@ app.whenReady().then(async () => {
   ipcMain.handle('settings:pi-model', (event, ...args: unknown[]) => {
     trusted(event)
     if (args.length !== 1) throw new Error('Expected Pi model selection')
-    return workspace!.api.setPiModel(piModelSelectionSchema.parse(args[0]))
+    return workspace!.api.setPiModel(piModelPreferenceInputSchema.parse(args[0]))
   })
   ipcMain.handle('settings:faithfulness', (event, ...args: unknown[]) => {
     trusted(event)

@@ -2,7 +2,7 @@ import { z } from 'zod'
 import type { ContactInput, EvidenceRevision, ProfileEntryInput, ProfileMutationResult, ProfileSnapshot, SkillInput } from './profile'
 import type { ExperienceInput, ExperienceMutationResult, ExperienceSnapshot, ProjectInput } from './experience'
 import { openRouterSettingsSchema, openRouterModelSchema, type OpenRouterModel } from './openrouter-settings'
-import { piModelSelectionSchema, type PiModelSelection } from './pi-model'
+import { piModelSelectionSchema, type PiModelPreferenceInput } from './pi-model'
 import type { JobInput, JobRecord, JobSaveResult, PostingRefreshChoice } from './jobs'
 import type { ProfileExchangeResult } from './profile-exchange'
 import type { OutboundConsentAction, OutboundConsentPreview } from './outbound-consent-contract'
@@ -33,7 +33,7 @@ export interface WorkbenchAPI {
   getWorkspaceBackupStatus(): Promise<WorkspaceBackupStatus>
   setAppearance(value: Appearance): Promise<Settings>
   setOpenRouterModel(value: OpenRouterModel): Promise<Settings>
-  setPiModel(selection: PiModelSelection): Promise<Settings>
+  setPiModel(input: PiModelPreferenceInput): Promise<Settings>
   setFaithfulnessCheck(value: boolean): Promise<Settings>
   saveOpenRouterApiKey(value: string): Promise<Settings>
   revealOpenRouterApiKey(): Promise<string>
