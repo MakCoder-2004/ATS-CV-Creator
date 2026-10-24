@@ -156,12 +156,11 @@ test('installed app compiles a generated draft with its bundled LaTeX toolchain'
     await loadingTask.destroy()
 
     const pendingSkills = (await page.evaluate(id => window.workbench.getDraft(id), setup.jobId))?.suggestedSkills?.filter(skill => skill.status === 'pending') ?? []
-    if (pendingSkills.length) {
-      await openReviewDetails(page, 'skills')
-      const skillReview = page.getByRole('region', { name: 'New skills to review' })
-      for (const skill of pendingSkills) await skillReview.getByRole('button', { name: `Remove ${skill.name}` }).click()
-      await closeReviewDetails(page)
-    }
+    expect(pendingSkills).toContainEqual(expect.objectContaining({ name: 'TypeScript' }))
+    await openReviewDetails(page, 'skills')
+    const skillReview = page.getByRole('region', { name: 'New skills to review' })
+    for (const skill of pendingSkills) await skillReview.getByRole('button', { name: `Remove ${skill.name}` }).click()
+    await closeReviewDetails(page)
     await page.getByRole('button', { name: 'Check page length' }).click()
     await expect(page.getByText(/Fits the selected target/i)).toBeVisible({ timeout: 45000 })
     await page.getByRole('checkbox', { name: 'I reviewed this CV and its wording.' }).check()
@@ -192,6 +191,8 @@ test('installed app compiles a generated draft with its bundled LaTeX toolchain'
     await expect(page.locator('[data-ui-ready="true"]')).toBeVisible()
     expect(await page.evaluate(id => window.workbench.getDraft(id).then(draft => draft?.approved), setup.jobId)).toBe(true)
     expect(await page.evaluate(id => window.workbench.assertDraftExportable(id), setup.jobId)).toMatchObject({ ok: true })
+    await page.getByRole('button', { name: 'Engineer Example Co', exact: true }).click()
+    await expect(page.getByRole('button', { name: 'Export approved PDF' })).toBeVisible()
   } finally {
     await dev?.close().catch(() => {})
     await installed?.close().catch(() => {})
