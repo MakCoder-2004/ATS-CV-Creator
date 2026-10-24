@@ -1,8 +1,10 @@
 import { test, expect, _electron as electron } from '@playwright/test'
+import { openReviewDetails, closeReviewDetails } from './review-helpers'
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { extractCanonicalDocx } from '../../src/main/docx-export'
 
 const executablePath = process.env.CV_TAILOR_INSTALLED_EXE
 test.skip(!executablePath, 'Set CV_TAILOR_INSTALLED_EXE to a genuinely installed executable')
@@ -153,7 +155,12 @@ test('installed app compiles a generated draft with its bundled LaTeX toolchain'
     expect(links.flatMap(item => item.subtype === 'Link' && item.url ? [item.url] : [])).toContain('https://example.test/portfolio')
     await loadingTask.destroy()
 
-    await page.getByRole('button', { name: 'Remove TypeScript', exact: true }).click()
+    const pendingSkills = (await page.evaluate(id => window.workbench.getDraft(id), setup.jobId))?.suggestedSkills?.filter(skill => skill.status === 'pending') ?? []
+    expect(pendingSkills).toContainEqual(expect.objectContaining({ name: 'TypeScript' }))
+    await openReviewDetails(page, 'skills')
+    const skillReview = page.getByRole('region', { name: 'New skills to review' })
+    for (const skill of pendingSkills) await skillReview.getByRole('button', { name: `Remove ${skill.name}` }).click()
+    await closeReviewDetails(page)
     await page.getByRole('button', { name: 'Check page length' }).click()
     await expect(page.getByText(/Fits the selected target/i)).toBeVisible({ timeout: 45000 })
     await page.getByRole('checkbox', { name: 'I reviewed this CV and its wording.' }).check()
@@ -164,6 +171,28 @@ test('installed app compiles a generated draft with its bundled LaTeX toolchain'
     await expect(preview.getByText('1 page', { exact: true })).toBeVisible({ timeout: 30000 })
     await expect(preview.locator('canvas[data-pdf-page="1"]')).toBeVisible()
     await page.screenshot({ path: 'test-results/installed-latex-preview.png', fullPage: true })
+
+    const pdfPath = join(directory, 'approved.pdf'), docxPath = join(directory, 'approved.docx')
+    await installed.evaluate(({ dialog }, destinations) => {
+      let next = 0
+      dialog.showSaveDialog = async () => ({ canceled: false, filePath: destinations[next++] })
+    }, [pdfPath, docxPath])
+    await page.getByRole('button', { name: 'Export approved PDF' }).click()
+    await expect(page.getByRole('status').filter({ hasText: 'Approved PDF saved and checked locally.' })).toBeVisible()
+    expect(readFileSync(pdfPath)).toEqual(bytes)
+    await page.getByRole('button', { name: 'Export editable Word document' }).click()
+    await expect(page.getByRole('status').filter({ hasText: 'Editable DOCX saved' })).toBeVisible()
+    expect((await extractCanonicalDocx(readFileSync(docxPath))).text).toContain('Zoë Candidate')
+
+    await installed.close()
+    installed = undefined
+    installed = await electron.launch({ executablePath, args: [`--user-data-dir=${directory}`], timeout: 60000 })
+    page = await installed.firstWindow()
+    await expect(page.locator('[data-ui-ready="true"]')).toBeVisible()
+    expect(await page.evaluate(id => window.workbench.getDraft(id).then(draft => draft?.approved), setup.jobId)).toBe(true)
+    expect(await page.evaluate(id => window.workbench.assertDraftExportable(id), setup.jobId)).toMatchObject({ ok: true })
+    await page.getByRole('button', { name: 'Engineer Example Co', exact: true }).click()
+    await expect(page.getByRole('button', { name: 'Export approved PDF' })).toBeVisible()
   } finally {
     await dev?.close().catch(() => {})
     await installed?.close().catch(() => {})
