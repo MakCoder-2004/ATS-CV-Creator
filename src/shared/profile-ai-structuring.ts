@@ -15,7 +15,7 @@ const mappedProposal = z.object({
 export const profileAiResultSchema = mappedProposal
 export type ProfileAiResult = z.infer<typeof profileAiResultSchema>
 
-export const PROFILE_AI_RESIDUAL_NOTICE = 'The selected text is sent to OpenRouter and may still contain identifying or sensitive information. Local redaction is incomplete and does not make this anonymous.'
+export const PROFILE_AI_RESIDUAL_NOTICE = 'The selected text is sent through Pi to the selected model provider and may still contain identifying or sensitive information. Local redaction is incomplete and does not make this anonymous.'
 
 /** Replaces recognizable contact strings before the preview is shown; original profile values remain local. */
 export function minimizeProfileText(text: string, recognizable: string[] = []) {
@@ -34,7 +34,7 @@ export function minimizeProfileText(text: string, recognizable: string[] = []) {
 }
 
 export const profileAiConsentPreviewSchema = z.discriminatedUnion('ok', [
-  z.object({ ok: z.literal(true), token: uuid, model: z.string().min(1), destination: z.literal('OpenRouter'), outgoing: z.string().max(500_000), warning: z.string(), termsNotice: z.string() }).strict(),
+  z.object({ ok: z.literal(true), token: uuid, providerId: z.string().min(1), modelId: z.string().min(1), thinkingLevel: z.string().min(1), destination: z.literal('Pi'), outgoing: z.string().max(500_000), warning: z.string(), termsNotice: z.string() }).strict(),
   z.object({ ok: z.literal(false), message: z.string() }).strict()
 ])
 export const profileAiConsentActionSchema = z.discriminatedUnion('ok', [
