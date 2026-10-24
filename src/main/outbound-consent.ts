@@ -5,9 +5,9 @@ interface ConsentRecord { id: string; runId: string; scopeHash: string; createdA
 export function createOutboundConsentEngine() {
   const records = new Map<string, ConsentRecord>()
   return Object.freeze({
-    grantConsent(runId: string, bundle: OutboundBundle, decision: { accepted: boolean; freeTierTermsAcknowledged: boolean }): Readonly<ConsentRecord> {
+    grantConsent(runId: string, bundle: OutboundBundle, decision: { accepted: boolean; privacyAcknowledged: boolean }): Readonly<ConsentRecord> {
       if (!decision.accepted) throw new Error('Explicit consent must be accepted.')
-      if (!decision.freeTierTermsAcknowledged) throw new Error('Free-tier data-use terms must be acknowledged.')
+      if (!decision.privacyAcknowledged) throw new Error('Review the outgoing-data privacy notice before authorizing this run.')
       const record = Object.freeze({ id: randomUUID(), runId, scopeHash: bundle.scopeHash, createdAt: new Date().toISOString(), revoked: false })
       records.set(record.id, { ...record })
       return record

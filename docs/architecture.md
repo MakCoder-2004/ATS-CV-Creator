@@ -11,7 +11,7 @@ The [locked npm package](../package.json) and [Electron Vite config](../electron
 | Desktop and build | Electron 39, TypeScript 5, Electron Vite 5, Vite 7, and an NSIS Windows installer through electron-builder. |
 | Interface | React 19, CSS and Tailwind 4, Radix Select and Popover controls, Lucide icons, and bundled Manrope and Sora variable fonts. The exported PDF instead uses Lato. |
 | Records and validation | `better-sqlite3` in the main process; Zod schemas shared across processes. |
-| Model work | OpenRouter transport, LangGraph state graph, and a SQLite checkpoint saver. |
+| Model work | Pi SDK `ModelRuntime.completeSimple()`, LangGraph state graph, and a SQLite checkpoint saver. |
 | Documents | PDF.js for import and preview, DOCX and JSZip for document paths, and an application-owned LaTeX template compiled by bundled pdfLaTeX. |
 | Tests | Vitest for domain and workbench contracts, and Playwright for Electron and installed-app flows. |
 
@@ -34,7 +34,7 @@ The browser window has context isolation and sandboxing, with Node integration d
 
 | Group | Tables and purpose |
 | --- | --- |
-| Configuration | `settings`, `encrypted_credentials`, and `schema_migrations` hold preferences, protected credentials, and migrations. |
+| Configuration | `settings` holds the exact Pi provider, model, and thinking level. `schema_migrations` tracks upgrades. The upgrade deletes the former CV Tailor OpenRouter ciphertext from `encrypted_credentials`; Pi owns its credentials outside this database. |
 | Profile | `profile_contact`, `profile_skills`, `profile_entries`, `profile_experience`, `profile_projects`, `evidence_revisions`, and `profile_import_provenance` hold career facts and source history. |
 | Jobs | `jobs` holds saved job records, including source snapshots and accepted posting revisions. |
 | Model work | `outbound_consents`, `posting_analysis_cache`, `analysis_run_state`, `analysis_attempts`, `provider_attempt_outcomes`, `generation_recovery`, `generation_recovery_extensions`, and the SQLite graph checkpointer track authorization, work, and recovery. |
@@ -48,7 +48,7 @@ The Saved jobs link flow accepts only named, public HTTPS Lever posting detail U
 
 Before model work, [`src/shared/outbound-consent.ts`](../src/shared/outbound-consent.ts) constructs a minimized, scoped payload from the current posting and profile. [`src/main/workbench.ts`](../src/main/workbench.ts) binds authorization to a run and scope hash. Accepting a preview alone does not send the request. `startAnalysis` checks the current authorization before loading compatible cached data or calling the provider, and refuses a second analysis while a job operation is active. Draft generation requires the analysis and authorization for that run; a prior cached result is not permission to generate again.
 
-[`src/main/posting-analysis.ts`](../src/main/posting-analysis.ts) and [`src/main/openrouter-analysis-transport.ts`](../src/main/openrouter-analysis-transport.ts) handle bounded OpenRouter calls, model capacity, retries, and usage limits. [`src/main/source-linked-generation.ts`](../src/main/source-linked-generation.ts) uses a LangGraph state graph to score eligible evidence, select content for a one- or two-page target, and produce structured, cited wording. It rejects missing or foreign citations and incompatible recovered checkpoints. [`src/main/sqlite-checkpoint.ts`](../src/main/sqlite-checkpoint.ts) stores graph checkpoints. The model supplies content, not executable LaTeX or authority to change profile facts. Factual and supported-keyword repair requests minimize locally restored identifiers again before dispatch; if a request still contains an identifier, generation stops without sending it. A recovered generation can retain or explicitly extend its own run limit without changing the dispatcher budget for other jobs.
+[`src/main/pi-model.ts`](../src/main/pi-model.ts) resolves the selected physical chat model against Pi's registry and checks local authentication and supported thinking before dispatch. [`src/main/pi-workbench-dispatcher.ts`](../src/main/pi-workbench-dispatcher.ts) serializes run-authorized requests, bounds output, validates each task's JSON response, and records physical attempts. It sends no tools, loads no project instructions or extensions, and makes no automatic provider retry. A locally configured but expired credential can still fail at the provider. Pi and providers enforce their own quotas and context limits; CV Tailor keeps storage and file safety limits but has no local daily or per-run model quota. [`src/main/source-linked-generation.ts`](../src/main/source-linked-generation.ts) uses LangGraph to select evidence and produce structured, cited wording. It rejects missing or foreign citations and incompatible recovered checkpoints. [`src/main/sqlite-checkpoint.ts`](../src/main/sqlite-checkpoint.ts) stores graph checkpoints. The model supplies content, not executable LaTeX or authority to change profile facts. Repair prompts minimize locally restored identifiers again before dispatch.
 
 ## Review, export, and backup
 
@@ -56,13 +56,13 @@ The draft's citations carry evidence identities and revisions. [`src/main/factua
 
 The PDF uses the application-owned Letter/Lato template under [`resources/cv-template/`](../resources/cv-template/) and a bundled local pdfLaTeX toolchain. [`src/main/latex-compiler.ts`](../src/main/latex-compiler.ts) compiles in a disposable directory with bounded execution and no shell escape. [`src/main/pdf-document.ts`](../src/main/pdf-document.ts) measures the actual compiled PDF. [`src/main/docx-export.ts`](../src/main/docx-export.ts) creates an editable Word document from the same canonical content; Word pagination can differ from the PDF.
 
-Profile PDF and DOCX imports extract text in bounded workers and produce proposals for explicit review; optional AI structuring has a separate outgoing-data preview and consent. Profile JSON exchange is a separate replacement path. [`src/main/workspace-backup.ts`](../src/main/workspace-backup.ts) validates backup data; restore previews replacement and makes a safety copy. Backup excludes the OpenRouter key and does not restore authorization for cloud work. The renderer's `WorkbenchStart` implements the user-facing order.
+Profile PDF and DOCX imports extract text in bounded workers and produce proposals for explicit review. Optional Pi structuring of either format has a separate minimized-text preview, frozen model and effort, and one-run consent. Profile JSON exchange is a separate replacement path. [`src/main/workspace-backup.ts`](../src/main/workspace-backup.ts) validates backup data; restore previews replacement and makes a safety copy. Backup excludes credentials, discards legacy OpenRouter settings, and does not restore authorization for cloud work. The renderer's `WorkbenchStart` implements the user-facing order.
 
 ## Invariants
 
 - Shared contracts define record shapes. IPC, network, file, and provider boundaries validate external input.
 - Consent binds to the operation and current source revisions. A cache hit does not waive new-run authorization.
-- The dispatcher checks generation budgets inside its shared request queue before each physical provider call.
+- The dispatcher verifies frozen Pi model and effort plus current run consent before each physical provider call. Old interrupted OpenRouter runs cannot resume under Pi.
 - Posting source snapshots, accepted posting revisions, profile evidence, and draft wording remain distinct. Posting keywords are not career facts.
 - The app-owned canonical document, citation checks, PDF page measurement, and approval guard constrain export.
 - The [frontend design contract](../design%20system/README.md) governs renderer changes. Prototype state is design evidence, not production data or a supported feature.

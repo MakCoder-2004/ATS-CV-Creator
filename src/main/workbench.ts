@@ -406,12 +406,11 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
   const api: WorkbenchStorageAPI = {
     async getWorkspaceBackupStatus() { return backupEngine.readBackupStatus() },
     async getSettings() {
-      const rows = db.prepare('SELECT key, value FROM settings WHERE key IN (?, ?, ?, ?)').all('appearance', 'openrouter-model', 'faithfulness-check', 'pi-model') as { key: string; value: string }[]
+      const rows = db.prepare('SELECT key, value FROM settings WHERE key IN (?, ?, ?)').all('appearance', 'faithfulness-check', 'pi-model') as { key: string; value: string }[]
       const stored = Object.fromEntries(rows.map(row => [row.key, row.value]))
-      const configured = Boolean(db.prepare('SELECT 1 FROM encrypted_credentials WHERE key = ?').get('openrouter-api-key'))
       let piModel: PiModelSelection | null = null
       try { if (stored['pi-model']) piModel = piModelSelectionSchema.parse(JSON.parse(stored['pi-model'])) } catch { piModel = null }
-      return settingsSchema.parse({ appearance: stored.appearance ?? 'light', openRouter: { model: stored['openrouter-model'] ?? defaultOpenRouterModel, faithfulnessCheck: stored['faithfulness-check'] === 'true', credential: { configured, secureStorageAvailable: secureStorageAvailable() } }, pi: piModel })
+      return settingsSchema.parse({ appearance: stored.appearance ?? 'light', pi: piModel, faithfulnessCheck: stored['faithfulness-check'] === 'true' })
     },
     async setAppearance(value) {
       saveSetting('appearance', appearanceSchema.parse(value))
@@ -425,16 +424,20 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       const value = piModelPreferenceInputSchema.parse(input)
       const runtime = await piRuntime
       if (!runtime) throw new Error('Pi model validation is unavailable. Your selection was not saved.')
-      const reference = parsePiModelReference(value.reference, listPiModelReferences(runtime))
-      const selection = piModelSelectionSchema.parse({ ...reference, thinkingLevel: value.thinkingLevel })
-      const provider = runtime.getProviders().find(candidate => candidate.id === selection.providerId)
-      if (!provider?.getModels().some(candidate => candidate.id === selection.modelId)) throw new Error('The selected Pi model is unavailable. Choose another model in Settings.')
-      const model = await resolvePiModel(runtime, selection)
-      const available = await runtime.getAvailable(selection.providerId)
-      if (!available.some(candidate => candidate.id === selection.modelId && candidate.provider === selection.providerId)) {
-        throw new Error('Pi has no currently available authentication for this provider. Sign in or choose another provider in Pi Settings.')
+      let reference: ReturnType<typeof parsePiModelReference>
+      try { reference = parsePiModelReference(value.reference, listPiModelReferences(runtime)) }
+      catch (error) {
+        if (error instanceof Error && /ambiguous|Choose a model listed/.test(error.message)) throw error
+        throw new Error('Pi model discovery is unavailable. Your selection was not saved.')
       }
-      if (!await runtime.getAuth(model)) throw new Error('Pi has no configured authentication for this provider. Sign in with Pi outside CV Tailor.')
+      const selection = piModelSelectionSchema.parse({ ...reference, thinkingLevel: value.thinkingLevel })
+      const model = await resolvePiModel(runtime, selection)
+      let available: boolean, authenticated: boolean
+      try {
+        available = (await runtime.getAvailable(selection.providerId)).some(candidate => candidate.id === selection.modelId && candidate.provider === selection.providerId)
+        authenticated = available && Boolean(await runtime.getAuth(model))
+      } catch { throw new Error('Pi sign-in could not be checked. Open Pi outside CV Tailor and try again.') }
+      if (!authenticated) throw new Error('Pi has no local sign-in for this model. Sign in with Pi outside CV Tailor.')
       saveSetting('pi-model', JSON.stringify(selection))
       return this.getSettings()
     },
@@ -1157,7 +1160,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
         return outboundConsentPreviewSchema.parse({ ok: true, token, jobTitle: source.job.title, jobCompany: source.job.company, outgoing: bundle.outgoing, warning: bundle.preview.residualSensitivityNotice, termsNotice: scriptedTransport ? 'This scripted request uses only the reviewed outgoing data. Redaction cannot guarantee anonymity.' : 'After you authorize this run, Pi sends the reviewed data to the selected model provider. Provider data-use policies and charges vary. Do not submit confidential information. Redaction cannot guarantee anonymity.' })
       } catch { return outboundConsentPreviewSchema.parse({ ok: false, message: 'Outgoing data could not be prepared safely. Review your profile and model settings, then try again.' }) }
     },
-    async acceptOutboundConsent(token: string, accepted: boolean, freeTierTermsAcknowledged: boolean): Promise<OutboundConsentAction> {
+    async acceptOutboundConsent(token: string, accepted: boolean, privacyAcknowledged: boolean): Promise<OutboundConsentAction> {
       const pending = pendingOutbound.get(token)
       if (!pending) return outboundConsentActionSchema.parse({ ok: false, message: 'This preview expired. Prepare and review the outgoing data again.' })
       if (pending.consentId) return outboundConsentActionSchema.parse({ ok: false, message: 'This preview has already been accepted. Start a new run to request fresh consent.' })
@@ -1168,7 +1171,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
         return outboundConsentActionSchema.parse({ ok: false, message: 'Your job, profile, or model settings changed after preview. Review the outgoing data again.' })
       }
       try {
-        const record = outboundEngine.grantConsent(pending.runId, pending.bundle, { accepted, freeTierTermsAcknowledged })
+        const record = outboundEngine.grantConsent(pending.runId, pending.bundle, { accepted, privacyAcknowledged })
         try {
           db.prepare('INSERT INTO outbound_consents (id, run_id, scope_hash, created_at, revoked) VALUES (?, ?, ?, ?, 0)').run(record.id, pending.runId, pending.bundle.scopeHash, record.createdAt)
         } catch {
@@ -1486,9 +1489,9 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       const section = base.content[parsedTarget.data.section]
       if (!section.length || (parsedTarget.data.kind === 'paragraph' && !section[parsedTarget.data.index])) return { ok: false, message: 'The selected section or paragraph is no longer available.' }
       const scoped = parsedTarget.data.kind === 'section' ? section : [section[parsedTarget.data.index]]
-      const compatibleCache = db.prepare('SELECT data, run_id FROM posting_analysis_cache WHERE cache_key = ?').get(analysisCacheKey(pending.source)) as { data: string; run_id: string } | undefined
-      let analysisResult = compatibleCache ? analysisResultSchema.parse({ jobId: pending.jobId, runId: compatibleCache.run_id, status: 'complete', analysis: postingAnalysisSchema.parse(JSON.parse(compatibleCache.data)), progress: 'Loaded compatible posting analysis for regeneration.', attempts: 0, cacheHit: true }) : null
-      if (!analysisResult) analysisResult = await this.startAnalysis(token)
+      const existingAnalysis = await this.getAnalysis(pending.jobId)
+      const analysisResult = existingAnalysis?.runId === pending.runId && existingAnalysis.status === 'complete'
+        ? existingAnalysis : await this.startAnalysis(token)
       if (!analysisResult || analysisResult.status !== 'complete' || !analysisResult.analysis) return { ok: false, message: 'Posting analysis must complete before regeneration. Your draft was not changed.' }
       const latestAfterAnalysis = currentConsentSource(pending.jobId)
       if (!latestAfterAnalysis || prepareOutboundBundle(latestAfterAnalysis).scopeHash !== pending.bundle.scopeHash) return { ok: false, message: 'Your authorized inputs changed. Review a fresh outgoing-data preview before retrying.' }
@@ -1934,6 +1937,14 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
     },
     async getGenerationRecovery(jobId: string) {
       const row = db.prepare("SELECT run_id,status,snapshot FROM generation_recovery WHERE job_id=? AND status IN ('running','paused') ORDER BY updated_at DESC LIMIT 1").get(jobId) as { run_id: string; status: 'running' | 'paused'; snapshot: string } | undefined
+      if (!row && !scriptedTransport) {
+        const legacy = db.prepare("SELECT run_id,updated_at FROM generation_recovery WHERE job_id=? AND status='cancelled' AND json_extract(snapshot,'$.version')=1 ORDER BY updated_at DESC LIMIT 1").get(jobId) as { run_id: string; updated_at: string } | undefined
+        const newer = legacy && db.prepare("SELECT 1 FROM generation_recovery WHERE job_id=? AND json_extract(snapshot,'$.version')=2 AND updated_at>=?").get(jobId, legacy.updated_at)
+        if (legacy && !newer) {
+          const attempts = (db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id=?').get(legacy.run_id) as { count: number }).count
+          return generationRecoverySchema.parse({ jobId, runId: legacy.run_id, status: 'interrupted', attempts, uncertainAttempts: 0, progress: 'An earlier generation cannot resume with Pi. Your saved draft and history remain available. Review outgoing data, authorize a new run, analyze the posting, then generate again.', canResume: false })
+        }
+      }
       if (!row) return null
       const attempts = (db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id=?').get(row.run_id) as { count: number }).count
       const uncertainAttempts = (db.prepare('SELECT COUNT(*) AS count FROM provider_attempt_outcomes WHERE run_id=? AND checkpointed_at IS NULL').get(row.run_id) as { count: number }).count

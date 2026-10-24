@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client'
 import { AlertTriangle, BriefcaseBusiness, FileText, LayoutPanelLeft, Moon, PanelLeftClose, PanelLeftOpen, Plus, Settings2, Sun, UserRound } from 'lucide-react'
 import type { Appearance } from '../shared/appearance'
 import type { WorkspaceBackupStatus } from '../shared/workspace-backup'
-import { OpenRouterSettingsPanel } from './OpenRouterSettings'
+import { PiSettingsPanel } from './PiSettings'
 import { WorkspaceBackup } from './WorkspaceBackup'
 import { ProfileEditor } from './ProfileEditor'
 import { SavedJobs } from './SavedJobs'
@@ -92,7 +92,7 @@ function App() {
       </aside>}
       <main id="content" ref={contentRef} tabIndex={-1}>
         {(page === 'My profile' || page === 'Settings') && <div className="title"><span className="context">Personal workspace</span><h1>{page}</h1><p>{page === 'My profile' ? 'Keep the career facts that support your CV in one place.' : 'Choose a Pi model and manage your review preferences.'}</p></div>}
-        {page === 'Tailor CV' ? <WorkbenchStart key={workspaceRevision} activeJob={activeJob} onNavigate={setPage} /> : page === 'My profile' ? <ProfileEditor key={workspaceRevision} /> : page === 'Saved jobs' ? <SavedJobs key={workspaceRevision} jobs={jobs} activeJob={activeJob} onSaved={keepJob} onOpened={keepJob} onNavigate={setPage} /> : <div className="settings-page"><OpenRouterSettingsPanel key={workspaceRevision} /><WorkspaceBackup onRestored={afterWorkspaceRestore} /></div>}
+        {page === 'Tailor CV' ? <WorkbenchStart key={workspaceRevision} activeJob={activeJob} onNavigate={setPage} /> : page === 'My profile' ? <ProfileEditor key={workspaceRevision} /> : page === 'Saved jobs' ? <SavedJobs key={workspaceRevision} jobs={jobs} activeJob={activeJob} onSaved={keepJob} onOpened={keepJob} onNavigate={setPage} /> : <div className="settings-page"><PiSettingsPanel key={workspaceRevision} /><WorkspaceBackup onRestored={afterWorkspaceRestore} /></div>}
       </main>
     </div>
   </div>

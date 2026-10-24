@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, safeStorage, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } from 'electron'
 import type { ZodError } from 'zod'
 import { fileURLToPath } from 'node:url'
 import { existsSync, linkSync, lstatSync, mkdirSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
@@ -11,10 +11,10 @@ import { assertCompiledContent, inspectCompiledPdf } from './pdf-document'
 import { renderCanonicalDocx } from './docx-export'
 import { z } from 'zod'
 import { createWorkbench } from './workbench'
+import type { PiModelRuntime } from './pi-model'
 import { piModelPreferenceInputSchema } from '../shared/pi-model'
 import type { AnalysisTransport } from './posting-analysis'
 import { appearanceSchema } from '../shared/appearance'
-import { openRouterKeyInputSchema, openRouterModelSchema } from '../shared/openrouter-settings'
 import { contactSaveInputSchema, evidenceRevisionSchema, profileEntrySaveSchema, profileMutationResultSchema, profileSnapshotSchema, skillSaveInputSchema, uuidSchema } from '../shared/profile'
 import { experienceSaveInputSchema, experienceSnapshotSchema, experienceMutationResultSchema, projectSaveInputSchema } from '../shared/experience'
 import { jobInputSchema, jobRecordSchema, jobSaveInputSchema, jobSaveResultSchema, postingRefreshChoiceSchema } from '../shared/jobs'
@@ -23,7 +23,7 @@ import { registerProfilePdfImportIpc } from './profile-pdf-import-ipc'
 import { registerProfileDocxImportIpc } from './profile-docx-import-ipc'
 import { registerWorkspaceBackupIpc } from './workspace-backup-ipc'
 import { outboundConsentActionSchema, outboundConsentPreviewSchema } from '../shared/outbound-consent-contract'
-import { analysisBudgetsSchema, analysisIdSchema, analysisResultSchema, analysisStartInputSchema, analysisUsageSchema, generationRecoverySchema, recoveryChoiceSchema } from '../shared/posting-analysis'
+import { analysisIdSchema, analysisResultSchema, analysisStartInputSchema, generationRecoverySchema, recoveryChoiceSchema } from '../shared/posting-analysis'
 import { addDraftItemInputSchema, draftCorrectionInputSchema, draftGenerationSchema, draftRevisionSchema, suggestedSkillDecisionSchema, draftTailoringCorrectionSchema } from '../shared/draft'
 import { factualCheckReportSchema } from '../shared/factual-report'
 import { regenerationProposalSchema, regenerationResultSchema, regenerationTargetSchema } from '../shared/regeneration'
@@ -143,9 +143,19 @@ app.whenReady().then(() => {
       onRequestCompleted: status => console.info(`[LINK37_SINGLE_REQUEST] request=1 completed status=${status}`)
     } : {})
   }
-  const piRuntime = import('@earendil-works/pi-coding-agent')
-    .then(({ ModelRuntime }) => ModelRuntime.create({ allowModelNetwork: false, refreshOnCreate: false }))
-    .catch(() => null)
+  const piRuntime = scriptedAnalysis && !app.isPackaged && process.env.CV_TAILOR_SCRIPTED_PI_MODEL === '1'
+    ? Promise.resolve((() => {
+      const model = { provider: 'scripted', id: 'cv-tailor-fixture', name: 'Offline test model', api: 'openai-completions', input: ['text'], reasoning: false, contextWindow: 16384, maxTokens: 8192 }
+      return {
+        getProviders: () => [{ id: model.provider, getModels: () => [model] }],
+        getPhysicalModel: (providerId: string, modelId: string) => providerId === model.provider && modelId === model.id ? model : undefined,
+        getAvailable: async () => [model], getAuth: async () => ({ source: 'synthetic' }),
+        completeSimple: async () => { throw new Error('The scripted Pi model cannot send a physical request.') }
+      } as unknown as PiModelRuntime
+    })())
+    : import('@earendil-works/pi-coding-agent')
+      .then(({ ModelRuntime }) => ModelRuntime.create({ allowModelNetwork: false, refreshOnCreate: false }))
+      .catch(() => null)
   workspace = createWorkbench(app.getPath('userData'), safeStorage, scriptedAnalysis, undefined, postingFetchOptions, piRuntime)
   registerWorkspaceBackupIpc(() => window!, () => workspace!, () => {
     const reopened = createWorkbench(app.getPath('userData'), safeStorage, scriptedAnalysis, undefined, postingFetchOptions, piRuntime)
@@ -163,11 +173,6 @@ app.whenReady().then(() => {
     if (args.length !== 1) throw new Error('Expected appearance')
     return workspace!.api.setAppearance(appearanceSchema.parse(args[0]))
   })
-  ipcMain.handle('settings:openrouter-model', (event, ...args: unknown[]) => {
-    trusted(event)
-    if (args.length !== 1) throw new Error('Expected OpenRouter model')
-    return workspace!.api.setOpenRouterModel(openRouterModelSchema.parse(args[0]))
-  })
   ipcMain.handle('settings:pi-model', (event, ...args: unknown[]) => {
     trusted(event)
     if (args.length !== 1) throw new Error('Expected Pi model selection')
@@ -178,34 +183,9 @@ app.whenReady().then(() => {
     if (args.length !== 1 || typeof args[0] !== 'boolean') throw new Error('Expected faithfulness setting')
     return workspace!.api.setFaithfulnessCheck(args[0])
   })
-  ipcMain.handle('settings:openrouter-key:save', (event, ...args: unknown[]) => {
-    trusted(event)
-    if (args.length !== 1) throw new Error('Expected OpenRouter API key')
-    const input = openRouterKeyInputSchema.safeParse(args[0])
-    if (!input.success) throw new Error('API key input is invalid. Correct it and try again.')
-    return workspace!.api.saveOpenRouterApiKey(input.data)
-  })
-  ipcMain.handle('settings:openrouter-key:reveal', (event, ...args: unknown[]) => {
-    trusted(event)
-    if (args.length) throw new Error('Unexpected arguments')
-    return workspace!.api.revealOpenRouterApiKey()
-  })
-  ipcMain.handle('settings:openrouter-key:copy', async (event, ...args: unknown[]) => {
-    trusted(event)
-    if (args.length) throw new Error('Unexpected arguments')
-    clipboard.writeText(await workspace!.api.revealOpenRouterApiKey())
-  })
-  ipcMain.handle('settings:openrouter-key:remove', async (event, ...args: unknown[]) => {
-    trusted(event)
-    if (args.length) throw new Error('Unexpected arguments')
-    // Clear only our copied key; never overwrite unrelated clipboard contents.
-    try { if (clipboard.readText() === await workspace!.api.revealOpenRouterApiKey()) clipboard.clear() }
-    catch { /* Removing a stored key must still work if decryption is unavailable. */ }
-    return workspace!.api.removeOpenRouterApiKey()
-  })
   registerProfileExchangeIpc(() => window!, () => workspace!.api, trusted)
   const profilePdfImport = registerProfilePdfImportIpc(() => window!, () => workspace!.api, trusted)
-  const profileDocxImport = registerProfileDocxImportIpc(() => window!, () => workspace!.api, trusted)
+  const profileDocxImport = registerProfileDocxImportIpc(() => window!, () => workspace!.api, trusted, profilePdfImport.clearAiForImport)
   app.on('before-quit', () => { profilePdfImport.clear(); profileDocxImport.clear() })
   ipcMain.handle('profile:get', async (event, ...args: unknown[]) => {
     trusted(event)
@@ -481,8 +461,6 @@ app.whenReady().then(() => {
   ipcMain.handle('generation:recovery:get', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected job ID'); const result = await workspace!.api.getGenerationRecovery(analysisIdSchema.parse(args[0])); return result === null ? null : generationRecoverySchema.parse(result) })
   ipcMain.handle('generation:recovery:resume', async (event, ...args: unknown[]) => { trusted(event); if (args.length < 1 || args.length > 2) throw new Error('Expected run ID and optional recovery choice'); const runId = analysisIdSchema.parse(args[0]); const choice = args[1] === undefined ? undefined : recoveryChoiceSchema.parse(args[1]); return workspace!.api.resumeGeneration(runId, choice) })
   ipcMain.handle('generation:recovery:cancel', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected run ID'); return workspace!.api.cancelGenerationRecovery(analysisIdSchema.parse(args[0])) })
-  ipcMain.handle('analysis:usage', async (event, ...args: unknown[]) => { trusted(event); if (args.length) throw new Error('Unexpected arguments'); return analysisUsageSchema.parse(await workspace!.api.getAnalysisUsage()) })
-  ipcMain.handle('analysis:budgets:set', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected analysis budgets'); return analysisUsageSchema.parse(await workspace!.api.setAnalysisBudgets(analysisBudgetsSchema.parse(args[0]))) })
   ipcMain.handle('jobs:open', async (event, ...args: unknown[]) => {
     trusted(event)
     if (args.length !== 1) throw new Error('Expected job ID')

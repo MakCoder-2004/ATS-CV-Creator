@@ -19,9 +19,9 @@ function bindIds(draft: ProfilePdfProposalDraft) {
 }
 
 /** DOCX-specific native picker; preview state is memory-only and shares the PDF acceptance contract. */
-export function registerProfileDocxImportIpc(getWindow: () => BrowserWindow, getStorage: () => WorkbenchStorageAPI, trusted: (event: IpcMainInvokeEvent) => void) {
+export function registerProfileDocxImportIpc(getWindow: () => BrowserWindow, getStorage: () => WorkbenchStorageAPI, trusted: (event: IpcMainInvokeEvent) => void, cancelAiForImport: (token: string) => void = () => {}) {
   const pending = new Map<string, { hash: string; baseline: string; proposals: ReturnType<typeof profilePdfProposalSchema.parse>; timer: NodeJS.Timeout }>()
-  const discard = (token: string) => { const item = pending.get(token); if (!item) return false; clearTimeout(item.timer); pending.delete(token); unregisterProfileAiImport(token); return true }
+  const discard = (token: string) => { const item = pending.get(token); if (!item) return false; clearTimeout(item.timer); cancelAiForImport(token); pending.delete(token); unregisterProfileAiImport(token); return true }
   ipcMain.handle('profile:docx-import:preview', async (event, ...args: unknown[]) => {
     trusted(event)
     if (args.length) throw new Error('Unexpected arguments')
@@ -34,9 +34,9 @@ export function registerProfileDocxImportIpc(getWindow: () => BrowserWindow, get
       if (bytes.length !== info.size) return profilePdfPreviewSchema.parse({ ok: false, cancelled: false, message: 'The selected file changed while it was being read. Choose it again.' })
       const extracted = await extractProfileDocx(bytes)
       const proposals = bindIds(profilePdfProposalDraftSchema.parse(mapProfileDocxPages(extracted.pages)))
-      const token = randomUUID(), timer = setTimeout(() => pending.delete(token), 15 * 60_000); timer.unref()
+      const token = randomUUID(), timer = setTimeout(() => discard(token), 15 * 60_000); timer.unref()
       pending.set(token, { hash: extracted.sha256, baseline, proposals, timer })
-      registerProfileAiImport(token, { get: () => proposals, set: value => { const active = pending.get(token); if (active) active.proposals = value } })
+      registerProfileAiImport(token, { get: () => pending.get(token)?.proposals ?? proposals, set: value => { const active = pending.get(token); if (active) active.proposals = value } })
       return profilePdfPreviewSchema.parse({ ok: true, token, sourceHash: extracted.sha256, proposals })
     } catch (error) { return profilePdfPreviewSchema.parse({ ok: false, cancelled: false, message: error instanceof Error ? error.message : 'The selected DOCX could not be read.' }) }
   })

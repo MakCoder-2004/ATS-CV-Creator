@@ -3,7 +3,7 @@ import { ShieldCheck, Sparkles } from 'lucide-react'
 import { PI_THINKING_LEVELS, type PiModelSelection } from '../shared/pi-model'
 import { FieldSelect } from './controls/FieldSelect'
 
-export function OpenRouterSettingsPanel() {
+export function PiSettingsPanel() {
   const [selection, setSelection] = useState<PiModelSelection | null>(null)
   const [reference, setReference] = useState('')
   const [thinkingLevel, setThinkingLevel] = useState<(typeof PI_THINKING_LEVELS)[number]>('medium')
@@ -18,7 +18,7 @@ export function OpenRouterSettingsPanel() {
       setSelection(value.pi)
       setReference(value.pi ? `${value.pi.providerId}/${value.pi.modelId}` : '')
       if (value.pi) setThinkingLevel(value.pi.thinkingLevel)
-      setFaithfulnessCheck(value.openRouter.faithfulnessCheck)
+      setFaithfulnessCheck(value.faithfulnessCheck)
       setLoaded(true)
     }).catch(() => setError('Pi settings could not be loaded. Restart the app to retry.'))
   }, [])
@@ -41,7 +41,7 @@ export function OpenRouterSettingsPanel() {
   async function saveFaithfulness(value: boolean) {
     try {
       const saved = await window.workbench.setFaithfulnessCheck(value)
-      setFaithfulnessCheck(saved.openRouter.faithfulnessCheck)
+      setFaithfulnessCheck(saved.faithfulnessCheck)
       setError('')
       setMessage('Faithfulness preference saved locally. Existing unresolved findings are not waived.')
     } catch { setError('Faithfulness preference could not be saved. Try again.'); setMessage('') }

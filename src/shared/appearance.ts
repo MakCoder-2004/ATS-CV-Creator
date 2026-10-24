@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import type { ContactInput, EvidenceRevision, ProfileEntryInput, ProfileMutationResult, ProfileSnapshot, SkillInput } from './profile'
 import type { ExperienceInput, ExperienceMutationResult, ExperienceSnapshot, ProjectInput } from './experience'
-import { openRouterSettingsSchema, openRouterModelSchema, type OpenRouterModel } from './openrouter-settings'
+import { openRouterModelSchema, type OpenRouterModel } from './openrouter-settings'
 import { piModelSelectionSchema, type PiModelPreferenceInput } from './pi-model'
 import type { JobInput, JobRecord, JobSaveResult, PostingRefreshChoice } from './jobs'
 import type { ProfileExchangeResult } from './profile-exchange'
@@ -19,7 +19,7 @@ import type { WorkspaceBackupStatus } from './workspace-backup'
 
 export const appearanceSchema = z.enum(['light', 'dark'])
 export type Appearance = z.infer<typeof appearanceSchema>
-export const settingsSchema = z.object({ appearance: appearanceSchema, openRouter: openRouterSettingsSchema, pi: piModelSelectionSchema.nullable() }).strict()
+export const settingsSchema = z.object({ appearance: appearanceSchema, pi: piModelSelectionSchema.nullable(), faithfulnessCheck: z.boolean() }).strict()
 export type Settings = z.infer<typeof settingsSchema>
 export const openRouterModelInputSchema = openRouterModelSchema
 
@@ -32,13 +32,8 @@ export interface WorkbenchAPI {
   getSettings(): Promise<Settings>
   getWorkspaceBackupStatus(): Promise<WorkspaceBackupStatus>
   setAppearance(value: Appearance): Promise<Settings>
-  setOpenRouterModel(value: OpenRouterModel): Promise<Settings>
   setPiModel(input: PiModelPreferenceInput): Promise<Settings>
   setFaithfulnessCheck(value: boolean): Promise<Settings>
-  saveOpenRouterApiKey(value: string): Promise<Settings>
-  revealOpenRouterApiKey(): Promise<string>
-  copyOpenRouterApiKey(): Promise<void>
-  removeOpenRouterApiKey(): Promise<Settings>
   exportWorkspaceBackup(): Promise<WorkspaceBackupResult>
   previewWorkspaceRestore(): Promise<WorkspaceRestoreSelection>
   applyWorkspaceRestore(token: string): Promise<{ ok: boolean; message: string }>
@@ -83,7 +78,7 @@ export interface WorkbenchAPI {
   cancelPostingFetch(token: string): Promise<{ ok: boolean }>
   openPostingSource(url: string): Promise<{ ok: boolean; message: string }>
   prepareOutboundConsent(jobId: string): Promise<OutboundConsentPreview>
-  acceptOutboundConsent(token: string, accepted: boolean, freeTierTermsAcknowledged: boolean): Promise<OutboundConsentAction>
+  acceptOutboundConsent(token: string, accepted: boolean, privacyAcknowledged: boolean): Promise<OutboundConsentAction>
   cancelOutboundConsent(token: string): Promise<OutboundConsentAction>
   startAnalysis(consentToken: string): Promise<AnalysisResult>
   getAnalysis(jobId: string): Promise<AnalysisResult | null>
@@ -112,11 +107,15 @@ export interface WorkbenchAPI {
   measureDocument(jobId: string): Promise<DocumentFitReport>
   getDocumentFitReport(jobId: string): Promise<DocumentFitReport | null>
   acceptDocumentCuts(jobId: string, documentHash: string, entryIds: string[]): Promise<{ ok: boolean; message: string; draft?: DraftRevision }>
-  getAnalysisUsage(): Promise<AnalysisUsage>
-  setAnalysisBudgets(value: AnalysisBudgets): Promise<AnalysisUsage>
 }
 
-export type WorkbenchStorageAPI = Omit<WorkbenchAPI, 'exportProfile' | 'previewProfileImport' | 'applyProfileImport' | 'cancelProfileImport' | 'previewProfilePdfImport' | 'cancelProfilePdfImport' | 'applyProfilePdfImport' | 'previewProfileDocxImport' | 'cancelProfileDocxImport' | 'applyProfileDocxImport' | 'previewProfileAiStructuring' | 'consentProfileAiStructuring' | 'runProfileAiStructuring' | 'cancelProfileAiStructuring' | 'exportWorkspaceBackup' | 'previewWorkspaceRestore' | 'applyWorkspaceRestore' | 'cancelWorkspaceRestore' | 'measureDocument' | 'getDocumentPdf' | 'copyOpenRouterApiKey' | 'exportApprovedPdf' | 'exportDraftDocx' | 'openPostingSource'> & {
+export type WorkbenchStorageAPI = Omit<WorkbenchAPI, 'exportProfile' | 'previewProfileImport' | 'applyProfileImport' | 'cancelProfileImport' | 'previewProfilePdfImport' | 'cancelProfilePdfImport' | 'applyProfilePdfImport' | 'previewProfileDocxImport' | 'cancelProfileDocxImport' | 'applyProfileDocxImport' | 'previewProfileAiStructuring' | 'consentProfileAiStructuring' | 'runProfileAiStructuring' | 'cancelProfileAiStructuring' | 'exportWorkspaceBackup' | 'previewWorkspaceRestore' | 'applyWorkspaceRestore' | 'cancelWorkspaceRestore' | 'measureDocument' | 'getDocumentPdf' | 'exportApprovedPdf' | 'exportDraftDocx' | 'openPostingSource'> & {
+  setOpenRouterModel(value: OpenRouterModel): Promise<Settings>
+  saveOpenRouterApiKey(value: string): Promise<Settings>
+  revealOpenRouterApiKey(): Promise<string>
+  removeOpenRouterApiKey(): Promise<Settings>
+  getAnalysisUsage(): Promise<AnalysisUsage>
+  setAnalysisBudgets(value: AnalysisBudgets): Promise<AnalysisUsage>
   saveDocumentFitReport(jobId: string, report: DocumentFitReport): Promise<DocumentFitReport>
   validateProfileImport(input: string): Promise<{ ok: boolean; message: string }>
   replaceProfile(input: string): Promise<{ ok: boolean; message: string; profile?: ProfileSnapshot }>

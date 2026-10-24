@@ -16,8 +16,8 @@ test('preload sends a typed Pi selection only through the Settings IPC channel',
   const input = { reference: `${selection.providerId}/${selection.modelId}`, thinkingLevel: selection.thinkingLevel }
   bridge.invoke.mockResolvedValue({
     appearance: 'light',
-    openRouter: { model: 'legacy/model', faithfulnessCheck: false, credential: { configured: false, secureStorageAvailable: false } },
     pi: selection,
+    faithfulnessCheck: false,
   })
   expect(bridge.api).toBeDefined()
   await expect(bridge.api!.setPiModel(input)).resolves.toMatchObject({ pi: selection })

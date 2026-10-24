@@ -71,6 +71,10 @@ test('Pi wording keeps evidence citations and saved career facts in a reviewable
       return JSON.stringify({ relevance: items.map((item: { index: number }) => ({ index: item.index, score: 0.9, rationale: 'Saved evidence.' })) })
     }
     if (prompt.startsWith('Factual repair cycle')) return JSON.stringify({ corrections: [] })
+    if (prompt.startsWith('Propose conservative replacement wording')) {
+      const { sourcesByItem } = JSON.parse(prompt.slice(prompt.indexOf('{')))
+      return JSON.stringify({ items: sourcesByItem.map(() => ({ text: 'Built reliable services with TypeScript.', rationale: 'Supported by the selected source.' })) })
+    }
     if (prompt.startsWith('Compare all rewritten/source pairs')) {
       const { pairs } = JSON.parse(prompt.slice(prompt.indexOf('{')))
       return JSON.stringify({ results: pairs.map((pair: { itemPath: string }) => ({ itemPath: pair.itemPath, supported: true, explanation: 'Grounded in saved evidence.' })) })
@@ -95,6 +99,14 @@ test('Pi wording keeps evidence citations and saved career facts in a reviewable
   expect(result).toMatchObject({ ok: true, draft: { approved: false, lockedFields: { fullName: 'Synthetic Candidate', experience: [expect.objectContaining({ title: 'Developer', organization: 'Synthetic Company' })] } } })
   expect(result.draft?.content.experience[0].citations[0].evidenceId).toBe(savedRole.value.experience[0].id)
   expect(completeSimple).toHaveBeenCalledTimes(3)
+  const next = await workbench.api.prepareOutboundConsent(job.value.id)
+  if (!next.ok) throw new Error(next.message)
+  const acceptedNext = await workbench.api.acceptOutboundConsent(next.token, true, true)
+  if (!acceptedNext.ok) throw new Error(acceptedNext.message)
+  const proposed = await workbench.api.regenerateDraft(next.token, { kind: 'section', section: 'experience' })
+  expect(proposed).toMatchObject({ ok: true, proposal: { status: 'pending' } })
+  expect(await workbench.api.getAnalysis(job.value.id)).toMatchObject({ status: 'complete', cacheHit: true, runId: acceptedNext.runId })
+  expect(completeSimple).toHaveBeenCalledTimes(4)
 })
 
 test('a missing local Pi login never dispatches posting text', async () => {

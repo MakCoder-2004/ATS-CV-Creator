@@ -66,7 +66,7 @@ Preserve existing live information architecture and functionality. Do not substi
 
 ## Settings — current implementation contract
 
-Preserve the existing two-column Settings structure, appearance, faithfulness and backup controls. Replace the legacy OpenRouter model, in-app credential and local analysis-budget controls with Pi provider/model preference controls. Existing OpenRouter settings remain transitional and must not be exposed in the UI. Do not imply the Pi model preference has switched the generation request flow until integration is complete.
+Preserve the existing two-column Settings structure, appearance, faithfulness and backup controls. Replace the legacy OpenRouter model, in-app credential and local analysis-budget controls with Pi provider/model preference controls. An old OpenRouter model ID is never treated as a Pi selection. The person chooses a new model and effort before a model run.
 
 - Retain the existing grid: two equal columns on wide screens, single column at 980px; faithfulness-wide section spans both columns above the breakpoint. Blocks use responsive 20–32px padding, 10px radius, 1px border and surface background.
 - Each block starts with a 38px raised icon tile and heading/description; form controls and explanatory text stay in the same logical group. The Pi model reference starts blank when no preference is saved and displays the exact saved provider/model reference and thinking level after reload.

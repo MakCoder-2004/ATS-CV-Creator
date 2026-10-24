@@ -1,14 +1,13 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { z } from 'zod'
 import { appearanceSchema, settingsSchema, type Appearance, type WorkbenchAPI } from '../shared/appearance'
-import { openRouterKeyInputSchema, openRouterModelSchema, type OpenRouterModel } from '../shared/openrouter-settings'
 import { piModelPreferenceInputSchema, type PiModelPreferenceInput } from '../shared/pi-model'
 import { evidenceRevisionSchema, profileEntryInputSchema, profileMutationResultSchema, profileSnapshotSchema, uuidSchema, type ContactInput, type ProfileEntryInput, type SkillInput } from '../shared/profile'
 import { experienceSnapshotSchema, experienceMutationResultSchema, type ExperienceInput, type ProjectInput } from '../shared/experience'
 import { jobInputSchema, jobRecordSchema, jobSaveResultSchema, postingRefreshChoiceSchema, type JobInput } from '../shared/jobs'
 import { profileExchangeResultSchema } from '../shared/profile-exchange'
 import { outboundConsentActionSchema, outboundConsentPreviewSchema } from '../shared/outbound-consent-contract'
-import { analysisBudgetsSchema, analysisIdSchema, analysisResultSchema, analysisUsageSchema, generationRecoverySchema, recoveryChoiceSchema, type AnalysisBudgets, type AnalysisResult, type RecoveryChoice } from '../shared/posting-analysis'
+import { analysisIdSchema, analysisResultSchema, generationRecoverySchema, recoveryChoiceSchema, type AnalysisResult, type RecoveryChoice } from '../shared/posting-analysis'
 import { addDraftItemInputSchema, draftCorrectionInputSchema, draftGenerationSchema, draftRevisionSchema, suggestedSkillDecisionSchema, draftTailoringCorrectionSchema } from '../shared/draft'
 import { factualCheckReportSchema } from '../shared/factual-report'
 import { canonicalDocumentSchema, documentFitReportSchema, documentPdfSchema } from '../shared/document'
@@ -36,28 +35,12 @@ const api: WorkbenchAPI = Object.freeze({
   async setAppearance(value: Appearance) {
     return settingsSchema.parse(await ipcRenderer.invoke('settings:appearance', appearanceSchema.parse(value)))
   },
-  async setOpenRouterModel(value: OpenRouterModel) {
-    return settingsSchema.parse(await ipcRenderer.invoke('settings:openrouter-model', openRouterModelSchema.parse(value)))
-  },
   async setPiModel(input: PiModelPreferenceInput) {
     return settingsSchema.parse(await ipcRenderer.invoke('settings:pi-model', piModelPreferenceInputSchema.parse(input)))
   },
   async setFaithfulnessCheck(value: boolean) {
     if (typeof value !== 'boolean') throw new Error('Faithfulness setting must be boolean.')
     return settingsSchema.parse(await ipcRenderer.invoke('settings:faithfulness', value))
-  },
-  async saveOpenRouterApiKey(value: string) {
-    return settingsSchema.parse(await ipcRenderer.invoke('settings:openrouter-key:save', openRouterKeyInputSchema.parse(value)))
-  },
-  async revealOpenRouterApiKey() {
-    const value: unknown = await ipcRenderer.invoke('settings:openrouter-key:reveal')
-    return openRouterKeyInputSchema.parse(value)
-  },
-  async copyOpenRouterApiKey() {
-    await ipcRenderer.invoke('settings:openrouter-key:copy')
-  },
-  async removeOpenRouterApiKey() {
-    return settingsSchema.parse(await ipcRenderer.invoke('settings:openrouter-key:remove'))
   },
   async exportWorkspaceBackup() { return workspaceResult.parse(await ipcRenderer.invoke('workspace:backup')) },
   async previewWorkspaceRestore() { return restoreSelection.parse(await ipcRenderer.invoke('workspace:restore:preview')) },
@@ -142,8 +125,8 @@ const api: WorkbenchAPI = Object.freeze({
   async prepareOutboundConsent(jobId: string) {
     return outboundConsentPreviewSchema.parse(await ipcRenderer.invoke('consent:outbound:preview', uuidSchema.parse(jobId)))
   },
-  async acceptOutboundConsent(token: string, accepted: boolean, freeTierTermsAcknowledged: boolean) {
-    return outboundConsentActionSchema.parse(await ipcRenderer.invoke('consent:outbound:accept', uuidSchema.parse(token), accepted, freeTierTermsAcknowledged))
+  async acceptOutboundConsent(token: string, accepted: boolean, privacyAcknowledged: boolean) {
+    return outboundConsentActionSchema.parse(await ipcRenderer.invoke('consent:outbound:accept', uuidSchema.parse(token), accepted, privacyAcknowledged))
   },
   async cancelOutboundConsent(token: string) {
     return outboundConsentActionSchema.parse(await ipcRenderer.invoke('consent:outbound:cancel', uuidSchema.parse(token)))
@@ -174,8 +157,6 @@ const api: WorkbenchAPI = Object.freeze({
   async cancelAnalysis(jobId: string) { return analysisResultSchema.parse(await ipcRenderer.invoke('analysis:cancel', analysisIdSchema.parse(jobId))) },
   async getGenerationRecovery(jobId: string) { const value = await ipcRenderer.invoke('generation:recovery:get', analysisIdSchema.parse(jobId)); return value === null ? null : generationRecoverySchema.parse(value) },
   async resumeGeneration(runId: string, choice?: RecoveryChoice) { return await ipcRenderer.invoke('generation:recovery:resume', analysisIdSchema.parse(runId), choice === undefined ? undefined : recoveryChoiceSchema.parse(choice)) },
-  async cancelGenerationRecovery(runId: string) { return await ipcRenderer.invoke('generation:recovery:cancel', analysisIdSchema.parse(runId)) },
-  async getAnalysisUsage() { return analysisUsageSchema.parse(await ipcRenderer.invoke('analysis:usage')) },
-  async setAnalysisBudgets(value: AnalysisBudgets) { return analysisUsageSchema.parse(await ipcRenderer.invoke('analysis:budgets:set', analysisBudgetsSchema.parse(value))) }
+  async cancelGenerationRecovery(runId: string) { return await ipcRenderer.invoke('generation:recovery:cancel', analysisIdSchema.parse(runId)) }
 })
 contextBridge.exposeInMainWorld('workbench', api)

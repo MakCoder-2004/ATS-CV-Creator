@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { profilePdfProposalDraftSchema, profilePdfProposalSchema, type ProfilePdfProposal, type ProfilePdfProposalDraft } from './profile-pdf-import'
+import { PI_THINKING_LEVELS } from './pi-model'
 
 const uuid = z.string().uuid()
 const citationSchema = z.object({ proposalRef: z.string().min(1).max(160), page: z.number().int().positive(), passage: z.string().min(1).max(4000), field: z.string().min(1).max(200) }).strict()
@@ -40,7 +41,7 @@ export function minimizeProfileText(text: string, recognizable: string[] = []) {
 }
 
 export const profileAiConsentPreviewSchema = z.discriminatedUnion('ok', [
-  z.object({ ok: z.literal(true), token: uuid, providerId: z.string().min(1), modelId: z.string().min(1), thinkingLevel: z.string().min(1), destination: z.literal('Pi'), outgoing: z.string().max(500_000), warning: z.string(), termsNotice: z.string() }).strict(),
+  z.object({ ok: z.literal(true), token: uuid, providerId: z.string().min(1), modelId: z.string().min(1), thinkingLevel: z.enum(PI_THINKING_LEVELS), destination: z.literal('Pi'), outgoing: z.string().max(500_000), warning: z.string(), termsNotice: z.string() }).strict(),
   z.object({ ok: z.literal(false), message: z.string() }).strict()
 ])
 export const profileAiConsentActionSchema = z.discriminatedUnion('ok', [

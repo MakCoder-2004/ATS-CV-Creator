@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { openRouterModelSchema } from './openrouter-settings'
+import { piModelSelectionSchema } from './pi-model'
 
 export type EvidenceScopeRevision = readonly [id: string, revision: number]
 
@@ -54,8 +55,8 @@ function escapeRegExp(value: string): string { return value.replace(/[.*+?^${}()
 export function prepareOutboundBundle(source: ConsentSource): OutboundBundle {
   if (source.model.providerId === undefined) {
     if (!openRouterModelSchema.safeParse(source.model.name).success) throw new Error('Invalid OpenRouter model ID.')
-  } else if (!source.model.providerId.trim() || !source.model.name.trim()) {
-    throw new Error('Invalid Pi provider or model ID.')
+  } else if (!piModelSelectionSchema.safeParse({ providerId: source.model.providerId, modelId: source.model.name, thinkingLevel: source.model.thinkingLevel }).success) {
+    throw new Error('Choose a valid Pi provider, model, and thinking level before reviewing outgoing data.')
   }
   if (source.model.temperature !== undefined && (!Number.isFinite(source.model.temperature) || source.model.temperature < 0 || source.model.temperature > 2)) throw new Error('Invalid model temperature.')
   if (source.model.topP !== undefined && (!Number.isFinite(source.model.topP) || source.model.topP < 0 || source.model.topP > 1)) throw new Error('Invalid model topP.')
