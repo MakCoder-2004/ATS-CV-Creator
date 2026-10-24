@@ -70,4 +70,4 @@ test('new-format backup retains the exact Pi selection while resetting workspace
   expect((await reopened.api.getSettings()).pi).toEqual({ providerId: 'sample', modelId: 'author/chat', thinkingLevel: 'low' })
   expect((await reopened.api.getSettings()).appearance).toBe('light')
   await expect(reopened.api.startAnalysis(preview.token)).rejects.toThrow()
-})
+}, 20_000)

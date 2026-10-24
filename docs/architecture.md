@@ -1,6 +1,6 @@
 # Application architecture
 
-CV Tailor is an Electron desktop application for keeping a local profile of career facts, saving job postings, and producing a reviewed tailored CV. The installed app runs on Windows. Its renderer is React and TypeScript; the main process owns the database, network requests, model requests, native dialogs, and file operations. The [project glossary](../GLOSSARY.md) defines the terms used here. This page describes current code, not future features in research notes.
+CV Tailor is an Electron desktop application for keeping a local profile of career facts, saving job postings, and producing a reviewed tailored CV. The installed app runs on Windows. Its renderer is React and TypeScript; the main process owns the database, network requests, model requests, native dialogs, and file operations. The [project glossary](../GLOSSARY.md) defines the terms used here. This page describes current source code. The Pi migration has not yet passed an installed 0.4.0 release check.
 
 ## Stack and repository layout
 

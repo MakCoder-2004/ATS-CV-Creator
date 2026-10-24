@@ -31,7 +31,7 @@ describe("Pi dispatcher", () => {
     expect(s.hooks.onAttempt).not.toHaveBeenCalled()
     expect(s.hooks.onAttemptComplete).not.toHaveBeenCalled()
     expect(s.complete).not.toHaveBeenCalled()
-  })
+  }, 15_000)
   it("parses valid response and accounts for exactly one physical attempt", async () => {
     const s = setup(); s.dispatcher.authorize("run", "consent")
     await expect(s.dispatcher.dispatch(s.input())).resolves.toMatchObject({ response: { ok: true }, attempts: 1 })

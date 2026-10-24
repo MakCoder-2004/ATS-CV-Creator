@@ -1,6 +1,6 @@
 # Documentation map
 
-Start with the [project README](../README.md) for the product and the [architecture map](architecture.md) for ownership. Use [shipped workflows](workflows.md) to trace a user action and [development and verification](development.md) to change or release the app. The [glossary](../GLOSSARY.md) fixes domain terms. Source code and tests decide current behavior when an older report disagrees with a guide.
+Start with the [project README](../README.md) for the product and the [architecture map](architecture.md) for ownership. Use [implemented workflows](workflows.md) to trace a user action and [development and verification](development.md) to change or release the app. The [glossary](../GLOSSARY.md) fixes domain terms. Source code and tests decide current behavior when an older report disagrees with a guide.
 
 ## Current guidance
 
@@ -12,7 +12,7 @@ These files describe the current code or govern changes to it.
 | [Project README](../README.md) | Product scope and a short setup and release summary. |
 | [Glossary](../GLOSSARY.md) | Terms for career facts, posting sources, drafts, and approval. |
 | [Architecture](architecture.md) | Electron boundaries, storage, model dispatch, and invariants. |
-| [Shipped workflows](workflows.md) | Current Tailor CV, Saved jobs, profile, Settings, and backup flows. |
+| [Implemented workflows](workflows.md) | Current source flows; the Pi migration still needs installed-app validation. |
 | [Develop and verify](development.md) | Setup, tests, native bindings, packaging, and installed Windows checks. |
 | [Design system index](design-system.md) | Repository entry point for the UI contract. |
 | [Design system](../design%20system/README.md) | Normative design reading order and prototype boundary. |
