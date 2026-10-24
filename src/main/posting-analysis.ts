@@ -130,11 +130,11 @@ export function createAnalysisDispatcher(options: Options) {
       throw failure
     } finally { clearTimeout(deadlineTimer); usage.finishedAt = now(); if (active.get(input.runId) === controller) active.delete(input.runId) }
   }
-  async function generate(input: AnalysisInput & { consentId: string; responseSchema: ZodTypeAny; retryProviderFailures?: boolean; maxTokens?: number; maxResponseChars?: number }): Promise<{ text: string; attempts: number }> {
+  async function generate(input: AnalysisInput & { consentId: string; responseSchema: ZodTypeAny; retryProviderFailures?: boolean; maxTokens?: number; maxResponseChars?: number; runBudgetOverride?: Pick<AnalysisBudgets, 'runLimit' | 'runTimeLimitMs'> }): Promise<{ text: string; attempts: number }> {
     if (!authorizations.has(input.runId) || authorizations.get(input.runId) !== input.consentId) throw new AnalysisError('PROVIDER', 'Generation requires accepted outgoing-data consent.')
     if (cancelled.has(input.runId)) throw cancelledError()
     const startedAt = runStartedAt.get(input.runId) ?? now(); runStartedAt.set(input.runId, startedAt)
-    const runBudgets = { ...budgets }, controller = new AbortController()
+    const runBudgets = { ...budgets, ...input.runBudgetOverride }, controller = new AbortController()
     active.set(input.runId, controller)
     let attempts = 0, timedOut = false
     const timer = setTimeout(() => { timedOut = true; controller.abort() }, Math.max(0, runBudgets.runTimeLimitMs - (now() - startedAt)))
