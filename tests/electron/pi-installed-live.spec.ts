@@ -64,7 +64,11 @@ test('installed Pi migration: settings, consented cited CV, review, and exports'
     await expect(workflow.getByRole('button', { name: 'Generate tailored draft' })).toBeVisible({ timeout: 90_000 })
 
     await workflow.getByRole('button', { name: 'Generate tailored draft' }).click()
-    await expect(page.getByRole('region', { name: 'CV review', exact: true })).toContainText('Finish reviewing', { timeout: 180_000 })
+    const reviewReady = page.getByRole('region', { name: 'CV review', exact: true })
+    const providerFailure = workflow.getByRole('alert').filter({ hasText: /provider returned|Pi could not|could not complete|failed to generate/i })
+    await expect(reviewReady.or(providerFailure).first()).toBeVisible({ timeout: 360_000 })
+    if (await providerFailure.isVisible()) throw new Error(`Installed provider request failed: ${(await providerFailure.textContent())?.slice(0, 300)}`)
+    await expect(reviewReady).toContainText('Finish reviewing')
     const analysis = await page.evaluate(id => window.workbench.getAnalysis(id), setup.jobId)
     expect(analysis?.status, analysis?.progress).toBe('complete')
     const draft = await page.evaluate(id => window.workbench.getDraft(id), setup.jobId)
