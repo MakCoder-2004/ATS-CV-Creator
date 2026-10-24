@@ -1,12 +1,16 @@
 import type { Api, Context, Model, ModelThinkingLevel } from "@earendil-works/pi-ai"
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent"
 import type { PiModelSelection } from "../shared/pi-model"
+import { z, type ZodTypeAny } from "zod"
+
+const MAX_RESPONSE_SCHEMA_BYTES = 64 * 1024
 
 export interface PiTaskRequest {
   readonly selection: PiModelSelection
   readonly prompt: string
   readonly signal: AbortSignal
   readonly maxOutputTokens: number
+  readonly responseSchema: ZodTypeAny
   readonly onDispatch?: () => void
   readonly onResponse?: () => void
 }
@@ -29,8 +33,10 @@ export async function resolvePiModel(runtime: Pick<ModelRuntime, "getPhysicalMod
 }
 
 export async function completePiTask(runtime: PiModelRuntime, request: PiTaskRequest): Promise<string> {
-  const { selection, prompt, signal, maxOutputTokens, onDispatch, onResponse } = request
+  const { selection, prompt, signal, maxOutputTokens, responseSchema, onDispatch, onResponse } = request
   if (!Number.isSafeInteger(maxOutputTokens) || maxOutputTokens <= 0) throw new Error("The task output limit must be a positive, finite token count.")
+  const schemaText = JSON.stringify(z.toJSONSchema(responseSchema))
+  if (Buffer.byteLength(schemaText, 'utf8') > MAX_RESPONSE_SCHEMA_BYTES) throw new Error('The requested response schema is too large to send safely.')
   if (!prompt.trim()) throw new Error("The task prompt is empty. Provide the authorized task prompt.")
   if (signal.aborted) throw new Error("The task was cancelled before it started.")
 
@@ -43,7 +49,11 @@ export async function completePiTask(runtime: PiModelRuntime, request: PiTaskReq
   if (!auth) throw new Error("Pi has no configured authentication for this provider. Sign in through Pi Settings.")
   if (signal.aborted) throw new Error("The task was cancelled before it started.")
 
-  const context: Context = { messages: [{ role: "user", content: prompt, timestamp: Date.now() }], tools: [] }
+  const context: Context = {
+    systemPrompt: `Return exactly one JSON object conforming to this JSON Schema. Include required fields, use empty arrays when no items apply, and add no extra keys. Do not include markdown, commentary, or tool calls.\n${schemaText}`,
+    messages: [{ role: "user", content: prompt, timestamp: Date.now() }],
+    tools: [],
+  }
   onDispatch?.()
   let message
   try {

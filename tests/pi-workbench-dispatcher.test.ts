@@ -31,13 +31,19 @@ describe("Pi workbench dispatcher adapter", () => {
   })
 
   it("uses posting analysis schema and fixed finite analysis output limit", async () => {
-    const complete = vi.fn(async (_model: Model<Api>, _context: unknown, options: { maxTokens: number }) => {
+    let supplied!: { systemPrompt?: string; messages: Array<{ content: string }> }
+    const complete = vi.fn(async (_model: Model<Api>, context: typeof supplied, options: { maxTokens: number }) => {
+      supplied = context
       expect(options.maxTokens).toBe(4096)
       return result(JSON.stringify(analysis))
     })
     const s = setup(complete)
     s.dispatcher.authorize("run", "consent")
     await expect(s.dispatcher.analyze(s.input() as any)).resolves.toMatchObject({ analysis, usage: { attempts: 1, status: "complete" } })
+    expect(supplied.systemPrompt).toContain('"required"')
+    expect(supplied.systemPrompt).toContain('"responsibilities"')
+    expect(supplied.systemPrompt).not.toContain('authorized synthetic prompt')
+    expect(supplied.messages[0].content).toBe('authorized synthetic prompt')
     expect(s.hooks.onAttempt).toHaveBeenCalledTimes(1)
     expect(s.hooks.onAttemptComplete).toHaveBeenCalledWith("run", true)
   })

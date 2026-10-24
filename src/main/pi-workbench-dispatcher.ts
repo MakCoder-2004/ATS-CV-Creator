@@ -75,6 +75,7 @@ export function createPiWorkbenchDispatcher(options: PiWorkbenchDispatcherOption
         prompt,
         signal: controller.signal,
         maxOutputTokens: maxTokens,
+        responseSchema: schema,
         onDispatch: () => {
           options.onAttempt?.(Date.now(), runId)
           attempts = 1

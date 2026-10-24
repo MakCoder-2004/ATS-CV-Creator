@@ -64,7 +64,7 @@ export function createPiDispatcher(runtime: PiModelRuntime, hooks: PiDispatchHoo
       try {
         const text = await completePiTask(runtime, {
           selection: input.selection, prompt: input.prompt, signal: abortController.signal,
-          maxOutputTokens: input.maxOutputTokens,
+          maxOutputTokens: input.maxOutputTokens, responseSchema: input.responseSchema,
           onDispatch: () => { hooks.onAttempt?.(Date.now(), runId); attempts = 1 },
           onResponse: () => { responseReceived = true; hooks.onAttemptComplete?.(runId, true) },
         })

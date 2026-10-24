@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest"
+import { z } from "zod"
 import type { Api, Model } from "@earendil-works/pi-ai"
 import { freezePiModelSelection, parsePiModelReference } from "../src/shared/pi-model"
 import { completePiTask, type PiModelRuntime } from "../src/main/pi-model"
@@ -21,7 +22,7 @@ function runtime(options: { auth?: boolean; available?: boolean; result?: any; e
     completeSimple: options.error ? vi.fn(async () => { throw new Error("private provider detail") }) : vi.fn(async () => options.result ?? reply()),
   } as unknown as PiModelRuntime
 }
-const request = (overrides: Record<string, unknown> = {}) => ({ selection, prompt: "Authorized prompt", signal: new AbortController().signal, maxOutputTokens: 30, ...overrides })
+const request = (overrides: Record<string, unknown> = {}) => ({ selection, prompt: "Authorized prompt", signal: new AbortController().signal, maxOutputTokens: 30, responseSchema: z.object({ result: z.string() }), ...overrides })
 
 describe("Pi model request boundary", () => {
   it("parses slash-containing provider and model ids exactly", () => {
@@ -34,7 +35,7 @@ describe("Pi model request boundary", () => {
   it("returns successful text with retries disabled", async () => {
     const sdk = runtime()
     expect(await completePiTask(sdk, request())).toBe("Done.")
-    expect(sdk.completeSimple).toHaveBeenCalledWith(model, expect.objectContaining({ tools: [] }), expect.objectContaining({ maxRetries: 0, maxTokens: 30 }))
+    expect(sdk.completeSimple).toHaveBeenCalledWith(model, expect.objectContaining({ tools: [], systemPrompt: expect.stringContaining('"result"'), messages: [expect.objectContaining({ content: 'Authorized prompt' })] }), expect.objectContaining({ maxRetries: 0, maxTokens: 30 }))
   })
   it("rejects missing auth and unavailable models without dispatch", async () => {
     for (const sdk of [runtime({ auth: false }), runtime({ available: false })]) {
@@ -42,6 +43,11 @@ describe("Pi model request boundary", () => {
       expect(sdk.completeSimple).not.toHaveBeenCalled()
     }
     await expect(completePiTask(runtime(), request({ selection: freezePiModelSelection("unknown", "missing", "low") }))).rejects.toThrow(/unavailable/)
+  })
+  it("rejects an oversized response schema before a physical request", async () => {
+    const sdk = runtime()
+    await expect(completePiTask(sdk, request({ responseSchema: z.object({ result: z.string().describe('synthetic'.repeat(10000)) }) }))).rejects.toThrow(/schema is too large/i)
+    expect(sdk.completeSimple).not.toHaveBeenCalled()
   })
   it("rejects unsupported effort", async () => {
     await expect(completePiTask(runtime(), request({ selection: freezePiModelSelection(model.provider, model.id, "max") }))).rejects.toThrow(/does not support/)
