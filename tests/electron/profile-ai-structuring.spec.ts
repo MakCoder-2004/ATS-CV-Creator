@@ -3,6 +3,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { selectScriptedPiModel } from './pi-model-fixture'
 
 function makePdf(lines: string[]) {
   const objects: string[] = []; const add = (value: string) => { objects.push(value); return objects.length }
@@ -23,9 +24,10 @@ test('requires run-specific consent for the frozen minimized CV text and returns
   writeFileSync(sourceFile, makePdf(['NAME: Ada Example', 'EMAIL: ada@example.test', 'PHONE: +1 555 123 4567', 'SKILLS: Python', 'A long enough supporting paragraph ensures this synthetic PDF meets the local text extraction threshold.']))
   let running: ElectronApplication | undefined
   try {
-    running = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData, CV_TAILOR_SCRIPTED_ANALYSIS: 'profile-ai' } })
+    running = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData, CV_TAILOR_SCRIPTED_ANALYSIS: 'profile-ai', CV_TAILOR_SCRIPTED_PI_MODEL: '1' } })
     const page = await running.firstWindow()
     await expect(page.locator('[data-ui-ready="true"]')).toBeVisible({ timeout: 15_000 })
+    await selectScriptedPiModel(page)
     await page.getByRole('button', { name: 'My profile' }).click()
     await running.evaluate(({ dialog }, selectedPath) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selectedPath] }); return true }, sourceFile)
     await page.getByRole('button', { name: 'Upload CV' }).click()
@@ -39,6 +41,17 @@ test('requires run-specific consent for the frozen minimized CV text and returns
     await expect(outgoing).not.toContainText('ada@example.test')
     await expect(outgoing).not.toContainText('+1 555 123 4567')
     await expect(consent).toContainText('does not make this anonymous')
+    const invalidEffort = await page.evaluate(async () => {
+      const workbench = window.workbench as typeof window.workbench & { setPiModel(input: { reference: string; thinkingLevel: string }): Promise<unknown> }
+      try {
+        await workbench.setPiModel({ reference: 'scripted/cv-tailor-fixture', thinkingLevel: 'invalid' })
+        return false
+      } catch {
+        return true
+      }
+    })
+    expect(invalidEffort).toBe(true)
+    await expect(consent).toBeVisible()
     await page.setViewportSize({ width: 375, height: 800 })
     await page.getByRole('button', { name: 'Use dark mode' }).click()
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true)
@@ -60,9 +73,10 @@ test('cancels an authorized in-flight request and retains the local correction r
   writeFileSync(sourceFile, makePdf(['NAME: Ada Example', 'SKILLS: Python', 'A long enough supporting paragraph ensures this synthetic PDF meets the local text extraction threshold.']))
   let running: ElectronApplication | undefined
   try {
-    running = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData, CV_TAILOR_SCRIPTED_ANALYSIS: 'profile-ai-delayed' } })
+    running = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData, CV_TAILOR_SCRIPTED_ANALYSIS: 'profile-ai-delayed', CV_TAILOR_SCRIPTED_PI_MODEL: '1' } })
     const page = await running.firstWindow()
     await expect(page.locator('[data-ui-ready="true"]')).toBeVisible({ timeout: 15_000 })
+    await selectScriptedPiModel(page)
     await page.getByRole('button', { name: 'My profile' }).click()
     await running.evaluate(({ dialog }, selectedPath) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selectedPath] }); return true }, sourceFile)
     await page.getByRole('button', { name: 'Upload CV' }).click()

@@ -3,6 +3,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { selectScriptedPiModel } from './pi-model-fixture'
 
 function makePdf(lines: string[]) {
   const objects: string[] = []; const add = (value: string) => { objects.push(value); return objects.length }
@@ -40,9 +41,10 @@ test('rejects an AI-invented skill even when it cites a real CV passage', async 
   writeFileSync(sourceFile, makePdf(['NAME: Ada Example', 'SKILLS: Python', 'A much longer synthetic career passage with meaningful selectable text satisfies the bounded local PDF extraction requirement and the minimum usable-text threshold.']))
   let running: ElectronApplication | undefined
   try {
-    running = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData, CV_TAILOR_SCRIPTED_ANALYSIS: 'profile-ai-wrong-fact' } })
+    running = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData, CV_TAILOR_SCRIPTED_ANALYSIS: 'profile-ai-wrong-fact', CV_TAILOR_SCRIPTED_PI_MODEL: '1' } })
     const page = await running.firstWindow()
     await expect(page.locator('[data-ui-ready="true"]')).toBeVisible({ timeout: 15_000 })
+    await selectScriptedPiModel(page)
     await page.getByRole('button', { name: 'My profile' }).click()
     const { review } = await prepareReview(running, sourceFile)
     await authorizeAndRun(page)
@@ -58,9 +60,10 @@ test('discards a non-abortable late response after cancel and protects the next 
   writeFileSync(secondFile, makePdf(['SKILLS: SQL', 'A separate lengthy synthetic career passage with selectable source wording satisfies the local PDF extraction minimum and preserves text review.']))
   let running: ElectronApplication | undefined
   try {
-    running = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData, CV_TAILOR_SCRIPTED_ANALYSIS: 'profile-ai-late' } })
+    running = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData, CV_TAILOR_SCRIPTED_ANALYSIS: 'profile-ai-late', CV_TAILOR_SCRIPTED_PI_MODEL: '1' } })
     const page = await running.firstWindow()
     await expect(page.locator('[data-ui-ready="true"]')).toBeVisible({ timeout: 15_000 })
+    await selectScriptedPiModel(page)
     await page.getByRole('button', { name: 'My profile' }).click()
     const { review } = await prepareReview(running, firstFile)
     const consent = await authorizeAndRun(page)
