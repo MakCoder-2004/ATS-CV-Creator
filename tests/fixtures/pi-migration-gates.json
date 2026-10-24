@@ -1,0 +1,27 @@
+{
+  "models": [
+    { "provider": "sample", "id": "chat", "thinking": ["off", "low"], "authenticated": true },
+    { "provider": "sample", "id": "author/chat", "thinking": ["off"], "authenticated": true },
+    { "provider": "sample", "id": "custom/chat", "thinking": ["off"], "authenticated": true },
+    { "provider": "sample/custom", "id": "chat", "thinking": ["off"], "authenticated": true },
+    { "provider": "unconfigured", "id": "chat", "thinking": ["off"], "authenticated": false }
+  ],
+  "beforeDispatch": [
+    { "case": "no model selected", "reference": "", "thinking": "off", "expectedRequests": 0 },
+    { "case": "unknown provider", "reference": "unknown/chat", "thinking": "off", "expectedRequests": 0 },
+    { "case": "missing local authentication", "reference": "unconfigured/chat", "thinking": "off", "expectedRequests": 0 },
+    { "case": "unsupported effort", "reference": "sample/chat", "thinking": "high", "expectedRequests": 0 },
+    { "case": "ambiguous provider prefix", "reference": "sample/custom/chat", "thinking": "off", "expectedRequests": 0 },
+    { "case": "stale model consent", "reference": "sample/author/chat", "thinking": "off", "changeAfterConsent": "sample/chat", "expectedRequests": 0 },
+    { "case": "stale effort consent", "reference": "sample/chat", "thinking": "off", "changeAfterConsent": "low", "expectedRequests": 0 }
+  ],
+  "providerOutput": [
+    { "case": "empty completion", "stopReason": "stop", "text": "", "accept": false },
+    { "case": "tool call", "stopReason": "toolUse", "text": "{}", "accept": false },
+    { "case": "output ceiling", "stopReason": "length", "text": "{}", "accept": false },
+    { "case": "provider error", "stopReason": "error", "text": "{}", "accept": false },
+    { "case": "cancelled", "stopReason": "aborted", "text": "{}", "accept": false },
+    { "case": "invalid JSON", "stopReason": "stop", "text": "{", "accept": false },
+    { "case": "valid JSON", "stopReason": "stop", "text": "{\"required\":[],\"preferred\":[],\"tools\":[],\"responsibilities\":[],\"keywords\":[]}", "accept": true }
+  ]
+}
