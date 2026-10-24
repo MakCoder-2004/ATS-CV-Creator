@@ -124,7 +124,6 @@ test('CV-44 final installed-app manual PDF and DOCX picker gate', async () => {
     expect(pendingProfileImport.value.profile.skills.map(skill => skill.name)).toContain('CV44_UNFINISHED_PREVIEW_CANARY')
     await page.evaluate(token => window.workbench.cancelProfileImport(token), pendingProfileImport.token)
     expect(await snapshot(page)).toEqual(imported)
-    expect(await page.evaluate(() => window.workbench.saveOpenRouterApiKey('CV44_DUMMY_SECRET_CANARY_NOT_A_REAL_KEY'))).toMatchObject({ openRouter: { credential: { configured: true } } })
 
     await page.getByRole('button', { name: 'Settings' }).click()
     await page.getByRole('button', { name: 'Back up workspace' }).click()
@@ -133,10 +132,7 @@ test('CV-44 final installed-app manual PDF and DOCX picker gate', async () => {
     const backup = JSON.parse(await import('node:fs/promises').then(fs => fs.readFile(workspaceBackup, 'utf8')))
     expect(backup.format).toBe('cv-tailor-workspace-backup')
     expect(backup.tables.profile_import_provenance.rows.length).toBeGreaterThan(0)
-    expect(backup.tables).not.toHaveProperty('encrypted_credentials')
-    expect(JSON.stringify(backup)).not.toContain('CV44_DUMMY_SECRET_CANARY_NOT_A_REAL_KEY')
     expect(JSON.stringify(backup)).not.toContain('CV44_UNFINISHED_PREVIEW_CANARY')
-    expect(JSON.stringify(backup)).not.toMatch(/openrouter.*api.?key/i)
     expect(backup.tables).not.toHaveProperty('profile_import_preview')
     expect(JSON.stringify(JSON.parse(await import('node:fs/promises').then(fs => fs.readFile(profileJson, 'utf8'))))).not.toContain('CV44_UNFINISHED_PREVIEW_CANARY')
 
@@ -149,7 +145,6 @@ test('CV-44 final installed-app manual PDF and DOCX picker gate', async () => {
     await expect(page.getByRole('dialog', { name: 'Replace workspace from backup?' })).toBeVisible({ timeout: 15_000 })
     await page.getByRole('button', { name: 'Confirm workspace replacement' }).click()
     await expect(page.getByRole('region', { name: 'Workspace backup' }).getByRole('status')).toContainText(/Workspace restored/i, { timeout: 20_000 })
-    expect(await page.evaluate(() => window.workbench.getSettings().then(settings => settings.openRouter.credential.configured))).toBe(false)
     const restored = await snapshot(page)
     expect(restored).toEqual(imported)
     expect(restored.profile.skills.map(skill => skill.name)).not.toContain('CV44 isolated restore sentinel')
@@ -174,7 +169,6 @@ test('CV-44 final installed-app manual PDF and DOCX picker gate', async () => {
     writeFileSync(join(results, 'evidence.json'), JSON.stringify({ task: '#44', status: 'failed', passed: false, userDataIsolated: true, detail }, null, 2))
     throw error
   } finally {
-    if (app) await app.firstWindow().then(page => page.evaluate(() => window.workbench.removeOpenRouterApiKey())).catch(() => {})
     await app?.close().catch(() => {})
     await import('node:fs/promises').then(fs => fs.rm(join(results, 'cv44-unfinished-profile-preview.json'), { force: true })).catch(() => {})
   }

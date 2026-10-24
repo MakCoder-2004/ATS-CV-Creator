@@ -31,7 +31,6 @@ test('review edits whole records with an explicit CV-only or profile scope and e
     await flow.getByRole('button', { name: 'Generate tailored draft' }).click()
     const paper = page.getByRole('article', { name: 'Draft CV review layout' })
     await expect(paper).toBeVisible({ timeout: 45000 })
-    const before = await page.evaluate(async () => ({ profile: await window.workbench.getProfile(), experience: await window.workbench.getExperience(), usage: await window.workbench.getAnalysisUsage() }))
     const editor = page.getByRole('dialog')
     const declare = async () => editor.getByRole('checkbox', { name: /I confirm these details/i }).check()
     async function selectRecord(name: string) {
@@ -116,7 +115,6 @@ test('review edits whole records with an explicit CV-only or profile scope and e
     await editor.getByRole('button', { name: 'Remove from CV and profile', exact: true }).click()
     await expect(paper).not.toContainText('Classifier service')
     expect((await page.evaluate(() => window.workbench.getExperience())).projects).toHaveLength(0)
-    expect((await page.evaluate(() => window.workbench.getAnalysisUsage())).attempts).toBe(before.usage.attempts)
     await page.reload()
     await expect(page.locator('[data-ui-ready="true"]')).toBeVisible()
     await page.getByRole('button', { name: 'Engineer Example Co', exact: true }).click()

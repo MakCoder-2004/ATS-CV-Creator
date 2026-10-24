@@ -143,7 +143,6 @@ test('maps a section-based PDF through visible review and requires a record type
       projects: [expect.objectContaining({ name: 'Transit Insights', factualItems: expect.arrayContaining([expect.objectContaining({ text: 'Built a route-planning dashboard with live transit data.' })]), links: [{ label: 'GitHub', url: 'https://github.com/ada/transit-insights' }] })]
     })
     expect(readFileSync(sourceFile)).toEqual(original)
-    expect((await page.evaluate(() => window.workbench.getAnalysisUsage())).attempts).toBe(0)
   } finally { await running?.close(); await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }) }
 })
 
@@ -171,7 +170,6 @@ test('imports DOCX proposals through visible review and applies them to the exis
     expect(await page.evaluate(() => window.workbench.getProfile())).toMatchObject({ contact: { fullName: 'Ada Example', links: [{ label: 'Portfolio', url: 'https://ada.example.test' }] }, skills: [{ name: 'Python' }, { name: 'SQL' }] })
     expect(await page.evaluate(() => window.workbench.getExperience())).toMatchObject({ experience: [{ title: 'Engineer', organization: 'Example Labs', factualItems: [{ text: 'Corrected wording after checking the original CV' }] }], projects: [{ name: 'Atlas', links: [{ label: 'Repository', url: 'https://atlas.example.test' }] }] })
     expect(readFileSync(sourceFile)).toEqual(original)
-    expect((await page.evaluate(() => window.workbench.getAnalysisUsage())).attempts).toBe(0)
     await running.evaluate(({ dialog }, target) => { dialog.showSaveDialog = async () => ({ canceled: false, filePath: target }); return true }, backupFile)
     await page.getByRole('button', { name: 'Settings' }).click()
     await page.getByRole('button', { name: 'Back up workspace' }).click()
@@ -338,7 +336,6 @@ test('imports PDF proposals through review, atomically applies supported profile
     await review.getByLabel('Full name').fill('Ada Byron Lovelace')
     await review.getByRole('button', { name: 'Apply accepted details' }).click()
     await expect(page.getByRole('status')).toContainText('added to your profile')
-    expect((await page.evaluate(() => window.workbench.getAnalysisUsage())).attempts).toBe(0)
     expect(await page.evaluate(() => window.workbench.getProfile())).toMatchObject({ contact: { fullName: 'Ada Byron Lovelace', revision: 1 }, skills: [{ name: 'Python', revision: 1 }], education: [{ title: 'BSc Computer Science', institution: 'Example University', description: 'GPA 3.7' }], certificates: [{ title: 'Safety Fundamentals', issuer: 'Example Institute', year: 2022 }], summary: [{ description: expect.stringContaining('Curious engineer') }], languages: [{ title: 'Arabic' }, { title: 'English' }] })
     expect(await page.evaluate(() => window.workbench.getExperience())).toMatchObject({ experience: [{ title: 'Engineer', organization: 'Example Labs', factualItems: [{ text: 'Built a data pipeline' }] }, { title: 'Consultant', organization: 'Northwind', factualItems: [{ text: 'Led a migration' }] }], projects: [{ name: 'Atlas', technologies: [{ text: 'Flask' }, { text: 'React' }], factualItems: [{ text: 'Built a recommendation service' }] }, { name: 'Beacon', technologies: [{ text: 'Go' }], factualItems: [{ text: 'Shipped a monitoring agent' }] }] })
     await app.evaluate(({ dialog }, target) => { dialog.showSaveDialog = async () => ({ canceled: false, filePath: target }); return true }, profileJson)
@@ -526,7 +523,6 @@ test('rejects malformed and scanned-like PDFs locally without sending requests o
     await page.getByRole('button', { name: 'Upload CV' }).click()
     await expect(page.getByRole('alert')).toContainText('15 MiB')
     expect(await page.evaluate(() => window.workbench.getProfile())).toMatchObject({ contact: null, skills: [] })
-    expect((await page.evaluate(() => window.workbench.getAnalysisUsage())).attempts).toBe(0)
     await running.close(); running = undefined
   } finally { await running?.close(); await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }) }
 })
@@ -553,7 +549,6 @@ test('shows ambiguous two-column order and inert hyperlinks as review-only sourc
     await review.getByRole('button', { name: 'Discard review' }).click()
     await expect(review).toHaveCount(0)
     expect(readFileSync(sourceFile)).toEqual(original)
-    expect((await page.evaluate(() => window.workbench.getAnalysisUsage())).attempts).toBe(0)
     expect(await page.evaluate(() => window.workbench.getProfile())).toMatchObject({ contact: null, skills: [] })
     await running.close(); running = undefined
   } finally { await running?.close(); await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }) }

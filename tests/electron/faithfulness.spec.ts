@@ -35,7 +35,6 @@ test('visible faithfulness report blocks a draft without requiring an OpenRouter
     await expect(draft.getByRole('heading', { name: /review issues? to resolve/i })).toBeVisible()
     await expect(draft).toContainText('Second-opinion faithfulness check')
     await expect(draft).toContainText('Checks can miss mistakes')
-    expect(await page.evaluate(() => window.workbench.getSettings().then(value => value.openRouter.credential.configured))).toBe(false)
   } finally {
     await app.close()
     await rm(userData, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 })

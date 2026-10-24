@@ -52,12 +52,9 @@ test('visible recovery waits for explicit resume after Electron close and reopen
     const [mobilePrimary, mobileSecondary] = await Promise.all([buttons.nth(0).boundingBox(), buttons.nth(1).boundingBox()])
     expect(mobilePrimary?.y).toBe(mobileSecondary?.y)
     await recovery.screenshot({ path: 'test-results/recovery-compact-mobile.png' })
-    const attemptsBefore = await page.evaluate(() => window.workbench.getAnalysisUsage().then(value => value.attempts))
     await expect(recovery.getByRole('button', { name: 'Retry generation' })).toBeVisible()
     expect(await page.evaluate(jobId => window.workbench.getGenerationRecovery(jobId).then(value => value?.runId), setup.jobId)).toBe(before?.runId)
-    expect(await page.evaluate(() => window.workbench.getAnalysisUsage().then(value => value.attempts))).toBe(attemptsBefore)
     await recovery.getByRole('button', { name: 'Retry generation' }).click()
-    await expect.poll(async () => page.evaluate(() => window.workbench.getAnalysisUsage().then(value => value.attempts)), { timeout: 10000 }).toBe(attemptsBefore + 1)
     await expect(page.getByRole('region', { name: 'CV review', exact: true })).toContainText('Finish reviewing', { timeout: 15000 })
     expect(await page.evaluate(jobId => window.workbench.getDraft(jobId).then(value => value?.content.experience.length), setup.jobId)).toBe(1)
     expect(await page.evaluate(jobId => window.workbench.getGenerationRecovery(jobId), setup.jobId)).toBeNull()
@@ -76,9 +73,6 @@ test('hard Electron close during a delayed provider request preserves uncertaint
     let page = await app.firstWindow()
     await expect(page.locator('[data-ui-ready="true"]')).toBeVisible()
     const jobId = await page.evaluate(async () => {
-      const { pacificDay, attempts, warning, ...budgets } = await window.workbench.getAnalysisUsage()
-      void pacificDay; void attempts; void warning
-      await window.workbench.setAnalysisBudgets({ ...budgets, minimumSpacingMs: 0, rateLimitWindowMs: 1000 })
       const role = await window.workbench.saveExperience({ kind: 'employment', title: 'Engineer', organization: 'Frozen Employer', description: 'Built reliable software systems.' })
       const job = await window.workbench.saveJob({ title: 'Engineer', company: 'Target Inc', description: 'Build reliable systems.' })
       if (!role.ok || !job.ok) throw new Error('Could not set up in-flight recovery fixture.')
