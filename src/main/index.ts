@@ -11,6 +11,8 @@ import { assertCompiledContent, inspectCompiledPdf } from './pdf-document'
 import { renderCanonicalDocx } from './docx-export'
 import { z } from 'zod'
 import { createWorkbench } from './workbench'
+import { ModelRuntime } from '@earendil-works/pi-coding-agent'
+import { piModelSelectionSchema } from '../shared/pi-model'
 import type { AnalysisTransport } from './posting-analysis'
 import { appearanceSchema } from '../shared/appearance'
 import { openRouterKeyInputSchema, openRouterModelSchema } from '../shared/openrouter-settings'
@@ -66,7 +68,7 @@ if (!app.isPackaged && process.env.CV_TAILOR_TEST_USER_DATA_DIR) {
   mkdirSync(process.env.CV_TAILOR_TEST_USER_DATA_DIR, { recursive: true })
   app.setPath('userData', process.env.CV_TAILOR_TEST_USER_DATA_DIR)
 }
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   const compiler = createLatexCompiler({
     toolchainRoot: app.isPackaged ? join(process.resourcesPath, 'latex') : join(__dirname, '../..', '.tools', 'latex'),
     templateRoot: app.isPackaged ? join(process.resourcesPath, 'cv-template') : join(__dirname, '../..', 'resources', 'cv-template'),
@@ -142,9 +144,10 @@ app.whenReady().then(() => {
       onRequestCompleted: status => console.info(`[LINK37_SINGLE_REQUEST] request=1 completed status=${status}`)
     } : {})
   }
-  workspace = createWorkbench(app.getPath('userData'), safeStorage, scriptedAnalysis, undefined, postingFetchOptions)
+  const piRuntime = await ModelRuntime.create({ allowModelNetwork: false })
+  workspace = createWorkbench(app.getPath('userData'), safeStorage, scriptedAnalysis, undefined, postingFetchOptions, piRuntime)
   registerWorkspaceBackupIpc(() => window!, () => workspace!, () => {
-    const reopened = createWorkbench(app.getPath('userData'), safeStorage, scriptedAnalysis, undefined, postingFetchOptions)
+    const reopened = createWorkbench(app.getPath('userData'), safeStorage, scriptedAnalysis, undefined, postingFetchOptions, piRuntime)
     const previous = workspace!
     workspace = reopened
     previous.close()
@@ -163,6 +166,11 @@ app.whenReady().then(() => {
     trusted(event)
     if (args.length !== 1) throw new Error('Expected OpenRouter model')
     return workspace!.api.setOpenRouterModel(openRouterModelSchema.parse(args[0]))
+  })
+  ipcMain.handle('settings:pi-model', (event, ...args: unknown[]) => {
+    trusted(event)
+    if (args.length !== 1) throw new Error('Expected Pi model selection')
+    return workspace!.api.setPiModel(piModelSelectionSchema.parse(args[0]))
   })
   ipcMain.handle('settings:faithfulness', (event, ...args: unknown[]) => {
     trusted(event)

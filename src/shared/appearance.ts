@@ -2,6 +2,7 @@ import { z } from 'zod'
 import type { ContactInput, EvidenceRevision, ProfileEntryInput, ProfileMutationResult, ProfileSnapshot, SkillInput } from './profile'
 import type { ExperienceInput, ExperienceMutationResult, ExperienceSnapshot, ProjectInput } from './experience'
 import { openRouterSettingsSchema, openRouterModelSchema, type OpenRouterModel } from './openrouter-settings'
+import { piModelSelectionSchema, type PiModelSelection } from './pi-model'
 import type { JobInput, JobRecord, JobSaveResult, PostingRefreshChoice } from './jobs'
 import type { ProfileExchangeResult } from './profile-exchange'
 import type { OutboundConsentAction, OutboundConsentPreview } from './outbound-consent-contract'
@@ -18,7 +19,7 @@ import type { WorkspaceBackupStatus } from './workspace-backup'
 
 export const appearanceSchema = z.enum(['light', 'dark'])
 export type Appearance = z.infer<typeof appearanceSchema>
-export const settingsSchema = z.object({ appearance: appearanceSchema, openRouter: openRouterSettingsSchema }).strict()
+export const settingsSchema = z.object({ appearance: appearanceSchema, openRouter: openRouterSettingsSchema, pi: piModelSelectionSchema.nullable() }).strict()
 export type Settings = z.infer<typeof settingsSchema>
 export const openRouterModelInputSchema = openRouterModelSchema
 
@@ -32,6 +33,7 @@ export interface WorkbenchAPI {
   getWorkspaceBackupStatus(): Promise<WorkspaceBackupStatus>
   setAppearance(value: Appearance): Promise<Settings>
   setOpenRouterModel(value: OpenRouterModel): Promise<Settings>
+  setPiModel(selection: PiModelSelection): Promise<Settings>
   setFaithfulnessCheck(value: boolean): Promise<Settings>
   saveOpenRouterApiKey(value: string): Promise<Settings>
   revealOpenRouterApiKey(): Promise<string>

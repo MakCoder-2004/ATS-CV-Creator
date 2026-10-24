@@ -5,6 +5,8 @@ import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import { appearanceSchema, settingsSchema, type WorkbenchStorageAPI } from '../shared/appearance'
+import { piModelSelectionSchema, type PiModelSelection } from '../shared/pi-model'
+import { resolvePiModel, type PiModelRuntime } from './pi-model'
 import { defaultOpenRouterModel, openRouterKeyInputSchema, openRouterModelSchema, type OpenRouterModel } from '../shared/openrouter-settings'
 import { contactInputSchema, contactRecordSchema, evidenceRevisionSchema, profileEntryInputSchema, profileEntrySchema, profileMutationResultSchema, profileSnapshotSchema, skillInputSchema, skillRecordSchema, uuidSchema, type ContactRecord, type EvidenceRevision, type ProfileEntry, type ProfileSnapshot, type SkillRecord } from '../shared/profile'
 import { experienceInputSchema, experienceRecordSchema, experienceSnapshotSchema, experienceMutationResultSchema, projectInputSchema, projectRecordSchema, type ExperienceRecord, type ProjectRecord, type FactualItemRecord, type ExperienceSnapshot } from '../shared/experience'
@@ -102,7 +104,7 @@ function preserveKnownFindings(checked: ReturnType<typeof checkDraftFacts>, prio
   return factualCheckReportSchema.parse({ ...checked, passed: checked.passed && known.length === 0, findings })
 }
 
-export function createWorkbench(userData: string, secureStorage: SecureStorage = unavailableSecureStorage, scriptedTransport?: AnalysisTransport, recoveryHooks?: { beforeGraphCheckpoint?: (metadata: import('@langchain/langgraph').CheckpointMetadata) => void; modelCatalogFetcher?: typeof fetch; workspaceBackupMaxBytes?: number }, safePostingFetchOptions?: SafePostingFetchOptions): { api: WorkbenchStorageAPI; authorizeOutboundPayload<T>(runId: string, payload: T): T; backup: WorkspaceBackupEngine; hasActiveWork(): boolean; close(): void } {
+export function createWorkbench(userData: string, secureStorage: SecureStorage = unavailableSecureStorage, scriptedTransport?: AnalysisTransport, recoveryHooks?: { beforeGraphCheckpoint?: (metadata: import('@langchain/langgraph').CheckpointMetadata) => void; modelCatalogFetcher?: typeof fetch; workspaceBackupMaxBytes?: number }, safePostingFetchOptions?: SafePostingFetchOptions, piRuntime?: PiModelRuntime): { api: WorkbenchStorageAPI; authorizeOutboundPayload<T>(runId: string, payload: T): T; backup: WorkspaceBackupEngine; hasActiveWork(): boolean; close(): void } {
   mkdirSync(userData, { recursive: true })
   const db = new Database(join(userData, 'workbench.sqlite'))
   registerWorkspaceBackupRowSizer(db)
@@ -376,10 +378,12 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
   const api: WorkbenchStorageAPI = {
     async getWorkspaceBackupStatus() { return backupEngine.readBackupStatus() },
     async getSettings() {
-      const rows = db.prepare('SELECT key, value FROM settings WHERE key IN (?, ?, ?)').all('appearance', 'openrouter-model', 'faithfulness-check') as { key: string; value: string }[]
+      const rows = db.prepare('SELECT key, value FROM settings WHERE key IN (?, ?, ?, ?)').all('appearance', 'openrouter-model', 'faithfulness-check', 'pi-model') as { key: string; value: string }[]
       const stored = Object.fromEntries(rows.map(row => [row.key, row.value]))
       const configured = Boolean(db.prepare('SELECT 1 FROM encrypted_credentials WHERE key = ?').get('openrouter-api-key'))
-      return settingsSchema.parse({ appearance: stored.appearance ?? 'light', openRouter: { model: stored['openrouter-model'] ?? defaultOpenRouterModel, faithfulnessCheck: stored['faithfulness-check'] === 'true', credential: { configured, secureStorageAvailable: secureStorageAvailable() } } })
+      let piModel: PiModelSelection | null = null
+      try { if (stored['pi-model']) piModel = piModelSelectionSchema.parse(JSON.parse(stored['pi-model'])) } catch { piModel = null }
+      return settingsSchema.parse({ appearance: stored.appearance ?? 'light', openRouter: { model: stored['openrouter-model'] ?? defaultOpenRouterModel, faithfulnessCheck: stored['faithfulness-check'] === 'true', credential: { configured, secureStorageAvailable: secureStorageAvailable() } }, pi: piModel })
     },
     async setAppearance(value) {
       saveSetting('appearance', appearanceSchema.parse(value))
@@ -387,6 +391,20 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
     },
     async setOpenRouterModel(value: OpenRouterModel) {
       saveSetting('openrouter-model', openRouterModelSchema.parse(value))
+      return this.getSettings()
+    },
+    async setPiModel(input: PiModelSelection) {
+      const selection = piModelSelectionSchema.parse(input)
+      if (!piRuntime) throw new Error('Pi model validation is unavailable. Your selection was not saved.')
+      const provider = piRuntime.getProviders().find(candidate => candidate.id === selection.providerId)
+      if (!provider?.getModels().some(candidate => candidate.id === selection.modelId)) throw new Error('The selected Pi model is unavailable. Choose another model in Settings.')
+      const model = await resolvePiModel(piRuntime, selection)
+      const available = await piRuntime.getAvailable(selection.providerId)
+      if (!available.some(candidate => candidate.id === selection.modelId && candidate.provider === selection.providerId)) {
+        throw new Error('Pi has no currently available authentication for this provider. Sign in or choose another provider in Pi Settings.')
+      }
+      if (!await piRuntime.getAuth(model)) throw new Error('Pi has no configured authentication for this provider. Sign in through Pi Settings.')
+      saveSetting('pi-model', JSON.stringify(selection))
       return this.getSettings()
     },
     async setFaithfulnessCheck(value: boolean) {

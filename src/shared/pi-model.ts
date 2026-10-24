@@ -1,3 +1,4 @@
+import { z } from "zod"
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai"
 
 export interface PiModelSelection {
@@ -12,6 +13,12 @@ export interface PiModelReference {
 }
 
 export const PI_THINKING_LEVELS = Object.freeze(["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const)
+
+export const piModelSelectionSchema = z.object({
+  providerId: z.string().min(1),
+  modelId: z.string().min(1),
+  thinkingLevel: z.enum(PI_THINKING_LEVELS),
+}).strict()
 
 export function parsePiModelReference(reference: string, candidates: readonly PiModelReference[]): PiModelReference {
   const matches = candidates.filter(candidate => `${candidate.providerId}/${candidate.modelId}` === reference)

@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 import { z } from 'zod'
 import { appearanceSchema, settingsSchema, type Appearance, type WorkbenchAPI } from '../shared/appearance'
 import { openRouterKeyInputSchema, openRouterModelSchema, type OpenRouterModel } from '../shared/openrouter-settings'
+import { piModelSelectionSchema, type PiModelSelection } from '../shared/pi-model'
 import { evidenceRevisionSchema, profileEntryInputSchema, profileMutationResultSchema, profileSnapshotSchema, uuidSchema, type ContactInput, type ProfileEntryInput, type SkillInput } from '../shared/profile'
 import { experienceSnapshotSchema, experienceMutationResultSchema, type ExperienceInput, type ProjectInput } from '../shared/experience'
 import { jobInputSchema, jobRecordSchema, jobSaveResultSchema, postingRefreshChoiceSchema, type JobInput } from '../shared/jobs'
@@ -37,6 +38,9 @@ const api: WorkbenchAPI = Object.freeze({
   },
   async setOpenRouterModel(value: OpenRouterModel) {
     return settingsSchema.parse(await ipcRenderer.invoke('settings:openrouter-model', openRouterModelSchema.parse(value)))
+  },
+  async setPiModel(selection: PiModelSelection) {
+    return settingsSchema.parse(await ipcRenderer.invoke('settings:pi-model', piModelSelectionSchema.parse(selection)))
   },
   async setFaithfulnessCheck(value: boolean) {
     if (typeof value !== 'boolean') throw new Error('Faithfulness setting must be boolean.')
