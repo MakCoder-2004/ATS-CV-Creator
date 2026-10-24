@@ -1192,6 +1192,11 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       const draftInputs = frozen?.draftInputs ?? prepareDraftInputs(profile, experience)
       const items = draftInputs.items
       const approvedPayload = authorizeOutboundPayload<OutboundPayload>(pending.runId, pending.bundle.outgoing)
+      const minimizeGeneratedPrompt = (text: string) => {
+        const prompt = pending.bundle.minimizeIdentifiers(text)
+        if (pending.bundle.containsRestoredIdentifier(prompt)) throw new Error('Generated wording still contains a local identifier. No model request was sent.')
+        return prompt
+      }
       const scrubbed = new Map<string, string>()
       profile.education.forEach((item, i) => { const safe = approvedPayload.profile.education[i]; if (safe) scrubbed.set(item.id, JSON.stringify(safe)) })
       experience.experience.forEach((item, i) => { const safe = approvedPayload.profile.experience[i]; if (safe) { scrubbed.set(item.id, JSON.stringify(safe)); item.factualItems.forEach((fact, n) => scrubbed.set(fact.id, safe.evidence[n] ?? '')) } })
@@ -1241,7 +1246,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
             return { finding, section, index, text: item && ('text' in item ? item.text : item.name), citedEvidence: item?.citations.map(citation => ({ ...citation, text: safeItems.find(source => source.id === citation.evidenceId)?.text ?? '' })) }
           })
           authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
-          const repair = await dispatcher.generate({ runId: pending.runId, jobId: pending.jobId, model: openRouterModelSchema.parse(pending.source.model.name), consentId: pending.consentId!, responseSchema: repairSchema, runBudgetOverride, prompt: `Factual repair cycle ${cycle + 1} of 2. Correct only the listed failing draft items using only their cited evidence. Preserve every unaffected item. Never infer facts or use uncited evidence. Return corrections for failed item paths only; keep citation IDs/revisions from the supplied evidence. If no safe correction is possible, remove that item by returning no correction for it.\n${JSON.stringify({ findings: failedItems })}` })
+          const repair = await dispatcher.generate({ runId: pending.runId, jobId: pending.jobId, model: openRouterModelSchema.parse(pending.source.model.name), consentId: pending.consentId!, responseSchema: repairSchema, runBudgetOverride, prompt: minimizeGeneratedPrompt(`Factual repair cycle ${cycle + 1} of 2. Correct only the listed failing draft items using only their cited evidence. Preserve every unaffected item. Never infer facts or use uncited evidence. Return corrections for failed item paths only; keep citation IDs/revisions from the supplied evidence. If no safe correction is possible, remove that item by returning no correction for it.\n${JSON.stringify({ findings: failedItems })}`) })
           authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
           repairAttempts += repair.attempts
           const response = repairSchema.parse(JSON.parse(repair.text))
@@ -1263,7 +1268,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
             const priorItem = result.draft.content[eligible.section][eligible.index]
             const priorText = 'text' in priorItem ? priorItem.text : priorItem.name
             authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
-            const coverageRepair = await dispatcher.generate({ runId: pending.runId, jobId: pending.jobId, model: openRouterModelSchema.parse(pending.source.model.name), consentId: pending.consentId!, responseSchema: repairSchema, runBudgetOverride, prompt: `Supported-keyword coverage repair (single exact item). Add only the explicitly supported term to this authored text. Preserve all existing wording, responsibility, scope, ownership, skill level, certainty, and citations exactly; do not change any other item. Return zero or one correction, only for the supplied section/index.\n${JSON.stringify({ opportunity: { qualification: opportunity.qualification, matchedAs: opportunity.matchedAs, section: eligible.section, index: eligible.index, evidenceId: eligible.evidenceId, revision: eligible.revision }, text: priorText, evidence: safeItems.find(source => source.id === eligible.evidenceId)?.text })}` })
+            const coverageRepair = await dispatcher.generate({ runId: pending.runId, jobId: pending.jobId, model: openRouterModelSchema.parse(pending.source.model.name), consentId: pending.consentId!, responseSchema: repairSchema, runBudgetOverride, prompt: minimizeGeneratedPrompt(`Supported-keyword coverage repair (single exact item). Add only the explicitly supported term to this authored text. Preserve all existing wording, responsibility, scope, ownership, skill level, certainty, and citations exactly; do not change any other item. Return zero or one correction, only for the supplied section/index.\n${JSON.stringify({ opportunity: { qualification: opportunity.qualification, matchedAs: opportunity.matchedAs, section: eligible.section, index: eligible.index, evidenceId: eligible.evidenceId, revision: eligible.revision }, text: priorText, evidence: safeItems.find(source => source.id === eligible.evidenceId)?.text })}`) })
             authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
             coverageRepairAttempts = coverageRepair.attempts
             const response = repairSchema.parse(JSON.parse(coverageRepair.text))
@@ -1275,7 +1280,7 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
               const priorText = 'text' in prior ? prior.text : prior.name
               const term = escapeCoverageTerm(opportunity.matchedAs)
               const withoutTerm = correction.text.replace(new RegExp(`(?:^|\\s)${term}(?=$|\\s)`, 'iu'), ' ').replace(/\s+/g, ' ').trim()
-              if (withoutTerm !== priorText.replace(/\s+/g, ' ').trim()) continue
+              if (withoutTerm !== pending.bundle.minimizeIdentifiers(priorText).replace(/\s+/g, ' ').trim()) continue
               section[eligible.index] = 'text' in prior ? { ...prior, text: pending.bundle.restoreIdentifiers(correction.text) } : { ...prior, name: pending.bundle.restoreIdentifiers(correction.text) }
               result.draft.content = { ...result.draft.content, [eligible.section]: section }
             }
