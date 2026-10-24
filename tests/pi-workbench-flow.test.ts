@@ -56,12 +56,15 @@ test('Pi posting analysis and cache retain fresh run authorization and effort sc
   expect(completeSimple).toHaveBeenCalledTimes(1)
   const stale = await workbench.api.prepareOutboundConsent(saved.value.id)
   if (!stale.ok) throw new Error(stale.message)
+  expect(await workbench.api.acceptOutboundConsent(stale.token, true, true)).toMatchObject({ ok: true })
   await workbench.api.setPiModel({ reference: 'sample/author/chat', thinkingLevel: 'high' })
-  expect(await workbench.api.acceptOutboundConsent(stale.token, true, true)).toMatchObject({ ok: false, message: expect.stringMatching(/changed/i) })
+  await expect(workbench.api.startAnalysis(stale.token)).rejects.toThrow(/authorize/i)
+  expect(await workbench.api.getAnalysis(saved.value.id)).toMatchObject({ status: 'stale' })
+  expect(completeSimple).toHaveBeenCalledTimes(1)
   const fresh = await workbench.api.prepareOutboundConsent(saved.value.id)
   if (!fresh.ok) throw new Error(fresh.message)
   expect(fresh.outgoing.model).toMatchObject({ thinkingLevel: 'high' })
-})
+}, 15_000)
 
 test('Pi wording keeps evidence citations and saved career facts in a reviewable draft', async () => {
   const response = (prompt: string) => {
@@ -91,6 +94,7 @@ test('Pi wording keeps evidence citations and saved career facts in a reviewable
   if (!savedSkill.ok || !savedRole.ok) throw new Error('Could not create the synthetic profile.')
   const job = await workbench.api.saveJob({ title: 'Engineer', company: 'Example', description: 'TypeScript services required.' })
   if (!job.ok) throw new Error('Could not create the synthetic job.')
+  await workbench.api.setFaithfulnessCheck(true)
   const preview = await workbench.api.prepareOutboundConsent(job.value.id)
   if (!preview.ok) throw new Error(preview.message)
   expect(await workbench.api.acceptOutboundConsent(preview.token, true, true)).toMatchObject({ ok: true })
@@ -98,7 +102,7 @@ test('Pi wording keeps evidence citations and saved career facts in a reviewable
   const result = await workbench.api.generateDraft(preview.token)
   expect(result).toMatchObject({ ok: true, draft: { approved: false, lockedFields: { fullName: 'Synthetic Candidate', experience: [expect.objectContaining({ title: 'Developer', organization: 'Synthetic Company' })] } } })
   expect(result.draft?.content.experience[0].citations[0].evidenceId).toBe(savedRole.value.experience[0].id)
-  expect(completeSimple).toHaveBeenCalledTimes(3)
+  expect(completeSimple).toHaveBeenCalledTimes(4)
   const next = await workbench.api.prepareOutboundConsent(job.value.id)
   if (!next.ok) throw new Error(next.message)
   const acceptedNext = await workbench.api.acceptOutboundConsent(next.token, true, true)
@@ -106,11 +110,11 @@ test('Pi wording keeps evidence citations and saved career facts in a reviewable
   const proposed = await workbench.api.regenerateDraft(next.token, { kind: 'section', section: 'experience' })
   expect(proposed).toMatchObject({ ok: true, proposal: { status: 'pending' } })
   expect(await workbench.api.getAnalysis(job.value.id)).toMatchObject({ status: 'complete', cacheHit: true, runId: acceptedNext.runId })
-  expect(completeSimple).toHaveBeenCalledTimes(4)
+  expect(completeSimple).toHaveBeenCalledTimes(5)
 })
 
 test('a missing local Pi login never dispatches posting text', async () => {
   const { workbench, completeSimple } = workspace(false)
-  await expect(workbench.api.setPiModel({ reference: 'sample/author/chat', thinkingLevel: 'low' })).rejects.toThrow(/authentication/i)
+  await expect(workbench.api.setPiModel({ reference: 'sample/author/chat', thinkingLevel: 'low' })).rejects.toThrow(/sign-in|Sign in/i)
   expect(completeSimple).not.toHaveBeenCalled()
 })

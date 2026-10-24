@@ -5,7 +5,7 @@ import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-test('visible faithfulness report blocks a draft without requiring an OpenRouter key', async () => {
+test('visible faithfulness report blocks a draft without an in-app provider key', async () => {
   test.setTimeout(90000)
   const userData = mkdtempSync(join(tmpdir(), 'cv-tailor-faithfulness-'))
   const app = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], timeout: 60000, env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData, CV_TAILOR_SCRIPTED_ANALYSIS: 'faithfulness' } })

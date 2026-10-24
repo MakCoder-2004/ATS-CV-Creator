@@ -13,7 +13,7 @@ import './draft-record-editor.css'
 type LocalSources = WorkbenchSources
 const readableFailure = (failure: unknown, fallback: string) => failure instanceof Error ? failure.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, '') : fallback
 
-export function WorkbenchStart({ activeJob, onNavigate }: { activeJob: JobRecord | null; onNavigate: (page: 'Saved jobs') => void }) {
+export function WorkbenchStart({ activeJob, onNavigate }: { activeJob: JobRecord | null; onNavigate: (page: 'Saved jobs' | 'Settings') => void }) {
   const [sources, setSources] = useState<LocalSources | null>(null)
   const [error, setError] = useState('')
   const [attempt, setAttempt] = useState(0)

@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 test('Settings exposes Pi model preferences without in-app credentials or analysis budgets', async () => {
+  test.setTimeout(90000)
   const userData = mkdtempSync(join(tmpdir(), 'cv-tailor-pi-settings-'))
   const app = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData } })
   try {
@@ -15,17 +16,48 @@ test('Settings exposes Pi model preferences without in-app credentials or analys
 
     const modelCard = page.getByRole('region', { name: 'Pi preferences' }).getByRole('region', { name: 'Pi model' })
     await expect(modelCard.getByLabel('Provider/model reference')).toHaveValue('')
-    await expect(modelCard.getByLabel('Thinking level')).toHaveValue('medium')
+    await expect(modelCard.getByLabel('Thinking level')).toContainText('medium')
     await expect(page.getByText(/sign in through Pi outside CV Tailor/i)).toBeVisible()
     await expect(page.getByLabel('API key')).toHaveCount(0)
     await expect(page.getByRole('heading', { name: 'Analysis request budgets' })).toHaveCount(0)
-    await expect(page.getByText(/credential is entered, stored, copied, or revealed/i)).toBeVisible()
+    await expect(page.getByText(/never asks for or stores Pi credentials/i)).toBeVisible()
 
     const faithfulness = page.getByRole('switch', { name: 'Enable optional faithfulness review for newly authorized runs' })
     await expect(faithfulness).toBeVisible()
-    await expect(page.getByText(/LLM check is not proof/i)).toBeVisible()
+    await expect(page.getByText(/A model check is not proof/i)).toBeVisible()
   } finally {
     await app.close()
+    await rm(userData, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 })
+  }
+})
+
+test('Settings saves a Pi model and thinking level across a real Electron reopen', async () => {
+  test.setTimeout(90000)
+  const userData = mkdtempSync(join(tmpdir(), 'cv-tailor-pi-selection-'))
+  const launch = () => electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData, CV_TAILOR_SCRIPTED_ANALYSIS: '1', CV_TAILOR_SCRIPTED_PI_MODEL: '1' } })
+  let app: Awaited<ReturnType<typeof electron.launch>> | undefined
+  try {
+    app = await launch()
+    let page = await app.firstWindow()
+    await expect(page.locator('[data-ui-ready="true"]')).toBeVisible()
+    await page.getByRole('button', { name: 'Settings' }).click()
+    const model = page.getByRole('region', { name: 'Pi preferences' }).getByRole('region', { name: 'Pi model' })
+    await model.getByLabel('Provider/model reference').fill('scripted/cv-tailor-fixture')
+    await model.getByLabel('Thinking level').click()
+    await page.getByRole('option', { name: 'off', exact: true }).click()
+    await model.getByRole('button', { name: 'Save Pi model' }).click()
+    await expect(page.getByRole('status').filter({ hasText: 'Pi model preference saved.' })).toBeVisible()
+    await app.close()
+    app = await launch()
+    page = await app.firstWindow()
+    await expect(page.locator('[data-ui-ready="true"]')).toBeVisible()
+    await page.getByRole('button', { name: 'Settings' }).click()
+    const reopened = page.getByRole('region', { name: 'Pi preferences' }).getByRole('region', { name: 'Pi model' })
+    await expect(reopened.getByLabel('Provider/model reference')).toHaveValue('scripted/cv-tailor-fixture')
+    await expect(reopened.getByLabel('Thinking level')).toContainText('off')
+    expect((await page.evaluate(() => window.workbench.getSettings())).pi).toEqual({ providerId: 'scripted', modelId: 'cv-tailor-fixture', thinkingLevel: 'off' })
+  } finally {
+    await app?.close().catch(() => {})
     await rm(userData, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 })
   }
 })

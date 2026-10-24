@@ -8,6 +8,7 @@ const { _electron: electron } = require('@playwright/test')
 const executable = process.argv[2] ? resolve(process.argv[2]) : null
 const output = resolve(process.argv[3] || join('.audit', 'pi-sdk-settings-baseline'))
 const label = executable ? 'installed' : 'source'
+const piMode = process.env.CV_TAILOR_SETTINGS_CAPTURE_MODE === 'pi'
 const userData = mkdtempSync(join(tmpdir(), 'cv-tailor-pi-baseline-'))
 const env = { ...process.env }
 delete env.ELECTRON_RUN_AS_NODE
@@ -26,7 +27,7 @@ async function main() {
     await page.setViewportSize({ width: 1440, height: 900 })
     await page.getByRole('button', { name: 'Settings', exact: true }).click()
     await page.getByRole('heading', { name: 'Settings' }).waitFor()
-    assert.equal(await page.getByRole('textbox', { name: 'OpenRouter model ID' }).inputValue(), 'xingchen-agi/xing4.0-29b-a4b:free')
+    assert.equal(await page.getByRole('textbox', { name: piMode ? 'Provider/model reference' : 'OpenRouter model ID' }).inputValue(), piMode ? '' : 'xingchen-agi/xing4.0-29b-a4b:free')
     for (const [theme, width, height] of [['light', 1440, 900], ['light', 375, 812], ['dark', 1440, 900], ['dark', 375, 812]]) {
       await page.setViewportSize({ width, height })
       if (theme === 'dark') await page.getByRole('button', { name: 'Use dark mode' }).click()
@@ -41,7 +42,7 @@ async function main() {
     await reopened.locator('[data-ui-ready="true"]').waitFor({ timeout: 30000 })
     assert.equal(await reopened.getByRole('button', { name: 'Use dark mode' }).getAttribute('aria-pressed'), 'true')
     await reopened.getByRole('button', { name: 'Settings', exact: true }).click()
-    assert.equal(await reopened.getByRole('textbox', { name: 'OpenRouter model ID' }).inputValue(), 'xingchen-agi/xing4.0-29b-a4b:free')
+    assert.equal(await reopened.getByRole('textbox', { name: piMode ? 'Provider/model reference' : 'OpenRouter model ID' }).inputValue(), piMode ? '' : 'xingchen-agi/xing4.0-29b-a4b:free')
     console.log(JSON.stringify({ label, executable, screenshotDirectory: output, screenshots: 4, sqliteReopen: true }))
   } finally {
     await app?.close().catch(() => {})

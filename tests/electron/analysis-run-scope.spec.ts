@@ -3,8 +3,9 @@ import { mkdtempSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { selectScriptedPiModel } from './pi-model-fixture'
 
-test('analysis that cannot start reports the error without claiming the run is in progress', async () => {
+test('missing Pi model blocks outgoing-data review before any analysis request', async () => {
   test.setTimeout(90000) // A cold Windows Electron launch can exceed the default 30-second test budget.
   const userData = mkdtempSync(join(tmpdir(), 'cv-tailor-analysis-error-ui-'))
   const app = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData, CV_TAILOR_SCRIPTED_ANALYSIS: '' } })
@@ -18,9 +19,8 @@ test('analysis that cannot start reports the error without claiming the run is i
     await page.getByRole('button', { name: 'Save job' }).click()
     await page.getByRole('button', { name: 'Tailor CV', exact: true }).click()
     await page.getByRole('button', { name: 'Inspect outgoing data' }).click()
-    await page.getByRole('checkbox', { name: /reviewed what is sent/ }).check()
-    await page.getByRole('button', { name: 'Authorize this run' }).click()
-    await expect(page.getByRole('alert')).toBeVisible()
+    await expect(page.getByRole('alert')).toContainText(/Choose an available Pi model/i)
+    await expect(page.getByRole('checkbox', { name: /reviewed what is sent/ })).toHaveCount(0)
     await expect(page.getByRole('status').filter({ hasText: 'Your authorized run is in progress.' })).toHaveCount(0)
     await expect(page.getByRole('button', { name: 'Cancel analysis' })).toHaveCount(0)
   } finally {
@@ -32,10 +32,11 @@ test('analysis that cannot start reports the error without claiming the run is i
 test('saved posting analysis does not skip analysis for a newly authorized draft run', async () => {
   test.setTimeout(120000)
   const userData = mkdtempSync(join(tmpdir(), 'cv-tailor-run-scope-ui-'))
-  const app = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData, CV_TAILOR_SCRIPTED_ANALYSIS: 'generation' } })
+  const app = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData, CV_TAILOR_SCRIPTED_ANALYSIS: 'generation', CV_TAILOR_SCRIPTED_PI_MODEL: '1' } })
   try {
     const page = await app.firstWindow()
     await expect(page.locator('[data-ui-ready="true"]')).toBeVisible()
+    await selectScriptedPiModel(page)
     await page.getByRole('button', { name: 'My profile' }).click()
     await page.getByLabel('Full name').fill('Ada Example')
     await page.getByRole('button', { name: 'Save contact details' }).click()
@@ -43,6 +44,8 @@ test('saved posting analysis does not skip analysis for a newly authorized draft
     await page.getByLabel('Skill name').fill('TypeScript')
     await page.getByRole('button', { name: 'Add skill' }).click()
     await page.getByRole('button', { name: 'Saved jobs', exact: true }).click()
+    await expect(page.getByRole('heading', { name: 'Give every CV a clear target.' })).toBeVisible()
+    await page.locator('.saved-jobs-heading').getByRole('button', { name: 'New job' }).click()
     await page.getByLabel('Job title').fill('Systems engineer')
     await page.getByLabel('Company').fill('Example Systems')
     await page.getByLabel('Posting and requirements').fill('TypeScript experience is required.')

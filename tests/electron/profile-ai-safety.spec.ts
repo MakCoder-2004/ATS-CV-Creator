@@ -29,7 +29,7 @@ async function prepareReview(app: ElectronApplication, sourceFile: string) {
 
 async function authorizeAndRun(page: Awaited<ReturnType<ElectronApplication['firstWindow']>>) {
   await page.getByRole('button', { name: 'Optional AI structuring' }).click()
-  const consent = page.getByRole('region', { name: 'Review text sent to OpenRouter' })
+  const consent = page.getByRole('region', { name: 'Review text sent through Pi' })
   await expect(consent).toBeVisible()
   await consent.getByLabel(/I authorize this one-time request/).check()
   await consent.getByRole('button', { name: 'Send text and structure' }).click()

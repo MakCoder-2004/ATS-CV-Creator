@@ -1,7 +1,7 @@
 {
   "name": "cv-tailor",
   "private": true,
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "CV Tailor personal Windows workbench",
   "author": "CV Tailor",
   "license": "UNLICENSED",
@@ -13,8 +13,8 @@
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "typecheck": "tsc --noEmit",
-    "test": "npm rebuild better-sqlite3 --no-audit --no-fund && vitest run",
-    "test:fast": "vitest run",
+    "test": "npm rebuild better-sqlite3 --no-audit --no-fund && vitest run --maxWorkers=4",
+    "test:fast": "vitest run --maxWorkers=4",
     "test:electron": "npm run build && electron-rebuild -f -w better-sqlite3 && playwright test",
     "rebuild:electron": "electron-rebuild -f -w better-sqlite3",
     "verify:electron-sqlite": "node scripts/verify-electron-sqlite.cjs",
@@ -114,6 +114,14 @@
       {
         "from": "node_modules/@fontsource-variable/sora/LICENSE",
         "to": "licenses/sora-OFL.txt"
+      },
+      {
+        "from": "resources/licenses/pi-MIT.txt",
+        "to": "licenses/pi-MIT.txt"
+      },
+      {
+        "from": "node_modules/@silvia-odwyer/photon-node/LICENSE.md",
+        "to": "licenses/photon-Apache-2.0.md"
       }
     ]
   }

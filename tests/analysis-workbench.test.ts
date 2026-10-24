@@ -8,21 +8,6 @@ import { analysisBudgetValues } from '../src/shared/posting-analysis'
 
 const dirs: string[] = []; const opened: Array<ReturnType<typeof createWorkbench>> = []
 afterEach(() => { for (const value of opened.splice(0)) value.close(); for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
-test('analysis budgets are validated, persisted, and reflected in local usage observations', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'analysis-budget-contract-')); dirs.push(dir)
-  const wb = createWorkbench(dir); opened.push(wb)
-  const defaults = await wb.api.getAnalysisUsage()
-  expect(defaults).toMatchObject({ minimumSpacingMs: 5000, rateLimitAttempts: 12, rateLimitWindowMs: 300000, configuredDailyLimit: 50, runLimit: 12, runTimeLimitMs: 300000 })
-  const configured = await wb.api.setAnalysisBudgets({ minimumSpacingMs: 7000, rateLimitAttempts: 8, rateLimitWindowMs: 60000, configuredDailyLimit: 25, runLimit: 6, runTimeLimitMs: 120000 })
-  expect(configured).toMatchObject({ minimumSpacingMs: 7000, rateLimitAttempts: 8, rateLimitWindowMs: 60000, configuredDailyLimit: 25, runLimit: 6, runTimeLimitMs: 120000 })
-  await expect(wb.api.setAnalysisBudgets({ ...configured, configuredDailyLimit: 0 })).rejects.toThrow()
-  await expect(wb.api.setAnalysisBudgets({ ...configured, runLimit: 13 })).rejects.toThrow()
-  await expect(wb.api.setAnalysisBudgets({ ...configured, runTimeLimitMs: 300001 })).rejects.toThrow()
-  wb.close(); opened.pop()
-  const reopened = createWorkbench(dir); opened.push(reopened)
-  expect(await reopened.api.getAnalysisUsage()).toMatchObject({ minimumSpacingMs: 7000, rateLimitAttempts: 8, rateLimitWindowMs: 60000, configuredDailyLimit: 25, runLimit: 6, runTimeLimitMs: 120000 })
-})
-
 test('public workbench analysis requires accepted preview, sends its frozen minimized bundle and reuses compatible cache', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'analysis-contract-')); dirs.push(dir)
   const requests: string[] = []
@@ -256,15 +241,6 @@ test('accepted target edits expose prior posting analysis as stale until explici
   await reopened.api.acceptOutboundConsent(fresh.token, true, true)
   expect(await reopened.api.startAnalysis(fresh.token)).toMatchObject({ status: 'complete', analysis: { required: ['Rust'] } })
   expect(requests).toHaveLength(2)
-})
-
-test('warns before a run when remaining configured daily attempts may be insufficient', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'analysis-pre-run-warning-contract-')); dirs.push(dir)
-  const wb = createWorkbench(dir); opened.push(wb)
-  const defaults = await wb.api.getAnalysisUsage()
-  const usage = await wb.api.setAnalysisBudgets({ ...analysisBudgetValues(defaults), runLimit: 12, configuredDailyLimit: 1, rateLimitAttempts: 1 })
-  expect(usage.warning).toMatch(/before.*run.*configured local daily/i)
-  expect(usage.warning).toMatch(/before.*run.*rate window/i)
 })
 
 test('invalid provider credentials fail once with a sanitized actionable public result', async () => {

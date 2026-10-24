@@ -441,7 +441,7 @@ export function createWorkspaceBackupEngine(db: Database.Database, maxBackupByte
           for (const row of rows) insert.run(...columns.map(column => row[column.name] as never))
         }
         // The restored history remains inspectable, but old authorizations and paused work cannot run.
-        if (names.includes('settings')) db.exec("DELETE FROM settings WHERE key IN ('openrouter-model','analysis-budgets')")
+        if (names.includes('settings') && names.includes('schema_migrations') && db.prepare('SELECT 1 FROM schema_migrations WHERE version=9').get()) db.exec("DELETE FROM settings WHERE key IN ('openrouter-model','analysis-budgets')")
         if (names.includes('outbound_consents')) db.exec('UPDATE outbound_consents SET revoked=1')
         if (names.includes('generation_recovery')) db.exec("UPDATE generation_recovery SET status='cancelled' WHERE status IN ('running','paused')")
         if (db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='encrypted_credentials'").get()) db.exec('DELETE FROM encrypted_credentials')

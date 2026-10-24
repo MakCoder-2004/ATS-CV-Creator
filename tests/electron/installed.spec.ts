@@ -1,5 +1,6 @@
 import { test, expect, _electron as electron } from '@playwright/test'
 import { openReviewDetails, closeReviewDetails } from './review-helpers'
+import { selectScriptedPiModel } from './pi-model-fixture'
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -21,6 +22,15 @@ test('installed app opens and writes SQLite across reopen', async () => {
     await page.getByRole('button', { name: 'Settings', exact: true }).click()
     const model = page.getByRole('region', { name: 'Pi preferences' }).getByRole('region', { name: 'Pi model' })
     await expect(model.getByLabel('Provider/model reference')).toHaveValue('')
+    const selectedModel = process.env.CV_TAILOR_PI_TEST_MODEL
+    const selectedEffort = process.env.CV_TAILOR_PI_TEST_THINKING ?? 'low'
+    if (selectedModel) {
+      await model.getByLabel('Provider/model reference').fill(selectedModel)
+      await model.getByLabel('Thinking level').click()
+      await page.getByRole('option', { name: selectedEffort, exact: true }).click()
+      await model.getByRole('button', { name: 'Save Pi model' }).click()
+      await expect(page.getByText('Pi model preference saved.')).toBeVisible()
+    }
     await first.close()
     expect(existsSync(join(directory, 'workbench.sqlite'))).toBe(true)
     const reopened = await launch()
@@ -28,8 +38,8 @@ test('installed app opens and writes SQLite across reopen', async () => {
     await expect(reopenedPage.getByRole('button', { name: 'Use dark mode' })).toHaveAttribute('aria-pressed', 'true')
     await reopenedPage.getByRole('button', { name: 'Settings', exact: true }).click()
     const reopenedModel = reopenedPage.getByRole('region', { name: 'Pi preferences' }).getByRole('region', { name: 'Pi model' })
-    await expect(reopenedModel.getByLabel('Provider/model reference')).toHaveValue('')
-    await expect(reopenedModel.getByLabel('Thinking level')).toHaveValue('medium')
+    await expect(reopenedModel.getByLabel('Provider/model reference')).toHaveValue(selectedModel ?? '')
+    await expect(reopenedModel.getByLabel('Thinking level')).toContainText(selectedModel ? selectedEffort : 'medium')
     await reopened.close()
   } finally {
     await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 })
@@ -98,10 +108,11 @@ test('installed app compiles a generated draft with its bundled LaTeX toolchain'
     dev = await electron.launch({
       args: [join(process.cwd(), 'out/main/index.js'), '--disable-gpu'],
       timeout: 60000,
-      env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: directory, CV_TAILOR_SCRIPTED_ANALYSIS: 'generation' },
+      env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: directory, CV_TAILOR_SCRIPTED_ANALYSIS: 'generation', CV_TAILOR_SCRIPTED_PI_MODEL: '1' },
     })
     let page = await dev.firstWindow()
     await expect(page.locator('[data-ui-ready="true"]')).toBeVisible({ timeout: 20000 })
+    await selectScriptedPiModel(page)
     const setup = await page.evaluate(async () => {
       const contact = await window.workbench.saveContact({ fullName: 'Zoë Candidate', headline: 'Staff Engineer', email: 'zoe@example.test', links: [{ label: 'Portfolio', url: 'https://example.test/portfolio' }] })
       const skill = await window.workbench.saveSkill({ name: 'CaféScript', category: 'Programming' })

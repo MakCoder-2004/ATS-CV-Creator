@@ -925,7 +925,9 @@ test('backup capacity also guards non-job SQLite writes and keeps them atomic', 
 test('aggregate backup guard blocks model dispatch before accounting can overrun its capacity', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'cv-tailor-backup-dispatch-capacity-'))
   directories.push(directory)
-  const probe = createWorkbench(directory)
+  let modelDispatches = 0
+  const scripted = { async generate() { modelDispatches++; return JSON.stringify({ required: [], preferred: [], tools: [], responsibilities: [], keywords: [] }) } }
+  const probe = createWorkbench(directory, undefined, scripted)
   const job = await probe.api.saveJob({ title: 'Capacity role', company: 'Example', description: 'Bounded posting.' })
   if (!job.ok) throw Error('Job fixture failed')
   const consentA = await probe.api.prepareOutboundConsent(job.value.id)
@@ -939,8 +941,6 @@ test('aggregate backup guard blocks model dispatch before accounting can overrun
   const consentRowBytes = Buffer.byteLength(backupB, 'utf8') - Buffer.byteLength(backupA, 'utf8')
   probe.close()
 
-  let modelDispatches = 0
-  const scripted = { async generate() { modelDispatches++; return JSON.stringify({ required: [], preferred: [], tools: [], responsibilities: [], keywords: [] }) } }
   const maxBytes = Buffer.byteLength(backupB, 'utf8') + consentRowBytes + 80
   const workbench = createWorkbench(directory, undefined, scripted, { workspaceBackupMaxBytes: maxBytes })
   try {

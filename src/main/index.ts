@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import type { ZodError } from 'zod'
 import { fileURLToPath } from 'node:url'
 import { existsSync, linkSync, lstatSync, mkdirSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
@@ -143,22 +143,28 @@ app.whenReady().then(() => {
       onRequestCompleted: status => console.info(`[LINK37_SINGLE_REQUEST] request=1 completed status=${status}`)
     } : {})
   }
-  const piRuntime = scriptedAnalysis && !app.isPackaged && process.env.CV_TAILOR_SCRIPTED_PI_MODEL === '1'
+  const useScriptedPi = Boolean(scriptedAnalysis && !app.isPackaged && process.env.CV_TAILOR_SCRIPTED_PI_MODEL === '1')
+  const piRuntime = useScriptedPi
     ? Promise.resolve((() => {
       const model = { provider: 'scripted', id: 'cv-tailor-fixture', name: 'Offline test model', api: 'openai-completions', input: ['text'], reasoning: false, contextWindow: 16384, maxTokens: 8192 }
       return {
         getProviders: () => [{ id: model.provider, getModels: () => [model] }],
         getPhysicalModel: (providerId: string, modelId: string) => providerId === model.provider && modelId === model.id ? model : undefined,
         getAvailable: async () => [model], getAuth: async () => ({ source: 'synthetic' }),
-        completeSimple: async () => { throw new Error('The scripted Pi model cannot send a physical request.') }
+        completeSimple: async (_selected: unknown, context: { messages: Array<{ role: string; content: string }> }, options: { signal?: AbortSignal }) => {
+          const prompt = context.messages.find(message => message.role === 'user')?.content
+          if (!prompt) throw new Error('The scripted Pi request has no prompt.')
+          const text = await scriptedAnalysis!.generate({ model: 'scripted/cv-tailor-fixture', prompt, signal: options.signal ?? new AbortController().signal, responseSchema: z.unknown() })
+          return { role: 'assistant', provider: model.provider, model: model.id, stopReason: 'stop', content: [{ type: 'text', text }], usage: { output: Math.ceil(Buffer.byteLength(text, 'utf8') / 4) } }
+        }
       } as unknown as PiModelRuntime
     })())
     : import('@earendil-works/pi-coding-agent')
       .then(({ ModelRuntime }) => ModelRuntime.create({ allowModelNetwork: false, refreshOnCreate: false }))
       .catch(() => null)
-  workspace = createWorkbench(app.getPath('userData'), safeStorage, scriptedAnalysis, undefined, postingFetchOptions, piRuntime)
+  workspace = createWorkbench(app.getPath('userData'), undefined, useScriptedPi ? undefined : scriptedAnalysis, undefined, postingFetchOptions, piRuntime)
   registerWorkspaceBackupIpc(() => window!, () => workspace!, () => {
-    const reopened = createWorkbench(app.getPath('userData'), safeStorage, scriptedAnalysis, undefined, postingFetchOptions, piRuntime)
+    const reopened = createWorkbench(app.getPath('userData'), undefined, useScriptedPi ? undefined : scriptedAnalysis, undefined, postingFetchOptions, piRuntime)
     const previous = workspace!
     workspace = reopened
     previous.close()
@@ -481,10 +487,7 @@ app.whenReady().then(() => {
       sandbox: true
     }
   })
-  window.webContents.setWindowOpenHandler(({ url }) => {
-    if (url === 'https://openrouter.ai/privacy') void shell.openExternal(url)
-    return { action: 'deny' }
-  })
+  window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   window.webContents.on('will-navigate', (event) => event.preventDefault())
   window.once('ready-to-show', () => window?.show())
   if (!app.isPackaged && process.env.ELECTRON_RENDERER_URL) void window.loadURL(process.env.ELECTRON_RENDERER_URL)

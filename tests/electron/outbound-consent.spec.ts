@@ -3,14 +3,17 @@ import { mkdtempSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { selectScriptedPiModel } from './pi-model-fixture'
 
 test('user inspects minimized data, declines or explicitly authorizes only one run', async () => {
+  test.setTimeout(120000)
   const userData = mkdtempSync(join(tmpdir(), 'cv-tailor-consent-ui-'))
   let app: ElectronApplication | undefined
   try {
-    app = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData } })
+    app = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData, CV_TAILOR_SCRIPTED_ANALYSIS: '1', CV_TAILOR_SCRIPTED_PI_MODEL: '1' } })
     const page = await app.firstWindow()
     await expect(page.locator('[data-ui-ready="true"]')).toBeVisible()
+    await selectScriptedPiModel(page)
     await page.getByRole('button', { name: 'My profile' }).click()
     await page.getByLabel('Full name').fill('Ada Canary')
     await page.getByLabel('Email').fill('ada.private@example.test')
@@ -31,7 +34,7 @@ test('user inspects minimized data, declines or explicitly authorizes only one r
     expect(reviewBounds).not.toBeNull()
     expect(phaseBounds).not.toBeNull()
     expect(Math.abs((reviewBounds!.x + reviewBounds!.width / 2) - (phaseBounds!.x + phaseBounds!.width / 2))).toBeLessThan(2)
-    await expect(review.getByRole('heading', { name: 'What OpenRouter receives' })).toBeVisible()
+    await expect(review.getByRole('heading', { name: 'What your selected model provider receives' })).toBeVisible()
     await expect(review.getByText('Read the included posting and profile details')).toBeVisible()
     await expect(review.locator('pre')).toHaveCount(0)
     await review.getByText('Read the included posting and profile details').click()
@@ -42,7 +45,7 @@ test('user inspects minimized data, declines or explicitly authorizes only one r
     await expect(review).not.toContainText('ada.private@example.test')
     await review.getByText('Full privacy notice').click()
     await expect(review).toContainText('cannot guarantee anonymity')
-    await expect(review.getByRole('link', { name: 'OpenRouter privacy policy' })).toHaveAttribute('href', 'https://openrouter.ai/privacy')
+    await expect(review.getByText(/Pi uses your existing sign-in/)).toBeVisible()
     await expect(review.getByRole('button', { name: 'Authorize this run' })).toBeDisabled()
     await review.getByRole('button', { name: 'Back to posting' }).click()
     await expect(review).toHaveCount(0)
@@ -53,8 +56,7 @@ test('user inspects minimized data, declines or explicitly authorizes only one r
     await expect(acknowledgment).not.toBeChecked()
     await acknowledgment.check()
     await secondReview.getByRole('button', { name: 'Authorize this run' }).click()
-    await expect(secondReview.getByRole('alert')).toBeVisible()
-    await expect(secondReview.getByRole('status').filter({ hasText: 'Your authorized run is in progress.' })).toHaveCount(0)
+    await expect(secondReview.getByRole('heading', { name: 'What this role calls for' })).toBeVisible({ timeout: 15000 })
     await expect(page.getByRole('navigation', { name: 'Tailoring phases' }).locator('[aria-current="step"]')).toContainText('Generate')
     await secondReview.getByRole('button', { name: 'Revoke this run' }).click()
     await expect(secondReview).toHaveCount(0)

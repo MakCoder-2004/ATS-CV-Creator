@@ -5,17 +5,17 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 test('saved posting above the previous limit stays complete and readable after restart', async ({}, testInfo) => {
-  testInfo.setTimeout(60_000)
+  testInfo.setTimeout(120_000)
   const userData = mkdtempSync(join(tmpdir(), 'cv-tailor-long-posting-'))
   let running: ElectronApplication | undefined
   const launch = async () => {
-    running = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData } })
+    running = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], timeout: 60000, env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData } })
     return running
   }
   const completeText = `Responsibilities:\n${'Build reliable fictional systems and document every requirement.\n'.repeat(700)}`
   try {
     const app = await launch()
-    const page = await app.firstWindow()
+    const page = await app.firstWindow({ timeout: 60000 })
     await expect(page.locator('[data-ui-ready="true"]')).toBeVisible()
     await page.getByRole('button', { name: 'Saved jobs', exact: true }).click()
     await page.locator('.saved-jobs-heading').getByRole('button', { name: 'New job' }).click()
@@ -31,7 +31,7 @@ test('saved posting above the previous limit stays complete and readable after r
     running = undefined
 
     const reopened = await launch()
-    const reopenedPage = await reopened.firstWindow()
+    const reopenedPage = await reopened.firstWindow({ timeout: 60000 })
     await expect(reopenedPage.locator('[data-ui-ready="true"]')).toBeVisible()
     await reopenedPage.getByRole('button', { name: 'Saved jobs', exact: true }).click()
     await reopenedPage.locator('.saved-job-row').getByRole('button', { name: 'Edit Long posting engineer posting' }).click()

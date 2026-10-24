@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import type { ContactInput, EvidenceRevision, ProfileEntryInput, ProfileMutationResult, ProfileSnapshot, SkillInput } from './profile'
 import type { ExperienceInput, ExperienceMutationResult, ExperienceSnapshot, ProjectInput } from './experience'
-import { openRouterModelSchema, type OpenRouterModel } from './openrouter-settings'
+import type { OpenRouterModel } from './openrouter-settings'
 import { piModelSelectionSchema, type PiModelPreferenceInput } from './pi-model'
 import type { JobInput, JobRecord, JobSaveResult, PostingRefreshChoice } from './jobs'
 import type { ProfileExchangeResult } from './profile-exchange'
@@ -21,7 +21,6 @@ export const appearanceSchema = z.enum(['light', 'dark'])
 export type Appearance = z.infer<typeof appearanceSchema>
 export const settingsSchema = z.object({ appearance: appearanceSchema, pi: piModelSelectionSchema.nullable(), faithfulnessCheck: z.boolean() }).strict()
 export type Settings = z.infer<typeof settingsSchema>
-export const openRouterModelInputSchema = openRouterModelSchema
 
 export type WorkspaceRestorePreview = { token: string; effects: Array<{ label: string; current: number; replacement: number }> }
 export type WorkspaceRestoreSelection = { ok: true; preview: WorkspaceRestorePreview } | { ok: false; cancelled: boolean; message: string }
@@ -111,9 +110,6 @@ export interface WorkbenchAPI {
 
 export type WorkbenchStorageAPI = Omit<WorkbenchAPI, 'exportProfile' | 'previewProfileImport' | 'applyProfileImport' | 'cancelProfileImport' | 'previewProfilePdfImport' | 'cancelProfilePdfImport' | 'applyProfilePdfImport' | 'previewProfileDocxImport' | 'cancelProfileDocxImport' | 'applyProfileDocxImport' | 'previewProfileAiStructuring' | 'consentProfileAiStructuring' | 'runProfileAiStructuring' | 'cancelProfileAiStructuring' | 'exportWorkspaceBackup' | 'previewWorkspaceRestore' | 'applyWorkspaceRestore' | 'cancelWorkspaceRestore' | 'measureDocument' | 'getDocumentPdf' | 'exportApprovedPdf' | 'exportDraftDocx' | 'openPostingSource'> & {
   setOpenRouterModel(value: OpenRouterModel): Promise<Settings>
-  saveOpenRouterApiKey(value: string): Promise<Settings>
-  revealOpenRouterApiKey(): Promise<string>
-  removeOpenRouterApiKey(): Promise<Settings>
   getAnalysisUsage(): Promise<AnalysisUsage>
   setAnalysisBudgets(value: AnalysisBudgets): Promise<AnalysisUsage>
   saveDocumentFitReport(jobId: string, report: DocumentFitReport): Promise<DocumentFitReport>

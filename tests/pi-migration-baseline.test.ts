@@ -12,7 +12,7 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-test('a fresh workspace cannot dispatch posting analysis without a configured credential', async () => {
+test('a fresh workspace without a selected Pi model cannot authorize posting analysis', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'pi-baseline-no-login-'))
   directories.push(directory)
   const workbench = createWorkbench(directory)
@@ -20,10 +20,7 @@ test('a fresh workspace cannot dispatch posting analysis without a configured cr
   const request = vi.spyOn(globalThis, 'fetch')
   const job = await workbench.api.saveJob({ title: 'Engineer', company: 'Synthetic Company', description: 'TypeScript required.' })
   if (!job.ok) throw Error(job.error.message)
-  const consent = await workbench.api.prepareOutboundConsent(job.value.id)
-  if (!consent.ok) throw Error(consent.message)
-  expect(await workbench.api.acceptOutboundConsent(consent.token, true, true)).toMatchObject({ ok: true })
-  await expect(workbench.api.startAnalysis(consent.token)).rejects.toThrow(/save.*API key/i)
+  expect(await workbench.api.prepareOutboundConsent(job.value.id)).toMatchObject({ ok: false, message: expect.stringMatching(/Choose an available Pi model/i) })
   expect(request).not.toHaveBeenCalled()
   expect(await workbench.api.getAnalysis(job.value.id)).not.toMatchObject({ status: 'complete' })
 })

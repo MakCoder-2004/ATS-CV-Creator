@@ -80,7 +80,7 @@ test('real Electron UI generates and exposes cited draft with a DEV-only scripte
     await expect(page.getByRole('article', { name: 'Draft CV review layout' })).toBeVisible()
     await openReviewDetails(page, 'notes')
     await page.getByRole('button', { name: 'Create another CV' }).click()
-    await expect(page.getByRole('heading', { name: 'What OpenRouter receives' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'What your selected model provider receives' })).toBeVisible()
     await page.getByRole('button', { name: 'Back to posting' }).click()
     await expect(page.getByRole('article', { name: 'Draft CV review layout' })).toBeVisible()
     await page.getByRole('button', { name: 'Check page length' }).click()

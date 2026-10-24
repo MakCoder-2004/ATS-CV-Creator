@@ -30,7 +30,7 @@ type Props = {
   renewDraftReview: () => Promise<boolean>
   decideSuggestedSkill: (id: string, decision: 'pending' | 'confirmed' | 'removed') => Promise<void>
   activeJob: JobRecord | null
-  onNavigate: (page: 'Saved jobs') => void
+  onNavigate: (page: 'Saved jobs' | 'Settings') => void
   error: string
   retry: () => void
   activePhase: Phase
@@ -237,6 +237,7 @@ export function WorkbenchStageLayout(props: Props) {
       <aside className="inspector" aria-label="Run review">
         <section className="job-stage" aria-labelledby="job-stage-heading">
         {error && <div className="job-stage-error" role="alert"><p>{error}</p><button className="secondary-button" type="button" onClick={retry}>Retry</button></div>}
+        {consentError && <div className="job-stage-error" role="alert"><p>{consentError}</p><button className="secondary-button" type="button" onClick={() => onNavigate('Settings')}>Open Settings</button></div>}
         {activeJob ? <><header><h2 id="job-stage-heading">A profile to build from</h2><p>Your saved career facts supply the content.</p></header>{sources && <dl className="profile-source-summary"><div><dt>Experience and training</dt><dd>{sources.evidence.experience.length} records</dd></div><div><dt>Projects</dt><dd>{sources.evidence.projects.length} records</dd></div><div><dt>Skills</dt><dd>{sources.profile.skills.length} saved skills</dd></div><div><dt>Education</dt><dd>{sources.profile.education.length} records</dd></div></dl>}<p className="job-stage-note">Job requirements are not automatically treated as your career facts. New skills will need your decision.</p></> : <><h2 id="job-stage-heading">Choose a posting first</h2><p>Open a saved job or add a new one.</p><button className="primary-button" type="button" onClick={() => onNavigate('Saved jobs')}>Open saved jobs</button></>}
       </section></aside>
     </section>}

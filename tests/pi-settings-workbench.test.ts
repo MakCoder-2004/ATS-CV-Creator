@@ -52,8 +52,8 @@ test('rejects unlisted models, missing auth, and unsupported effort without chan
   await fixture.workbench.api.setPiModel(priorInput)
   await expect(fixture.workbench.api.setPiModel({ reference: `${model.provider}/unknown/model`, thinkingLevel: 'off' })).rejects.toThrow(/model/i)
   const unauthenticated = createWorkbench(fixture.directory, undefined, undefined, undefined, undefined, runtime({ auth: false }))
-  await expect(unauthenticated.api.setPiModel(priorInput)).rejects.toThrow(/authentication|configured authentication/)
-  unauthenticated.close()
+  try { await expect(unauthenticated.api.setPiModel(priorInput)).rejects.toThrow(/sign-in/i) }
+  finally { unauthenticated.close() }
   await expect(fixture.workbench.api.setPiModel({ ...priorInput, thinkingLevel: 'low' })).rejects.toThrow(/does not support/)
   expect((await fixture.workbench.api.getSettings()).pi).toEqual(prior)
   fixture.workbench.close()

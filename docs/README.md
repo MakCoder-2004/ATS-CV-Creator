@@ -23,6 +23,7 @@ These files describe the current code or govern changes to it.
 | [Issue tracker rules](agents/issue-tracker.md) | GitHub issue conventions. |
 | [Triage labels](agents/triage-labels.md) | Issue label meanings. |
 | [Lato font notice](../resources/fonts/lato/README.md) | Font provenance. |
+| [Pi SDK notices](../resources/licenses/README.md) | SDK license text and remaining redistribution review. |
 | [LaTeX license inventory](../resources/latex-licenses/README.md) | Bundled toolchain license inventory and its limits. |
 
 Tailor CV and Saved jobs follow the approved Variant A visual direction. My profile and Settings keep their implemented structures. The design system is normative for UI decisions, but the prototype does not prove a feature ships. Read the relevant design contracts before renderer work.
