@@ -29,6 +29,7 @@ export function SelectedReview({ selection, item, entry, sources, draft, editing
   const displayedText = readableText(entry?.text) || selectedText
   const heading = entry?.heading || (selection ? `${selection.section[0].toUpperCase()}${selection.section.slice(1)}` : '')
   const rationale = item ? readableText(item.rationale) : ''
+  const generationFailed = draft.checkReport?.findings.some(finding => finding.itemPath === 'generation') ?? false
 
   function saveWording(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -50,6 +51,6 @@ export function SelectedReview({ selection, item, entry, sources, draft, editing
       {sources.length ? <ul className="source-list">{sources.map((source, index) => <li key={`${item.citations[index]?.evidenceId}-${index}`}><strong>{source.heading}</strong>{source.detail && <details><summary>Read source wording</summary><p>{source.detail}</p></details>}</li>)}</ul> : <p>No saved source is linked. Check this wording before approval.</p>}
       {rationale && <p className="inclusion-note"><strong>Why it's here</strong><br />{rationale}</p>}
       {!editing ? <div className="selected-review-actions"><button className="secondary-button" type="button" onClick={() => setEditing(true)}>Edit wording</button><button className="secondary-button" type="button" disabled={busy} onClick={() => onImprove(selection.section, selection.index)}>Suggest different wording</button></div> : <form className="selected-edit-form" onSubmit={saveWording}><label>Wording for this CV<textarea key={`${draft.id}-${selection.section}-${selection.index}`} name="wording" defaultValue={selectedText} required maxLength={3000} /></label><p>Use this to rephrase existing facts. To change the record's facts or details, choose Edit record.</p><div><button className="secondary-button" type="button" onClick={() => setEditing(false)}>Cancel</button><button className="primary-button" type="submit" disabled={busy}>Save wording</button></div></form>}
-    </div> : <p className="review-empty">Your CV is ready to review. Add saved career facts before approving it, or select wording on the page to inspect its sources.</p>}
+    </div> : generationFailed ? <p className="review-empty" role="status">The suggested wording could not be validated, so no CV wording was created. Review the issue under Checks &amp; options, then create another CV or add wording from saved career facts.</p> : <p className="review-empty">Your CV is ready to review. Add saved career facts before approving it, or select wording on the page to inspect its sources.</p>}
   </section>
 }
