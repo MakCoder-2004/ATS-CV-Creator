@@ -58,6 +58,20 @@ test('rejects pre-consent, stops cancelled work, and enforces shared attempt cei
   await expect(dispatcher.analyze(input('r1', 'consent-1'))).rejects.toThrow(/budget/i)
   expect(transport.generate).toHaveBeenCalledTimes(1)
 })
+test('concurrent generation runs cannot dispatch past the shared daily attempt limit', async () => {
+  const transport: AnalysisTransport = { validateCapacity: knownFixtureCapacity, generate: vi.fn(async () => JSON.stringify(response)) }
+  const dispatcher = createAnalysisDispatcher({ transport, now: () => 1000, sleep: async () => {}, minimumSpacingMs: 0, maxDailyAttempts: 1 })
+  dispatcher.authorize('first-run', 'first-consent')
+  dispatcher.authorize('second-run', 'second-consent')
+  const result = await Promise.allSettled([
+    dispatcher.generate({ ...input('first-run', 'first-consent'), responseSchema: postingAnalysisSchema }),
+    dispatcher.generate({ ...input('second-run', 'second-consent'), responseSchema: postingAnalysisSchema })
+  ])
+  expect(result.map(item => item.status)).toEqual(['fulfilled', 'rejected'])
+  expect(transport.generate).toHaveBeenCalledTimes(1)
+  expect(dispatcher.getUsage()).toBe(1)
+})
+
 test('retries a transient provider failure without deadlocking the dispatcher queue', async () => {
   let now = 1000
   const transport: AnalysisTransport = { validateCapacity: knownFixtureCapacity, generate: vi.fn().mockRejectedValueOnce({ status: 503 }).mockResolvedValueOnce(JSON.stringify(response)) }
