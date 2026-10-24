@@ -19,7 +19,11 @@ test('legacy backup restores history without OpenRouter settings, credentials, o
   opened.push(old)
   const saved = await old.api.saveJob({ title: 'Synthetic role', company: 'Example', description: 'Retain this posting.' })
   if (!saved.ok) throw new Error('Could not save synthetic job.')
-  await old.api.setOpenRouterModel('author/legacy-model')
+  const legacyDb = new Database(join(oldDir, 'workbench.sqlite'))
+  try {
+    registerWorkspaceBackupRowSizer(legacyDb)
+    legacyDb.prepare('INSERT INTO settings (key,value) VALUES (?,?)').run('openrouter-model', 'author/legacy-model')
+  } finally { legacyDb.close() }
   const legacyBackup = old.backup.createBackup()
   expect(JSON.parse(legacyBackup).tables.settings.rows.some((row: { key: string }) => row.key === 'openrouter-model')).toBe(true)
   old.close(); opened.pop()

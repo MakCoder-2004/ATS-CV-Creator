@@ -9,7 +9,7 @@ import { piModelPreferenceInputSchema, piModelSelectionSchema, parsePiModelRefer
 import { listPiModelReferences, resolvePiModel, type PiModelRuntime } from './pi-model'
 import { createPiWorkbenchDispatcher } from './pi-workbench-dispatcher'
 import { migrateLegacyOpenRouterWorkspace } from './pi-settings-migration'
-import { defaultOpenRouterModel, openRouterModelSchema, type OpenRouterModel } from '../shared/openrouter-settings'
+import { defaultOpenRouterModel, openRouterModelSchema } from '../shared/openrouter-settings'
 import { contactInputSchema, contactRecordSchema, evidenceRevisionSchema, profileEntryInputSchema, profileEntrySchema, profileMutationResultSchema, profileSnapshotSchema, skillInputSchema, skillRecordSchema, uuidSchema, type ContactRecord, type EvidenceRevision, type ProfileEntry, type ProfileSnapshot, type SkillRecord } from '../shared/profile'
 import { experienceInputSchema, experienceRecordSchema, experienceSnapshotSchema, experienceMutationResultSchema, projectInputSchema, projectRecordSchema, type ExperienceRecord, type ProjectRecord, type FactualItemRecord, type ExperienceSnapshot } from '../shared/experience'
 import { jobInputSchema, jobRecordSchema, jobSaveResultSchema, MAX_JOB_RECORD_UTF8_BYTES, MAX_POSTING_REVISIONS, legacyDraftTargetBaseline, postingOptionalFieldNames, postingRefreshChoiceSchema, type PostingRefreshChoice } from '../shared/jobs'
@@ -364,10 +364,6 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
     },
     async setAppearance(value) {
       saveSetting('appearance', appearanceSchema.parse(value))
-      return this.getSettings()
-    },
-    async setOpenRouterModel(value: OpenRouterModel) {
-      saveSetting('openrouter-model', openRouterModelSchema.parse(value))
       return this.getSettings()
     },
     async setPiModel(input) {
