@@ -67,6 +67,8 @@ test('installed Pi structures synthetic PDF and DOCX CVs into reviewable, unconf
     await page.getByRole('option', { name: effort!, exact: true }).click()
     await settings.getByRole('button', { name: 'Save Pi model' }).click()
     await expect(page.getByText('Pi model preference saved.')).toBeVisible({ timeout: 15_000 })
+    const selectedModel = (await page.evaluate(() => window.workbench.getSettings())).pi
+    expect(`${selectedModel?.providerId}/${selectedModel?.modelId}`).toBe(modelReference)
     await page.getByRole('button', { name: 'My profile', exact: true }).click()
 
     const profileIsEmpty = async () => {
@@ -83,8 +85,8 @@ test('installed Pi structures synthetic PDF and DOCX CVs into reviewable, unconf
       await page.getByRole('button', { name: 'Optional AI structuring' }).click()
       const consent = page.getByRole('region', { name: 'Review text sent through Pi' })
       await expect(consent).toBeVisible({ timeout: 30_000 })
-      await expect(consent).toContainText('Provider:')
-      await expect(consent).toContainText(modelReference!)
+      await expect(consent).toContainText(`Provider: ${selectedModel?.providerId}`)
+      await expect(consent).toContainText(`Model: ${selectedModel?.modelId}`)
       await expect(consent).toContainText(`Thinking level: ${effort}`)
       const outgoing = consent.getByLabel('Exact outgoing text')
       const outgoingText = await outgoing.inputValue()
@@ -97,8 +99,12 @@ test('installed Pi structures synthetic PDF and DOCX CVs into reviewable, unconf
       // This is the only dispatch click for this CV. A timeout/failure fails the test; it is not retried.
       await consent.getByLabel(/I authorize this one-time request/).check()
       await consent.getByRole('button', { name: 'Send text and structure' }).click()
-      await expect(consent).toHaveCount(0, { timeout: 150_000 })
-      await expect(review.getByRole('group', { name: /Skill/ }).first()).toBeVisible({ timeout: 30_000 })
+      const success = page.getByRole('status').filter({ hasText: 'AI suggestions are ready for review.' })
+      const failure = page.getByRole('alert').filter({ hasText: /structuring failed|provider|could not complete|request failed/i })
+      await expect(success.or(failure).first()).toBeVisible({ timeout: 180_000 })
+      if (await failure.isVisible()) throw new Error(`Installed ${format} structuring failed: ${(await failure.textContent())?.slice(0, 300)}`)
+      await expect(consent).toHaveCount(0)
+      await expect(review.locator('fieldset.pdf-proposal').first()).toBeVisible()
       await profileIsEmpty()
     }
 
