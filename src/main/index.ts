@@ -146,16 +146,17 @@ app.whenReady().then(() => {
   const useScriptedPi = Boolean(scriptedAnalysis && !app.isPackaged && process.env.CV_TAILOR_SCRIPTED_PI_MODEL === '1')
   const piRuntime = useScriptedPi
     ? Promise.resolve((() => {
-      const model = { provider: 'scripted', id: 'cv-tailor-fixture', name: 'Offline test model', api: 'openai-completions', input: ['text'], reasoning: false, contextWindow: 16384, maxTokens: 8192 }
+      const model = { provider: 'scripted', id: 'cv-tailor-fixture', name: 'Offline test model', api: 'openai-completions', input: ['text'], reasoning: true, contextWindow: 16384, maxTokens: 8192 }
+      const alternate = { ...model, id: 'cv-tailor-fixture-alt' }
       return {
-        getProviders: () => [{ id: model.provider, getModels: () => [model] }],
-        getPhysicalModel: (providerId: string, modelId: string) => providerId === model.provider && modelId === model.id ? model : undefined,
-        getAvailable: async () => [model], getAuth: async () => ({ source: 'synthetic' }),
-        completeSimple: async (_selected: unknown, context: { messages: Array<{ role: string; content: string }> }, options: { signal?: AbortSignal }) => {
+        getProviders: () => [{ id: model.provider, getModels: () => [model, alternate] }],
+        getPhysicalModel: (providerId: string, modelId: string) => providerId === model.provider ? [model, alternate].find(item => item.id === modelId) : undefined,
+        getAvailable: async () => [model, alternate], getAuth: async () => ({ source: 'synthetic' }),
+        completeSimple: async (selected: { provider: string; id: string }, context: { messages: Array<{ role: string; content: string }> }, options: { signal?: AbortSignal }) => {
           const prompt = context.messages.find(message => message.role === 'user')?.content
           if (!prompt) throw new Error('The scripted Pi request has no prompt.')
           const text = await scriptedAnalysis!.generate({ model: 'scripted/cv-tailor-fixture', prompt, signal: options.signal ?? new AbortController().signal, responseSchema: z.unknown() })
-          return { role: 'assistant', provider: model.provider, model: model.id, stopReason: 'stop', content: [{ type: 'text', text }], usage: { output: Math.ceil(Buffer.byteLength(text, 'utf8') / 4) } }
+          return { role: 'assistant', provider: selected.provider, model: selected.id, stopReason: 'stop', content: [{ type: 'text', text }], usage: { output: Math.ceil(Buffer.byteLength(text, 'utf8') / 4) } }
         }
       } as unknown as PiModelRuntime
     })())
