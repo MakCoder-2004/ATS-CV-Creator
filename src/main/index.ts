@@ -11,7 +11,6 @@ import { assertCompiledContent, inspectCompiledPdf } from './pdf-document'
 import { renderCanonicalDocx } from './docx-export'
 import { z } from 'zod'
 import { createWorkbench } from './workbench'
-import { ModelRuntime } from '@earendil-works/pi-coding-agent'
 import { piModelPreferenceInputSchema } from '../shared/pi-model'
 import type { AnalysisTransport } from './posting-analysis'
 import { appearanceSchema } from '../shared/appearance'
@@ -68,7 +67,7 @@ if (!app.isPackaged && process.env.CV_TAILOR_TEST_USER_DATA_DIR) {
   mkdirSync(process.env.CV_TAILOR_TEST_USER_DATA_DIR, { recursive: true })
   app.setPath('userData', process.env.CV_TAILOR_TEST_USER_DATA_DIR)
 }
-app.whenReady().then(async () => {
+app.whenReady().then(() => {
   const compiler = createLatexCompiler({
     toolchainRoot: app.isPackaged ? join(process.resourcesPath, 'latex') : join(__dirname, '../..', '.tools', 'latex'),
     templateRoot: app.isPackaged ? join(process.resourcesPath, 'cv-template') : join(__dirname, '../..', 'resources', 'cv-template'),
@@ -144,7 +143,9 @@ app.whenReady().then(async () => {
       onRequestCompleted: status => console.info(`[LINK37_SINGLE_REQUEST] request=1 completed status=${status}`)
     } : {})
   }
-  const piRuntime = await ModelRuntime.create({ allowModelNetwork: false })
+  const piRuntime = import('@earendil-works/pi-coding-agent')
+    .then(({ ModelRuntime }) => ModelRuntime.create({ allowModelNetwork: false, refreshOnCreate: false }))
+    .catch(() => null)
   workspace = createWorkbench(app.getPath('userData'), safeStorage, scriptedAnalysis, undefined, postingFetchOptions, piRuntime)
   registerWorkspaceBackupIpc(() => window!, () => workspace!, () => {
     const reopened = createWorkbench(app.getPath('userData'), safeStorage, scriptedAnalysis, undefined, postingFetchOptions, piRuntime)

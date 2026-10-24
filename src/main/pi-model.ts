@@ -1,4 +1,4 @@
-import { getSupportedThinkingLevels, type Api, type Context, type Model, type ModelThinkingLevel } from "@earendil-works/pi-ai"
+import type { Api, Context, Model, ModelThinkingLevel } from "@earendil-works/pi-ai"
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent"
 import type { PiModelSelection } from "../shared/pi-model"
 
@@ -21,6 +21,7 @@ export function listPiModelReferences(runtime: Pick<ModelRuntime, "getProviders"
 export async function resolvePiModel(runtime: Pick<ModelRuntime, "getPhysicalModel">, selection: PiModelSelection): Promise<Model<Api>> {
   const model = runtime.getPhysicalModel(selection.providerId, selection.modelId)
   if (!model) throw new Error("The selected Pi model is unavailable. Choose another model in Settings.")
+  const { getSupportedThinkingLevels } = await import("@earendil-works/pi-ai")
   const levels = getSupportedThinkingLevels(model)
   if (!levels.includes(selection.thinkingLevel)) throw new Error("The selected model does not support that thinking level. Choose a supported level in Settings.")
   return model

@@ -104,7 +104,7 @@ function preserveKnownFindings(checked: ReturnType<typeof checkDraftFacts>, prio
   return factualCheckReportSchema.parse({ ...checked, passed: checked.passed && known.length === 0, findings })
 }
 
-export function createWorkbench(userData: string, secureStorage: SecureStorage = unavailableSecureStorage, scriptedTransport?: AnalysisTransport, recoveryHooks?: { beforeGraphCheckpoint?: (metadata: import('@langchain/langgraph').CheckpointMetadata) => void; modelCatalogFetcher?: typeof fetch; workspaceBackupMaxBytes?: number }, safePostingFetchOptions?: SafePostingFetchOptions, piRuntime?: PiModelRuntime): { api: WorkbenchStorageAPI; authorizeOutboundPayload<T>(runId: string, payload: T): T; backup: WorkspaceBackupEngine; hasActiveWork(): boolean; close(): void } {
+export function createWorkbench(userData: string, secureStorage: SecureStorage = unavailableSecureStorage, scriptedTransport?: AnalysisTransport, recoveryHooks?: { beforeGraphCheckpoint?: (metadata: import('@langchain/langgraph').CheckpointMetadata) => void; modelCatalogFetcher?: typeof fetch; workspaceBackupMaxBytes?: number }, safePostingFetchOptions?: SafePostingFetchOptions, piRuntime?: PiModelRuntime | Promise<PiModelRuntime | null>): { api: WorkbenchStorageAPI; authorizeOutboundPayload<T>(runId: string, payload: T): T; backup: WorkspaceBackupEngine; hasActiveWork(): boolean; close(): void } {
   mkdirSync(userData, { recursive: true })
   const db = new Database(join(userData, 'workbench.sqlite'))
   registerWorkspaceBackupRowSizer(db)
@@ -395,17 +395,18 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
     },
     async setPiModel(input) {
       const value = piModelPreferenceInputSchema.parse(input)
-      if (!piRuntime) throw new Error('Pi model validation is unavailable. Your selection was not saved.')
-      const reference = parsePiModelReference(value.reference, listPiModelReferences(piRuntime))
+      const runtime = await piRuntime
+      if (!runtime) throw new Error('Pi model validation is unavailable. Your selection was not saved.')
+      const reference = parsePiModelReference(value.reference, listPiModelReferences(runtime))
       const selection = piModelSelectionSchema.parse({ ...reference, thinkingLevel: value.thinkingLevel })
-      const provider = piRuntime.getProviders().find(candidate => candidate.id === selection.providerId)
+      const provider = runtime.getProviders().find(candidate => candidate.id === selection.providerId)
       if (!provider?.getModels().some(candidate => candidate.id === selection.modelId)) throw new Error('The selected Pi model is unavailable. Choose another model in Settings.')
-      const model = await resolvePiModel(piRuntime, selection)
-      const available = await piRuntime.getAvailable(selection.providerId)
+      const model = await resolvePiModel(runtime, selection)
+      const available = await runtime.getAvailable(selection.providerId)
       if (!available.some(candidate => candidate.id === selection.modelId && candidate.provider === selection.providerId)) {
         throw new Error('Pi has no currently available authentication for this provider. Sign in or choose another provider in Pi Settings.')
       }
-      if (!await piRuntime.getAuth(model)) throw new Error('Pi has no configured authentication for this provider. Sign in through Pi Settings.')
+      if (!await runtime.getAuth(model)) throw new Error('Pi has no configured authentication for this provider. Sign in with Pi outside CV Tailor.')
       saveSetting('pi-model', JSON.stringify(selection))
       return this.getSettings()
     },
