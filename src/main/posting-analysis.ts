@@ -1,9 +1,11 @@
 import type { OpenRouterModel } from '../shared/openrouter-settings'
 import { defaultAnalysisBudgets, postingAnalysisSchema, type AnalysisBudgets, type PostingAnalysis } from '../shared/posting-analysis'
-import { pacificDay } from '../shared/pacific-day'
 import type { ZodTypeAny } from 'zod'
 export { postingAnalysisSchema }
 export type { PostingAnalysis }
+
+const MAX_RESPONSE_CHARS = 500_000
+
 export interface AnalysisTransport {
   generate(input: { model: OpenRouterModel; prompt: string; signal: AbortSignal; responseSchema: ZodTypeAny; maxTokens?: number; maxResponseChars?: number }): Promise<string>
 }
@@ -13,167 +15,112 @@ export class AnalysisError extends Error {
   usage?: AnalysisUsage
   constructor(readonly code: 'BUDGET' | 'TIMEOUT' | 'CANCELLED' | 'INVALID_KEY' | 'OFFLINE' | 'MALFORMED' | 'PROVIDER', message: string) { super(message); this.name = 'AnalysisError' }
 }
-type Options = { transport: AnalysisTransport; now?: () => number; sleep?: (ms: number, signal: AbortSignal) => Promise<void>; minimumSpacingMs?: number; rateLimitAttempts?: number; rateLimitWindowMs?: number; maxAttempts?: number; maxElapsedMs?: number; maxDailyAttempts?: number; observedAttempts?: number[]; observedRunAttempts?: Record<string, number>; observedRunStartedAt?: Record<string, number>; random?: () => number; onAttempt?: (timestamp: number, runId: string) => void; onAttemptComplete?: (runId: string, succeeded: boolean) => void; onProgress?: (runId: string, jobId: string, progress: string, attempts: number) => void }
-const cancelledError = () => new AnalysisError('CANCELLED', 'Analysis cancelled.')
-const cancellableSleep = (ms: number, signal: AbortSignal) => new Promise<void>((resolve, reject) => {
-  if (signal.aborted) return reject(cancelledError())
-  const timer = setTimeout(() => { signal.removeEventListener('abort', abort); resolve() }, ms)
-  const abort = () => { clearTimeout(timer); reject(cancelledError()) }
-  signal.addEventListener('abort', abort, { once: true })
-})
-function providerError(error: unknown, now: () => number): { retry: boolean; delay?: number; kind: AnalysisError['code'] } {
-  const status = Number((error as { status?: number })?.status)
-  const code = String((error as { code?: string })?.code ?? '')
-  if (status === 401 || status === 403 || /API_KEY/i.test(code)) return { retry: false, kind: 'INVALID_KEY' }
-  if (status === 429 || /RESOURCE_EXHAUSTED/i.test(code)) {
-    const raw = (error as { retryAfter?: number | string })?.retryAfter
-    const delay = typeof raw === 'number' ? raw * 1000 : typeof raw === 'string' ? (/^\d+(?:\.\d+)?$/.test(raw) ? Number(raw) * 1000 : Math.max(0, Date.parse(raw) - now())) : undefined
-    return { retry: true, delay, kind: 'PROVIDER' }
-  }
-  if (['ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND', 'ECONNREFUSED'].includes(code)) return { retry: false, kind: 'OFFLINE' }
-  if (status >= 500) return { retry: true, kind: 'PROVIDER' }
-  return { retry: false, kind: 'PROVIDER' }
+type Options = {
+  transport: AnalysisTransport
+  now?: () => number
+  observedAttempts?: number[]
+  onAttempt?: (timestamp: number, runId: string) => void
+  onAttemptComplete?: (runId: string, succeeded: boolean) => void
+  onProgress?: (runId: string, jobId: string, progress: string, attempts: number) => void
+  [legacyOption: string]: unknown
 }
-function isPacificDay(timestamp: number, today: number): boolean { return pacificDay(timestamp) === pacificDay(today) }
+type Request = AnalysisInput & { consentId: string }
+
+const cancelledError = () => new AnalysisError('CANCELLED', 'Analysis cancelled.')
+const safeFailure = (error: unknown): AnalysisError => {
+  if (error instanceof AnalysisError) return error
+  const status = Number((error as { status?: number } | null)?.status)
+  const code = String((error as { code?: string } | null)?.code ?? '')
+  if (status === 401 || status === 403 || /API_KEY/i.test(code)) return new AnalysisError('INVALID_KEY', 'The provider rejected authentication. Check model access in Settings.')
+  if (['ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND', 'ECONNREFUSED'].includes(code)) return new AnalysisError('OFFLINE', 'The network is unavailable. Start a new authorized request after checking the connection.')
+  return new AnalysisError('PROVIDER', 'The provider could not complete the request. Start a new authorized request if you choose to retry.')
+}
+
 export function createAnalysisDispatcher(options: Options) {
-  const now = options.now ?? Date.now, sleep = options.sleep ?? cancellableSleep
-  let budgets: AnalysisBudgets = { ...defaultAnalysisBudgets, minimumSpacingMs: options.minimumSpacingMs ?? defaultAnalysisBudgets.minimumSpacingMs, rateLimitAttempts: options.rateLimitAttempts ?? defaultAnalysisBudgets.rateLimitAttempts, rateLimitWindowMs: options.rateLimitWindowMs ?? defaultAnalysisBudgets.rateLimitWindowMs, runLimit: options.maxAttempts ?? defaultAnalysisBudgets.runLimit, runTimeLimitMs: options.maxElapsedMs ?? defaultAnalysisBudgets.runTimeLimitMs, configuredDailyLimit: options.maxDailyAttempts ?? defaultAnalysisBudgets.configuredDailyLimit }
-  const random = options.random ?? Math.random
-  const authorizations = new Map<string, string>(), cancelled = new Set<string>(), active = new Map<string, AbortController>(), attemptCounts = new Map(Object.entries(options.observedRunAttempts ?? {}).map(([runId, count]) => [runId, count])), runStartedAt = new Map(Object.entries(options.observedRunStartedAt ?? {}).map(([runId, timestamp]) => [runId, timestamp]))
-  const dispatched: number[] = [...(options.observedAttempts ?? [])]; let queue = Promise.resolve()
-  // The caller binds this capability to a persisted, accepted consent record; a run ID alone is not authority.
+  const now = options.now ?? Date.now
+  const authorizations = new Map<string, string>()
+  const cancelled = new Set<string>()
+  const active = new Map<string, AbortController>()
+  const dispatched = [...(options.observedAttempts ?? [])]
+  let queue: Promise<void> = Promise.resolve()
+
   const authorize = (runId: string, consentId: string) => { if (runId && consentId) authorizations.set(runId, consentId) }
   const cancel = (runId: string) => { cancelled.add(runId); active.get(runId)?.abort() }
-  const getUsage = () => dispatched.filter(t => isPacificDay(t, now())).length
-  const setBudgets = (value: AnalysisBudgets) => { budgets = value }
-  async function analyze(input: AnalysisInput & { consentId: string }): Promise<{ analysis: PostingAnalysis; usage: AnalysisUsage }> {
-    if (!input.runId || !input.jobId || !input.prompt.trim()) throw new AnalysisError('PROVIDER', 'Analysis inputs are invalid.')
-    if (!input.consentId || authorizations.get(input.runId) !== input.consentId) throw new AnalysisError('PROVIDER', 'Analysis requires accepted outgoing-data consent.')
-    if (cancelled.has(input.runId)) throw cancelledError()
-    if (active.has(input.runId)) throw new AnalysisError('PROVIDER', 'An analysis with this run identity is already active.')
-    const startedAt = runStartedAt.get(input.runId) ?? now(); runStartedAt.set(input.runId, startedAt)
-    const runBudgets = { ...budgets }, controller = new AbortController(); active.set(input.runId, controller)
-    let timedOut = false
-    const deadlineTimer = setTimeout(() => { timedOut = true; controller.abort() }, Math.max(0, runBudgets.runTimeLimitMs - (now() - startedAt)))
-    const checkBudget = () => {
-      if (cancelled.has(input.runId)) throw cancelledError()
-      if (now() - startedAt >= runBudgets.runTimeLimitMs) throw new AnalysisError('TIMEOUT', 'Analysis time budget is exhausted.')
-      if ((attemptCounts.get(input.runId) ?? 0) >= runBudgets.runLimit || getUsage() >= runBudgets.configuredDailyLimit) throw new AnalysisError('BUDGET', 'Configured local analysis budget is exhausted.')
-    }
-    const usage: AnalysisUsage = { runId: input.runId, jobId: input.jobId, attempts: 0, status: 'failed', startedAt, finishedAt: startedAt }
-    // Queue only a single physical attempt. Retry/backoff happens outside the queued promise, preventing self-deadlock.
-    const dispatch = async (prompt: string): Promise<string> => {
-      const work = queue.then(async () => {
-        checkBudget()
-        const previous = dispatched.at(-1), spacingWait = previous === undefined ? 0 : Math.max(0, runBudgets.minimumSpacingMs - (now() - previous))
-        const recent = dispatched.filter(timestamp => now() - timestamp < runBudgets.rateLimitWindowMs)
-        const rateWait = recent.length >= runBudgets.rateLimitAttempts ? Math.max(0, recent[0] + runBudgets.rateLimitWindowMs - now()) : 0
-        const wait = Math.max(spacingWait, rateWait)
-        if (wait) { const boundedWait = Math.min(wait, Math.max(0, runBudgets.runTimeLimitMs - (now() - startedAt))); options.onProgress?.(input.runId, input.jobId, 'Waiting for shared request pacing before the next attempt.', usage.attempts); await sleep(boundedWait, controller.signal) }
-        checkBudget()
-        options.onProgress?.(input.runId, input.jobId, `Preparing posting-analysis request ${usage.attempts + 1}; local backup and accounting checks must finish before dispatch.`, usage.attempts)
-        const timestamp = now()
-        options.onAttempt?.(timestamp, input.runId)
-        dispatched.push(timestamp); usage.attempts++; attemptCounts.set(input.runId, (attemptCounts.get(input.runId) ?? 0) + 1)
-        try {
-          const response = await options.transport.generate({ model: input.model, prompt, signal: controller.signal, responseSchema: postingAnalysisSchema, maxTokens: 2048 })
-          options.onAttemptComplete?.(input.runId, true)
-          return response
-        } catch (error) { options.onAttemptComplete?.(input.runId, false); throw error }
-      })
-      queue = work.then(() => undefined, () => undefined)
-      return work
-    }
-    const request = async (prompt: string): Promise<string> => {
-      for (;;) {
-        checkBudget()
-        try { return await dispatch(prompt) }
-        catch (error) {
-          if (timedOut) throw new AnalysisError('TIMEOUT', 'Analysis time budget is exhausted.')
-          if (controller.signal.aborted || cancelled.has(input.runId)) throw cancelledError()
-          if (error instanceof Error && error.name === 'WorkspaceBackupCapacityError') throw new AnalysisError('BUDGET', error.message)
-          if (error instanceof AnalysisError) throw error
-          const result = providerError(error, now)
-          if (!result.retry) throw new AnalysisError(result.kind, result.kind === 'INVALID_KEY' ? 'OpenRouter rejected the API key. Check the saved key in Settings.' : result.kind === 'OFFLINE' ? 'The network is unavailable. Check the connection, then start a new authorized run.' : 'OpenRouter could not complete the analysis. Check the model ID, model availability or credits in Settings, then try again.')
-          checkBudget()
-          const backoff = result.delay ?? Math.min(30000, 1000 * (2 ** Math.max(0, usage.attempts - 1))) * (0.75 + random() * 0.5)
-          const boundedBackoff = Math.min(backoff, Math.max(0, runBudgets.runTimeLimitMs - (now() - startedAt)))
-          options.onProgress?.(input.runId, input.jobId, `Temporary provider failure. Retrying after a bounded ${Math.ceil(boundedBackoff / 1000)} second pause.`, usage.attempts)
-          try { await sleep(boundedBackoff, controller.signal) }
-          catch (error) {
-            if (timedOut) throw new AnalysisError('TIMEOUT', 'Analysis time budget is exhausted.')
-            if (controller.signal.aborted || cancelled.has(input.runId)) throw cancelledError()
-            throw error
-          }
-          checkBudget()
-        }
-      }
-    }
-    try {
-      let output = await request(input.prompt)
-      let parsed = (() => { try { return postingAnalysisSchema.safeParse(JSON.parse(output)) } catch { return null } })()
-      if (!parsed || !parsed.success) {
-        output = await request(`${input.prompt}\nReturn only valid JSON matching the required posting-analysis schema. Do not infer absent qualifications.`)
-        try { parsed = postingAnalysisSchema.safeParse(JSON.parse(output)) } catch { parsed = null }
-      }
-      if (!parsed || !parsed.success) throw new AnalysisError('MALFORMED', 'The selected OpenRouter model returned invalid JSON twice. Choose a model that follows structured prompts, then try again.')
-      if (cancelled.has(input.runId)) throw cancelledError()
-      usage.status = 'complete'; return { analysis: parsed.data, usage }
-    } catch (error) {
-      const failure = timedOut ? new AnalysisError('TIMEOUT', 'Analysis time budget is exhausted.') : error
-      usage.status = failure instanceof AnalysisError && failure.code === 'CANCELLED' ? 'cancelled' : 'failed'
-      if (failure instanceof AnalysisError) failure.usage = usage
-      throw failure
-    } finally { clearTimeout(deadlineTimer); usage.finishedAt = now(); if (active.get(input.runId) === controller) active.delete(input.runId) }
-  }
-  async function generate(input: AnalysisInput & { consentId: string; responseSchema: ZodTypeAny; retryProviderFailures?: boolean; maxTokens?: number; maxResponseChars?: number; runBudgetOverride?: Pick<AnalysisBudgets, 'runLimit' | 'runTimeLimitMs'> }): Promise<{ text: string; attempts: number }> {
-    if (!authorizations.has(input.runId) || authorizations.get(input.runId) !== input.consentId) throw new AnalysisError('PROVIDER', 'Generation requires accepted outgoing-data consent.')
-    if (cancelled.has(input.runId)) throw cancelledError()
-    const startedAt = runStartedAt.get(input.runId) ?? now(); runStartedAt.set(input.runId, startedAt)
-    const runBudgets = { ...budgets, ...input.runBudgetOverride }, controller = new AbortController()
-    active.set(input.runId, controller)
-    let attempts = 0, timedOut = false
-    const timer = setTimeout(() => { timedOut = true; controller.abort() }, Math.max(0, runBudgets.runTimeLimitMs - (now() - startedAt)))
-    const checkBudget = () => {
-      if (timedOut) throw new AnalysisError('TIMEOUT', 'Analysis time budget is exhausted.')
-      if (controller.signal.aborted || cancelled.has(input.runId)) throw cancelledError()
-      if (now() - startedAt >= runBudgets.runTimeLimitMs) throw new AnalysisError('TIMEOUT', 'Analysis time budget is exhausted.')
-      if ((attemptCounts.get(input.runId) ?? 0) >= runBudgets.runLimit || getUsage() >= runBudgets.configuredDailyLimit) throw new AnalysisError('BUDGET', 'Configured local analysis budget is exhausted.')
-    }
-    try {
-      for (;;) {
-        checkBudget()
-        const work = queue.then(async () => {
-          const previous = dispatched.at(-1), spacingWait = previous === undefined ? 0 : Math.max(0, runBudgets.minimumSpacingMs - (now() - previous))
-          const recent = dispatched.filter(timestamp => now() - timestamp < runBudgets.rateLimitWindowMs)
-          const rateWait = recent.length >= runBudgets.rateLimitAttempts ? Math.max(0, recent[0] + runBudgets.rateLimitWindowMs - now()) : 0
-          const wait = Math.max(spacingWait, rateWait)
-          if (wait) { options.onProgress?.(input.runId, input.jobId, 'Waiting for shared request pacing before the next attempt.', attempts); await sleep(Math.min(wait, Math.max(0, runBudgets.runTimeLimitMs - (now() - startedAt))), controller.signal) }
-          checkBudget()
-          checkBudget()
-          options.onProgress?.(input.runId, input.jobId, `Preparing source-linked generation request ${attempts + 1}; local backup and accounting checks must finish before dispatch.`, attempts)
-          const timestamp = now(); options.onAttempt?.(timestamp, input.runId); dispatched.push(timestamp); attempts++; attemptCounts.set(input.runId, (attemptCounts.get(input.runId) ?? 0) + 1)
-          try {
-            const response = await options.transport.generate({ model: input.model, prompt: input.prompt, signal: controller.signal, responseSchema: input.responseSchema, ...(input.maxTokens ? { maxTokens: input.maxTokens } : {}), ...(input.maxResponseChars !== undefined ? { maxResponseChars: input.maxResponseChars } : {}) })
-            options.onAttemptComplete?.(input.runId, true)
-            return response
-          } catch (error) { options.onAttemptComplete?.(input.runId, false); throw error }
-        })
-        queue = work.then(() => undefined, () => undefined)
-        try { const text = await work; if (cancelled.has(input.runId)) throw cancelledError(); return { text, attempts } }
-        catch (error) {
-          if (timedOut) throw new AnalysisError('TIMEOUT', 'Analysis time budget is exhausted.')
-          if (controller.signal.aborted || cancelled.has(input.runId)) throw cancelledError()
-          if (error instanceof Error && error.name === 'WorkspaceBackupCapacityError') throw new AnalysisError('BUDGET', error.message)
-          if (error instanceof AnalysisError) throw error
-          const failure = providerError(error, now)
-          if (!failure.retry || input.retryProviderFailures === false) throw new AnalysisError(failure.kind, failure.kind === 'INVALID_KEY' ? 'OpenRouter rejected the API key. Check the saved key in Settings.' : failure.kind === 'OFFLINE' ? 'The network is unavailable. Check the connection, then start a new authorized run.' : input.retryProviderFailures === false ? 'OpenRouter did not confirm whether the request completed. No automatic retry was sent; a retry could incur another charge.' : 'OpenRouter could not complete generation. Check the model ID, model availability or credits in Settings.')
-          const delay = failure.delay ?? Math.min(30000, 1000 * (2 ** Math.max(0, attempts - 1))) * (0.75 + random() * 0.5)
-          await sleep(Math.min(delay, Math.max(0, runBudgets.runTimeLimitMs - (now() - startedAt))), controller.signal)
-        }
-      }
-    } finally { clearTimeout(timer); if (active.get(input.runId) === controller) active.delete(input.runId) }
-  }
   const isCancelled = (runId: string) => cancelled.has(runId)
-  return { authorize, cancel, analyze, generate, getUsage, setBudgets, isCancelled }
+  const getUsage = () => dispatched.length
+  const setBudgets = (_value: AnalysisBudgets) => {}
+
+  async function execute(input: Request, schema: ZodTypeAny, prompt: string, maxTokens?: number, maxResponseChars = MAX_RESPONSE_CHARS): Promise<{ text: string; attempts: number }> {
+    if (!input.runId || !input.jobId || !input.prompt.trim() || !input.consentId || authorizations.get(input.runId) !== input.consentId) {
+      throw new AnalysisError('PROVIDER', 'This request requires valid accepted outgoing-data consent.')
+    }
+    if (!Number.isSafeInteger(maxResponseChars) || maxResponseChars < 1) throw new AnalysisError('PROVIDER', 'The request output limit is invalid.')
+    if (cancelled.has(input.runId)) throw cancelledError()
+    if (active.has(input.runId)) throw new AnalysisError('PROVIDER', 'A request with this run identity is already active.')
+
+    const controller = new AbortController()
+    active.set(input.runId, controller)
+    let attempts = 0
+    const check = () => {
+      if (cancelled.has(input.runId) || controller.signal.aborted) throw cancelledError()
+      if (authorizations.get(input.runId) !== input.consentId) throw new AnalysisError('PROVIDER', 'This request requires current accepted outgoing-data consent.')
+    }
+    const work = queue.then(async () => {
+      check()
+      options.onProgress?.(input.runId, input.jobId, 'Preparing the authorized provider request.', attempts)
+      const timestamp = now()
+      options.onAttempt?.(timestamp, input.runId)
+      dispatched.push(timestamp)
+      attempts++
+      try {
+        const text = await options.transport.generate({ model: input.model, prompt, signal: controller.signal, responseSchema: schema, ...(maxTokens ? { maxTokens } : {}), maxResponseChars })
+        options.onAttemptComplete?.(input.runId, true)
+        check()
+        if (text.length > maxResponseChars) throw new AnalysisError('PROVIDER', 'The provider response exceeded the task output limit.')
+        let decoded: unknown
+        try { decoded = JSON.parse(text) } catch { throw new AnalysisError('MALFORMED', 'The provider returned invalid structured data.') }
+        const parsed = schema.safeParse(decoded)
+        if (!parsed.success) throw new AnalysisError('MALFORMED', 'The provider response did not match the required format.')
+        return JSON.stringify(parsed.data)
+      } catch (error) {
+        if (!(error instanceof AnalysisError)) options.onAttemptComplete?.(input.runId, false)
+        throw error
+      }
+    })
+    queue = work.then(() => undefined, () => undefined)
+    try { return { text: await work, attempts } }
+    catch (error) {
+      const failure = cancelled.has(input.runId) || controller.signal.aborted ? cancelledError() : safeFailure(error)
+      failure.usage = { runId: input.runId, jobId: input.jobId, attempts, status: failure.code === 'CANCELLED' ? 'cancelled' : 'failed', startedAt: now(), finishedAt: now() }
+      throw failure
+    } finally { if (active.get(input.runId) === controller) active.delete(input.runId) }
+  }
+
+  async function analyze(input: Request): Promise<{ analysis: PostingAnalysis; usage: AnalysisUsage }> {
+    const startedAt = now()
+    const run = async (prompt: string) => execute(input, postingAnalysisSchema, prompt, 2048)
+    let attempts = 0
+    try {
+      let result: { text: string; attempts: number }
+      try { result = await run(input.prompt); attempts += result.attempts }
+      catch (error) {
+        if (!(error instanceof AnalysisError) || error.code !== 'MALFORMED' || error.usage?.attempts !== 1) throw error
+        attempts++
+        result = await run(`${input.prompt}\nReturn only valid JSON matching the required posting-analysis schema. Do not infer absent qualifications.`)
+        attempts += result.attempts
+      }
+      const analysis = postingAnalysisSchema.parse(JSON.parse(result.text))
+      return { analysis, usage: { runId: input.runId, jobId: input.jobId, attempts, status: 'complete', startedAt, finishedAt: now() } }
+    } catch (error) {
+      if (error instanceof AnalysisError) {
+        error.usage = { runId: input.runId, jobId: input.jobId, attempts: attempts + (error.usage?.attempts ?? 0), status: error.code === 'CANCELLED' ? 'cancelled' : 'failed', startedAt, finishedAt: now() }
+      }
+      throw error
+    }
+  }
+
+  async function generate(input: Request & { responseSchema: ZodTypeAny; retryProviderFailures?: boolean; maxTokens?: number; maxResponseChars?: number; runBudgetOverride?: Pick<AnalysisBudgets, 'runLimit' | 'runTimeLimitMs'> }): Promise<{ text: string; attempts: number }> {
+    return execute(input, input.responseSchema, input.prompt, input.maxTokens, input.maxResponseChars)
+  }
+  return { authorize, cancel, isCancelled, analyze, generate, getUsage, setBudgets }
 }

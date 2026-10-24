@@ -3,128 +3,91 @@ import { createAnalysisDispatcher, postingAnalysisSchema, type AnalysisTransport
 
 const response = { required: ['TypeScript'], preferred: ['SQLite'], tools: ['TypeScript'], responsibilities: ['Build applications'], keywords: ['TypeScript', 'SQLite'] }
 const input = (runId: string, consentId: string) => ({ runId, consentId, jobId: 'j1', prompt: 'posting', model: 'minimax/minimax-m3.1-flash:free' as const })
-test('parses structured analysis through one dispatcher and records local usage', async () => {
+const dispatcherFor = (transport: AnalysisTransport) => {
+  const dispatcher = createAnalysisDispatcher({ transport, now: () => 1000 })
+  return dispatcher
+}
+
+test('parses structured analysis and records physical attempts', async () => {
   const transport: AnalysisTransport = { generate: vi.fn(async () => JSON.stringify(response)) }
-  const dispatcher = createAnalysisDispatcher({ transport, now: () => 1000, sleep: async () => {}, minimumSpacingMs: 0 })
+  const dispatcher = dispatcherFor(transport)
   dispatcher.authorize('r1', 'consent-1')
   const result = await dispatcher.analyze(input('r1', 'consent-1'))
   expect(result.analysis).toEqual(postingAnalysisSchema.parse(response))
   expect(result.usage).toMatchObject({ attempts: 1, status: 'complete' })
-})
-test('repairs malformed output with one additional provider dispatch', async () => {
-  const transport: AnalysisTransport = {
-    generate: vi.fn().mockResolvedValueOnce('{bad').mockResolvedValueOnce(JSON.stringify(response))
-  }
-  const dispatcher = createAnalysisDispatcher({ transport, now: () => 1000, sleep: async () => {}, minimumSpacingMs: 0 })
-  dispatcher.authorize('r-repair', 'consent-repair')
-  const result = await dispatcher.analyze(input('r-repair', 'consent-repair'))
-  expect(result.usage.attempts).toBe(2)
-  expect(transport.generate).toHaveBeenCalledTimes(2)
-})
-test('dispatches generation without application-side model capacity metadata', async () => {
-  const transport: AnalysisTransport = { generate: vi.fn(async () => JSON.stringify(response)) }
-  const dispatcher = createAnalysisDispatcher({ transport, now: () => 1000, sleep: async () => {}, minimumSpacingMs: 0 })
-  dispatcher.authorize('generation', 'consent-generation')
-  await expect(dispatcher.generate({ ...input('generation', 'consent-generation'), responseSchema: postingAnalysisSchema })).resolves.toMatchObject({ text: JSON.stringify(response), attempts: 1 })
-  expect(transport.generate).toHaveBeenCalledOnce()
-})
-test('repairs malformed structured output once and counts the repair attempt', async () => {
-  const transport: AnalysisTransport = { generate: vi.fn().mockResolvedValueOnce('{bad').mockResolvedValueOnce(JSON.stringify(response)) }
-  const dispatcher = createAnalysisDispatcher({ transport, now: () => 1000, sleep: async () => {}, minimumSpacingMs: 0 })
-  dispatcher.authorize('r1', 'consent-1')
-  const result = await dispatcher.analyze(input('r1', 'consent-1'))
-  expect(result.usage.attempts).toBe(2)
-  expect(transport.generate).toHaveBeenCalledTimes(2)
-})
-test('rejects pre-consent, stops cancelled work, and enforces shared attempt ceiling', async () => {
-  const transport: AnalysisTransport = { generate: vi.fn(async () => JSON.stringify(response)) }
-  const dispatcher = createAnalysisDispatcher({ transport, now: () => 1000, sleep: async () => {}, minimumSpacingMs: 0, maxAttempts: 1 })
-  await expect(dispatcher.analyze(input('r1', 'consent-1'))).rejects.toThrow(/consent/i)
-  dispatcher.authorize('r1', 'consent-1')
-  await dispatcher.analyze(input('r1', 'consent-1'))
-  await expect(dispatcher.analyze(input('r1', 'consent-1'))).rejects.toThrow(/budget/i)
-  expect(transport.generate).toHaveBeenCalledTimes(1)
-})
-test('concurrent generation runs cannot dispatch past the shared daily attempt limit', async () => {
-  const transport: AnalysisTransport = { generate: vi.fn(async () => JSON.stringify(response)) }
-  const dispatcher = createAnalysisDispatcher({ transport, now: () => 1000, sleep: async () => {}, minimumSpacingMs: 0, maxDailyAttempts: 1 })
-  dispatcher.authorize('first-run', 'first-consent')
-  dispatcher.authorize('second-run', 'second-consent')
-  const result = await Promise.allSettled([
-    dispatcher.generate({ ...input('first-run', 'first-consent'), responseSchema: postingAnalysisSchema }),
-    dispatcher.generate({ ...input('second-run', 'second-consent'), responseSchema: postingAnalysisSchema })
-  ])
-  expect(result.map(item => item.status)).toEqual(['fulfilled', 'rejected'])
-  expect(transport.generate).toHaveBeenCalledTimes(1)
   expect(dispatcher.getUsage()).toBe(1)
 })
 
-test('retries a transient provider failure without deadlocking the dispatcher queue', async () => {
-  let now = 1000
-  const transport: AnalysisTransport = { generate: vi.fn().mockRejectedValueOnce({ status: 503 }).mockResolvedValueOnce(JSON.stringify(response)) }
-  const dispatcher = createAnalysisDispatcher({ transport, now: () => now, sleep: async ms => { now += ms }, minimumSpacingMs: 0, random: () => 0 })
-  dispatcher.authorize('retry-run', 'consent-retry')
-  await expect(dispatcher.analyze(input('retry-run', 'consent-retry'))).resolves.toMatchObject({ analysis: response, usage: { attempts: 2, status: 'complete' } })
+test('requires the exact consent capability before dispatch', async () => {
+  const transport: AnalysisTransport = { generate: vi.fn(async () => JSON.stringify(response)) }
+  const dispatcher = dispatcherFor(transport)
+  dispatcher.authorize('r', 'accepted-consent')
+  await expect(dispatcher.analyze(input('r', 'other-consent'))).rejects.toThrow(/consent/i)
+  expect(transport.generate).not.toHaveBeenCalled()
 })
-test('validates model output categories and sanitizes provider errors', async () => {
-  const transport: AnalysisTransport = { generate: vi.fn(async () => '{"required":[" "]}') }
-  const dispatcher = createAnalysisDispatcher({ transport, now: () => 1000, sleep: async () => {}, minimumSpacingMs: 0 })
-  dispatcher.authorize('r', 'consent-r')
-  await expect(dispatcher.analyze({ ...input('r', 'consent-r'), prompt: 'secret prompt' })).rejects.toThrow(/invalid JSON/i)
+
+test('permits repeated independent authorized requests without local quotas', async () => {
+  const transport: AnalysisTransport = { generate: vi.fn(async () => JSON.stringify(response)) }
+  const dispatcher = dispatcherFor(transport)
+  dispatcher.authorize('r1', 'c1')
+  dispatcher.authorize('r2', 'c2')
+  await dispatcher.analyze(input('r1', 'c1'))
+  await dispatcher.generate({ ...input('r2', 'c2'), responseSchema: postingAnalysisSchema })
+  await dispatcher.analyze(input('r1', 'c1'))
+  expect(transport.generate).toHaveBeenCalledTimes(3)
+  expect(dispatcher.getUsage()).toBe(3)
 })
-test('does not dispatch a retry when backoff exhausts the shared time limit', async () => {
-  let now = 1000
-  const transport: AnalysisTransport = { generate: vi.fn().mockRejectedValue({ status: 503 }) }
-  const dispatcher = createAnalysisDispatcher({ transport, now: () => now, sleep: async ms => { now += ms }, minimumSpacingMs: 0, maxElapsedMs: 500, random: () => 0.5 })
-  dispatcher.authorize('paced', 'consent-paced')
-  await expect(dispatcher.analyze(input('paced', 'consent-paced'))).rejects.toThrow(/time budget/i)
-  expect(transport.generate).toHaveBeenCalledTimes(1)
+
+test('repairs one complete malformed posting response and accounts for both dispatches', async () => {
+  const transport: AnalysisTransport = { generate: vi.fn().mockResolvedValueOnce('{bad').mockResolvedValueOnce(JSON.stringify(response)) }
+  const dispatcher = dispatcherFor(transport)
+  dispatcher.authorize('repair', 'consent')
+  const result = await dispatcher.analyze(input('repair', 'consent'))
+  expect(result.usage.attempts).toBe(2)
+  expect(transport.generate).toHaveBeenCalledTimes(2)
 })
-test('duplicate active run identities are rejected without replacing the original cancellation handle', async () => {
+
+test('does not retry provider failures and sanitizes their details', async () => {
+  const transport: AnalysisTransport = { generate: vi.fn().mockRejectedValue(new Error('secret prompt and provider payload')) }
+  const dispatcher = dispatcherFor(transport)
+  dispatcher.authorize('failure', 'consent')
+  await expect(dispatcher.analyze(input('failure', 'consent'))).rejects.toThrow('The provider could not complete the request.')
+  expect(transport.generate).toHaveBeenCalledOnce()
+  expect(dispatcher.getUsage()).toBe(1)
+})
+
+test('serializes physical calls and cancels a request while queued', async () => {
+  let finish!: (value: string) => void
+  let firstStarted!: () => void
+  const started = new Promise<void>(resolve => { firstStarted = resolve })
+  const transport: AnalysisTransport = { generate: vi.fn(() => {
+    if (vi.mocked(transport.generate).mock.calls.length === 1) { firstStarted(); return new Promise<string>(resolve => { finish = resolve }) }
+    return Promise.resolve(JSON.stringify(response))
+  }) }
+  const dispatcher = dispatcherFor(transport)
+  dispatcher.authorize('first', 'c1')
+  dispatcher.authorize('queued', 'c2')
+  const first = dispatcher.generate({ ...input('first', 'c1'), responseSchema: postingAnalysisSchema })
+  await started
+  const queued = dispatcher.generate({ ...input('queued', 'c2'), responseSchema: postingAnalysisSchema })
+  dispatcher.cancel('queued')
+  finish(JSON.stringify(response))
+  await first
+  await expect(queued).rejects.toThrow(/cancelled/i)
+  expect(transport.generate).toHaveBeenCalledOnce()
+})
+
+test('discards late in-flight results after cancellation', async () => {
   let finish!: (value: string) => void
   let started!: () => void
-  const firstStarted = new Promise<void>(resolve => { started = resolve })
+  const running = new Promise<void>(resolve => { started = resolve })
   const transport: AnalysisTransport = { generate: vi.fn(() => { started(); return new Promise<string>(resolve => { finish = resolve }) }) }
-  const dispatcher = createAnalysisDispatcher({ transport, now: () => 1000, sleep: async () => {}, minimumSpacingMs: 0 })
-  dispatcher.authorize('same-run', 'consent')
-  const first = dispatcher.analyze(input('same-run', 'consent'))
-  await firstStarted
-  await expect(dispatcher.analyze(input('same-run', 'consent'))).rejects.toThrow(/already active/i)
-  dispatcher.cancel('same-run')
+  const dispatcher = dispatcherFor(transport)
+  dispatcher.authorize('active', 'consent')
+  const pending = dispatcher.analyze(input('active', 'consent'))
+  await running
+  dispatcher.cancel('active')
   finish(JSON.stringify(response))
-  await expect(first).rejects.toThrow(/cancelled/i)
-  expect(transport.generate).toHaveBeenCalledTimes(1)
-})
-
-test('cancellation interrupts an active Retry-After pause before another dispatch', async () => {
-  let startedPause!: () => void
-  const pauseStarted = new Promise<void>(resolve => { startedPause = resolve })
-  const transport: AnalysisTransport = { generate: vi.fn().mockRejectedValue({ status: 429, retryAfter: 30 }) }
-  const dispatcher = createAnalysisDispatcher({ transport, now: () => 1000, minimumSpacingMs: 0, sleep: (_ms, signal) => new Promise<void>((_resolve, reject) => { startedPause(); signal.addEventListener('abort', () => reject(new Error('sleep aborted')), { once: true }) }) })
-  dispatcher.authorize('pause-run', 'consent-pause')
-  const pending = dispatcher.analyze(input('pause-run', 'consent-pause'))
-  await pauseStarted
-  dispatcher.cancel('pause-run')
   await expect(pending).rejects.toThrow(/cancelled/i)
-  expect(transport.generate).toHaveBeenCalledTimes(1)
-})
-
-test('enforces shared rolling-window pacing and honors Retry-After before dispatch', async () => {
-  let now = 1000
-  const waits: number[] = []
-  const transport: AnalysisTransport = { generate: vi.fn().mockRejectedValueOnce({ status: 429, retryAfter: 2 }).mockResolvedValueOnce(JSON.stringify(response)) }
-  const dispatcher = createAnalysisDispatcher({ transport, now: () => now, sleep: async ms => { waits.push(ms); now += ms }, minimumSpacingMs: 0, rateLimitAttempts: 1, rateLimitWindowMs: 10000, random: () => 0 })
-  dispatcher.authorize('rate-run', 'consent-rate')
-  const result = await dispatcher.analyze(input('rate-run', 'consent-rate'))
-  expect(result.usage.attempts).toBe(2)
-  expect(waits).toContain(2000)
-  expect(waits).toContain(8000)
-})
-
-test('run ID without the matching accepted-consent capability cannot authorize analysis', async () => {
-  const transport: AnalysisTransport = { generate: vi.fn(async () => JSON.stringify(response)) }
-  const dispatcher = createAnalysisDispatcher({ transport, now: () => 1000, sleep: async () => {}, minimumSpacingMs: 0 })
-  dispatcher.authorize('r', 'real-consent')
-  await expect(dispatcher.analyze(input('r', 'guessed-consent'))).rejects.toThrow(/consent/i)
-  expect(transport.generate).not.toHaveBeenCalled()
+  expect(transport.generate).toHaveBeenCalledOnce()
 })
