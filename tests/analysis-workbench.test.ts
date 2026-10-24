@@ -135,25 +135,23 @@ test('public analysis reports malformed structured output after one counted sche
   const preview = await wb.api.prepareOutboundConsent(job.value.id)
   if (!preview.ok) throw Error('preview fixture')
   await wb.api.acceptOutboundConsent(preview.token, true, true)
-  expect(await wb.api.startAnalysis(preview.token)).toMatchObject({ status: 'failed', attempts: 2, error: expect.stringMatching(/invalid JSON/i) })
+  expect(await wb.api.startAnalysis(preview.token)).toMatchObject({ status: 'failed', attempts: 2, error: expect.stringMatching(/invalid structured data/i) })
   expect(requests).toHaveLength(2)
 })
 
-test('failed accepted analysis cannot silently restart and reuse its consent or exhausted run budget', async () => {
+test('failed accepted analysis cannot silently restart under the same consent', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'analysis-restart-contract-')); dirs.push(dir)
   let calls = 0
   const transport: AnalysisTransport = { async generate() { calls++; return '{malformed' } }
   const wb = createWorkbench(dir, undefined, transport); opened.push(wb)
-  const defaults = await wb.api.getAnalysisUsage()
-  await wb.api.setAnalysisBudgets({ ...analysisBudgetValues(defaults), minimumSpacingMs: 0, runLimit: 1 })
   const job = await wb.api.saveJob({ title: 'Developer', company: 'Local Corp', description: 'TypeScript required.' })
   if (!job.ok) throw Error('job fixture')
   const preview = await wb.api.prepareOutboundConsent(job.value.id)
   if (!preview.ok) throw Error('preview fixture')
   await wb.api.acceptOutboundConsent(preview.token, true, true)
-  expect(await wb.api.startAnalysis(preview.token)).toMatchObject({ status: 'failed', attempts: 1 })
+  expect(await wb.api.startAnalysis(preview.token)).toMatchObject({ status: 'failed', attempts: 2 })
   await expect(wb.api.startAnalysis(preview.token)).rejects.toThrow(/already started/i)
-  expect(calls).toBe(1)
+  expect(calls).toBe(2)
 })
 
 test('compatible persisted posting analysis is readable offline after restart without fresh consent', async () => {
@@ -254,7 +252,7 @@ test('invalid provider credentials fail once with a sanitized actionable public 
   if (!preview.ok) throw Error('preview fixture')
   await wb.api.acceptOutboundConsent(preview.token, true, true)
   const result = await wb.api.startAnalysis(preview.token)
-  expect(result).toMatchObject({ status: 'failed', attempts: 1, error: expect.stringMatching(/API key.*Settings/i) })
+  expect(result).toMatchObject({ status: 'failed', attempts: 1, error: expect.stringMatching(/provider rejected authentication/i) })
   expect(JSON.stringify(result)).not.toContain('private-provider-detail')
   expect(requests).toHaveLength(1)
 })

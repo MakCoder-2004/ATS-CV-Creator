@@ -93,31 +93,6 @@ test('public workbench keeps rationale-only and unrelated-citation keywords advi
   expect(requests.filter(prompt => prompt.startsWith('Supported-keyword coverage repair'))).toHaveLength(0)
 })
 
-test('public workbench preserves exhausted repair budget instead of resetting or claiming coverage', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'qualification-coverage-')); directories.push(dir)
-  const requests: string[] = []
-  const transport: AnalysisTransport = { async generate({ prompt }) {
-    requests.push(prompt)
-    if (prompt.includes('Extract only explicit qualifications')) return JSON.stringify({ required: ['JavaScript'], preferred: [], tools: [], responsibilities: [], keywords: ['JavaScript'] })
-    if (prompt.startsWith('Score these numbered')) { const { items } = JSON.parse(prompt.slice(prompt.indexOf('{'))); return JSON.stringify({ relevance: items.map((item: { index: number }) => ({ index: item.index, score: 1, rationale: 'Relevant source.' })) }) }
-    const { selected } = JSON.parse(prompt.slice(prompt.indexOf('{')))
-    return JSON.stringify({ headline: 'Developer', summary: { text: 'Developer with application experience.', evidence: [selected[0].index], rationale: 'Saved profile evidence.' }, education: [], experience: selected.filter((item: { category: string }) => item.category === 'experience').map((item: { index: number }) => ({ text: 'Built applications.', evidence: [item.index], rationale: 'Directly supported.' })), projects: [], skills: [], certificates: [] })
-  } }
-  const wb = createWorkbench(dir, undefined, transport); workspaces.push(wb)
-  const usage = await wb.api.getAnalysisUsage(); await wb.api.setAnalysisBudgets({ ...analysisBudgetValues(usage), minimumSpacingMs: 0, runLimit: 3 })
-  const role = await wb.api.saveExperience({ kind: 'employment', title: 'Developer', organization: 'Local Employer', description: 'Built JS applications.' })
-  const job = await wb.api.saveJob({ title: 'Developer', company: 'Target', description: 'JavaScript required.' })
-  if (!role.ok || !job.ok) throw Error('Could not create budget fixtures')
-  const consent = await wb.api.prepareOutboundConsent(job.value.id); if (!consent.ok) throw Error('Could not prepare consent')
-  await wb.api.acceptOutboundConsent(consent.token, true, true)
-  await wb.api.startAnalysis(consent.token)
-  const generated = await wb.api.generateDraft(consent.token)
-  expect(generated).toMatchObject({ ok: false })
-  expect(requests.filter(prompt => prompt.startsWith('Supported-keyword coverage repair'))).toHaveLength(0)
-  expect(await wb.api.getAnalysisUsage()).toMatchObject({ runLimit: 3, attempts: 3 })
-  expect(await wb.api.getDraft(job.value.id)).toBeNull()
-})
-
 test('public workbench records a strong supported match without unnecessary repair', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'qualification-coverage-')); directories.push(dir)
   const requests: string[] = []

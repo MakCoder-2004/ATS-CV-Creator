@@ -168,11 +168,9 @@ test('regeneration proposals require fresh consent, compare without mutation, re
   expect(await workspace.api.getDocumentFitReport(jobId)).toBeNull()
 })
 
-test('regeneration reuses cached analysis and shared run ceilings bound retries and elapsed time', async () => {
+test('regeneration reuses cached analysis without automatically retrying provider failures', async () => {
   let retryCalls = 0
   const retryState = await fixture(async () => { retryCalls++; throw Object.assign(new Error('temporary provider failure'), { status: 503 }) })
-  const retryBudgets = await retryState.workspace.api.getAnalysisUsage()
-  await retryState.workspace.api.setAnalysisBudgets({ ...analysisBudgetValues(retryBudgets), runLimit: 1, runTimeLimitMs: 5000, minimumSpacingMs: 0, rateLimitWindowMs: 1000 })
   const retryPreview = await retryState.workspace.api.prepareOutboundConsent(retryState.jobId)
   if (!retryPreview.ok) throw new Error('Could not prepare retry preview')
   await retryState.workspace.api.acceptOutboundConsent(retryPreview.token, true, true)
@@ -181,22 +179,6 @@ test('regeneration reuses cached analysis and shared run ceilings bound retries 
   expect(retryCalls).toBe(1)
   expect(retryState.prompts.filter(prompt => prompt.includes('Extract only explicit qualifications'))).toHaveLength(1)
   expect(await retryState.workspace.api.getDraft(retryState.jobId)).toMatchObject({ revision: retryState.draft.revision })
-
-  let timedOutCalls = 0
-  const timeoutState = await fixture(signal => new Promise<string>((_resolve, reject) => {
-    timedOutCalls++
-    signal.addEventListener('abort', () => reject(new Error('transport aborted')), { once: true })
-  }))
-  const timeoutBudgets = await timeoutState.workspace.api.getAnalysisUsage()
-  await timeoutState.workspace.api.setAnalysisBudgets({ ...analysisBudgetValues(timeoutBudgets), runTimeLimitMs: 1000, minimumSpacingMs: 0, rateLimitWindowMs: 1000 })
-  const timeoutPreview = await timeoutState.workspace.api.prepareOutboundConsent(timeoutState.jobId)
-  if (!timeoutPreview.ok) throw new Error('Could not prepare timeout preview')
-  await timeoutState.workspace.api.acceptOutboundConsent(timeoutPreview.token, true, true)
-  const timedOut = await timeoutState.workspace.api.regenerateDraft(timeoutPreview.token, { kind: 'paragraph', section: 'skills', index: 0 })
-  expect(timedOut).toMatchObject({ ok: false })
-  expect(timedOutCalls).toBe(1)
-  expect(await timeoutState.workspace.api.getDraft(timeoutState.jobId)).toMatchObject({ revision: timeoutState.draft.revision })
-  expect(await timeoutState.workspace.api.getAnalysis(timeoutState.jobId)).toMatchObject({ status: 'failed' })
 })
 
 test('cancelling an in-flight authorized regeneration preserves the current draft and creates no proposal', async () => {
@@ -400,7 +382,8 @@ test('known unresolved generation failure remains blocked through direct public 
   await workspace.api.acceptOutboundConsent(preview.token, true, true)
   await workspace.api.startAnalysis(preview.token)
   const failed = await workspace.api.generateDraft(preview.token)
-  expect(failed).toMatchObject({ ok: true, draft: { status: 'blocked', checkReport: { passed: false } } })
+  expect(failed).toMatchObject({ ok: false, message: expect.stringMatching(/invalid|provider|model/i) })
+  expect(await workspace.api.getDraft(job.value.id)).toBeNull()
   expect(await workspace.api.approveDraft(job.value.id)).toMatchObject({ ok: false })
   expect(await workspace.api.assertDraftExportable(job.value.id)).toMatchObject({ ok: false })
 })

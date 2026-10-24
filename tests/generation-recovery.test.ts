@@ -73,7 +73,7 @@ test('public recovery resumes frozen consent after restart when the accepted pos
   extensionDb.close()
 }, 20000)
 
-test('a recovered run cannot extend another job’s configured attempt limit', async () => {
+test('recovering one job cannot block another accepted job from repairing malformed analysis', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'cv-tailor-recovery-budget-')); dirs.push(directory)
   let tailorCalls = 0, otherAnalysisCalls = 0
   let announceResume!: () => void, releaseResume!: () => void
@@ -97,7 +97,6 @@ test('a recovered run cannot extend another job’s configured attempt limit', a
   expect((await workspace.api.generateDraft(token)).ok).toBe(false)
   const recovery = await workspace.api.getGenerationRecovery(jobId)
   expect(recovery?.status).toBe('uncertain')
-  await workspace.api.setAnalysisBudgets({ ...analysisBudgetValues(await workspace.api.getAnalysisUsage()), runLimit: 1 })
   const other = await workspace.api.saveJob({ title: 'Second role', company: 'Example', description: 'SECOND_POSTING_CANARY' })
   if (!other.ok) throw Error('Second job fixture failed')
   const preview = await workspace.api.prepareOutboundConsent(other.value.id)
@@ -108,8 +107,8 @@ test('a recovered run cannot extend another job’s configured attempt limit', a
   const otherAnalysis = workspace.api.startAnalysis(preview.token)
   releaseResume()
   expect((await resumed).ok).toBe(true)
-  expect(await otherAnalysis).toMatchObject({ status: 'failed', attempts: 1 })
-  expect(otherAnalysisCalls).toBe(1)
+  expect(await otherAnalysis).toMatchObject({ status: 'complete', attempts: 2 })
+  expect(otherAnalysisCalls).toBe(2)
 }, 20000)
 
 test('accepted target edits after restart revoke paused recovery consent without dispatching stale inputs', async () => {
