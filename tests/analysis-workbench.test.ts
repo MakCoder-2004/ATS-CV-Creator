@@ -4,7 +4,6 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createWorkbench } from '../src/main/workbench'
 import type { AnalysisTransport } from '../src/main/posting-analysis'
-import { analysisBudgetValues } from '../src/shared/posting-analysis'
 
 const dirs: string[] = []; const opened: Array<ReturnType<typeof createWorkbench>> = []
 afterEach(() => { for (const value of opened.splice(0)) value.close(); for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
@@ -13,8 +12,7 @@ test('public workbench analysis requires accepted preview, sends its frozen mini
   const requests: string[] = []
   const transport: AnalysisTransport = { async generate(input) { requests.push(input.prompt); return JSON.stringify({ required: ['TypeScript'], preferred: [], tools: ['TypeScript'], responsibilities: ['Build systems'], keywords: ['TypeScript'] }) } }
   const wb = createWorkbench(dir, undefined, transport); opened.push(wb)
-  const defaults = await wb.api.getAnalysisUsage()
-  await wb.api.setAnalysisBudgets({ ...analysisBudgetValues(defaults), minimumSpacingMs: 0 })
+
   const job = await wb.api.saveJob({ title: 'Developer', company: 'Local Corp', description: 'Must know TypeScript.' })
   if (!job.ok) throw Error('job fixture')
   const preview = await wb.api.prepareOutboundConsent(job.value.id)
@@ -30,7 +28,6 @@ test('public workbench analysis requires accepted preview, sends its frozen mini
   const cached = await wb.api.startAnalysis(preview.token)
   expect(cached).toMatchObject({ status: 'complete', cacheHit: true, attempts: 0 })
   expect(requests).toHaveLength(1)
-  expect(await wb.api.getAnalysisUsage()).toMatchObject({ runLimit: 12, minimumSpacingMs: 0 })
   wb.close(); opened.pop()
   const offlineTransport: AnalysisTransport = { async generate() { throw { code: 'ENOTFOUND' } } }
   const reopened = createWorkbench(dir, undefined, offlineTransport); opened.push(reopened)
@@ -99,8 +96,7 @@ test('cancelling an in-flight public run suppresses a late response and does not
   let calls = 0
   const transport: AnalysisTransport = { generate() { calls++; (calls === 1 ? started : startedSecond)(); return new Promise(resolve => { finish = resolve }) } }
   const wb = createWorkbench(dir, undefined, transport); opened.push(wb)
-  const defaults = await wb.api.getAnalysisUsage()
-  await wb.api.setAnalysisBudgets({ ...analysisBudgetValues(defaults), minimumSpacingMs: 0 })
+
   const job = await wb.api.saveJob({ title: 'Developer', company: 'Local Corp', description: 'TypeScript required.' })
   if (!job.ok) throw Error('job fixture')
   const preview = await wb.api.prepareOutboundConsent(job.value.id)
@@ -128,8 +124,7 @@ test('public analysis reports malformed structured output after one counted sche
   const requests: string[] = []
   const transport: AnalysisTransport = { async generate(input) { requests.push(input.prompt); return '{malformed' } }
   const wb = createWorkbench(dir, undefined, transport); opened.push(wb)
-  const defaults = await wb.api.getAnalysisUsage()
-  await wb.api.setAnalysisBudgets({ ...analysisBudgetValues(defaults), minimumSpacingMs: 0 })
+
   const job = await wb.api.saveJob({ title: 'Developer', company: 'Local Corp', description: 'TypeScript required.' })
   if (!job.ok) throw Error('job fixture')
   const preview = await wb.api.prepareOutboundConsent(job.value.id)
@@ -158,8 +153,7 @@ test('compatible persisted posting analysis is readable offline after restart wi
   const dir = mkdtempSync(join(tmpdir(), 'analysis-restart-cache-contract-')); dirs.push(dir)
   const transport: AnalysisTransport = { async generate() { return JSON.stringify({ required: ['TypeScript'], preferred: [], tools: [], responsibilities: [], keywords: ['TypeScript'] }) } }
   const wb = createWorkbench(dir, undefined, transport); opened.push(wb)
-  const defaults = await wb.api.getAnalysisUsage()
-  await wb.api.setAnalysisBudgets({ ...analysisBudgetValues(defaults), minimumSpacingMs: 0 })
+
   const job = await wb.api.saveJob({ title: 'Developer', company: 'Local Corp', description: 'TypeScript required.' })
   if (!job.ok) throw Error('job fixture')
   const preview = await wb.api.prepareOutboundConsent(job.value.id)
@@ -196,7 +190,7 @@ test('an active analysis blocks material posting edits and a cancelled late resp
   const startedPromise = new Promise<void>(resolve => { started = resolve })
   const transport: AnalysisTransport = { generate() { started(); return new Promise(resolve => { finish = resolve }) } }
   const wb = createWorkbench(dir, undefined, transport); opened.push(wb)
-  await wb.api.setAnalysisBudgets({ ...analysisBudgetValues(await wb.api.getAnalysisUsage()), minimumSpacingMs: 0 })
+
   const job = await wb.api.saveJob({ title: 'Developer', company: 'Local Corp', description: 'TypeScript required.' })
   if (!job.ok) throw Error('job fixture')
   const preview = await wb.api.prepareOutboundConsent(job.value.id)
@@ -219,7 +213,7 @@ test('accepted target edits expose prior posting analysis as stale until explici
   const requests: string[] = []
   const transport: AnalysisTransport = { async generate(input) { requests.push(input.prompt); return JSON.stringify({ required: [input.prompt.includes('Rust required') ? 'Rust' : 'TypeScript'], preferred: [], tools: [], responsibilities: [], keywords: [] }) } }
   const wb = createWorkbench(dir, undefined, transport); opened.push(wb)
-  await wb.api.setAnalysisBudgets({ ...analysisBudgetValues(await wb.api.getAnalysisUsage()), minimumSpacingMs: 0 })
+
   const job = await wb.api.saveJob({ title: 'Developer', company: 'Local Corp', description: 'TypeScript required.' })
   if (!job.ok) throw Error('job fixture')
   const preview = await wb.api.prepareOutboundConsent(job.value.id)

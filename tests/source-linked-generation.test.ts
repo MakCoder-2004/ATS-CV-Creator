@@ -6,7 +6,6 @@ import { randomUUID } from 'node:crypto'
 import { runSourceLinkedGraph, CitationValidationError } from '../src/main/source-linked-generation'
 import { createWorkbench } from '../src/main/workbench'
 import type { AnalysisTransport } from '../src/main/posting-analysis'
-import { analysisBudgetValues } from '../src/shared/posting-analysis'
 import type { PostingReview } from '../src/shared/posting-import'
 
 const dirs: string[] = [], opened: Array<ReturnType<typeof createWorkbench>> = []
@@ -79,7 +78,7 @@ test('posting analysis restores a display copy while cached and generated provid
     return JSON.stringify({ headline: '[[EMPLOYER_1]] Cloud Engineer', summary: { text: 'Uses [[EMPLOYER_1]] Cloud Platform.', evidence: [0], rationale: 'Saved cloud skill' }, education: [], experience: [], projects: [], certificates: [], skills: [{ name: '[[EMPLOYER_1]] Cloud Platform', evidence: [0], rationale: 'Saved skill' }] })
   } }
   const wb = createWorkbench(dir, undefined, transport); opened.push(wb)
-  await wb.api.setAnalysisBudgets({ ...analysisBudgetValues(await wb.api.getAnalysisUsage()), minimumSpacingMs: 0, rateLimitAttempts: 100, rateLimitWindowMs: 1000 })
+
   await wb.api.saveContact({ fullName: 'Local Candidate' })
   await wb.api.saveSkill({ name: 'Google Cloud Platform', category: 'Cloud' })
   const job = await wb.api.saveJob({ title: 'Google Cloud Engineer', company: 'Google', description: 'Google Cloud Platform skills required.' })
@@ -121,7 +120,7 @@ test('shortened working posting scope persists through import, generation, reope
   const body = JSON.stringify({ id: 'scope-long-role', text: 'Synthetic Application Engineer', company: 'Example Systems', descriptionPlain: sourceDescription, opening: '<p>Opening information for the fictional role.</p>', lists: [{ text: 'Requirements', content: '<li>TypeScript is required.</li>' }] })
   const fetchOptions = { lookup: async () => [{ address: '8.8.8.8', family: 4 }], request: async () => ({ status: 200, headers: { 'content-type': 'application/json' }, body: Buffer.from(body) }) }
   let wb = createWorkbench(dir, undefined, transport, undefined, fetchOptions); opened.push(wb)
-  await wb.api.setAnalysisBudgets({ ...analysisBudgetValues(await wb.api.getAnalysisUsage()), minimumSpacingMs: 0, rateLimitAttempts: 100, rateLimitWindowMs: 1000 })
+
   const savedRole = await wb.api.saveExperience({ kind: 'employment', title: 'Developer', organization: 'Example Employer', description: 'Built dependable TypeScript services.' })
   const savedSkill = await wb.api.saveSkill({ name: 'TypeScript', category: 'Programming' })
   if (!savedRole.ok || !savedSkill.ok) throw new Error('Profile fixture failed')
@@ -260,7 +259,7 @@ test('full-source proposal does not gain a shortened-scope label after later pos
   const body = JSON.stringify({ id: 'scope-long-role', text: 'Synthetic Engineer', company: 'Example Systems', descriptionPlain: sourceDescription, opening: '<p>Opening information for the fictional role.</p>', lists: [{ text: 'Requirements', content: '<li>TypeScript is required.</li>' }] })
   const fetchOptions = { lookup: async () => [{ address: '8.8.8.8', family: 4 }], request: async () => ({ status: 200, headers: { 'content-type': 'application/json' }, body: Buffer.from(body) }) }
   let wb = createWorkbench(dir, undefined, transport, undefined, fetchOptions); opened.push(wb)
-  await wb.api.setAnalysisBudgets({ ...analysisBudgetValues(await wb.api.getAnalysisUsage()), minimumSpacingMs: 0, rateLimitAttempts: 100, rateLimitWindowMs: 1000 })
+
   await wb.api.saveSkill({ name: 'TypeScript', category: 'Programming' })
   const { token: fetchToken } = await wb.api.startPostingFetch('https://api.lever.co/v0/postings/example-board/scope-long-role')
   let fetchState = await wb.api.readPostingPreview(fetchToken)
@@ -352,8 +351,7 @@ test('accepted frozen consent generates a batched source-linked draft that reope
     return JSON.stringify({ headline: 'Software Engineer', summary: { text: 'Engineer with experience building reliable services.', evidence: selected.filter((item: { category: string }) => item.category === 'experience').slice(0, 1).map((item: { index: number }) => item.index), rationale: 'Grounded in saved experience.' }, education: byCategory('education'), experience: byCategory('experience'), projects: projectOutput, skills: selected.filter((item: { category: string }) => item.category === 'skills').map((item: { index: number; text: string }) => ({ name: JSON.parse(item.text).name, evidence: [item.index], rationale: 'Profile skill matches the posting.' })), certificates: byCategory('certificates') })
   } }
   let wb = createWorkbench(dir, undefined, transport); opened.push(wb)
-  const budget = await wb.api.getAnalysisUsage()
-  await wb.api.setAnalysisBudgets({ ...analysisBudgetValues(budget), minimumSpacingMs: 0, rateLimitWindowMs: 1000 })
+
   const contact = await wb.api.saveContact({ fullName: 'Private Candidate', headline: 'Senior engineer', email: 'private@example.test' })
   expect(contact.ok).toBe(true)
   const skill = await wb.api.saveSkill({ name: 'TypeScript', category: 'Programming' })
@@ -517,8 +515,7 @@ test('cancellation during the shared semantic batch suppresses its late response
     return JSON.stringify({ headline: 'Engineer', summary: { text: 'Experienced engineer.', evidence: selected.filter((item: { category: string }) => item.category === 'experience').slice(0, 1).map((item: { index: number }) => item.index), rationale: 'Based on saved role evidence.' }, education: [], experience: selected.filter((item: { category: string }) => item.category === 'experience').map((item: { index: number; text: string }) => ({ text: item.text, evidence: [item.index], rationale: 'Relevant.' })), projects: [], skills: [], certificates: [] })
   } }
   const wb = createWorkbench(dir, undefined, transport); opened.push(wb)
-  const usage = await wb.api.getAnalysisUsage()
-  await wb.api.setAnalysisBudgets({ ...analysisBudgetValues(usage), minimumSpacingMs: 0, rateLimitWindowMs: 1000 })
+
   const role = await wb.api.saveExperience({ kind: 'employment', title: 'Engineer', organization: 'Example Org', description: 'Built reliable services.' })
   if (!role.ok) throw Error('cancel role fixture')
   const job = await wb.api.saveJob({ title: 'Engineer', company: 'Example Co', description: 'Build reliable systems.' })

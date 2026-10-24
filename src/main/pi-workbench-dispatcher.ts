@@ -29,7 +29,6 @@ export type PiWorkbenchGenerationInput = PiWorkbenchBaseInput & {
   retryProviderFailures?: boolean
   maxTokens?: number
   maxResponseChars?: number
-  runBudgetOverride?: unknown
 }
 
 export function createPiWorkbenchDispatcher(options: PiWorkbenchDispatcherOptions) {
@@ -145,7 +144,5 @@ export function createPiWorkbenchDispatcher(options: PiWorkbenchDispatcherOption
     return { text, attempts: result.attempts }
   }
 
-  const getUsage = () => 0
-  const setBudgets = () => { throw new AnalysisError("PROVIDER", "Local model-usage limits are no longer configurable.") }
-  return { authorize, cancel, isCancelled, analyze, generate, getUsage, setBudgets }
+  return { authorize, cancel, isCancelled, analyze, generate }
 }

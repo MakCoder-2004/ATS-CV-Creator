@@ -21,14 +21,7 @@ export const analysisBudgetsSchema = z.object({
   runLimit: z.number().int().min(1).max(12),
   runTimeLimitMs: z.number().int().min(1000).max(300000)
 }).strict()
-export type AnalysisBudgets = z.infer<typeof analysisBudgetsSchema>
-export const defaultAnalysisBudgets: AnalysisBudgets = { minimumSpacingMs: 5000, rateLimitAttempts: 12, rateLimitWindowMs: 300000, configuredDailyLimit: 50, runLimit: 12, runTimeLimitMs: 300000 }
-export function analysisBudgetValues(value: AnalysisBudgets): AnalysisBudgets {
-  return analysisBudgetsSchema.parse({ minimumSpacingMs: value.minimumSpacingMs, rateLimitAttempts: value.rateLimitAttempts, rateLimitWindowMs: value.rateLimitWindowMs, configuredDailyLimit: value.configuredDailyLimit, runLimit: value.runLimit, runTimeLimitMs: value.runTimeLimitMs })
-}
-export const analysisUsageSchema = analysisBudgetsSchema.extend({ pacificDay: z.string(), attempts: z.number().int().nonnegative(), warning: z.string() }).strict()
 export const analysisStartInputSchema = z.object({ consentToken: z.string().uuid() }).strict()
 export const analysisIdSchema = z.string().uuid()
 export type PostingAnalysis = z.infer<typeof postingAnalysisSchema>
 export type AnalysisResult = z.infer<typeof analysisResultSchema>
-export type AnalysisUsage = z.infer<typeof analysisUsageSchema>

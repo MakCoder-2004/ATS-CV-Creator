@@ -5,7 +5,6 @@ import { tmpdir } from 'node:os'
 import { createHash } from 'node:crypto'
 import { createWorkbench } from '../src/main/workbench'
 import type { AnalysisTransport } from '../src/main/posting-analysis'
-import { analysisBudgetValues } from '../src/shared/posting-analysis'
 import { draftRevisionSchema } from '../src/shared/draft'
 import { checkDraftFacts } from '../src/main/factual-verification'
 
@@ -38,8 +37,7 @@ test('suggested skill decisions are draft-local, stale-safe, approval-gated, and
     return JSON.stringify({ headline: 'Engineer', summary: { text: 'Engineer with relevant experience.', evidence: [selected[0].index], rationale: 'Selected source evidence.' }, education: entries('education'), experience, projects: entries('projects'), skills: [], certificates: entries('certificates') })
   } }
   let wb = createWorkbench(dir, undefined, transport); opened.push(wb)
-  const budgets = await wb.api.getAnalysisUsage()
-  await wb.api.setAnalysisBudgets({ ...analysisBudgetValues(budgets), minimumSpacingMs: 0, rateLimitAttempts: 100, rateLimitWindowMs: 1000 })
+
   await wb.api.saveSkill({ name: 'TypeScript', category: 'Programming' })
   const role = await wb.api.saveExperience({ kind: 'employment', title: 'Engineer', organization: 'Example', description: 'Built backend services.' })
   const job = await wb.api.saveJob({ title: 'Rust Engineer', company: 'Example', description: 'Rust required.' })

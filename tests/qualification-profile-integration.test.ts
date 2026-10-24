@@ -3,7 +3,6 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createWorkbench } from '../src/main/workbench'
-import { analysisBudgetValues } from '../src/shared/posting-analysis'
 import type { AnalysisTransport } from '../src/main/posting-analysis'
 
 const degreeRequirement = 'Bachelor’s degree in Computer Science, Engineering, Artificial Intelligence, Data Science, or a related field'
@@ -22,7 +21,7 @@ test('public coverage checks unselected profile facts and refreshes after profil
   try {
     workspace = createWorkbench(dir, undefined, transport)
     const api = workspace.api
-    await api.setAnalysisBudgets({ ...analysisBudgetValues(await api.getAnalysisUsage()), minimumSpacingMs: 0 })
+
     await api.saveContact({ fullName: 'Candidate' })
     const education = await api.saveProfileEntry({ section: 'education', title: 'B.Sc. in Computer Science (Data Science)', institution: 'Example University', endDate: '2024' })
     if (!education.ok) throw Error('education fixture')

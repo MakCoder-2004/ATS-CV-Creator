@@ -4,7 +4,6 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createWorkbench } from '../src/main/workbench'
 import type { AnalysisTransport } from '../src/main/posting-analysis'
-import { analysisBudgetValues } from '../src/shared/posting-analysis'
 
 const dirs: string[] = []
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
@@ -29,7 +28,7 @@ test.each(['factual', 'coverage'] as const)('%s repair never sends a restored em
   } }
   const wb = createWorkbench(dir, undefined, transport)
   try {
-    await wb.api.setAnalysisBudgets({ ...analysisBudgetValues(await wb.api.getAnalysisUsage()), minimumSpacingMs: 0 })
+
     const role = await wb.api.saveExperience({ kind: 'employment', title: 'Engineer', organization: 'Secret Employer', description: 'Built JS services at Secret Employer.' })
     const job = await wb.api.saveJob({ title: 'Engineer', company: 'Example Co', description: 'Build services.' })
     if (!role.ok || !job.ok) throw Error('Fixture could not be saved.')

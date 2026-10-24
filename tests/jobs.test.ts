@@ -9,7 +9,6 @@ import Database from 'better-sqlite3'
 import { createWorkbench } from '../src/main/workbench'
 import { createWorkspaceBackupEngine, registerWorkspaceBackupRowSizer } from '../src/main/workspace-backup'
 import type { AnalysisTransport } from '../src/main/posting-analysis'
-import { analysisBudgetValues } from '../src/shared/posting-analysis'
 import { normalizePostingUrl, samePostingSource } from '../src/shared/posting-identity'
 
 const directories: string[] = []
@@ -72,7 +71,6 @@ test('changed exact-source refresh compares all three versions and explicitly ac
     const accepted = await wb.api.acceptPostingRefresh(second.token, stagedRefresh.revision, saved.value.id, saved.value.updatedAt, saved.value.revisions.at(-1)?.revision ?? 0, { title: 'source', company: 'working', description: 'working', optionalDetails: {} })
     expect(accepted).toMatchObject({ ok: true, value: { title: 'Platform Engineer', description: initialText, sourceSnapshot: { description: refreshedText, submittedUrl: 'https://api.lever.co/v0/postings/example-board/refresh-role?utm_source=refresh' }, sourceHistory: [{ description: initialText }], revisions: [{ revision: 1 }, { revision: 2, description: initialText }] } })
     if (!accepted.ok) throw new Error(accepted.error.message)
-    expect(await wb.api.getAnalysisUsage()).toMatchObject({ attempts: 0 })
     const backup = wb.backup.createBackup()
     const backupJob = JSON.parse(JSON.parse(backup).tables.jobs.rows[0].data)
     expect(backupJob.sourceHistory[0].description).toBe(initialText)
@@ -142,8 +140,7 @@ test('accepting refreshed requirements stales prior analysis without dispatching
     const firstState = await readReady(wb.api, first.token)
     const saved = await acceptImport(wb.api, first.token, { title: firstState.preview.title, company: firstState.preview.company!, description: firstState.preview.description }, { completenessConfirmed: true, conflictResolutions: {} })
     if (!saved.ok) throw new Error(saved.error.message)
-    const usage = await wb.api.getAnalysisUsage()
-    await wb.api.setAnalysisBudgets({ ...analysisBudgetValues(usage), minimumSpacingMs: 0, rateLimitWindowMs: 1000 })
+
     const consent = await wb.api.prepareOutboundConsent(saved.value.id)
     if (!consent.ok) throw new Error(consent.message)
     expect(await wb.api.acceptOutboundConsent(consent.token, true, true)).toMatchObject({ ok: true })
@@ -159,7 +156,7 @@ test('accepting refreshed requirements stales prior analysis without dispatching
     expect(await wb.api.assertDraftExportable(saved.value.id)).toMatchObject({ ok: true })
     const earlierDraft = await wb.api.getDraft(saved.value.id)
     if (!earlierDraft) throw new Error('Approved draft disappeared.')
-    const callsBeforeRefresh = modelCalls, attemptsBeforeRefresh = (await wb.api.getAnalysisUsage()).attempts
+    const callsBeforeRefresh = modelCalls
     const metadataFetch = await wb.api.startPostingFetch('https://api.lever.co/v0/postings/example-board/refresh-target')
     const metadataState = await readReady(wb.api, metadataFetch.token)
     const metadataEdit = await wb.api.updatePostingPreview(metadataFetch.token, 0, { title: metadataState.preview.title, company: metadataState.preview.company!, description: metadataState.preview.description, optionalDetails: metadataState.preview.optionalDetails })
@@ -185,7 +182,6 @@ test('accepting refreshed requirements stales prior analysis without dispatching
     expect(await wb.api.getDraft(saved.value.id)).toMatchObject({ id: earlierDraft.id, revision: earlierDraft.revision, content: earlierDraft.content, targetPostingUpdatedAt: earlierDraft.targetPostingUpdatedAt, approved: true, coverage: { stale: true } })
     expect(await wb.api.assertDraftExportable(saved.value.id)).toMatchObject({ ok: false, message: expect.stringMatching(/earlier job posting/i) })
     expect(modelCalls).toBe(callsBeforeRefresh)
-    expect(await wb.api.getAnalysisUsage()).toMatchObject({ attempts: attemptsBeforeRefresh })
   } finally { wb.close() }
 }, 30_000)
 
@@ -249,7 +245,6 @@ test('reviewed link imports save atomically with immutable source provenance and
     const repeated = await acceptImport(imported.api, repeatedFetch.token, { title: 'Reviewed Engineer', company: 'Corrected Example Co', description: reviewedDescription }, { completenessConfirmed: true, conflictResolutions: {} })
     expect(repeated).toMatchObject({ ok: false, error: { code: 'CONFLICT', message: expect.stringMatching(/already saved|Open the existing/i) } })
     expect(await imported.api.listJobs()).toHaveLength(1)
-    expect((await imported.api.getAnalysisUsage()).attempts).toBe(0)
     const id = result.value.id
     imported.close(); importedClosed = true
     const reopened = createWorkbench(directory)
@@ -526,7 +521,6 @@ test('posting fetch previews run through the public application contract and sta
     expect(calls[0]).toEqual({ url: 'https://api.lever.co/v0/postings/example-board/synthetic-123', address: '8.8.8.8', headers: { Accept: 'application/json', 'Accept-Encoding': 'identity', 'User-Agent': 'CV-Tailor/1.0' } })
     expect(state).toMatchObject({ status: 'incomplete', preview: { title: 'Synthetic Platform Engineer', company: null, description: expect.stringContaining('• Experience with testing.') } })
     expect(await workbench.api.listJobs()).toEqual([])
-    expect((await workbench.api.getAnalysisUsage()).attempts).toBe(0)
     workbench.close()
     reopened = createWorkbench(directory)
     expect(await reopened.api.listJobs()).toEqual([])
@@ -666,7 +660,6 @@ test('posting import retries one transient response and never saves on fetch', a
     expect(attempts).toHaveLength(3)
     expect(waits.some(ms => ms > 1_000 && ms < 2_000)).toBe(true)
     expect(await workbench.api.listJobs()).toEqual([])
-    expect((await workbench.api.getAnalysisUsage()).attempts).toBe(0)
   } finally { workbench?.close() }
 })
 
@@ -951,7 +944,6 @@ test('aggregate backup guard blocks model dispatch before accounting can overrun
     expect(result).toMatchObject({ status: 'failed', attempts: 0 })
     expect(result.progress).toMatch(/backup safety limit/i)
     expect(modelDispatches).toBe(0)
-    expect((await workbench.api.getAnalysisUsage()).attempts).toBe(0)
     expect(await workbench.api.openJob(job.value.id)).toEqual(job.value)
     expect(Buffer.byteLength(workbench.backup.createBackup(), 'utf8')).toBeLessThanOrEqual(maxBytes)
   } finally { workbench.close() }

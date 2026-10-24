@@ -6,7 +6,6 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createWorkbench } from '../src/main/workbench'
 import type { AnalysisTransport } from '../src/main/posting-analysis'
-import { analysisBudgetValues } from '../src/shared/posting-analysis'
 import { mapProfilePdfPages } from '../src/shared/profile-pdf-import'
 import { registerWorkspaceBackupRowSizer } from '../src/main/workspace-backup'
 
@@ -31,8 +30,7 @@ async function fixture(regenerationTransport?: (signal: AbortSignal) => Promise<
     return JSON.stringify({ headline: 'Engineer', summary: { text: 'Engineer with saved technical skills.', evidence: [selected[0].index], rationale: 'Selected profile evidence.' }, education: [], experience: legacySources ? experienceGroups.map((group: { indexes: number[] }) => ({ text: 'Delivered saved work.', evidence: group.indexes, rationale: 'Saved role wording.' })) : [], projects: legacySources ? projectGroups.map((group: { indexes: number[] }) => ({ text: 'Delivered saved project work.', evidence: group.indexes, rationale: 'Saved project wording.' })) : [], skills: selected.filter((item: { category: string }) => item.category === 'skills').map((item: { index: number; text: string }) => ({ name: JSON.parse(item.text).name, evidence: [item.index], rationale: 'Saved skill. PRIVATE_DRAFT_RATIONALE_CANARY' })), certificates: [] })
   } }
   const workspace = createWorkbench(directory, undefined, transport); opened.push(workspace)
-  const budgets = await workspace.api.getAnalysisUsage()
-  await workspace.api.setAnalysisBudgets({ ...analysisBudgetValues(budgets), minimumSpacingMs: 0, rateLimitWindowMs: 1000 })
+
   const skill = await workspace.api.saveSkill({ name: 'TypeScript', category: 'Programming' })
   if (!skill.ok) throw new Error('Could not create source fixture')
   const legacyRole = legacySources ? await workspace.api.saveExperience({ kind: 'employment', title: 'Engineer', organization: 'Example Employer', description: 'Built systems.', factualItems: [{ text: 'Reduced failures.' }] }) : undefined
@@ -372,8 +370,7 @@ test('a populated CV merge updating a cited source makes the affected draft stal
 test('known unresolved generation failure remains blocked through direct public approval and export APIs', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'approval-failure-')); directories.push(directory)
   const workspace = createWorkbench(directory, undefined, { async generate({ prompt }) { if (prompt.includes('Extract only explicit qualifications')) return JSON.stringify({ required: ['TypeScript'], preferred: [], tools: [], responsibilities: [], keywords: ['TypeScript'] }); if (prompt.startsWith('Score these numbered')) { const { items } = JSON.parse(prompt.slice(prompt.indexOf('{'))); return JSON.stringify({ relevance: items.map((item: { index: number }) => ({ index: item.index, score: 1, rationale: 'Relevant.' })) }) } return '{bad json' } }); opened.push(workspace)
-  const budgets = await workspace.api.getAnalysisUsage()
-  await workspace.api.setAnalysisBudgets({ ...analysisBudgetValues(budgets), minimumSpacingMs: 0, rateLimitWindowMs: 1000 })
+
   await workspace.api.saveSkill({ name: 'TypeScript', category: 'Programming' })
   const job = await workspace.api.saveJob({ title: 'Engineer', company: 'Example', description: 'Build systems.' })
   if (!job.ok) throw new Error('Could not create job fixture')

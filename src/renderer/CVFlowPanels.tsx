@@ -31,7 +31,7 @@ export function GenerationProgress({ analysis, measuring, onCancel, cancelling }
         <div><strong>{step.label}</strong><span>{done ? 'Completed' : working ? step.detail : 'Waiting'}</span></div>
       </li>
     })}</ol>
-    <p role="status" aria-live="polite">{current ? `${current.label}: ${current.detail}.` : 'Preparing your authorized generation.'}{/retry|backoff|429|quota/i.test(analysis?.progress ?? '') ? ' The service is busy. Retrying within your saved limits.' : ''}</p>
+    <p role="status" aria-live="polite">{current ? `${current.label}: ${current.detail}.` : 'Preparing your authorized generation.'}</p>
     {!measuring && <button type="button" className="secondary-button" disabled={cancelling} onClick={onCancel}>Cancel generation</button>}
   </section>
 }

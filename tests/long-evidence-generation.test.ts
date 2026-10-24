@@ -4,7 +4,6 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createWorkbench } from '../src/main/workbench'
 import type { AnalysisTransport } from '../src/main/posting-analysis'
-import { analysisBudgetValues } from '../src/shared/posting-analysis'
 
 const directories: string[] = []
 afterEach(() => { for (const dir of directories.splice(0)) rmSync(dir, { recursive: true, force: true }) })
@@ -26,7 +25,7 @@ test('a long saved role can yield a concise cited one-page CV', async () => {
   } }
   const wb = createWorkbench(dir, undefined, transport)
   try {
-    await wb.api.setAnalysisBudgets({ ...analysisBudgetValues(await wb.api.getAnalysisUsage()), minimumSpacingMs: 0 })
+
     const sourceText = `Built TypeScript services. ${'Maintained the same reliable service. '.repeat(350)}`
     const role = await wb.api.saveExperience({ kind: 'employment', title: 'Engineer', organization: 'Example Employer', description: sourceText })
     const job = await wb.api.saveJob({ title: 'Engineer', company: 'Example Company', description: 'TypeScript is required.' })

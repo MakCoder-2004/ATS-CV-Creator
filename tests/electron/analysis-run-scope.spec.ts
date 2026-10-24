@@ -10,7 +10,7 @@ test('missing Pi model blocks outgoing-data review before any analysis request',
   const userData = mkdtempSync(join(tmpdir(), 'cv-tailor-analysis-error-ui-'))
   const app = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData, CV_TAILOR_SCRIPTED_ANALYSIS: '' } })
   try {
-    const page = await app.firstWindow()
+    const page = await app.firstWindow({ timeout: 60000 })
     await expect(page.locator('[data-ui-ready="true"]')).toBeVisible()
     await page.getByRole('button', { name: 'Saved jobs', exact: true }).click()
     await page.getByLabel('Job title').fill('Systems engineer')

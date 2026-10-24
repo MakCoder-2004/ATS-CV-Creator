@@ -1,4 +1,4 @@
-import { postingAnalysisSchema, type AnalysisBudgets, type PostingAnalysis } from '../shared/posting-analysis'
+import { postingAnalysisSchema, type PostingAnalysis } from '../shared/posting-analysis'
 import type { ZodTypeAny } from 'zod'
 export { postingAnalysisSchema }
 export type { PostingAnalysis }
@@ -45,8 +45,6 @@ export function createAnalysisDispatcher(options: Options) {
   const authorize = (runId: string, consentId: string) => { if (runId && consentId) authorizations.set(runId, consentId) }
   const cancel = (runId: string) => { cancelled.add(runId); active.get(runId)?.abort() }
   const isCancelled = (runId: string) => cancelled.has(runId)
-  const getUsage = () => dispatched.length
-  const setBudgets = (_value: AnalysisBudgets) => {}
 
   async function execute(input: Request, schema: ZodTypeAny, prompt: string, maxTokens?: number, maxResponseChars = MAX_RESPONSE_CHARS): Promise<{ text: string; attempts: number }> {
     if (!input.runId || !input.jobId || !input.prompt.trim() || !input.consentId || authorizations.get(input.runId) !== input.consentId) {
@@ -120,8 +118,8 @@ export function createAnalysisDispatcher(options: Options) {
     }
   }
 
-  async function generate(input: Request & { responseSchema: ZodTypeAny; retryProviderFailures?: boolean; maxTokens?: number; maxResponseChars?: number; runBudgetOverride?: Pick<AnalysisBudgets, 'runLimit' | 'runTimeLimitMs'> }): Promise<{ text: string; attempts: number }> {
+  async function generate(input: Request & { responseSchema: ZodTypeAny; retryProviderFailures?: boolean; maxTokens?: number; maxResponseChars?: number }): Promise<{ text: string; attempts: number }> {
     return execute(input, input.responseSchema, input.prompt, input.maxTokens, input.maxResponseChars)
   }
-  return { authorize, cancel, isCancelled, analyze, generate, getUsage, setBudgets }
+  return { authorize, cancel, isCancelled, analyze, generate }
 }

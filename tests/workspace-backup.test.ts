@@ -6,7 +6,6 @@ import { createHash } from 'node:crypto'
 import { createWorkbench } from '../src/main/workbench'
 import Database from 'better-sqlite3'
 import type { AnalysisTransport } from '../src/main/posting-analysis'
-import { analysisBudgetValues } from '../src/shared/posting-analysis'
 import { MAX_WORKSPACE_BACKUP_BYTES, MAX_WORKSPACE_BACKUP_POSTING_REVISIONS, MAX_WORKSPACE_BACKUP_ROW_BYTES, WORKSPACE_BACKUP_TABLE_ROW_LIMITS } from '../src/shared/workspace-backup'
 
 const directories: string[] = []
@@ -39,14 +38,13 @@ function safetyBackup(dir: string) {
   }
 }
 
-test('complete workspace backup restores draft revisions, evidence, posting, preferences and usage from real persistence without automatically dispatching', async () => {
+test('complete workspace backup restores draft revisions, evidence, posting, preferences and run history from real persistence without automatically dispatching', async () => {
   const { dir, workbench: wb } = fixture()
   const requests: string[] = []
   const capture: AnalysisTransport = { async generate(input) { requests.push(input.prompt); return scripted.generate(input) } }
   wb.close(); instances.pop()
   const active = createWorkbench(dir, undefined, capture); instances.push(active)
-  const budget = analysisBudgetValues(await active.api.getAnalysisUsage())
-  await active.api.setAnalysisBudgets({ ...budget, minimumSpacingMs: 0, rateLimitWindowMs: 1000 })
+
   const contact = await active.api.saveContact({ fullName: 'Example Candidate' })
   const skill = await active.api.saveSkill({ name: 'TypeScript', category: 'Programming' })
   if (!contact.ok || !skill.ok) throw Error('profile fixture failed')
@@ -95,8 +93,6 @@ test('complete workspace backup restores draft revisions, evidence, posting, pre
   expect((await reopened.api.getDraft(job.value.id))?.approval).toEqual(approved?.approval)
   expect(await reopened.api.getRegenerationProposal(job.value.id)).toMatchObject({ id: proposal.proposal!.id, status: 'pending' })
   expect(JSON.parse(reopened.backup.createBackup()).tables.langgraph_checkpoints.rows).toEqual(JSON.parse(backup).tables.langgraph_checkpoints.rows)
-  expect((await reopened.api.getAnalysisUsage()).attempts).toBeGreaterThan(0)
-  expect((await reopened.api.getAnalysisUsage()).minimumSpacingMs).toBe(0)
   expect(requests.length).toBe(attemptsBeforeReopen)
   expect(await reopened.api.getAnalysis(job.value.id)).toMatchObject({ status: 'complete' })
   expect(await reopened.api.assertDraftExportable(job.value.id)).toMatchObject({ ok: true })

@@ -4,7 +4,6 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createWorkbench } from '../src/main/workbench'
 import type { AnalysisTransport } from '../src/main/posting-analysis'
-import { analysisBudgetValues } from '../src/shared/posting-analysis'
 
 const workspaces: Array<ReturnType<typeof createWorkbench>> = []
 const directories: string[] = []
@@ -24,8 +23,7 @@ test('public generation contract persists a blocked editable draft when a number
     return JSON.stringify({ headline: 'Engineer', summary: { text: 'Engineer with service experience.', evidence: [experience[0].index], rationale: 'Saved role evidence.' }, education: [], experience: experience.map((item: { index: number }) => ({ text: 'Improved service throughput by 500 percent.', evidence: [item.index], rationale: 'Relevant to delivery.' })), projects: [], skills: [], certificates: [] })
   } }
   const workspace = createWorkbench(directory, undefined, transport); workspaces.push(workspace)
-  const budgets = await workspace.api.getAnalysisUsage()
-  await workspace.api.setAnalysisBudgets({ ...analysisBudgetValues(budgets), minimumSpacingMs: 0 })
+
   const role = await workspace.api.saveExperience({ kind: 'employment', title: 'Engineer', organization: 'Local Employer', description: 'Contributed to reliable TypeScript services.' })
   const job = await workspace.api.saveJob({ title: 'Engineer', company: 'Target Co', description: 'TypeScript engineering.' })
   if (!role.ok || !job.ok) throw Error('generation fixtures could not be saved')
@@ -60,8 +58,7 @@ test('public generation contract discards a provider response if its consent sco
     return JSON.stringify({ headline: 'Engineer', summary: { text: 'Engineer with service experience.', evidence: [experience[0].index], rationale: 'Saved role evidence.' }, education: [], experience: experience.map((item: { index: number; text: string }) => ({ text: item.text, evidence: [item.index], rationale: 'Relevant evidence.' })), projects: [], skills: [], certificates: [] })
   } }
   const workspace = createWorkbench(directory, undefined, transport); workspaces.push(workspace)
-  const budgets = await workspace.api.getAnalysisUsage()
-  await workspace.api.setAnalysisBudgets({ ...analysisBudgetValues(budgets), minimumSpacingMs: 0 })
+
   const role = await workspace.api.saveExperience({ kind: 'employment', title: 'Engineer', organization: 'Local Employer', description: 'Contributed to reliable TypeScript services.' })
   const job = await workspace.api.saveJob({ title: 'Engineer', company: 'Target Co', description: 'TypeScript engineering.' })
   if (!role.ok || !job.ok) throw Error('generation fixtures could not be saved')

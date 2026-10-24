@@ -7,7 +7,6 @@ import { listDraftRecords, mutateDraftRecordInputSchema } from '../src/shared/dr
 import type { DraftRevision } from '../src/shared/draft'
 import { createWorkbench } from '../src/main/workbench'
 import type { AnalysisTransport } from '../src/main/posting-analysis'
-import { analysisBudgetValues } from '../src/shared/posting-analysis'
 
 const uuid = '00000000-0000-4000-8000-000000000001'
 const dirs: string[] = [], opened: Array<ReturnType<typeof createWorkbench>> = []
@@ -53,7 +52,7 @@ async function generatedWorkspace(withGroupedExperience = false, childOnly = fal
     return JSON.stringify({ headline: 'Engineer', summary: { text: 'Engineer.', evidence: [0], rationale: 'Profile.' }, education: byCategory('education'), experience: byCategory('experience'), projects: byCategory('projects'), skills: selected.filter((item: { category: string }) => item.category === 'skills').map((item: { index: number; text: string }) => ({ name: JSON.parse(item.text).name, evidence: [item.index], rationale: 'Profile.' })), certificates: [] })
   } }
   const wb = createWorkbench(dir, undefined, transport); opened.push(wb)
-  await wb.api.setAnalysisBudgets({ ...analysisBudgetValues(await wb.api.getAnalysisUsage()), minimumSpacingMs: 0 })
+
   await wb.api.saveContact({ fullName: 'Candidate' })
   await wb.api.saveProfileEntry({ section: 'education', title: 'Degree', institution: 'School', description: 'Studied systems.' })
   await wb.api.saveExperience({ kind: 'employment', title: 'Engineer', organization: 'Org', description: 'Built services.', factualItems: withGroupedExperience ? [{ text: 'Documented APIs.' }, { text: 'Reviewed tests.' }] : [] })

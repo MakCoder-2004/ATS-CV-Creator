@@ -4,7 +4,6 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createWorkbench } from '../src/main/workbench'
 import type { AnalysisTransport } from '../src/main/posting-analysis'
-import { analysisBudgetValues } from '../src/shared/posting-analysis'
 
 const workspaces: Array<ReturnType<typeof createWorkbench>> = [], directories: string[] = []
 afterEach(() => { for (const workspace of workspaces.splice(0)) workspace.close(); for (const dir of directories.splice(0)) rmSync(dir, { recursive: true, force: true }) })
@@ -22,7 +21,7 @@ test('public workbench repairs one supported keyword, preserves absent must-have
     return JSON.stringify({ headline: 'Developer', summary: { text: 'Developer with application experience.', evidence: [experience[0].index], rationale: 'Saved role evidence.' }, education: [], experience: experience.map((item: { index: number }) => ({ text: 'Built applications.', evidence: [item.index], rationale: 'Directly supported.' })), projects: [], skills: [], certificates: [] })
   } }
   const wb = createWorkbench(dir, undefined, transport); workspaces.push(wb)
-  const usage = await wb.api.getAnalysisUsage(); await wb.api.setAnalysisBudgets({ ...analysisBudgetValues(usage), minimumSpacingMs: 0, runLimit: 4 })
+
   const role = await wb.api.saveExperience({ kind: 'employment', title: 'Developer', organization: 'Local Employer', description: 'Built JS applications.' })
   const secondRole = await wb.api.saveExperience({ kind: 'employment', title: 'Engineer', organization: 'Local Employer', description: 'Built JS services.' })
   const job = await wb.api.saveJob({ title: 'Developer', company: 'Target', description: 'JavaScript and leadership required; Kubernetes preferred.' })
@@ -53,7 +52,7 @@ test.each(['wrong-index', 'wrong-section', 'wrong-citation', 'unsupported-claim'
     return JSON.stringify({ headline: 'Developer', summary: { text: 'Developer with application experience.', evidence: [item.index], rationale: 'Saved role evidence.' }, education: [], experience: [{ text: 'Built applications.', evidence: [item.index], rationale: 'Directly supported.' }], projects: [], skills: [], certificates: [] })
   } }
   const wb = createWorkbench(dir, undefined, transport); workspaces.push(wb)
-  const usage = await wb.api.getAnalysisUsage(); await wb.api.setAnalysisBudgets({ ...analysisBudgetValues(usage), minimumSpacingMs: 0 })
+
   const role = await wb.api.saveExperience({ kind: 'employment', title: 'Developer', organization: 'Local Employer', description: 'Built JS applications.' })
   const job = await wb.api.saveJob({ title: 'Developer', company: 'Target', description: 'JavaScript required.' })
   if (!role.ok || !job.ok) throw Error('Could not create correction fixtures')
@@ -79,7 +78,7 @@ test('public workbench keeps rationale-only and unrelated-citation keywords advi
     return JSON.stringify({ headline: 'Developer', summary: { text: 'Developer with application experience.', evidence: [unrelated.index], rationale: 'Saved role evidence.' }, education: [], experience: selected.filter((item: { category: string }) => item.category === 'experience').map((item: { index: number }) => ({ text: 'Built useful applications.', evidence: [item.index], rationale: 'JavaScript is relevant.' })), projects: [], skills: [], certificates: [] })
   } }
   const wb = createWorkbench(dir, undefined, transport); workspaces.push(wb)
-  const usage = await wb.api.getAnalysisUsage(); await wb.api.setAnalysisBudgets({ ...analysisBudgetValues(usage), minimumSpacingMs: 0 })
+
   const unrelated = await wb.api.saveExperience({ kind: 'employment', title: 'Developer', organization: 'Local Employer', description: 'Unrelated application delivery.' })
   const keyword = await wb.api.saveExperience({ kind: 'employment', title: 'Engineer', organization: 'Local Employer', description: 'Used JavaScript on production services.' })
   const job = await wb.api.saveJob({ title: 'Developer', company: 'Target', description: 'JavaScript required.' })
@@ -104,7 +103,7 @@ test('public workbench records a strong supported match without unnecessary repa
     return JSON.stringify({ headline: 'Engineer', summary: { text: 'Engineer with service experience.', evidence: [selected[0].index], rationale: 'Saved profile evidence.' }, education: [], experience: selected.filter((item: { category: string }) => item.category === 'experience').map((item: { index: number; text: string }) => ({ text: item.text, evidence: [item.index], rationale: 'Directly supported.' })), projects: [], skills: [], certificates: [] })
   } }
   const wb = createWorkbench(dir, undefined, transport); workspaces.push(wb)
-  const usage = await wb.api.getAnalysisUsage(); await wb.api.setAnalysisBudgets({ ...analysisBudgetValues(usage), minimumSpacingMs: 0 })
+
   const role = await wb.api.saveExperience({ kind: 'employment', title: 'Engineer', organization: 'Local Employer', description: 'Built TypeScript services.' })
   const job = await wb.api.saveJob({ title: 'Engineer', company: 'Target', description: 'TypeScript required.' })
   if (!role.ok || !job.ok) throw Error('Could not create strong-match fixtures')

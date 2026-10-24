@@ -5,16 +5,13 @@ import { join } from 'node:path'
 import Database from 'better-sqlite3'
 import { createWorkbench } from '../src/main/workbench'
 import type { AnalysisTransport } from '../src/main/posting-analysis'
-import { analysisBudgetValues } from '../src/shared/posting-analysis'
 import { registerWorkspaceBackupRowSizer } from '../src/main/workspace-backup'
 
 const dirs: string[] = []
 const opened: Array<ReturnType<typeof createWorkbench>> = []
 afterEach(() => { for (const item of opened.splice(0)) item.close(); for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }) })
 
-async function seed(workspace: ReturnType<typeof createWorkbench>, runLimit = 12) {
-  const budget = await workspace.api.getAnalysisUsage()
-  await workspace.api.setAnalysisBudgets({ ...analysisBudgetValues(budget), minimumSpacingMs: 0, rateLimitWindowMs: 1000, runLimit })
+async function seed(workspace: ReturnType<typeof createWorkbench>) {
   const role = await workspace.api.saveExperience({ kind: 'employment', title: 'Engineer', organization: 'Frozen Employer', description: 'Built durable systems.' })
   const job = await workspace.api.saveJob({ title: 'Engineer', company: 'Target Inc', description: 'Original posting wording.' })
   if (!role.ok || !job.ok) throw new Error('Recovery fixture could not be saved')
@@ -48,7 +45,7 @@ test('public recovery resumes frozen consent after restart when the accepted pos
   })
   const capturing: AnalysisTransport = { async generate(input) { prompts.push(input.prompt); const answer = await transport.generate(input); if (answer) return answer; const { selected } = JSON.parse(input.prompt.slice(input.prompt.indexOf('{'))); return JSON.stringify({ headline: 'Engineer', summary: { text: 'Engineer with relevant evidence.', evidence: [selected[0].index], rationale: 'Selected profile evidence.' }, education: [], experience: selected.filter((item: { category: string }) => item.category === 'experience').map((item: { index: number; text: string }) => ({ text: item.text, evidence: [item.index], rationale: 'Relevant.' })), projects: [], skills: [], certificates: [] }) } }
   let workspace = createWorkbench(directory, undefined, capturing); opened.push(workspace)
-  const { jobId, token } = await seed(workspace, 3)
+  const { jobId, token } = await seed(workspace)
   expect(await workspace.api.generateDraft(token)).toMatchObject({ ok: false })
   const recovery = await workspace.api.getGenerationRecovery(jobId)
   expect(recovery).toMatchObject({ status: 'uncertain', attempts: 3, uncertainAttempts: 1, canResume: true })
@@ -57,8 +54,7 @@ test('public recovery resumes frozen consent after restart when the accepted pos
   workspace = createWorkbench(directory, undefined, capturing); opened.push(workspace)
   expect((await workspace.api.getGenerationRecovery(jobId))?.runId).toBe(recovery?.runId)
   expect(prompts).toHaveLength(3)
-  const savedBudget = await workspace.api.getAnalysisUsage()
-  await workspace.api.setAnalysisBudgets({ ...analysisBudgetValues(savedBudget), runLimit: 4 })
+
   const resumed = await workspace.api.resumeGeneration(recovery!.runId, 'retry-uncertain')
   expect(resumed.ok).toBe(true)
   expect((await workspace.api.openJob(jobId))?.description).toBe('Original posting wording.')
@@ -67,10 +63,9 @@ test('public recovery resumes frozen consent after restart when the accepted pos
   expect(prompts.at(-1)).toContain('Original posting wording.')
   expect(await workspace.api.getGenerationRecovery(jobId)).toBeNull()
   workspace.close(); opened.pop()
-  const extensionDb = new Database(join(directory, 'workbench.sqlite'))
-  expect(extensionDb.prepare('SELECT prior_run_limit,new_run_limit FROM generation_recovery_extensions WHERE run_id=?').get(recovery!.runId)).toEqual({ prior_run_limit: 3, new_run_limit: 4 })
-  expect(extensionDb.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id=?').get(recovery!.runId)).toMatchObject({ count: 4 })
-  extensionDb.close()
+  const attemptsDb = new Database(join(directory, 'workbench.sqlite'))
+  expect(attemptsDb.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id=?').get(recovery!.runId)).toMatchObject({ count: 4 })
+  attemptsDb.close()
 }, 20000)
 
 test('recovering one job cannot block another accepted job from repairing malformed analysis', async () => {
@@ -93,7 +88,7 @@ test('recovering one job cannot block another accepted job from repairing malfor
     return ordinary.generate(input)
   } }
   const workspace = createWorkbench(directory, undefined, transport); opened.push(workspace)
-  const { jobId, token } = await seed(workspace, 4)
+  const { jobId, token } = await seed(workspace)
   expect((await workspace.api.generateDraft(token)).ok).toBe(false)
   const recovery = await workspace.api.getGenerationRecovery(jobId)
   expect(recovery?.status).toBe('uncertain')
@@ -121,7 +116,7 @@ test('accepted target edits after restart revoke paused recovery consent without
   })
   const capturing: AnalysisTransport = { async generate(input) { prompts.push(input.prompt); const answer = await transport.generate(input); if (answer) return answer; const { selected } = JSON.parse(input.prompt.slice(input.prompt.indexOf('{'))); return JSON.stringify({ headline: 'Engineer', summary: { text: 'Engineer with relevant evidence.', evidence: [selected[0].index], rationale: 'Selected profile evidence.' }, education: [], experience: selected.filter((item: { category: string }) => item.category === 'experience').map((item: { index: number; text: string }) => ({ text: item.text, evidence: [item.index], rationale: 'Relevant.' })), projects: [], skills: [], certificates: [] }) } }
   let workspace = createWorkbench(directory, undefined, capturing); opened.push(workspace)
-  const { jobId, token } = await seed(workspace, 3)
+  const { jobId, token } = await seed(workspace)
   const interrupted = await workspace.api.generateDraft(token)
   expect(interrupted.ok).toBe(false)
   const recovery = await workspace.api.getGenerationRecovery(jobId)
@@ -134,14 +129,11 @@ test('accepted target edits after restart revoke paused recovery consent without
   const changedJob = await workspace.api.saveJob({ id: jobId, title: 'Changed target', company: 'New company', description: 'Changed posting must not replace frozen inputs.' })
   expect(changedJob.ok).toBe(true)
   expect(await workspace.api.getAnalysis(jobId)).toMatchObject({ status: 'stale', progress: expect.stringMatching(/may be uncertain.*cannot resume/i) })
-  const savedBudget = await workspace.api.getAnalysisUsage()
-  await workspace.api.setAnalysisBudgets({ ...analysisBudgetValues(savedBudget), runLimit: 4 })
+
   const requestsBeforeResume = prompts.length
-  const attemptsBeforeResume = (await workspace.api.getAnalysisUsage()).attempts
   const resumed = await workspace.api.resumeGeneration(recovery!.runId, 'retry-uncertain')
   expect(resumed).toMatchObject({ ok: false, message: expect.stringMatching(/no longer resumable|no recoverable|consent.*revoked/i) })
   expect(prompts).toHaveLength(requestsBeforeResume)
-  expect((await workspace.api.getAnalysisUsage()).attempts).toBe(attemptsBeforeResume)
   expect(await workspace.api.getGenerationRecovery(jobId)).toBeNull()
   expect(await workspace.api.getDraft(jobId)).toBeNull()
   workspace.close(); opened.pop()
@@ -195,7 +187,7 @@ test('an uncertain dispatched request requires an explicit duplicate-risk choice
   const directory = mkdtempSync(join(tmpdir(), 'cv-tailor-uncertain-recovery-')); dirs.push(directory)
   const initialTransport = recoveryTransport(async () => { throw Object.assign(new Error('response was interrupted'), { code: 'ECONNRESET' }) })
   let workspace = createWorkbench(directory, undefined, initialTransport); opened.push(workspace)
-  const { jobId, token } = await seed(workspace, 3)
+  const { jobId, token } = await seed(workspace)
   expect((await workspace.api.generateDraft(token)).ok).toBe(false)
   const paused = await workspace.api.getGenerationRecovery(jobId)
   expect(paused).toMatchObject({ status: 'uncertain', uncertainAttempts: 1 })
@@ -209,8 +201,7 @@ test('an uncertain dispatched request requires an explicit duplicate-risk choice
   const declined = await workspace.api.resumeGeneration(recovery!.runId)
   expect(declined).toMatchObject({ ok: false, message: expect.stringMatching(/uncertain|explicitly/i) })
   expect(retryRequests).toBe(0)
-  const budget = await workspace.api.getAnalysisUsage()
-  await workspace.api.setAnalysisBudgets({ ...analysisBudgetValues(budget), runLimit: 4 })
+
   const resumed = await workspace.api.resumeGeneration(recovery!.runId, 'retry-uncertain')
   expect(resumed.ok).toBe(true)
   expect(retryRequests).toBe(1)

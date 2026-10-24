@@ -23,8 +23,7 @@ import { regenerationProposalSchema, regenerationTargetSchema, type Regeneration
 import { outboundConsentActionSchema, outboundConsentPreviewSchema } from '../shared/outbound-consent-contract'
 import { AnalysisError, createAnalysisDispatcher, type AnalysisTransport } from './posting-analysis'
 import { z } from 'zod'
-import { analysisBudgetsSchema, analysisResultSchema, analysisUsageSchema, defaultAnalysisBudgets, generationRecoverySchema, postingAnalysisSchema, displayPostingAnalysisSchema, type AnalysisBudgets, type AnalysisResult, type RecoveryChoice } from '../shared/posting-analysis'
-import { pacificDay } from '../shared/pacific-day'
+import { analysisBudgetsSchema, analysisResultSchema, generationRecoverySchema, postingAnalysisSchema, displayPostingAnalysisSchema, type AnalysisResult, type RecoveryChoice } from '../shared/posting-analysis'
 import { addDraftItemInputSchema, draftCorrectionInputSchema, draftRevisionSchema, suggestedSkillDecisionSchema, draftTailoringCorrectionSchema, type DraftRevision } from '../shared/draft'
 import { mutateDraftRecordInputSchema, type MutateDraftRecordInput } from '../shared/draft-records'
 import { CitationValidationError, IncompatibleGenerationCheckpointError, runSourceLinkedGraph } from './source-linked-generation'
@@ -238,11 +237,6 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
   const analysisCacheKey = (source: ConsentSource) => createHash('sha256').update(JSON.stringify({ job: { title: source.job.title, company: source.job.company, description: source.job.description }, minimizedPosting: prepareOutboundBundle(source).outgoing.job, model: source.model, prompt: 'posting-analysis-v3', schema: JSON.stringify(z.toJSONSchema(postingAnalysisSchema)) })).digest('hex')
   const activeAnalysisByJob = new Map<string, string>()
   const recoveredRunIds = new Set<string>()
-  const readAnalysisBudgets = (): AnalysisBudgets => {
-    const row = db.prepare('SELECT value FROM settings WHERE key = ?').get('analysis-budgets') as { value: string } | undefined
-    try { return analysisBudgetsSchema.parse(row ? JSON.parse(row.value) : defaultAnalysisBudgets) } catch { return defaultAnalysisBudgets }
-  }
-  const previousAttempts = (db.prepare('SELECT attempted_at FROM analysis_attempts').all() as { attempted_at: string }[]).map(row => Date.parse(row.attempted_at)).filter(Number.isFinite)
   const activeProfileAiRuns = new Set<string>()
   const profileAiSelections = new Map<string, PiModelSelection>()
   const readPiSelection = (): PiModelSelection | null => {
@@ -254,7 +248,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
   const fixtureTransport: AnalysisTransport | undefined = scriptedTransport && {
     generate: input => scriptedTransport.generate(input)
   }
-  const dispatcher = scriptedTransport ? createAnalysisDispatcher({ transport: fixtureTransport!, onAttempt: (timestamp, runId) => { const dispatchedAt = new Date(timestamp).toISOString(); db.transaction(() => { db.prepare('INSERT INTO analysis_attempts (run_id, attempted_at) VALUES (?, ?)').run(runId, dispatchedAt); db.prepare('INSERT INTO provider_attempt_outcomes (run_id, dispatched_at, outcome) VALUES (?, ?, \'dispatched\')').run(runId, dispatchedAt) })(); previousAttempts.push(timestamp) }, onAttemptComplete: (runId, received) => { db.prepare("UPDATE provider_attempt_outcomes SET outcome=?, settled_at=? WHERE id=(SELECT id FROM provider_attempt_outcomes WHERE run_id=? AND outcome='dispatched' AND checkpointed_at IS NULL ORDER BY id DESC LIMIT 1)").run(received ? 'response' : 'error', new Date().toISOString(), runId) }, onProgress: (runId, jobId, progress, attempts) => { if (jobId.startsWith('profile-import:')) return; const observed = (db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id = ?').get(runId) as { count: number }).count; const prior = currentAnalysis.get(jobId), sameRun = prior?.runId === runId; saveAnalysisState({ jobId, runId, status: 'running', analysis: sameRun ? prior.analysis : null, progress, attempts: observed || attempts, cacheHit: sameRun ? prior.cacheHit : false, ...(sameRun && prior.generationStep ? { generationStep: prior.generationStep } : {}), ...(sameRun && prior.completedSteps ? { completedSteps: prior.completedSteps } : {}) }) } }) : createPiWorkbenchDispatcher({
+  const dispatcher = scriptedTransport ? createAnalysisDispatcher({ transport: fixtureTransport!, onAttempt: (timestamp, runId) => { const dispatchedAt = new Date(timestamp).toISOString(); db.transaction(() => { db.prepare('INSERT INTO analysis_attempts (run_id, attempted_at) VALUES (?, ?)').run(runId, dispatchedAt); db.prepare('INSERT INTO provider_attempt_outcomes (run_id, dispatched_at, outcome) VALUES (?, ?, \'dispatched\')').run(runId, dispatchedAt) })() }, onAttemptComplete: (runId, received) => { db.prepare("UPDATE provider_attempt_outcomes SET outcome=?, settled_at=? WHERE id=(SELECT id FROM provider_attempt_outcomes WHERE run_id=? AND outcome='dispatched' AND checkpointed_at IS NULL ORDER BY id DESC LIMIT 1)").run(received ? 'response' : 'error', new Date().toISOString(), runId) }, onProgress: (runId, jobId, progress, attempts) => { if (jobId.startsWith('profile-import:')) return; const observed = (db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id = ?').get(runId) as { count: number }).count; const prior = currentAnalysis.get(jobId), sameRun = prior?.runId === runId; saveAnalysisState({ jobId, runId, status: 'running', analysis: sameRun ? prior.analysis : null, progress, attempts: observed || attempts, cacheHit: sameRun ? prior.cacheHit : false, ...(sameRun && prior.generationStep ? { generationStep: prior.generationStep } : {}), ...(sameRun && prior.completedSteps ? { completedSteps: prior.completedSteps } : {}) }) } }) : createPiWorkbenchDispatcher({
     runtime: piRuntime ?? Promise.resolve(null),
     selectionForRun: runId => {
       const source = [...pendingOutbound.values()].find(pending => pending.runId === runId)?.source.model
@@ -1194,7 +1188,6 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       }
       const latestScope = resumeRunId ? null : currentConsentSource(pending.jobId)
       if (!resumeRunId && (!latestScope || prepareOutboundBundle(latestScope).scopeHash !== pending.bundle.scopeHash)) return { ok: false, message: 'Your job, profile, or model settings changed after consent. Review the outgoing data again.' }
-      const runBudgetOverride = frozen?.version === 1 ? { runLimit: frozen.budgets.runLimit, runTimeLimitMs: frozen.budgets.runTimeLimitMs } : undefined
       const analysis = frozen?.analysis ?? await this.getAnalysis(pending.jobId)
       if (!analysis || analysis.status !== 'complete' || !analysis.analysis) return { ok: false, message: 'Complete posting analysis before generating a draft.' }
       if (!resumeRunId && (!startedAnalysisTokens.has(token) || analysis.runId !== pending.runId)) return { ok: false, message: 'Complete posting analysis for this run before generating a draft. Saved analysis can be reused without another provider request.' }
@@ -1239,8 +1232,9 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       if (!resumeRunId) {
         const data = { runId: pending.runId, jobId: pending.jobId, consentId: pending.consentId, scopeHash: pending.bundle.scopeHash, analysis, job, profile, experience, draftInputs, safeItems, identity: failedDraftIdentity, pageTarget, source: pending.source, faithfulnessCheck: pending.faithfulnessCheck }
         const sourceModel = pending.source.model
+        // Version 1 is kept only for scripted legacy recovery fixtures; Pi runs store version 2 without budgets.
         const snapshot = generationRecoverySnapshotSchema.parse(scriptedTransport
-          ? { ...data, version: 1, budgets: readAnalysisBudgets() }
+          ? { ...data, version: 1, budgets: analysisBudgetsSchema.parse({ minimumSpacingMs: 0, rateLimitAttempts: 100, rateLimitWindowMs: 86400000, configuredDailyLimit: 10000, runLimit: 12, runTimeLimitMs: 300000 }) }
           : { ...data, version: 2, model: piModelSelectionSchema.parse({ providerId: sourceModel.providerId, modelId: sourceModel.name, thinkingLevel: sourceModel.thinkingLevel }) })
         db.prepare('INSERT OR REPLACE INTO generation_recovery (run_id,job_id,consent_id,scope_hash,status,snapshot,updated_at) VALUES (?,?,?,?,?,?,?)').run(pending.runId,pending.jobId,pending.consentId,pending.bundle.scopeHash,'running',JSON.stringify(snapshot),new Date().toISOString())
       }
@@ -1248,7 +1242,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       try {
         const result = await runSourceLinkedGraph({ job: approvedPayload.job, analysis: analysis.analysis, items: safeItems, savedSkillNames: profile.skills.map(skill => skill.name), sourceJobRevision: pending.source.job.revision, pageTarget, restoreText: pending.bundle.restoreIdentifiers, checkpointer: graphCheckpointer, threadId: pending.runId, resume: Boolean(resumeRunId), onProgress: (progress, generationStep, completedSteps) => { const observed = (db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id = ?').get(pending.runId) as { count: number }).count; saveAnalysisState({ jobId: pending.jobId, runId: pending.runId, status: 'running', analysis: analysis.analysis, progress, attempts: observed, cacheHit: analysis.cacheHit, generationStep, completedSteps }) }, identity: failedDraftIdentity, call: async (prompt, responseSchema) => {
           authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
-          const generated = await dispatcher.generate({ runId: pending.runId, jobId: pending.jobId, model: transportModel(pending.source.model.name), prompt, consentId: pending.consentId!, responseSchema, runBudgetOverride })
+          const generated = await dispatcher.generate({ runId: pending.runId, jobId: pending.jobId, model: transportModel(pending.source.model.name), prompt, consentId: pending.consentId!, responseSchema })
           authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
           return { value: responseSchema.parse(JSON.parse(generated.text)), attempts: generated.attempts }
         } })
@@ -1267,7 +1261,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
             return { finding, section, index, text: item && ('text' in item ? item.text : item.name), citedEvidence: item?.citations.map(citation => ({ ...citation, text: safeItems.find(source => source.id === citation.evidenceId)?.text ?? '' })) }
           })
           authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
-          const repair = await dispatcher.generate({ runId: pending.runId, jobId: pending.jobId, model: transportModel(pending.source.model.name), consentId: pending.consentId!, responseSchema: repairSchema, runBudgetOverride, prompt: minimizeGeneratedPrompt(`Factual repair cycle ${cycle + 1} of 2. Correct only the listed failing draft items using only their cited evidence. Preserve every unaffected item. Never infer facts or use uncited evidence. Return corrections for failed item paths only; keep citation IDs/revisions from the supplied evidence. If no safe correction is possible, remove that item by returning no correction for it.\n${JSON.stringify({ findings: failedItems })}`) })
+          const repair = await dispatcher.generate({ runId: pending.runId, jobId: pending.jobId, model: transportModel(pending.source.model.name), consentId: pending.consentId!, responseSchema: repairSchema, prompt: minimizeGeneratedPrompt(`Factual repair cycle ${cycle + 1} of 2. Correct only the listed failing draft items using only their cited evidence. Preserve every unaffected item. Never infer facts or use uncited evidence. Return corrections for failed item paths only; keep citation IDs/revisions from the supplied evidence. If no safe correction is possible, remove that item by returning no correction for it.\n${JSON.stringify({ findings: failedItems })}`) })
           authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
           repairAttempts += repair.attempts
           const response = repairSchema.parse(JSON.parse(repair.text))
@@ -1289,7 +1283,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
             const priorItem = result.draft.content[eligible.section][eligible.index]
             const priorText = 'text' in priorItem ? priorItem.text : priorItem.name
             authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
-            const coverageRepair = await dispatcher.generate({ runId: pending.runId, jobId: pending.jobId, model: transportModel(pending.source.model.name), consentId: pending.consentId!, responseSchema: repairSchema, runBudgetOverride, prompt: minimizeGeneratedPrompt(`Supported-keyword coverage repair (single exact item). Add only the explicitly supported term to this authored text. Preserve all existing wording, responsibility, scope, ownership, skill level, certainty, and citations exactly; do not change any other item. Return zero or one correction, only for the supplied section/index.\n${JSON.stringify({ opportunity: { qualification: opportunity.qualification, matchedAs: opportunity.matchedAs, section: eligible.section, index: eligible.index, evidenceId: eligible.evidenceId, revision: eligible.revision }, text: priorText, evidence: safeItems.find(source => source.id === eligible.evidenceId)?.text })}`) })
+            const coverageRepair = await dispatcher.generate({ runId: pending.runId, jobId: pending.jobId, model: transportModel(pending.source.model.name), consentId: pending.consentId!, responseSchema: repairSchema, prompt: minimizeGeneratedPrompt(`Supported-keyword coverage repair (single exact item). Add only the explicitly supported term to this authored text. Preserve all existing wording, responsibility, scope, ownership, skill level, certainty, and citations exactly; do not change any other item. Return zero or one correction, only for the supplied section/index.\n${JSON.stringify({ opportunity: { qualification: opportunity.qualification, matchedAs: opportunity.matchedAs, section: eligible.section, index: eligible.index, evidenceId: eligible.evidenceId, revision: eligible.revision }, text: priorText, evidence: safeItems.find(source => source.id === eligible.evidenceId)?.text })}`) })
             authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
             coverageRepairAttempts = coverageRepair.attempts
             const response = repairSchema.parse(JSON.parse(coverageRepair.text))
@@ -1330,7 +1324,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
             const attemptsBeforeReview = (db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id = ?').get(pending.runId) as { count: number }).count
             try {
               authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
-              const review = await dispatcher.generate({ runId: pending.runId, jobId: pending.jobId, model: transportModel(pending.source.model.name), consentId: pending.consentId!, responseSchema: semanticSchema, runBudgetOverride, prompt: `Compare all rewritten/source pairs in this single structured batch. Report each exact itemPath once. Mark unsupported only when the rewrite adds or strengthens factual meaning beyond its cited source. This is a second opinion, not proof. Do not rewrite content or request more data.\n${JSON.stringify({ pairs: finalSemanticPairs })}` })
+              const review = await dispatcher.generate({ runId: pending.runId, jobId: pending.jobId, model: transportModel(pending.source.model.name), consentId: pending.consentId!, responseSchema: semanticSchema, prompt: `Compare all rewritten/source pairs in this single structured batch. Report each exact itemPath once. Mark unsupported only when the rewrite adds or strengthens factual meaning beyond its cited source. This is a second opinion, not proof. Do not rewrite content or request more data.\n${JSON.stringify({ pairs: finalSemanticPairs })}` })
               authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
               semanticAttempts += review.attempts
               const parsed = semanticSchema.parse(JSON.parse(review.text))
@@ -1347,7 +1341,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
               const attemptsAfterReview = (db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id = ?').get(pending.runId) as { count: number }).count
               semanticAttempts = attemptsAfterReview - attemptsBeforeReview
               const reason = error instanceof AnalysisError ? error.code.toLowerCase() : 'malformed structured output'
-              semanticFindings.push({ code: 'semantic-unsupported', itemPath: 'faithfulness', ...findingOrigin, message: `Optional faithfulness review did not complete (${reason}); generated wording was retained but remains blocked.`, correction: 'Retry with a fresh authorized run when the shared request/time budget permits. This check is a second opinion, not proof.' })
+              semanticFindings.push({ code: 'semantic-unsupported', itemPath: 'faithfulness', ...findingOrigin, message: `Optional faithfulness review did not complete (${reason}); generated wording was retained but remains blocked.`, correction: 'Review the cited sources and authorize a fresh run if you want another model check. This check is a second opinion, not proof.' })
             }
           }
         }
@@ -1496,7 +1490,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
         return { ok: true, message: proposal.progress, proposal }
       } catch (error) {
         const cancelled = error instanceof AnalysisError && error.code === 'CANCELLED'
-        const message = cancelled ? 'Regeneration was cancelled; the current draft was preserved.' : 'Replacement generation failed safely; the current draft was preserved. Review inputs and budget, then start a fresh authorized operation.'
+        const message = cancelled ? 'Regeneration was cancelled; the current draft was preserved.' : 'Replacement generation failed safely; the current draft was preserved. Review the source text and Pi model, then start a fresh authorized operation.'
         saveAnalysisState({ jobId: pending.jobId, runId, status: cancelled ? 'cancelled' : 'failed', analysis: analysisResult.analysis, progress: message, attempts: (db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id = ?').get(runId) as { count: number }).count, error: message, cacheHit: analysisResult.cacheHit })
         return { ok: false, message }
       } finally { if (activeAnalysisByJob.get(pending.jobId) === runId) activeAnalysisByJob.delete(pending.jobId) }
@@ -1926,14 +1920,6 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       const token = randomUUID()
       pendingOutbound.set(token, { jobId: row.job_id, source: frozen.source, bundle, runId, faithfulnessCheck: frozen.faithfulnessCheck, consentId: consent.id })
       dispatcher.authorize(runId, consent.id)
-      if (frozen.version === 1) {
-        const priorBudgets = frozen.budgets, configuredBudgets = readAnalysisBudgets()
-        const effectiveBudgets = { ...priorBudgets, runLimit: Math.max(priorBudgets.runLimit, configuredBudgets.runLimit), runTimeLimitMs: Math.max(priorBudgets.runTimeLimitMs, configuredBudgets.runTimeLimitMs) }
-        if (effectiveBudgets.runLimit !== priorBudgets.runLimit || effectiveBudgets.runTimeLimitMs !== priorBudgets.runTimeLimitMs) {
-          db.prepare('INSERT INTO generation_recovery_extensions (run_id,prior_run_limit,new_run_limit,prior_time_limit_ms,new_time_limit_ms,recorded_at) VALUES (?,?,?,?,?,?)').run(runId, priorBudgets.runLimit, effectiveBudgets.runLimit, priorBudgets.runTimeLimitMs, effectiveBudgets.runTimeLimitMs, new Date().toISOString())
-          db.prepare('UPDATE generation_recovery SET snapshot=?,updated_at=? WHERE run_id=?').run(JSON.stringify({ ...frozen, budgets: effectiveBudgets }), new Date().toISOString(), runId)
-        }
-      }
       recoveredRunIds.add(runId)
       const resume = api.generateDraft as (token: string, pageTarget: 1 | 2, runId: string) => Promise<{ ok: boolean; message: string }>
       const result = await resume(token, frozen.pageTarget, runId)
@@ -1949,24 +1935,6 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       db.prepare("UPDATE generation_recovery SET status='cancelled',updated_at=? WHERE run_id=?").run(new Date().toISOString(), runId)
       recoveredRunIds.delete(runId)
       return { ok: true, message: 'Saved generation cancelled. Its draft and usage history are retained.' }
-    },
-    async getAnalysisUsage() {
-      const day = pacificDay(Date.now())
-      const attempts = previousAttempts.filter(timestamp => pacificDay(timestamp) === day).length
-      const budgets = readAnalysisBudgets()
-      const localNotice = 'Local observations and configured app limits only; other clients or keys are not visible. These are not OpenRouter account limits.'
-      const now = Date.now()
-      const recentAttempts = previousAttempts.filter(timestamp => now - timestamp < budgets.rateLimitWindowMs).length
-      const dailyWarning = budgets.configuredDailyLimit - attempts < budgets.runLimit ? `Warning before run: the remaining configured local daily attempts may be insufficient for this run (up to ${budgets.runLimit} attempts). ` : ''
-      const rateWarning = recentAttempts + budgets.runLimit > budgets.rateLimitAttempts ? `Warning before run: this run may reach the configured ${budgets.rateLimitAttempts}-attempt rate window and require pacing. ` : ''
-      return analysisUsageSchema.parse({ ...budgets, pacificDay: day, attempts, warning: `${dailyWarning}${rateWarning}${localNotice}` })
-    },
-    async setAnalysisBudgets(value) {
-      if (!scriptedTransport) throw new Error('Local model-usage limits are not available for Pi requests.')
-      const budgets = analysisBudgetsSchema.parse(value)
-      saveSetting('analysis-budgets', JSON.stringify(budgets))
-      dispatcher.setBudgets(budgets)
-      return this.getAnalysisUsage()
     },
     async cancelOutboundConsent(token: string): Promise<OutboundConsentAction> {
       const pending = pendingOutbound.get(token)
