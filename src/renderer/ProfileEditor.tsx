@@ -96,7 +96,7 @@ export function ProfileEditor() {
   useEffect(() => () => { if (pdfPreview?.token) void (docxReview ? window.workbench.cancelProfileDocxImport(pdfPreview.token) : window.workbench.cancelProfilePdfImport(pdfPreview.token)).catch(() => {}) }, [pdfPreview?.token, docxReview])
   useEffect(() => () => { if (aiPreview?.token) void window.workbench.cancelProfileAiStructuring(aiPreview.token).catch(() => {}) }, [aiPreview?.token])
   async function prepareProfileAi() {
-    if (!pdfPreview || docxReview) return
+    if (!pdfPreview) return
     setMutationError(''); setNotice(''); setAiBusy(true); setAiStage('preparing'); setAiAuthorized(false)
     try {
       const result = await window.workbench.previewProfileAiStructuring(pdfPreview.token)
@@ -157,6 +157,11 @@ export function ProfileEditor() {
   }
   function updatePdfProposal(update: (current: ProfilePdfProposal) => ProfilePdfProposal) {
     setPdfValidationError('')
+    if (aiPreview) {
+      activeAiToken.current = null
+      void window.workbench.cancelProfileAiStructuring(aiPreview.token).catch(() => {})
+      setAiPreview(null); setAiAuthorized(false)
+    }
     setPdfPreview(current => current ? { ...current, proposals: update(current.proposals) } : current)
   }
   async function cancelPdfReview() {
@@ -312,7 +317,7 @@ export function ProfileEditor() {
     {pdfBusy && <p className="profile-message" role="status" aria-live="polite">Reading the selected {docxReview ? 'Word document' : 'PDF'} on this device…</p>}
     {aiStage && <p className="profile-message" role="status" aria-live="polite">{aiStage === 'running' ? 'Sending the authorized text through Pi for structuring…' : 'Preparing the outgoing-text preview locally…'}</p>}
     {pdfPreview && <section className="profile-panel pdf-import-review" role="region" aria-labelledby="pdf-import-title"><div className="panel-heading"><div><span className="context">{docxReview ? 'Local Word review' : 'Local PDF review'}</span><h2 id="pdf-import-title">Review proposed profile details</h2><p>Choose add, update, or skip for each group. Nothing is saved until you apply. Source passages may contain sensitive personal data and will be retained only for accepted facts.</p></div></div>{pdfValidationError && <p className="profile-message error" role="alert">{pdfValidationError}</p>}
-      {!docxReview && !aiPreview && <div className="form-actions"><button className="secondary-button" type="button" disabled={pdfBusy || aiBusy} onClick={() => void prepareProfileAi()}>{aiBusy ? 'Preparing AI preview…' : 'Optional AI structuring'}</button><span>AI replaces temporary proposals only; saved profile data is not sent or changed. Local review works without AI.</span></div>}
+      {!aiPreview && <div className="form-actions"><button className="secondary-button" type="button" disabled={pdfBusy || aiBusy} onClick={() => void prepareProfileAi()}>{aiBusy ? 'Preparing AI preview…' : 'Optional AI structuring'}</button><span>AI replaces temporary proposals only; saved profile data is not sent or changed. Local review works without Pi.</span></div>}
       {aiPreview && <section className="profile-panel ai-consent-review" role="region" aria-labelledby="profile-ai-consent-title"><h3 id="profile-ai-consent-title">Review text sent through Pi</h3><p>Destination: Pi · Provider: <strong>{aiPreview.providerId}</strong> · Model: <strong>{aiPreview.modelId}</strong> · Thinking level: <strong>{aiPreview.thinkingLevel}</strong></p><label>Exact outgoing text<textarea rows={10} readOnly value={aiPreview.outgoing} /></label><p role="note">{aiPreview.warning}</p><p>{aiPreview.termsNotice}</p><label className="pdf-include"><input type="checkbox" checked={aiAuthorized} onChange={event => setAiAuthorized(event.target.checked)} /> I authorize this one-time request to send the text above through Pi to the selected provider for CV structuring.</label><div className="form-actions"><button className="primary-button" type="button" disabled={!aiAuthorized || aiBusy} onClick={() => void authorizeProfileAi()}>{aiBusy ? 'Structuring CV…' : 'Send text and structure'}</button><button className="secondary-button" type="button" onClick={() => void cancelProfileAi()}>{aiBusy ? 'Cancel AI request' : 'Decline AI assistance'}</button></div></section>}
       <div className="profile-ai-proposals" inert={aiBusy} aria-busy={aiBusy}>
 

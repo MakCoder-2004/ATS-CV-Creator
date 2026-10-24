@@ -17,6 +17,12 @@ export type ProfileAiResult = z.infer<typeof profileAiResultSchema>
 
 export const PROFILE_AI_RESIDUAL_NOTICE = 'The selected text is sent through Pi to the selected model provider and may still contain identifying or sensitive information. Local redaction is incomplete and does not make this anonymous.'
 
+type ImportProposalAccess = { get: () => ProfilePdfProposal; set: (proposal: ProfilePdfProposal) => void }
+const importProposals = new Map<string, ImportProposalAccess>()
+export function registerProfileAiImport(token: string, access: ImportProposalAccess) { importProposals.set(token, access) }
+export function unregisterProfileAiImport(token: string) { importProposals.delete(token) }
+export function getProfileAiImport(token: string) { return importProposals.get(token) }
+
 /** Replaces recognizable contact strings before the preview is shown; original profile values remain local. */
 export function minimizeProfileText(text: string, recognizable: string[] = []) {
   const replacements: Array<{ token: string; value: string }> = []

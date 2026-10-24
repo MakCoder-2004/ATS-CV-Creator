@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { minimizeProfileText, PROFILE_AI_RESIDUAL_NOTICE, validateProfileAiDraft } from '../src/shared/profile-ai-structuring'
+import { getProfileAiImport, minimizeProfileText, PROFILE_AI_RESIDUAL_NOTICE, registerProfileAiImport, unregisterProfileAiImport, validateProfileAiDraft } from '../src/shared/profile-ai-structuring'
 import { profilePdfProposalSchema } from '../src/shared/profile-pdf-import'
 
 const proposal = profilePdfProposalSchema.parse({
@@ -9,6 +9,17 @@ const proposal = profilePdfProposalSchema.parse({
 })
 
 describe('profile AI outgoing projection', () => {
+  it('shares mutable local proposals across PDF and Word import previews until discarded', () => {
+    const token = 'docx-import-token'
+    let current = proposal
+    registerProfileAiImport(token, { get: () => current, set: value => { current = value } })
+    const updated = profilePdfProposalSchema.parse({ ...proposal, unmapped: [{ page: 1, text: 'Review only' }] })
+    getProfileAiImport(token)?.set(updated)
+    expect(getProfileAiImport(token)?.get()).toEqual(updated)
+    unregisterProfileAiImport(token)
+    expect(getProfileAiImport(token)).toBeUndefined()
+  })
+
   it('redacts recognizable email and phone locally and discloses residual sensitivity', () => {
     const minimized = minimizeProfileText('Contact ada@example.test or +1 (555) 123-4567 about confidential work')
     expect(minimized.text).toBe('Contact [EMAIL_1] or [PHONE_2] about confidential work')

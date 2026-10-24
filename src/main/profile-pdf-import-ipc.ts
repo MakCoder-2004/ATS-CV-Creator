@@ -4,7 +4,7 @@ import { lstat, readFile } from 'node:fs/promises'
 import type { WorkbenchStorageAPI } from '../shared/appearance'
 import { profilePdfApplyResultSchema, profilePdfPreviewSchema, profilePdfProposalDraftSchema, profilePdfProposalSchema, mapProfilePdfPages, type ProfilePdfProposalDraft } from '../shared/profile-pdf-import'
 import { extractProfilePdf, profilePdfLimits } from './profile-pdf-intake'
-import { profileAiConsentActionSchema, profileAiConsentPreviewSchema, profileAiRunResultSchema, PROFILE_AI_RESIDUAL_NOTICE, minimizeProfileText, validateProfileAiDraft } from '../shared/profile-ai-structuring'
+import { getProfileAiImport, registerProfileAiImport, unregisterProfileAiImport, profileAiConsentActionSchema, profileAiConsentPreviewSchema, profileAiRunResultSchema, PROFILE_AI_RESIDUAL_NOTICE, minimizeProfileText, validateProfileAiDraft } from '../shared/profile-ai-structuring'
 
 function bindProposalIds(draft: ProfilePdfProposalDraft) {
   const refs = new Set<string>()
@@ -22,7 +22,7 @@ export function registerProfilePdfImportIpc(getWindow: () => BrowserWindow, getS
   const pending = new Map<string, { sourceHash: string; baseline: string; proposals: ReturnType<typeof profilePdfProposalSchema.parse>; timer: NodeJS.Timeout }>()
   const ai = new Map<string, { importToken: string; runId: string; prompt: string; replacements: Array<{ token: string; value: string }>; model: string; thinkingLevel: string; timer: NodeJS.Timeout; accepted: boolean; used: boolean }>()
   const clearAi = (token: string) => { const state = ai.get(token); if (!state) return false; clearTimeout(state.timer); if (state.accepted) getStorage().cancelProfileImportAi(state.runId); ai.delete(token); return true }
-  const discard = (token: string) => { const active = pending.get(token); if (!active) return false; clearTimeout(active.timer); pending.delete(token); for (const [aiToken, state] of ai) if (state.importToken === token) clearAi(aiToken); return true }
+  const discard = (token: string) => { const active = pending.get(token); if (!active) return false; clearTimeout(active.timer); pending.delete(token); unregisterProfileAiImport(token); for (const [aiToken, state] of ai) if (state.importToken === token) clearAi(aiToken); return true }
   ipcMain.handle('profile:pdf-import:preview', async (event, ...args: unknown[]) => {
     trusted(event); if (args.length) throw new Error('Unexpected arguments')
     try {
@@ -38,8 +38,9 @@ export function registerProfilePdfImportIpc(getWindow: () => BrowserWindow, getS
       const draft = profilePdfProposalDraftSchema.parse(mapProfilePdfPages(extracted.pages))
       const proposals = bindProposalIds(draft)
       const token = randomUUID()
-      const timer = setTimeout(() => pending.delete(token), 15 * 60_000); timer.unref()
+      const timer = setTimeout(() => discard(token), 15 * 60_000); timer.unref()
       pending.set(token, { sourceHash: extracted.sha256, baseline, proposals, timer })
+      registerProfileAiImport(token, { get: () => proposals, set: value => { const active = pending.get(token); if (active) active.proposals = value } })
       return profilePdfPreviewSchema.parse({ ok: true, token, sourceHash: extracted.sha256, proposals })
     } catch (error) {
       return profilePdfPreviewSchema.parse({ ok: false, cancelled: false, message: error instanceof Error ? error.message : 'The selected PDF could not be read.' })
@@ -47,12 +48,12 @@ export function registerProfilePdfImportIpc(getWindow: () => BrowserWindow, getS
   })
   ipcMain.handle('profile:ai:preview', async (event, ...args: unknown[]) => {
     trusted(event); if (args.length !== 1 || typeof args[0] !== 'string') throw new Error('Expected a local CV review token')
-    const source = pending.get(args[0]); if (!source) return profileAiConsentPreviewSchema.parse({ ok: false, message: 'This CV review expired. Select the PDF again.' })
+    const source = getProfileAiImport(args[0])?.get(); if (!source) return profileAiConsentPreviewSchema.parse({ ok: false, message: 'This CV review expired. Select the PDF or Word document again.' })
     try {
       const settings = await getStorage().getSettings()
       if (!settings.pi) return profileAiConsentPreviewSchema.parse({ ok: false, message: 'Choose a Pi model in Settings before requesting optional AI structuring. Your local review remains available.' })
-      const payload = JSON.stringify({ sources: source.proposals.sources.map((item, index) => ({ sourceRef: `source-${index}`, page: item.page, field: item.field, text: item.passage })), unmapped: source.proposals.unmapped.map((item, index) => ({ sourceRef: `unmapped-${index}`, page: item.page, text: item.text })) })
-      const recognizable = [source.proposals.contact?.fullName, source.proposals.contact?.email, source.proposals.contact?.phone].filter((value): value is string => Boolean(value))
+      const payload = JSON.stringify({ sources: source.sources.map((item, index) => ({ sourceRef: `source-${index}`, page: item.page, field: item.field, text: item.passage })), unmapped: source.unmapped.map((item, index) => ({ sourceRef: `unmapped-${index}`, page: item.page, text: item.text })) })
+      const recognizable = [source.contact?.fullName, source.contact?.email, source.contact?.phone].filter((value): value is string => Boolean(value))
       const minimized = minimizeProfileText(payload, recognizable)
       if (minimized.text.length > 20_000) return profileAiConsentPreviewSchema.parse({ ok: false, message: 'This CV text exceeds the 20,000-character AI input limit. Nothing was sent or truncated; continue with local review.' })
       const token = randomUUID(), runId = `profile-import:${randomUUID()}`
@@ -65,7 +66,7 @@ export function registerProfilePdfImportIpc(getWindow: () => BrowserWindow, getS
   })
   ipcMain.handle('profile:ai:consent', async (event, ...args: unknown[]) => {
     trusted(event); if (args.length !== 2 || typeof args[0] !== 'string' || typeof args[1] !== 'boolean') throw new Error('Expected preview token and consent decision')
-    const state = ai.get(args[0]); if (!state || !pending.has(state.importToken)) return profileAiConsentActionSchema.parse({ ok: false, message: 'This AI preview expired. Review a fresh outgoing-text preview.' })
+    const state = ai.get(args[0]); if (!state || !getProfileAiImport(state.importToken)) return profileAiConsentActionSchema.parse({ ok: false, message: 'This AI preview expired. Review a fresh outgoing-text preview.' })
     if (!args[1]) { clearAi(args[0]); return profileAiConsentActionSchema.parse({ ok: false, message: 'AI assistance declined. Continue with the local proposals.' }) }
     try {
       const settings = await getStorage().getSettings()
@@ -78,10 +79,10 @@ export function registerProfilePdfImportIpc(getWindow: () => BrowserWindow, getS
   ipcMain.handle('profile:ai:run', async (event, ...args: unknown[]) => {
     trusted(event); if (args.length !== 1 || typeof args[0] !== 'string') throw new Error('Expected an accepted AI preview token')
     const token = args[0]
-    const state = ai.get(token), source = state && pending.get(state.importToken)
+    const state = ai.get(token), access = state && getProfileAiImport(state.importToken), source = access?.get()
     if (!state || !state.accepted || state.used || !source) return profileAiRunResultSchema.parse({ ok: false, message: 'An active consent for this CV preview is required. Your local proposals remain available.' })
     state.used = true
-    const isCurrent = () => ai.get(token) === state && pending.get(state.importToken) === source && state.accepted && state.used
+    const isCurrent = () => ai.get(token) === state && getProfileAiImport(state.importToken) === access && state.accepted && state.used
     try {
       let { text } = await getStorage().generateProfileImportAi(state.runId, state.model, state.prompt, profilePdfProposalDraftSchema)
       if (!isCurrent()) {
@@ -92,12 +93,12 @@ export function registerProfilePdfImportIpc(getWindow: () => BrowserWindow, getS
       let decoded: unknown
       try { decoded = JSON.parse(replace(text)) } catch { throw new Error('Pi returned malformed structured data. No profile data was changed; continue with local review.') }
       const draft = profilePdfProposalDraftSchema.parse(decoded)
-      const proposals = validateProfileAiDraft(source.proposals, draft, randomUUID)
+      const proposals = validateProfileAiDraft(source, draft, randomUUID)
       if (!isCurrent()) {
         if (ai.get(args[0]) === state) clearAi(args[0])
         return profileAiRunResultSchema.parse({ ok: false, cancelled: true, message: 'This CV review was cancelled or superseded. Its late AI response was discarded; continue with the current local review.' })
       }
-      source.proposals = proposals
+      access!.set(proposals)
       clearAi(args[0])
       return profileAiRunResultSchema.parse({ ok: true, proposals, message: 'AI suggestions are ready for review. Nothing was saved; confirm or correct them before applying.' })
     } catch (error) {
