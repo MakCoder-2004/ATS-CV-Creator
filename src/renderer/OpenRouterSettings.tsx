@@ -1,89 +1,71 @@
 import React, { FormEvent, useEffect, useState } from 'react'
-import { Copy, Eye, EyeOff, KeyRound, ShieldCheck, Sparkles, Trash2 } from 'lucide-react'
-import { defaultOpenRouterModel, openRouterModelSchema, type OpenRouterSettings } from '../shared/openrouter-settings'
-import { analysisBudgetValues, defaultAnalysisBudgets, type AnalysisBudgets, type AnalysisUsage } from '../shared/posting-analysis'
+import { ShieldCheck, Sparkles } from 'lucide-react'
+import { PI_THINKING_LEVELS, type PiModelSelection } from '../shared/pi-model'
+import { FieldSelect } from './controls/FieldSelect'
 
 export function OpenRouterSettingsPanel() {
-  const [settings, setSettings] = useState<OpenRouterSettings | null>(null)
-  const [model, setModel] = useState(defaultOpenRouterModel)
-  const [apiKey, setApiKey] = useState('')
-  const [revealedKey, setRevealedKey] = useState<string | null>(null)
-  const [replacingKey, setReplacingKey] = useState(false)
-  const [confirmRevoke, setConfirmRevoke] = useState(false)
+  const [selection, setSelection] = useState<PiModelSelection | null>(null)
+  const [reference, setReference] = useState('')
+  const [thinkingLevel, setThinkingLevel] = useState<(typeof PI_THINKING_LEVELS)[number]>('medium')
+  const [faithfulnessCheck, setFaithfulnessCheck] = useState(false)
+  const [loaded, setLoaded] = useState(false)
+  const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [budgets, setBudgets] = useState<AnalysisBudgets>(defaultAnalysisBudgets)
-  const [usage, setUsage] = useState<AnalysisUsage | null>(null)
-  useEffect(() => { window.workbench.getSettings().then(value => { setSettings(value.openRouter); setModel(value.openRouter.model) }).catch(() => setError('OpenRouter settings could not be loaded. Restart the app to retry.')); window.workbench.getAnalysisUsage().then(value => { setUsage(value); setBudgets(analysisBudgetValues(value)) }).catch(() => setError('Analysis budget settings could not be loaded. Restart the app to retry.')) }, [])
-  useEffect(() => { if (!revealedKey) return; const timer = window.setTimeout(() => setRevealedKey(null), 30000); return () => window.clearTimeout(timer) }, [revealedKey])
-  async function saveBudgets(event: FormEvent) {
-    event.preventDefault()
-    try { const saved = await window.workbench.setAnalysisBudgets(analysisBudgetValues(budgets)); setUsage(saved); setBudgets(saved); setError(''); setMessage('Analysis budgets saved locally. No provider request was sent.') }
-    catch { setError('Analysis budgets were not saved. Check that limits are within the displayed ranges.'); setMessage('') }
-  }
-  function budgetField(key: keyof AnalysisBudgets, label: string, min: number, max: number, step = 1) {
-    return <label className="form-field">{label}<input type="number" min={min} max={max} step={step} value={budgets[key]} onChange={event => setBudgets(current => ({ ...current, [key]: Number(event.target.value) }))} /></label>
-  }
-  async function saveFaithfulness(value: boolean) {
-    try { const saved = await window.workbench.setFaithfulnessCheck(value); setSettings(saved.openRouter); setError(''); setMessage('Faithfulness preference saved locally. Existing unresolved findings are not waived.') }
-    catch { setError('Faithfulness preference could not be saved. Try again.'); setMessage('') }
-  }
+
+  useEffect(() => {
+    window.workbench.getSettings().then(value => {
+      setSelection(value.pi)
+      setReference(value.pi ? `${value.pi.providerId}/${value.pi.modelId}` : '')
+      if (value.pi) setThinkingLevel(value.pi.thinkingLevel)
+      setFaithfulnessCheck(value.openRouter.faithfulnessCheck)
+      setLoaded(true)
+    }).catch(() => setError('Pi settings could not be loaded. Restart the app to retry.'))
+  }, [])
+
   async function saveModel(event: FormEvent) {
     event.preventDefault()
-    const parsed = openRouterModelSchema.safeParse(model)
-    if (!parsed.success) { setError(parsed.error.issues[0]?.message ?? 'Enter an OpenRouter model ID.'); setMessage(''); return }
     setBusy(true)
-    try { const saved = await window.workbench.setOpenRouterModel(parsed.data); setSettings(saved.openRouter); setModel(saved.openRouter.model); setError(''); setMessage('OpenRouter model saved. New runs will use it; review and authorize outgoing data again.') }
-    catch { setError('Model could not be saved. Check the ID and try again.'); setMessage('') }
-    finally { setBusy(false) }
+    setError('')
+    setMessage('')
+    try {
+      const saved = await window.workbench.setPiModel({ reference, thinkingLevel })
+      setSelection(saved.pi)
+      setReference(saved.pi ? `${saved.pi.providerId}/${saved.pi.modelId}` : reference)
+      setMessage('Pi model preference saved.')
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Pi model preference was not saved. Check the model reference and try again.')
+    } finally { setBusy(false) }
   }
-  async function saveKey(event: FormEvent) {
-    event.preventDefault(); setMessage(''); setError(''); setBusy(true)
-    try { const saved = await window.workbench.saveOpenRouterApiKey(apiKey); setSettings(saved.openRouter); setApiKey(''); setRevealedKey(null); setReplacingKey(false); setConfirmRevoke(false); setMessage('OpenRouter API key saved securely. No provider request was sent.') }
-    catch (cause) { setError(cause instanceof Error ? cause.message : 'API key was not saved. Check secure storage and try again.') }
-    finally { setBusy(false) }
+
+  async function saveFaithfulness(value: boolean) {
+    try {
+      const saved = await window.workbench.setFaithfulnessCheck(value)
+      setFaithfulnessCheck(saved.openRouter.faithfulnessCheck)
+      setError('')
+      setMessage('Faithfulness preference saved locally. Existing unresolved findings are not waived.')
+    } catch { setError('Faithfulness preference could not be saved. Try again.'); setMessage('') }
   }
-  async function revealKey() {
-    if (revealedKey) { setRevealedKey(null); return }
-    setBusy(true); setError('')
-    try { setRevealedKey(await window.workbench.revealOpenRouterApiKey()) }
-    catch { setError('The saved key could not be revealed. Check secure storage and try again.') }
-    finally { setBusy(false) }
-  }
-  async function copyKey() {
-    setBusy(true); setError('')
-    try { await window.workbench.copyOpenRouterApiKey(); setMessage('Key copied to clipboard. Other apps can read it until you clear the clipboard.') }
-    catch { setError('The saved key could not be copied. Check secure storage and try again.') }
-    finally { setBusy(false) }
-  }
-  async function removeKey() {
-    setBusy(true)
-    try { const saved = await window.workbench.removeOpenRouterApiKey(); setSettings(saved.openRouter); setApiKey(''); setRevealedKey(null); setReplacingKey(false); setConfirmRevoke(false); setError(''); setMessage('Saved key removed from this device. It may still be valid in OpenRouter.') }
-    catch { setError('The saved API key could not be removed. Try again.') }
-    finally { setBusy(false) }
-  }
-  return <section className="settings-panel" aria-label="OpenRouter preferences">
+
+  return <section className="settings-panel" aria-label="Pi preferences">
     <div className="settings-grid">
-      <section className="settings-block" aria-labelledby="model-heading">
-        <div className="settings-block-heading"><span className="settings-block-icon"><Sparkles size={18} aria-hidden="true" /></span><div><h2 id="model-heading">Model preference</h2><p>Enter an OpenRouter model ID for future runs.</p></div></div>
-        <form className="profile-form" onSubmit={event => void saveModel(event)}><label className="form-field">OpenRouter model ID<input value={model} onChange={event => setModel(event.target.value)} placeholder="xingchen-agi/xing4.0-29b-a4b:free" spellCheck={false} autoCapitalize="off" autoComplete="off" required /></label><div className="form-actions"><button className="primary-button" type="submit" disabled={busy || !settings || model === settings.model}>Save model</button></div></form>
-        <p className="settings-helper">Availability, pricing and JSON reliability vary by model. Saving a model sends no request.</p>
+      <section className="settings-block" aria-labelledby="pi-model-heading">
+        <div className="settings-block-heading"><span className="settings-block-icon"><Sparkles size={18} aria-hidden="true" /></span><div><h2 id="pi-model-heading">Pi model</h2><p>Choose a provider and model available in your Pi setup.</p></div></div>
+        {selection && <p className="settings-helper">Saved selection: <strong>{selection.providerId}/{selection.modelId}</strong> · {selection.thinkingLevel} thinking</p>}
+        <form className="profile-form" onSubmit={event => void saveModel(event)}>
+          <label className="form-field">Provider/model reference<input value={reference} onChange={event => setReference(event.target.value)} placeholder="provider/model" spellCheck={false} autoCapitalize="off" autoComplete="off" required aria-describedby="pi-reference-help" /></label>
+          <p className="settings-helper" id="pi-reference-help">Enter the exact provider/model reference. Keep any slashes in either ID.</p>
+          <FieldSelect label="Thinking level" id="pi-thinking-level" value={thinkingLevel} onValueChange={value => setThinkingLevel(value as (typeof PI_THINKING_LEVELS)[number])} options={PI_THINKING_LEVELS.map(level => ({ value: level, label: level }))} />
+          <div className="form-actions"><button className="primary-button" type="submit" disabled={busy || !loaded || !reference.trim() || (reference === (selection ? `${selection.providerId}/${selection.modelId}` : '') && thinkingLevel === selection?.thinkingLevel)}>{busy ? 'Saving…' : 'Save Pi model'}</button></div>
+        </form>
+        <p className="settings-helper">If you are not signed in with a provider, sign in through Pi outside CV Tailor. CV Tailor does not collect or reveal provider credentials.</p>
       </section>
-      <section className="settings-block credential-panel" aria-labelledby="credential-heading">
-        <div className="settings-block-heading"><span className="settings-block-icon"><KeyRound size={18} aria-hidden="true" /></span><div><h2 id="credential-heading">API key</h2><p>{settings?.credential.configured ? 'Encrypted on this device. Reveal it only when you need it.' : 'No OpenRouter API key is saved.'}</p></div></div>
-        {!settings?.credential.secureStorageAvailable && <p className="secure-storage-error" role="alert">Secure storage is unavailable. A key cannot be saved; CV Tailor will not store it in plaintext.</p>}
-        {settings?.credential.configured && <div className="saved-credential">
-          <label className="form-field">Saved OpenRouter API key<input aria-label="Saved OpenRouter API key" type={revealedKey ? 'text' : 'password'} value={revealedKey ?? 'stored-openrouter-key'} readOnly autoComplete="off" spellCheck={false} /></label>
-          <div className="saved-credential-actions"><button type="button" className="secondary-button" aria-pressed={!!revealedKey} disabled={busy || !settings.credential.secureStorageAvailable} onClick={() => void revealKey()}>{revealedKey ? <EyeOff size={16} aria-hidden="true" /> : <Eye size={16} aria-hidden="true" />}{revealedKey ? 'Hide key' : 'Reveal key'}</button><button type="button" className="secondary-button" disabled={busy || !settings.credential.secureStorageAvailable} onClick={() => void copyKey()}><Copy size={16} aria-hidden="true" />Copy key</button><button type="button" className="secondary-button" disabled={busy} onClick={() => { setReplacingKey(value => !value); setRevealedKey(null); setConfirmRevoke(false); setApiKey('') }}>{replacingKey ? 'Cancel replacement' : 'Replace key'}</button><button type="button" className="secondary-button destructive" disabled={busy} onClick={() => { setConfirmRevoke(true); setRevealedKey(null); setReplacingKey(false); setApiKey('') }}><Trash2 size={16} aria-hidden="true" />Revoke local key</button></div>
-          {confirmRevoke && <div className="credential-revoke-confirm" role="group" aria-label="Confirm local key removal"><p>Remove this key from CV Tailor? The token will still be valid in OpenRouter until you revoke it there.</p><div className="form-actions"><button type="button" className="secondary-button" onClick={() => setConfirmRevoke(false)}>Cancel</button><button type="button" className="secondary-button destructive" disabled={busy} onClick={() => void removeKey()}>Revoke saved key</button></div></div>}
-        </div>}
-        {(!settings?.credential.configured || replacingKey) && <form className="profile-form" onSubmit={event => void saveKey(event)}><label className="form-field">{replacingKey ? 'New OpenRouter API key' : 'OpenRouter API key'}<input aria-label={replacingKey ? 'New OpenRouter API key' : 'OpenRouter API key'} type="password" autoComplete="new-password" value={apiKey} onChange={event => setApiKey(event.target.value)} disabled={!settings?.credential.secureStorageAvailable || busy} /></label><div className="form-actions"><button className="primary-button" type="submit" disabled={busy || !settings?.credential.secureStorageAvailable || !apiKey.trim()}>{replacingKey ? 'Save replacement' : 'Save API key'}</button></div></form>}
+      <section className="settings-block" aria-labelledby="pi-auth-heading">
+        <div className="settings-block-heading"><span className="settings-block-icon"><ShieldCheck size={18} aria-hidden="true" /></span><div><h2 id="pi-auth-heading">Provider sign-in</h2><p>Authentication is managed by Pi, not in CV Tailor.</p></div></div>
+        <p className="settings-helper">If a provider requires sign-in, complete it in Pi outside CV Tailor, then return here. No API key or credential is entered, stored, copied, or revealed in this app.</p>
       </section>
-      <section className="settings-block faithfulness-panel" aria-labelledby="faithfulness-heading"><div className="settings-block-heading"><span className="settings-block-icon"><ShieldCheck size={18} aria-hidden="true" /></span><div><h2 id="faithfulness-heading">Optional faithfulness review</h2><p>One structured, batched second opinion compares rewritten wording with its cited minimized evidence.</p></div></div><div className="faithfulness-options"><label className="faithfulness-toggle"><input role="switch" aria-label="Enable optional faithfulness review for newly authorized runs" aria-describedby="faithfulness-helper" type="checkbox" checked={settings?.faithfulnessCheck ?? false} onChange={event => void saveFaithfulness(event.target.checked)} /><span>Enable for newly authorized runs</span></label><p className="settings-helper" id="faithfulness-helper">Findings remain blocking even if you later disable this option. An LLM check is not proof and does not replace your review; calls count against the same run and time budgets.</p></div></section>
+      <section className="settings-block faithfulness-panel" aria-labelledby="faithfulness-heading"><div className="settings-block-heading"><span className="settings-block-icon"><ShieldCheck size={18} aria-hidden="true" /></span><div><h2 id="faithfulness-heading">Optional faithfulness review</h2><p>One structured, batched second opinion compares rewritten wording with its cited minimized evidence.</p></div></div><div className="faithfulness-options"><label className="faithfulness-toggle"><input role="switch" aria-label="Enable optional faithfulness review for newly authorized runs" aria-describedby="faithfulness-helper" type="checkbox" checked={faithfulnessCheck} onChange={event => void saveFaithfulness(event.target.checked)} /><span>Enable for newly authorized runs</span></label><p className="settings-helper" id="faithfulness-helper">Findings remain blocking even if you later disable this option. An LLM check is not proof and does not replace your review; calls count against the same run and time budgets.</p></div></section>
     </div>
-    <section className="settings-block" aria-labelledby="analysis-budget-heading"><div className="settings-block-heading"><div><h2 id="analysis-budget-heading">Analysis request budgets</h2><p>Local safeguards for future runs. These are not OpenRouter account limits.</p></div></div><form className="profile-form" onSubmit={event => void saveBudgets(event)}><div className="settings-grid">{budgetField('minimumSpacingMs', 'Minimum spacing (milliseconds)', 0, 60000, 100)}{budgetField('rateLimitAttempts', 'Attempts per rate window', 1, 100)}{budgetField('rateLimitWindowMs', 'Rate window (milliseconds)', 1000, 86400000, 1000)}{budgetField('configuredDailyLimit', 'Local daily attempt limit', 1, 10000)}{budgetField('runLimit', 'Attempts per run', 1, 100)}{budgetField('runTimeLimitMs', 'Run time limit (milliseconds)', 1000, 3600000, 1000)}</div><p className="settings-helper">Initial defaults: 5-second spacing, 12 attempts per 5 minutes, 50 locally observed attempts per Pacific day, and 12 attempts or 5 minutes per run.</p><button className="primary-button" type="submit">Save analysis budgets</button></form>{usage && <p role="status">Pacific day {usage.pacificDay}: {usage.attempts} locally observed attempts. Requests from other clients or keys are not visible; no authoritative quota is reported.</p>}</section>
-    <p className="settings-disclosure">OpenRouter sends requests to third-party model providers; their data handling and prices vary by model. Redaction cannot guarantee anonymity. Check your chosen provider's terms before sending sensitive information. <a href="https://openrouter.ai/privacy" target="_blank" rel="noopener noreferrer">OpenRouter privacy policy</a>.</p>
     {error && <p className="profile-message error" role="alert">{error}</p>}{message && <p className="profile-message success" role="status">{message}</p>}
   </section>
 }

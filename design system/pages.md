@@ -66,9 +66,11 @@ Preserve existing live information architecture and functionality. Do not substi
 
 ## Settings — current implementation contract
 
-Preserve existing live Settings structure, model/credential controls, privacy/faithfulness settings, secure-storage disclosures, and their current interaction semantics. Do not substitute prototype Settings.
+Preserve the existing two-column Settings structure, appearance, faithfulness and backup controls. Replace the legacy OpenRouter model, in-app credential and local analysis-budget controls with Pi provider/model preference controls. Existing OpenRouter settings remain transitional and must not be exposed in the UI. Do not imply the Pi model preference has switched the generation request flow until integration is complete.
 
 - Retain the existing grid: two equal columns on wide screens, single column at 980px; faithfulness-wide section spans both columns above the breakpoint. Blocks use responsive 20–32px padding, 10px radius, 1px border and surface background.
-- Each block starts with a 38px raised icon tile and heading/description; form controls and explanatory text stay in the same logical group. Sensitive credential controls must preserve masking and existing secure-storage behavior.
+- Each block starts with a 38px raised icon tile and heading/description; form controls and explanatory text stay in the same logical group. The Pi model reference starts blank when no preference is saved and displays the exact saved provider/model reference and thinking level after reload.
+- Provide a labeled provider/model reference field and thinking-level choice. The UI must not split or parse provider/model IDs because either ID may contain slashes; main resolves the exact reference.
+- When Pi authentication is absent, explain plainly that sign-in happens through Pi outside CV Tailor. Do not provide an in-app key, budget, credential reveal, copy, or credential-change control.
 - Settings controls are at least 48px high; helper text is 12px with readable 1.5–1.65 line spacing. Disclosures are plain, scannable, link-underlined and max 100ch.
-- Do not state a setting was saved until persistence confirms it. Loading, storage errors and disabled states remain visible and accurately described.
+- Do not state a setting was saved until persistence confirms it. Preserve typed model input on recoverable errors. Loading, storage errors and disabled states remain visible and accurately described.
