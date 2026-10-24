@@ -53,6 +53,7 @@ These reports record tests, artifacts, and claims at the stated version or issue
 | [Link release](validation/link-11-release-2026-10-22.md) | Bounded Lever intake release checks and limits. |
 | [Review workspace](validation/review-workspace.md) | v0.3.0 review, manual records, and qualification comparison. |
 | [Pi migration baseline](validation/pi-sdk-baseline.md) | Pre-change Settings screenshots, offline model-work checks, and installed SQLite reopen for issue #64. |
+| [Installed Pi SDK proof](validation/pi-sdk-proof.md) | Tool-free request, local auth failures, and cancellation from installed Electron for issue #65. |
 
 ## Prototype design evidence
 

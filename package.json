@@ -26,6 +26,8 @@
     "prototype:typecheck": "npm run typecheck --workspace @cv-tailor/ui-prototype"
   },
   "dependencies": {
+    "@earendil-works/pi-ai": "1.4.0",
+    "@earendil-works/pi-coding-agent": "1.4.0",
     "@fontsource-variable/manrope": "^5.2.7",
     "@fontsource-variable/sora": "^5.2.8",
     "@langchain/core": "1.2.19",
