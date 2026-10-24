@@ -71,7 +71,7 @@ function selectWithinPageBudget(items: GenerationItem[], relevance: Array<{ inde
   for (const candidate of ranked) {
     const item = items[candidate.index]
     const used = usedByCategory.get(item.category) ?? 0
-    const estimate = Math.max(3, wordCount(item.text))
+    const estimate = Math.min(limit[item.category], Math.max(3, wordCount(item.text)))
     if (used + estimate > limit[item.category]) continue
     selected.push(candidate)
     usedByCategory.set(item.category, used + estimate)
