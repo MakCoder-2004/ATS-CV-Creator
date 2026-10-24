@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createWorkbench } from '../src/main/workbench'
+import type { AnalysisTransport } from '../src/main/posting-analysis'
 import { registerWorkspaceBackupRowSizer } from '../src/main/workspace-backup'
 import { migrateLegacyOpenRouterWorkspace } from '../src/main/pi-settings-migration'
 
@@ -82,4 +83,39 @@ test('opening an old workspace deletes only the app-owned key and leaves saved j
   databases.push(inspected)
   expect(inspected.prepare('SELECT key FROM encrypted_credentials ORDER BY key').all()).toEqual([{ key: 'pi-owned-test-row' }])
   expect(inspected.prepare('SELECT key FROM settings WHERE key=?').all('openrouter-model')).toEqual([])
+})
+
+test('a real paused legacy run stays visible but cannot resume after Pi upgrade', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'pi-legacy-recovery-'))
+  directories.push(directory)
+  let calls = 0
+  const transport: AnalysisTransport = { async generate({ prompt }) {
+    calls++
+    if (prompt.includes('Extract only explicit qualifications')) return JSON.stringify({ required: [], preferred: [], tools: [], responsibilities: [], keywords: [] })
+    if (prompt.startsWith('Score these numbered')) {
+      const { items } = JSON.parse(prompt.slice(prompt.indexOf('{')))
+      return JSON.stringify({ relevance: items.map((item: { index: number }) => ({ index: item.index, score: 1, rationale: 'Synthetic evidence.' })) })
+    }
+    throw Object.assign(new Error('Synthetic interrupted provider response.'), { code: 'ECONNRESET' })
+  } }
+  const old = createWorkbench(directory, undefined, transport)
+  const role = await old.api.saveExperience({ kind: 'employment', title: 'Engineer', organization: 'Example', description: 'Built systems.' })
+  const job = await old.api.saveJob({ title: 'Engineer', company: 'Example', description: 'Build systems.' })
+  if (!role.ok || !job.ok) throw new Error('Could not save synthetic recovery sources.')
+  const preview = await old.api.prepareOutboundConsent(job.value.id)
+  if (!preview.ok) throw new Error(preview.message)
+  expect(await old.api.acceptOutboundConsent(preview.token, true, true)).toMatchObject({ ok: true })
+  expect(await old.api.startAnalysis(preview.token)).toMatchObject({ status: 'complete' })
+  expect(await old.api.generateDraft(preview.token)).toMatchObject({ ok: false })
+  const prior = await old.api.getGenerationRecovery(job.value.id)
+  expect(prior).toMatchObject({ canResume: true, runId: expect.any(String) })
+  old.close()
+
+  const upgraded = createWorkbench(directory)
+  const recovery = await upgraded.api.getGenerationRecovery(job.value.id)
+  expect(recovery).toMatchObject({ canResume: false, attempts: prior?.attempts, progress: expect.stringMatching(/cannot resume with Pi.*Review outgoing data/i) })
+  expect(await upgraded.api.resumeGeneration(prior!.runId, 'retry-uncertain')).toMatchObject({ ok: false })
+  expect(await upgraded.api.openJob(job.value.id)).toMatchObject({ description: 'Build systems.' })
+  expect(calls).toBe(3)
+  upgraded.close()
 })
