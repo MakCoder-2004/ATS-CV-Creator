@@ -101,7 +101,7 @@ test('posting analysis restores a display copy while cached and generated provid
 test('shortened working posting scope persists through import, generation, reopen, and regeneration without source-text dispatch', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'shortened-working-posting-scope-')); dirs.push(dir)
   const modelPrompts: string[] = []
-  const transport: AnalysisTransport = { validateCapacity: async () => true, async generate({ prompt }) {
+  const transport: AnalysisTransport = { async generate({ prompt }) {
     modelPrompts.push(prompt)
     if (prompt.startsWith('Extract only explicit qualifications')) return JSON.stringify({ required: ['TypeScript'], preferred: [], tools: [], responsibilities: [], keywords: [] })
     if (prompt.startsWith('Score these numbered')) {

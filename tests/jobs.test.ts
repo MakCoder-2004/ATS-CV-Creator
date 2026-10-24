@@ -999,11 +999,10 @@ test('backupability guard rolls back non-job profile writes at the aggregate bou
   reopened.close()
 })
 
-test('model capacity refusal preserves long saved text and sends no scripted model request', async () => {
+test('scripted provider dispatch accepts long reviewed posting text without capacity metadata', async () => {
   let modelDispatches = 0
   const transport = {
-    async validateCapacity() { return false },
-    async generate() { modelDispatches++; return '{}' }
+    async generate() { modelDispatches++; return JSON.stringify({ required: [], preferred: [], tools: [], responsibilities: [], keywords: [] }) }
   }
   const { workbench } = open(transport)
   const text = 'Complete requirements.\n'.repeat(1500)
@@ -1013,9 +1012,8 @@ test('model capacity refusal preserves long saved text and sends no scripted mod
   if (!consent.ok) throw Error(consent.message)
   await workbench.api.acceptOutboundConsent(consent.token, true, true)
   const analysis = await workbench.api.startAnalysis(consent.token)
-  expect(analysis).toMatchObject({ status: 'failed', attempts: 0 })
-  expect(analysis.progress).toMatch(/model capacity|shorten/i)
-  expect(modelDispatches).toBe(0)
+  expect(analysis).toMatchObject({ status: 'complete', attempts: 1 })
+  expect(modelDispatches).toBe(1)
   expect((await workbench.api.openJob(job.value.id))?.description).toBe(text)
   workbench.close()
 })

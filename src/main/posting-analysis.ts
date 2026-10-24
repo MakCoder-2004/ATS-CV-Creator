@@ -5,8 +5,7 @@ import type { ZodTypeAny } from 'zod'
 export { postingAnalysisSchema }
 export type { PostingAnalysis }
 export interface AnalysisTransport {
-  generate(input: { model: OpenRouterModel; prompt: string; signal: AbortSignal; responseSchema: ZodTypeAny; maxTokens?: number; maxResponseChars?: number; providerOnly?: string[] }): Promise<string>
-  validateCapacity?(input: { runId: string; model: OpenRouterModel; prompt: string; responseSchema: ZodTypeAny; maxTokens: number; signal: AbortSignal }): Promise<boolean | { fits: boolean; providers: string[]; message?: string }>
+  generate(input: { model: OpenRouterModel; prompt: string; signal: AbortSignal; responseSchema: ZodTypeAny; maxTokens?: number; maxResponseChars?: number }): Promise<string>
 }
 export interface AnalysisInput { runId: string; jobId: string; prompt: string; model: OpenRouterModel }
 export interface AnalysisUsage { runId: string; jobId: string; attempts: number; status: 'complete' | 'failed' | 'cancelled'; startedAt: number; finishedAt: number }
@@ -16,7 +15,6 @@ export class AnalysisError extends Error {
 }
 type Options = { transport: AnalysisTransport; now?: () => number; sleep?: (ms: number, signal: AbortSignal) => Promise<void>; minimumSpacingMs?: number; rateLimitAttempts?: number; rateLimitWindowMs?: number; maxAttempts?: number; maxElapsedMs?: number; maxDailyAttempts?: number; observedAttempts?: number[]; observedRunAttempts?: Record<string, number>; observedRunStartedAt?: Record<string, number>; random?: () => number; onAttempt?: (timestamp: number, runId: string) => void; onAttemptComplete?: (runId: string, succeeded: boolean) => void; onProgress?: (runId: string, jobId: string, progress: string, attempts: number) => void }
 const cancelledError = () => new AnalysisError('CANCELLED', 'Analysis cancelled.')
-const capacityFailure = (message?: string) => new AnalysisError('BUDGET', message ?? 'The selected model capacity could not be confirmed for the complete request, or the authorized request exceeds its conservative context budget. Choose a model with verified capacity or consciously shorten the working posting, then review and authorize again.')
 const cancellableSleep = (ms: number, signal: AbortSignal) => new Promise<void>((resolve, reject) => {
   if (signal.aborted) return reject(cancelledError())
   const timer = setTimeout(() => { signal.removeEventListener('abort', abort); resolve() }, ms)
@@ -73,14 +71,12 @@ export function createAnalysisDispatcher(options: Options) {
         const wait = Math.max(spacingWait, rateWait)
         if (wait) { const boundedWait = Math.min(wait, Math.max(0, runBudgets.runTimeLimitMs - (now() - startedAt))); options.onProgress?.(input.runId, input.jobId, 'Waiting for shared request pacing before the next attempt.', usage.attempts); await sleep(boundedWait, controller.signal) }
         checkBudget()
-        const capacity = options.transport.validateCapacity && await options.transport.validateCapacity({ runId: input.runId, model: input.model, prompt, responseSchema: postingAnalysisSchema, maxTokens: 2048, signal: controller.signal })
-        if (!capacity || (typeof capacity === 'object' && !capacity.fits)) throw capacityFailure(typeof capacity === 'object' ? capacity.message : undefined)
         options.onProgress?.(input.runId, input.jobId, `Preparing posting-analysis request ${usage.attempts + 1}; local backup and accounting checks must finish before dispatch.`, usage.attempts)
         const timestamp = now()
         options.onAttempt?.(timestamp, input.runId)
         dispatched.push(timestamp); usage.attempts++; attemptCounts.set(input.runId, (attemptCounts.get(input.runId) ?? 0) + 1)
         try {
-          const response = await options.transport.generate({ model: input.model, prompt, signal: controller.signal, responseSchema: postingAnalysisSchema, maxTokens: 2048, ...(typeof capacity === 'object' ? { providerOnly: capacity.providers } : {}) })
+          const response = await options.transport.generate({ model: input.model, prompt, signal: controller.signal, responseSchema: postingAnalysisSchema, maxTokens: 2048 })
           options.onAttemptComplete?.(input.runId, true)
           return response
         } catch (error) { options.onAttemptComplete?.(input.runId, false); throw error }
@@ -154,13 +150,11 @@ export function createAnalysisDispatcher(options: Options) {
           const wait = Math.max(spacingWait, rateWait)
           if (wait) { options.onProgress?.(input.runId, input.jobId, 'Waiting for shared request pacing before the next attempt.', attempts); await sleep(Math.min(wait, Math.max(0, runBudgets.runTimeLimitMs - (now() - startedAt))), controller.signal) }
           checkBudget()
-          const capacity = options.transport.validateCapacity && await options.transport.validateCapacity({ runId: input.runId, model: input.model, prompt: input.prompt, responseSchema: input.responseSchema, maxTokens: input.maxTokens ?? 2048, signal: controller.signal })
-          if (!capacity || (typeof capacity === 'object' && !capacity.fits)) throw capacityFailure(typeof capacity === 'object' ? capacity.message : undefined)
           checkBudget()
           options.onProgress?.(input.runId, input.jobId, `Preparing source-linked generation request ${attempts + 1}; local backup and accounting checks must finish before dispatch.`, attempts)
           const timestamp = now(); options.onAttempt?.(timestamp, input.runId); dispatched.push(timestamp); attempts++; attemptCounts.set(input.runId, (attemptCounts.get(input.runId) ?? 0) + 1)
           try {
-            const response = await options.transport.generate({ model: input.model, prompt: input.prompt, signal: controller.signal, responseSchema: input.responseSchema, ...(input.maxTokens ? { maxTokens: input.maxTokens } : {}), ...(input.maxResponseChars !== undefined ? { maxResponseChars: input.maxResponseChars } : {}), ...(typeof capacity === 'object' ? { providerOnly: capacity.providers } : {}) })
+            const response = await options.transport.generate({ model: input.model, prompt: input.prompt, signal: controller.signal, responseSchema: input.responseSchema, ...(input.maxTokens ? { maxTokens: input.maxTokens } : {}), ...(input.maxResponseChars !== undefined ? { maxResponseChars: input.maxResponseChars } : {}) })
             options.onAttemptComplete?.(input.runId, true)
             return response
           } catch (error) { options.onAttemptComplete?.(input.runId, false); throw error }
