@@ -62,7 +62,7 @@ Profile PDF and DOCX imports extract text in bounded workers and produce proposa
 
 - Shared contracts define record shapes. IPC, network, file, and provider boundaries validate external input.
 - Consent binds to the operation and current source revisions. A cache hit does not waive new-run authorization.
-- The dispatcher verifies frozen Pi model and effort plus current run consent before each physical provider call. Old interrupted OpenRouter runs cannot resume under Pi.
+- The dispatcher verifies frozen Pi model and effort plus current run consent before each physical provider call. Received malformed output terminates the saved generation checkpoint without keeping model wording or offering an uncertain replay; truly interrupted runs retain explicit recovery. Old interrupted OpenRouter runs cannot resume under Pi.
 - Posting source snapshots, accepted posting revisions, profile evidence, and draft wording remain distinct. Posting keywords are not career facts.
 - The app-owned canonical document, citation checks, PDF page measurement, and approval guard constrain export.
 - The [frontend design contract](../design%20system/README.md) governs renderer changes. Prototype state is design evidence, not production data or a supported feature.

@@ -99,7 +99,7 @@ describe("Pi workbench dispatcher adapter", () => {
     for (const body of ['{"ok":true}', "not-json"]) {
       const s = setup(vi.fn(async () => result(body)))
       s.dispatcher.authorize("run", "consent")
-      await expect(s.dispatcher.generate(s.input({ maxResponseChars: body.startsWith("{") ? 4 : 100 }))).rejects.toMatchObject({ usage: { attempts: 1 } })
+      await expect(s.dispatcher.generate(s.input({ maxResponseChars: body.startsWith("{") ? 4 : 100 }))).rejects.toMatchObject({ code: body.startsWith('{') ? 'PROVIDER' : 'MALFORMED', usage: { attempts: 1 } })
       expect(s.hooks.onAttempt).toHaveBeenCalledTimes(1)
       expect(s.hooks.onAttemptComplete).toHaveBeenCalledWith("run", true)
     }

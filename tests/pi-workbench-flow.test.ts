@@ -118,3 +118,28 @@ test('a missing local Pi login never dispatches posting text', async () => {
   await expect(workbench.api.setPiModel({ reference: 'sample/author/chat', thinkingLevel: 'low' })).rejects.toThrow(/sign-in|Sign in/i)
   expect(completeSimple).not.toHaveBeenCalled()
 })
+
+test('a received malformed Pi response cannot resume or replace a saved draft', async () => {
+  const response = (prompt: string) => {
+    if (prompt.includes('Extract only explicit qualifications')) return output
+    if (prompt.startsWith('Score these numbered')) {
+      const { items } = JSON.parse(prompt.slice(prompt.indexOf('{')))
+      return JSON.stringify({ relevance: items.map((item: { index: number }) => ({ index: item.index, score: 0.9, rationale: 'Saved evidence.' })) })
+    }
+    return '{ malformed synthetic response'
+  }
+  const { workbench, completeSimple } = workspace(true, response)
+  await workbench.api.setPiModel({ reference: 'sample/author/chat', thinkingLevel: 'low' })
+  expect((await workbench.api.saveExperience({ kind: 'employment', title: 'Developer', organization: 'Synthetic Company', description: 'Built TypeScript services.' })).ok).toBe(true)
+  const job = await workbench.api.saveJob({ title: 'Engineer', company: 'Example', description: 'TypeScript services required.' })
+  if (!job.ok) throw new Error('Synthetic job could not be saved.')
+  const preview = await workbench.api.prepareOutboundConsent(job.value.id)
+  if (!preview.ok) throw new Error(preview.message)
+  await workbench.api.acceptOutboundConsent(preview.token, true, true)
+  expect(await workbench.api.startAnalysis(preview.token)).toMatchObject({ status: 'complete' })
+  expect(await workbench.api.generateDraft(preview.token)).toMatchObject({ ok: false, message: expect.stringMatching(/invalid response/i) })
+  expect(await workbench.api.getDraft(job.value.id)).toBeNull()
+  expect(await workbench.api.getGenerationRecovery(job.value.id)).toBeNull()
+  expect(await workbench.api.getAnalysis(job.value.id)).toMatchObject({ status: 'failed', attempts: 3 })
+  expect(completeSimple).toHaveBeenCalledTimes(3)
+}, 15_000)

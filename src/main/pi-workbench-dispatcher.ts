@@ -99,15 +99,16 @@ export function createPiWorkbenchDispatcher(options: PiWorkbenchDispatcherOption
       return await work
     } catch (error) {
       if (attempts && !responseReceived) options.onAttemptComplete?.(runId, false)
+      const malformed = error instanceof Error && /structured data|required task format/.test(error.message)
       const failure = cancelled.has(runId) || controller.signal.aborted
         ? new AnalysisError("CANCELLED", "Analysis cancelled.")
-        : error instanceof AnalysisError ? error : new AnalysisError("PROVIDER", error instanceof Error && /byte limit|output limit/.test(error.message)
-          ? "The response exceeded the task output limit."
-          : error instanceof Error && /structured data|required task format/.test(error.message)
-            ? "The provider returned an invalid response. Start a new authorized run to retry."
-            : attempts
-              ? "Pi could not complete the request. Start a new authorized run to retry."
-              : "The selected Pi model or authentication is unavailable. Sign in with Pi outside CV Tailor and check Settings.")
+        : error instanceof AnalysisError ? error
+          : malformed ? new AnalysisError("MALFORMED", "The provider returned an invalid response. Start a new authorized run to retry.")
+            : new AnalysisError("PROVIDER", error instanceof Error && /byte limit|output limit/.test(error.message)
+              ? "The response exceeded the task output limit."
+              : attempts
+                ? "Pi could not complete the request. Start a new authorized run to retry."
+                : "The selected Pi model or authentication is unavailable. Sign in with Pi outside CV Tailor and check Settings.")
       failure.usage = { runId, jobId, attempts, status: failure.code === "CANCELLED" ? "cancelled" : "failed", startedAt: Date.now(), finishedAt: Date.now() }
       throw failure
     } finally {

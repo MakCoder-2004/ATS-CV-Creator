@@ -48,6 +48,7 @@ test.each([
   await wb.api.acceptOutboundConsent(consent.token, true, true)
   await wb.api.startAnalysis(consent.token)
   const result = await wb.api.generateDraft(consent.token)
+  expect(await wb.api.getGenerationRecovery(job.value.id)).toBeNull()
   if (expectedCode === 'schema') {
     expect(result).toMatchObject({ ok: false, message: expect.stringMatching(/invalid structured data|required format|could not complete/i) })
     expect(JSON.stringify(result)).not.toContain('Secret model output')

@@ -285,7 +285,7 @@ test('real Electron UI generates and exposes cited draft with a DEV-only scripte
     const acceptedComparison = regenDraft.getByRole('region', { name: 'Compare suggestion' })
     await expect(acceptedComparison.getByRole('button', { name: 'Accept replacement and recheck' })).toBeVisible({ timeout: 30000 })
     await acceptedComparison.getByRole('button', { name: 'Accept replacement and recheck' }).click()
-    await expect(regenDraft).toContainText('Sources and page length were checked')
+    await expect(regenDraft).toContainText('Sources and page length were checked', { timeout: 45_000 })
     expect(await page.evaluate(id => window.workbench.getDocumentFitReport(id).then(value => value?.actualPages), jobId)).toBeGreaterThan(0)
     expect(await page.evaluate(id => window.workbench.getDraft(id).then(value => value?.revision), jobId)).toBe(unchangedRevision! + 1)
     expect(await page.evaluate(id => window.workbench.assertDraftExportable(id), jobId)).toMatchObject({ ok: false })

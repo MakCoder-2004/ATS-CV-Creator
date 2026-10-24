@@ -1377,14 +1377,23 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
           const code = error instanceof CitationValidationError ? error.finding : 'schema'
           const report = factualCheckReportSchema.parse({ ...checkDraftFacts(failed), passed: false, findings: [{ code, itemPath: 'generation', message: code === 'foreign-citation' ? 'The response referenced evidence outside the selected authorized sources. Model output was discarded.' : 'The tailored response did not match the required structured schema. Model output was discarded.', correction: 'Author or correct draft wording using the saved evidence revisions, then run factual checks.' }] })
           const blocked = draftRevisionSchema.parse({ ...failed, checkReport: report })
-          db.prepare('INSERT INTO draft_revisions (id,job_id,revision,data) VALUES (?,?,?,?)').run(blocked.id, blocked.jobId, blocked.revision, JSON.stringify(blocked))
+          db.transaction(() => {
+            db.prepare('INSERT INTO draft_revisions (id,job_id,revision,data) VALUES (?,?,?,?)').run(blocked.id, blocked.jobId, blocked.revision, JSON.stringify(blocked))
+            db.prepare('UPDATE provider_attempt_outcomes SET checkpointed_at=? WHERE run_id=? AND checkpointed_at IS NULL').run(new Date().toISOString(), pending.runId)
+            db.prepare("UPDATE generation_recovery SET status='complete',updated_at=? WHERE run_id=?").run(new Date().toISOString(), pending.runId)
+          })()
           const priorProgress = currentAnalysis.get(pending.jobId)
           saveAnalysisState({ jobId: pending.jobId, runId: pending.runId, status: 'complete', analysis: analysis.analysis, progress: blocked.progress, attempts: observedAttempts, cacheHit: analysis.cacheHit, generationStep: priorProgress?.runId === pending.runId ? priorProgress.generationStep : 'parse-posting', completedSteps: priorProgress?.runId === pending.runId ? priorProgress.completedSteps : ['parse-posting'] })
           return { ok: true, message: 'A blocked draft was saved; no invalid model output was retained.', draft: blocked }
         }
+        const knownInvalid = error instanceof AnalysisError && error.code === 'MALFORMED'
         const paused = error instanceof AnalysisError && ['BUDGET','TIMEOUT','OFFLINE','PROVIDER','INVALID_KEY'].includes(error.code)
         const safeMessage = cancelled ? message : error instanceof AnalysisError ? error.message : error instanceof Error && /scope|authorization|stale|changed/i.test(error.message) ? 'Your authorized scope changed during generation. Review the outgoing data and try again.' : 'Draft generation failed safely. No draft was created; check authorization, connection, and model settings before retrying.'
-        if (resumeRunId || !validationFailure) db.prepare('UPDATE generation_recovery SET status=?,updated_at=? WHERE run_id=?').run(cancelled ? 'cancelled' : paused ? 'paused' : 'running', new Date().toISOString(), pending.runId)
+        if (knownInvalid) db.transaction(() => {
+          db.prepare("UPDATE generation_recovery SET status='cancelled',updated_at=? WHERE run_id=?").run(new Date().toISOString(), pending.runId)
+          db.prepare('UPDATE provider_attempt_outcomes SET checkpointed_at=? WHERE run_id=? AND checkpointed_at IS NULL').run(new Date().toISOString(), pending.runId)
+        })()
+        else if (resumeRunId || !validationFailure) db.prepare('UPDATE generation_recovery SET status=?,updated_at=? WHERE run_id=?').run(cancelled ? 'cancelled' : paused ? 'paused' : 'running', new Date().toISOString(), pending.runId)
         const priorProgress = currentAnalysis.get(pending.jobId)
         saveAnalysisState({ jobId: pending.jobId, runId: pending.runId, status: cancelled ? 'cancelled' : 'failed', analysis: analysis.analysis, progress: safeMessage, attempts: observedAttempts, error: safeMessage, cacheHit: analysis.cacheHit, ...(priorProgress?.runId === pending.runId ? { generationStep: priorProgress.generationStep, completedSteps: priorProgress.completedSteps } : {}) })
         return { ok: false, message: safeMessage }
