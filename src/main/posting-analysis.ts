@@ -138,20 +138,25 @@ export function createAnalysisDispatcher(options: Options) {
     active.set(input.runId, controller)
     let attempts = 0, timedOut = false
     const timer = setTimeout(() => { timedOut = true; controller.abort() }, Math.max(0, runBudgets.runTimeLimitMs - (now() - startedAt)))
+    const checkBudget = () => {
+      if (timedOut) throw new AnalysisError('TIMEOUT', 'Analysis time budget is exhausted.')
+      if (controller.signal.aborted || cancelled.has(input.runId)) throw cancelledError()
+      if (now() - startedAt >= runBudgets.runTimeLimitMs) throw new AnalysisError('TIMEOUT', 'Analysis time budget is exhausted.')
+      if ((attemptCounts.get(input.runId) ?? 0) >= runBudgets.runLimit || getUsage() >= runBudgets.configuredDailyLimit) throw new AnalysisError('BUDGET', 'Configured local analysis budget is exhausted.')
+    }
     try {
       for (;;) {
-        if (controller.signal.aborted || cancelled.has(input.runId)) throw cancelledError()
-        if (now() - startedAt >= runBudgets.runTimeLimitMs) throw new AnalysisError('TIMEOUT', 'Analysis time budget is exhausted.')
-        if ((attemptCounts.get(input.runId) ?? 0) >= runBudgets.runLimit || getUsage() >= runBudgets.configuredDailyLimit) throw new AnalysisError('BUDGET', 'Configured local analysis budget is exhausted.')
+        checkBudget()
         const work = queue.then(async () => {
           const previous = dispatched.at(-1), spacingWait = previous === undefined ? 0 : Math.max(0, runBudgets.minimumSpacingMs - (now() - previous))
           const recent = dispatched.filter(timestamp => now() - timestamp < runBudgets.rateLimitWindowMs)
           const rateWait = recent.length >= runBudgets.rateLimitAttempts ? Math.max(0, recent[0] + runBudgets.rateLimitWindowMs - now()) : 0
           const wait = Math.max(spacingWait, rateWait)
           if (wait) { options.onProgress?.(input.runId, input.jobId, 'Waiting for shared request pacing before the next attempt.', attempts); await sleep(Math.min(wait, Math.max(0, runBudgets.runTimeLimitMs - (now() - startedAt))), controller.signal) }
-          if (controller.signal.aborted) throw cancelledError()
+          checkBudget()
           const capacity = options.transport.validateCapacity && await options.transport.validateCapacity({ runId: input.runId, model: input.model, prompt: input.prompt, responseSchema: input.responseSchema, maxTokens: input.maxTokens ?? 2048, signal: controller.signal })
           if (!capacity || (typeof capacity === 'object' && !capacity.fits)) throw capacityFailure(typeof capacity === 'object' ? capacity.message : undefined)
+          checkBudget()
           options.onProgress?.(input.runId, input.jobId, `Preparing source-linked generation request ${attempts + 1}; local backup and accounting checks must finish before dispatch.`, attempts)
           const timestamp = now(); options.onAttempt?.(timestamp, input.runId); dispatched.push(timestamp); attempts++; attemptCounts.set(input.runId, (attemptCounts.get(input.runId) ?? 0) + 1)
           try {
