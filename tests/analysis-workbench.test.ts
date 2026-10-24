@@ -82,6 +82,30 @@ test('a saved analysis cannot be used to generate under a newly authorized run u
   expect(cached.runId).not.toBe(original.runId)
 })
 
+test('a profile change after consent cannot mark cached analysis ready for a stale run', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'analysis-stale-cache-scope-')); dirs.push(dir)
+  let calls = 0
+  const wb = createWorkbench(dir, undefined, { async generate() { calls++; return JSON.stringify({ required: ['TypeScript'], preferred: [], tools: [], responsibilities: [], keywords: [] }) } }); opened.push(wb)
+  const job = await wb.api.saveJob({ title: 'Developer', company: 'Example Co', description: 'TypeScript required.' })
+  if (!job.ok) throw Error('job fixture')
+  const authorize = async () => {
+    const preview = await wb.api.prepareOutboundConsent(job.value.id)
+    if (!preview.ok) throw Error(preview.message)
+    expect(await wb.api.acceptOutboundConsent(preview.token, true, true)).toMatchObject({ ok: true })
+    return preview.token
+  }
+  const original = await wb.api.startAnalysis(await authorize())
+  expect(original.status).toBe('complete')
+  const staleToken = await authorize()
+  expect((await wb.api.saveSkill({ name: 'TypeScript', category: 'Programming' })).ok).toBe(true)
+  await expect(wb.api.startAnalysis(staleToken)).rejects.toThrow(/changed|review/i)
+  expect(await wb.api.getAnalysis(job.value.id)).toMatchObject({ runId: original.runId })
+  const fresh = await wb.api.startAnalysis(await authorize())
+  expect(fresh).toMatchObject({ status: 'complete', cacheHit: true })
+  expect(fresh.runId).not.toBe(original.runId)
+  expect(calls).toBe(1)
+})
+
 test('cancelling an in-flight public run suppresses a late response and does not cache it', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'analysis-cancel-contract-')); dirs.push(dir)
   let started!: () => void; let startedSecond!: () => void; let finish!: (value: string) => void

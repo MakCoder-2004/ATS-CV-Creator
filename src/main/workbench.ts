@@ -1124,6 +1124,8 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       if (!pending?.consentId) throw new Error('Review and authorize this exact outgoing bundle before analysis.')
       // Human-readable local copy only; generation and provider requests continue to use minimized analysis.
       const displayAnalysis = (value: z.infer<typeof postingAnalysisSchema>) => displayPostingAnalysisSchema.parse(Object.fromEntries(Object.entries(value).map(([key, items]) => [key, items.map(item => pending.bundle.restoreIdentifiers(item))])))
+      const approvedPayload = authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
+      if (activeAnalysisByJob.has(pending.jobId)) throw new Error('An analysis for this job is already active. Cancel it before starting another run.')
       const cacheKey = analysisCacheKey(pending.source)
       const cached = db.prepare('SELECT data, run_id FROM posting_analysis_cache WHERE cache_key = ?').get(cacheKey) as { data: string; run_id: string } | undefined
       if (cached) {
@@ -1137,8 +1139,6 @@ export function createWorkbench(userData: string, secureStorage: SecureStorage =
       const credentials = db.prepare('SELECT ciphertext FROM encrypted_credentials WHERE key = ?').get('openrouter-api-key')
       if (!scriptedTransport && !credentials) throw new Error('Save an OpenRouter API key in Settings before starting analysis.')
       if (startedAnalysisTokens.has(token)) throw new Error('This accepted analysis run is already active or has already started. Review outgoing data and accept a new run to continue.')
-      const approvedPayload = authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
-      if (activeAnalysisByJob.has(pending.jobId)) throw new Error('An analysis for this job is already active. Cancel it before starting another run.')
       startedAnalysisTokens.add(token)
       dispatcher.authorize(pending.runId, pending.consentId)
       activeAnalysisByJob.set(pending.jobId, pending.runId)
