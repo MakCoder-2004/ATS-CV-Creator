@@ -59,6 +59,15 @@ describe('outbound consent public contract', () => {
     expect(next.id).not.toBe(consent.id)
   })
 
+  it('binds Pi provider, model, and effort to the authorized outgoing scope', () => {
+    const selected = prepareOutboundBundle({ ...source, model: { name: 'gpt-6-luna', providerId: 'openai-codex', thinkingLevel: 'low' } })
+    const otherProvider = prepareOutboundBundle({ ...source, model: { name: 'gpt-6-luna', providerId: 'other-provider', thinkingLevel: 'low' } })
+    const otherEffort = prepareOutboundBundle({ ...source, model: { name: 'gpt-6-luna', providerId: 'openai-codex', thinkingLevel: 'high' } })
+    expect(selected.outgoing.model).toEqual({ name: 'gpt-6-luna', providerId: 'openai-codex', thinkingLevel: 'low' })
+    expect(selected.scopeHash).not.toBe(otherProvider.scopeHash)
+    expect(selected.scopeHash).not.toBe(otherEffort.scopeHash)
+  })
+
   it('does not let short restored organization identifiers escape in an extra prompt', () => {
     const bundle = prepareOutboundBundle({ ...source, job: { ...source.job, company: 'AI' }, profile: { ...source.profile, experience: [{ ...source.profile.experience[0], organization: 'AI' }] } })
     const engine = createOutboundConsentEngine()

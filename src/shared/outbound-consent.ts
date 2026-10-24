@@ -15,7 +15,7 @@ export interface ConsentSource {
     certificates?: Array<{ id?: string; revision?: number; title: string; issuer?: string; year?: number; description?: string; link?: string }>
     summary?: unknown[]; languages?: unknown[]; extras?: unknown[]
   }
-  model: { name: string; temperature?: number; topP?: number; maxOutputTokens?: number; thinkingLevel?: 'minimal' | 'low' | 'medium' | 'high' }
+  model: { name: string; providerId?: string; temperature?: number; topP?: number; maxOutputTokens?: number; thinkingLevel?: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' }
 }
 export interface OutboundPayload {
   readonly job: { readonly title: string; readonly description: string }
@@ -26,7 +26,7 @@ export interface OutboundPayload {
     readonly education: readonly { readonly title: string; readonly institution?: string; readonly field?: string; readonly description?: string }[]
     readonly certificates: readonly { readonly title: string; readonly issuer?: string; readonly description?: string }[]
   }
-  readonly model: { readonly name: string; readonly temperature?: number; readonly topP?: number; readonly maxOutputTokens?: number; readonly thinkingLevel?: 'minimal' | 'low' | 'medium' | 'high' }
+  readonly model: { readonly name: string; readonly providerId?: string; readonly temperature?: number; readonly topP?: number; readonly maxOutputTokens?: number; readonly thinkingLevel?: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' }
 }
 export interface OutboundBundle {
   readonly id: string
@@ -52,7 +52,11 @@ function digest(value: unknown): string { return createHash('sha256').update(JSO
 function escapeRegExp(value: string): string { return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') }
 
 export function prepareOutboundBundle(source: ConsentSource): OutboundBundle {
-  if (!openRouterModelSchema.safeParse(source.model.name).success) throw new Error('Invalid OpenRouter model ID.')
+  if (source.model.providerId === undefined) {
+    if (!openRouterModelSchema.safeParse(source.model.name).success) throw new Error('Invalid OpenRouter model ID.')
+  } else if (!source.model.providerId.trim() || !source.model.name.trim()) {
+    throw new Error('Invalid Pi provider or model ID.')
+  }
   if (source.model.temperature !== undefined && (!Number.isFinite(source.model.temperature) || source.model.temperature < 0 || source.model.temperature > 2)) throw new Error('Invalid model temperature.')
   if (source.model.topP !== undefined && (!Number.isFinite(source.model.topP) || source.model.topP < 0 || source.model.topP > 1)) throw new Error('Invalid model topP.')
   if (source.model.maxOutputTokens !== undefined && (!Number.isInteger(source.model.maxOutputTokens) || source.model.maxOutputTokens < 1)) throw new Error('Invalid model output limit.')
@@ -86,7 +90,7 @@ export function prepareOutboundBundle(source: ConsentSource): OutboundBundle {
       .replace(/\b(?:19|20)\d{2}-(?:0[1-9]|1[0-2])(?:-(?:0[1-9]|[12]\d|3[01]))?\b/g, '[DATE_OMITTED]')
     return result
   }
-  const model = { name: source.model.name, ...(source.model.temperature === undefined ? {} : { temperature: source.model.temperature }), ...(source.model.topP === undefined ? {} : { topP: source.model.topP }), ...(source.model.maxOutputTokens === undefined ? {} : { maxOutputTokens: source.model.maxOutputTokens }), ...(source.model.thinkingLevel === undefined ? {} : { thinkingLevel: source.model.thinkingLevel }) }
+  const model = { name: source.model.name, ...(source.model.providerId === undefined ? {} : { providerId: source.model.providerId }), ...(source.model.temperature === undefined ? {} : { temperature: source.model.temperature }), ...(source.model.topP === undefined ? {} : { topP: source.model.topP }), ...(source.model.maxOutputTokens === undefined ? {} : { maxOutputTokens: source.model.maxOutputTokens }), ...(source.model.thinkingLevel === undefined ? {} : { thinkingLevel: source.model.thinkingLevel }) }
   const evidence = [...source.profile.experience, ...source.profile.projects, ...source.profile.skills, ...source.profile.education, ...(source.profile.certificates ?? [])]
   const scope = { jobId: source.job.id, jobRevision: source.job.revision, profileRevision: source.profile.revision, evidenceRevisions: evidence.flatMap(item => [['id' in item ? item.id : undefined, item.revision], ...('factualItems' in item ? (item.factualItems ?? []).map(child => [child.id, child.revision]) : []), ...('technologies' in item ? (item.technologies ?? []).map(child => [child.id, child.revision]) : [])]).filter(([id]) => id !== undefined) }
   const outgoing = {
