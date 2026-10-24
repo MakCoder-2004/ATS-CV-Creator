@@ -14,7 +14,7 @@ The source for the app is under `src/`. Change the contract in `src/shared/`, ex
 ## Run checks in ABI order
 
 1. Run `npm run typecheck` and `npm run build` after changing TypeScript or Electron wiring.
-2. Run `npm test`. This command rebuilds `better-sqlite3` for Node, then runs Vitest tests under `tests/`.
+2. Run `npm test`. This command rebuilds `better-sqlite3` for Node, then runs Vitest tests under `tests/` with one worker so parallel test files do not compete with the app's fixed PDF and posting-extraction deadlines on Windows.
 3. While the binding still targets Node, repeat a focused test with `npx vitest run tests/<file>.test.ts` or use `npm run test:fast` for the full suite.
 4. Run `npm run test:electron` for Playwright Electron tests under `tests/electron/`. The script builds the app, rebuilds `better-sqlite3` for Electron, and runs the serial suite.
 5. If you return to Vitest after step 4, run `npm test` again before `npm run test:fast`.
