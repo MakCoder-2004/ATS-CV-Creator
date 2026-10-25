@@ -28,6 +28,14 @@ These files describe the current code or govern changes to it.
 
 Tailor CV and Saved jobs follow the approved Variant A visual direction. My profile and Settings keep their implemented structures. The design system is normative for UI decisions, but the prototype does not prove a feature ships. Read the relevant design contracts before renderer work.
 
+## Current feasibility research
+
+These reports record source-access decisions that are not shipped product behavior.
+
+| Document | Scope |
+| --- | --- |
+| [LinkedIn job intake feasibility](research/linkedin-job-intake-feasibility-2026-10-25.md) | Bounded research on approved single-job read routes; no suitable route was verified. |
+
 ## Historical research and feasibility
 
 These documents record earlier questions, proposals, and experiments. They are not a backlog of installed features or a replacement for checking code.
