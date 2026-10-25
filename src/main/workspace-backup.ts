@@ -227,8 +227,16 @@ export function createWorkspaceBackupEngine(db: Database.Database, maxBackupByte
       if (field === 'experience.factualItem') return 'text' in snapshot && nestedParentContains('factualItems', 'experience') && evidence.some(item => item.id === ownerId && item.revision === ownerRevision && 'text' in item.snapshot)
       if (field === 'projects.factualItem') return 'text' in snapshot && nestedParentContains('factualItems', 'project') && evidence.some(item => item.id === ownerId && item.revision === ownerRevision && 'text' in item.snapshot)
       if (field === 'projects.technology') return 'text' in snapshot && nestedParentContains('technologies', 'project') && evidence.some(item => item.id === ownerId && item.revision === ownerRevision && 'text' in item.snapshot)
-      const entryField = field.match(/^entries\.(education|certificates|summary|languages|extras)(?:\.(date|year))?$/)
-      if (entryField) return snapshot.section === entryField[1] && (!entryField[2] || (entryField[2] === 'date' && entryField[1] === 'education') || (entryField[2] === 'year' && entryField[1] === 'certificates'))
+      const entryField = field.match(/^entries\.(education|certificates|summary|languages|extras)(?:\.(date|year|institution|description|link))?$/)
+      if (entryField) {
+        if (snapshot.section !== entryField[1]) return false
+        const property = entryField[2]
+        if (!property) return true
+        if (property === 'date') return entryField[1] === 'education'
+        if (property === 'year') return entryField[1] === 'certificates' && Number.isInteger(snapshot.year)
+        if (property === 'link') return entryField[1] === 'certificates' && typeof snapshot.link === 'string'
+        return entryField[1] === 'education' && typeof snapshot[property] === 'string'
+      }
       return false
     }
     for (const row of rows.profile_import_provenance?.rows ?? []) {
@@ -243,7 +251,8 @@ export function createWorkspaceBackupEngine(db: Database.Database, maxBackupByte
     for (const row of rows.document_fit_reports?.rows ?? []) assertValid(documentFitReportSchema, parseJson('document_fit_reports', row.data as string), 'document_fit_reports')
     for (const table of ['outbound_consents','analysis_attempts','provider_attempt_outcomes','generation_recovery_extensions'] as const) for (const row of rows[table]?.rows ?? []) {
       const runId = row.run_id
-      if (runId !== undefined && !uuidSchema.safeParse(runId).success) fail(table)
+      const profileImportRun = (table === 'analysis_attempts' || table === 'provider_attempt_outcomes') && typeof runId === 'string' && runId.startsWith('profile-import:') && uuidSchema.safeParse(runId.slice('profile-import:'.length)).success
+      if (runId !== undefined && !uuidSchema.safeParse(runId).success && !profileImportRun) fail(table)
       for (const key of ['created_at','attempted_at','dispatched_at','settled_at','checkpointed_at','recorded_at','updated_at']) if (row[key] !== null && row[key] !== undefined && typeof row[key] === 'string' && !Number.isFinite(Date.parse(row[key] as string))) fail(table)
     }
     const jobs = new Set((rows.jobs?.rows ?? []).map(row => row.id))

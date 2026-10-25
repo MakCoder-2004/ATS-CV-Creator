@@ -13,7 +13,7 @@ import { factualCheckReportSchema } from '../shared/factual-report'
 import { canonicalDocumentSchema, documentFitReportSchema, documentPdfSchema } from '../shared/document'
 import { regenerationProposalSchema, regenerationResultSchema, regenerationTargetSchema } from '../shared/regeneration'
 import { mutateDraftRecordInputSchema } from '../shared/draft-records'
-import { profilePdfApplyResultSchema, profilePdfPreviewSchema, profilePdfProposalSchema } from '../shared/profile-pdf-import'
+import { profilePdfApplyResultSchema, profilePdfPreviewSchema, profilePdfProposalSchema, profilePdfRebaseResultSchema } from '../shared/profile-pdf-import'
 import { profileAiConsentActionSchema, profileAiConsentPreviewSchema, profileAiRunResultSchema } from '../shared/profile-ai-structuring'
 import { postingFetchStateSchema, postingPreviewEditSchema, postingRefreshComparisonSchema, postingReviewSchema } from '../shared/posting-import'
 import { workspaceBackupStatusSchema } from '../shared/workspace-backup'
@@ -51,9 +51,11 @@ const api: WorkbenchAPI = Object.freeze({
   },
   async previewProfilePdfImport() { return profilePdfPreviewSchema.parse(await ipcRenderer.invoke('profile:pdf-import:preview')) },
   async cancelProfilePdfImport(token: string) { return z.object({ ok: z.boolean(), message: z.string() }).strict().parse(await ipcRenderer.invoke('profile:pdf-import:cancel', uuidSchema.parse(token))) },
+  async rebaseProfilePdfImport(token: string) { return profilePdfRebaseResultSchema.parse(await ipcRenderer.invoke('profile:pdf-import:rebase', uuidSchema.parse(token))) },
   async applyProfilePdfImport(token: string, proposals: import('../shared/profile-pdf-import').ProfilePdfProposal) { return profilePdfApplyResultSchema.parse(await ipcRenderer.invoke('profile:pdf-import:apply', uuidSchema.parse(token), profilePdfProposalSchema.parse(proposals))) },
   async previewProfileDocxImport() { return profilePdfPreviewSchema.parse(await ipcRenderer.invoke('profile:docx-import:preview')) },
   async cancelProfileDocxImport(token: string) { return z.object({ ok: z.boolean(), message: z.string() }).strict().parse(await ipcRenderer.invoke('profile:docx-import:cancel', uuidSchema.parse(token))) },
+  async rebaseProfileDocxImport(token: string) { return profilePdfRebaseResultSchema.parse(await ipcRenderer.invoke('profile:docx-import:rebase', uuidSchema.parse(token))) },
   async applyProfileDocxImport(token: string, proposals: import('../shared/profile-pdf-import').ProfilePdfProposal) { return profilePdfApplyResultSchema.parse(await ipcRenderer.invoke('profile:docx-import:apply', uuidSchema.parse(token), profilePdfProposalSchema.parse(proposals))) },
   async previewProfileAiStructuring(importToken: string) { return profileAiConsentPreviewSchema.parse(await ipcRenderer.invoke('profile:ai:preview', uuidSchema.parse(importToken))) },
   async consentProfileAiStructuring(token: string, accepted: boolean) { if (typeof accepted !== 'boolean') throw new Error('Choose whether to send this CV text.'); return profileAiConsentActionSchema.parse(await ipcRenderer.invoke('profile:ai:consent', uuidSchema.parse(token), accepted)) },

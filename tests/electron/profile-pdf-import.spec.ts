@@ -127,9 +127,9 @@ test('maps a section-based PDF through visible review and requires a record type
     await expect(review.getByText('Choose Employment or Training for each included experience record.')).toBeVisible()
     expect(await page.evaluate(() => window.workbench.getProfile())).toMatchObject({ contact: null, skills: [] })
     await roleCards.nth(0).getByLabel('Record type').selectOption('employment')
-    await roleCards.nth(0).getByLabel('Include this proposal').check()
+    await expect(roleCards.nth(0).getByLabel('Include this proposal')).toBeChecked()
     await roleCards.nth(1).getByLabel('Record type').selectOption('training')
-    await roleCards.nth(1).getByLabel('Include this proposal').check()
+    await expect(roleCards.nth(1).getByLabel('Include this proposal')).toBeChecked()
     await review.getByRole('button', { name: 'Apply accepted details' }).click()
     await expect(page.getByRole('status')).toContainText('added to your profile')
     expect(await page.evaluate(() => window.workbench.getProfile())).toMatchObject({
@@ -142,6 +142,14 @@ test('maps a section-based PDF through visible review and requires a record type
       experience: expect.arrayContaining([expect.objectContaining({ kind: 'employment', title: 'Machine Learning Engineer', organization: 'Example Labs', factualItems: expect.arrayContaining([expect.objectContaining({ text: 'Built a recommendation service for customer support.' })]) }), expect.objectContaining({ kind: 'training', title: 'Data Science Trainee', organization: 'Sample Institute' })]),
       projects: [expect.objectContaining({ name: 'Transit Insights', factualItems: expect.arrayContaining([expect.objectContaining({ text: 'Built a route-planning dashboard with live transit data.' })]), links: [{ label: 'GitHub', url: 'https://github.com/ada/transit-insights' }] })]
     })
+    const backupFile = join(root, 'kind-correction-backup.json')
+    await running.evaluate(({ dialog }, target) => { dialog.showSaveDialog = async () => ({ canceled: false, filePath: target }); return true }, backupFile)
+    await page.getByRole('button', { name: 'Settings' }).click()
+    await page.getByRole('button', { name: 'Back up workspace' }).click()
+    await expect(page.getByRole('region', { name: 'Workspace backup' }).getByRole('status')).toContainText('Workspace backup saved')
+    const provenance = JSON.parse(readFileSync(backupFile, 'utf8')).tables.profile_import_provenance.rows as Array<{ field: string; passage: string }>
+    expect(provenance).toEqual(expect.arrayContaining([expect.objectContaining({ field: 'experience.role', passage: expect.stringContaining('Machine Learning Engineer') })]))
+    expect(provenance).toEqual(expect.arrayContaining([expect.objectContaining({ field: 'experience.role', passage: expect.stringContaining('Data Science Trainee') })]))
     expect(readFileSync(sourceFile)).toEqual(original)
   } finally { await running?.close(); await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }) }
 })
@@ -165,6 +173,7 @@ test('imports DOCX proposals through visible review and applies them to the exis
     await expect(review.getByLabel('Skill name').first()).toHaveValue('Python')
     await expect(review.getByText('Built accessible software for customers across multiple teams').first()).toBeVisible()
     await review.getByLabel('Source factual item 1').fill('Corrected wording after checking the original CV')
+    await expect(review.getByText(/manual corrections do not become source-supported/).first()).toBeVisible()
     await review.getByRole('button', { name: 'Apply accepted details' }).click()
     await expect(page.getByRole('status')).toContainText('added to your profile')
     expect(await page.evaluate(() => window.workbench.getProfile())).toMatchObject({ contact: { fullName: 'Ada Example', links: [{ label: 'Portfolio', url: 'https://ada.example.test' }] }, skills: [{ name: 'Python' }, { name: 'SQL' }] })
@@ -177,6 +186,7 @@ test('imports DOCX proposals through visible review and applies them to the exis
     const provenance = JSON.parse(readFileSync(backupFile, 'utf8')).tables.profile_import_provenance.rows
     expect(provenance).toEqual(expect.arrayContaining([expect.objectContaining({ source_hash: expect.stringMatching(/^[a-f0-9]{64}$/), passage: expect.stringContaining('EXPERIENCE: Example Labs | Engineer') })]))
     expect(provenance.some((row: { field: string; passage: string }) => row.field === 'experience.factualItem' && row.passage.includes('Built accessible software for customers'))).toBe(false)
+    expect(provenance.some((row: { passage: string }) => row.passage.includes('Corrected wording after checking the original CV'))).toBe(false)
     expect(provenance.some((row: { field: string; passage: string }) => row.field === 'experience.role' && row.passage.includes('Example Labs'))).toBe(true)
     expect(provenance.some((row: { field: string; passage: string }) => row.field === 'projects.links' && row.passage.includes('Project context with repository link') && row.passage.includes('https://atlas.example.test'))).toBe(true)
     expect(provenance.some((row: { field: string; passage: string }) => row.field === 'contact.links' && row.passage.includes('CONTACT LINK:') && row.passage.includes('https://ada.example.test'))).toBe(true)
@@ -475,7 +485,7 @@ test('rejects a forged nested update from another role and rolls back profile an
   } finally { await running?.close(); await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }) }
 })
 
-test('profile changes during local review invalidate apply instead of overwriting facts', async () => {
+test('a profile change keeps the visible review recoverable through explicit refresh choices', async () => {
   const root = mkdtempSync(join(tmpdir(), 'cv-tailor-pdf-stale-')), userData = join(root, 'workspace'), sourceFile = join(root, 'cv.pdf')
   writeFileSync(sourceFile, makePdf(['NAME: Ada Example', 'SKILLS: Python', 'This synthetic paragraph contains enough selectable characters to exceed the local text threshold safely.', 'Additional readable career source wording keeps this sample above one hundred useful characters.']))
   let running: ElectronApplication | undefined
@@ -483,13 +493,23 @@ test('profile changes during local review invalidate apply instead of overwritin
     running = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData } })
     const page = await running.firstWindow()
     await expect(page.locator('[data-ui-ready="true"]')).toBeVisible({ timeout: 15000 })
+    await page.getByRole('button', { name: 'My profile' }).click()
     await running.evaluate(({ dialog }, selectedPath) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selectedPath] }); return true }, sourceFile)
-    const preview = await page.evaluate(() => window.workbench.previewProfilePdfImport())
-    if (!preview.ok) throw new Error(preview.message)
+    await page.getByRole('button', { name: 'Upload CV' }).click()
+    const review = page.getByRole('region', { name: 'Review proposed profile details' })
+    await expect(review).toBeVisible()
     await page.evaluate(() => window.workbench.saveSkill({ name: 'Newer fact', category: 'Technical' }))
-    const result = await page.evaluate(async ({ token, proposals }) => window.workbench.applyProfilePdfImport(token, proposals), { token: preview.token, proposals: preview.proposals })
-    expect(result).toMatchObject({ ok: false, message: expect.stringContaining('profile changed') })
+    await review.getByRole('button', { name: 'Apply accepted details' }).click()
+    await expect(review.getByRole('alert')).toContainText('Refresh the merge choices before applying')
+    await expect(review.getByRole('button', { name: 'Refresh merge choices' })).toBeVisible()
+    await expect(review.getByRole('button', { name: 'Read CV again' })).toBeVisible()
+    await expect(review.getByLabel('Full name')).toHaveValue('Ada Example')
     expect(await page.evaluate(() => window.workbench.getProfile())).toMatchObject({ contact: null, skills: [{ name: 'Newer fact' }] })
+    await review.getByRole('button', { name: 'Refresh merge choices' }).click()
+    await expect(review.getByRole('alert')).toHaveCount(0)
+    await review.getByRole('button', { name: 'Apply accepted details' }).click()
+    await expect(page.getByRole('status')).toContainText('decisions were applied')
+    expect(await page.evaluate(() => window.workbench.getProfile())).toMatchObject({ contact: { fullName: 'Ada Example' }, skills: expect.arrayContaining([expect.objectContaining({ name: 'Newer fact' }), expect.objectContaining({ name: 'Python' })]) })
     await running.close(); running = undefined
   } finally { await running?.close(); await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }) }
 })

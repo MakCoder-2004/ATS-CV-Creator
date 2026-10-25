@@ -2,10 +2,11 @@ import { dialog, ipcMain, type BrowserWindow, type IpcMainInvokeEvent } from 'el
 import { randomUUID } from 'node:crypto'
 import { lstat, readFile } from 'node:fs/promises'
 import type { WorkbenchStorageAPI } from '../shared/appearance'
-import { profilePdfApplyResultSchema, profilePdfPreviewSchema, profilePdfProposalDraftSchema, profilePdfProposalSchema, type ProfilePdfProposalDraft } from '../shared/profile-pdf-import'
+import { profilePdfApplyResultSchema, profilePdfPreviewSchema, profilePdfProposalDraftSchema, profilePdfProposalSchema, profilePdfRebaseResultSchema, type ProfilePdfProposalDraft } from '../shared/profile-pdf-import'
 import { mapProfileDocxPages } from '../shared/profile-docx-import'
 import { registerProfileAiImport, unregisterProfileAiImport } from '../shared/profile-ai-structuring'
 import { extractProfileDocx, profileDocxLimits } from './profile-docx-intake'
+import { buildDocxSourceEvidence } from '../shared/profile-source-evidence'
 
 function bindIds(draft: ProfilePdfProposalDraft) {
   const refs = new Set<string>()
@@ -30,17 +31,31 @@ export function registerProfileDocxImportIpc(getWindow: () => BrowserWindow, get
       if (selection.canceled || !selection.filePaths[0]) return profilePdfPreviewSchema.parse({ ok: false, cancelled: true, message: 'CV upload cancelled.' })
       const path = selection.filePaths[0], info = await lstat(path)
       if (!info.isFile() || info.isSymbolicLink() || info.size < 1 || info.size > profileDocxLimits.bytes) return profilePdfPreviewSchema.parse({ ok: false, cancelled: false, message: 'Choose a regular DOCX file smaller than 15 MiB.' })
-      const baseline = await getStorage().getProfileImportBaseline(), bytes = await readFile(path)
-      if (bytes.length !== info.size) return profilePdfPreviewSchema.parse({ ok: false, cancelled: false, message: 'The selected file changed while it was being read. Choose it again.' })
+      const baseline = await getStorage().getProfileImportBaseline(), bytes = await readFile(path), afterRead = await lstat(path)
+      if (bytes.length !== info.size || !afterRead.isFile() || afterRead.isSymbolicLink() || afterRead.dev !== info.dev || afterRead.ino !== info.ino || afterRead.size !== info.size || afterRead.mtimeMs !== info.mtimeMs || afterRead.ctimeMs !== info.ctimeMs) return profilePdfPreviewSchema.parse({ ok: false, cancelled: false, message: 'The selected file changed while it was being read. Choose it again.' })
       const extracted = await extractProfileDocx(bytes)
       const proposals = bindIds(profilePdfProposalDraftSchema.parse(mapProfileDocxPages(extracted.pages)))
+      let evidence: ReturnType<typeof buildDocxSourceEvidence> | undefined, evidenceError: string | undefined
+      try { evidence = buildDocxSourceEvidence(extracted.sha256, extracted.pages, randomUUID) }
+      catch (error) { evidenceError = error instanceof Error && /source-unit limit/.test(error.message) ? error.message : 'Complete source text could not be prepared for AI. Continue locally or choose a smaller document.' }
       const token = randomUUID(), timer = setTimeout(() => discard(token), 15 * 60_000); timer.unref()
       pending.set(token, { hash: extracted.sha256, baseline, proposals, timer })
-      registerProfileAiImport(token, { get: () => pending.get(token)?.proposals ?? proposals, set: value => { const active = pending.get(token); if (active) active.proposals = value } })
+      registerProfileAiImport(token, { get: () => pending.get(token)?.proposals ?? proposals, set: value => { const active = pending.get(token); if (active) active.proposals = value }, evidence, evidenceError })
       return profilePdfPreviewSchema.parse({ ok: true, token, sourceHash: extracted.sha256, proposals })
     } catch (error) { return profilePdfPreviewSchema.parse({ ok: false, cancelled: false, message: error instanceof Error ? error.message : 'The selected DOCX could not be read.' }) }
   })
   ipcMain.handle('profile:docx-import:cancel', (event, token: unknown) => { trusted(event); if (typeof token !== 'string') throw new Error('Expected preview token'); return discard(token) ? { ok: true, message: 'CV review discarded. No profile data was changed.' } : { ok: false, message: 'This CV review has expired.' } })
+  ipcMain.handle('profile:docx-import:rebase', async (event, token: unknown) => {
+    trusted(event)
+    if (typeof token !== 'string') throw new Error('Expected a CV review token')
+    const saved = pending.get(token)
+    if (!saved) return profilePdfRebaseResultSchema.parse({ ok: false, message: 'This CV review expired. Select the document again.' })
+    try {
+      const current = await getStorage().getProfileImportRebase()
+      saved.baseline = current.baseline
+      return profilePdfRebaseResultSchema.parse({ ok: true, message: 'Profile changed. Review the refreshed add, update, and skip choices before applying.', profile: current.profile, experience: current.experience })
+    } catch { return profilePdfRebaseResultSchema.parse({ ok: false, message: 'The current profile could not be reloaded. No CV changes were applied.' }) }
+  })
   ipcMain.handle('profile:docx-import:apply', async (event, token: unknown, input: unknown) => {
     trusted(event)
     if (typeof token !== 'string') throw new Error('Expected preview token and reviewed proposals')
@@ -63,8 +78,8 @@ export function registerProfileDocxImportIpc(getWindow: () => BrowserWindow, get
       const original = valueForRef(saved.proposals, source.proposalRef), accepted = valueForRef(parsed.data, source.proposalRef)
       if (source.field === 'experience.role') {
         const before = saved.proposals.experience.find(item => item.proposalRef === source.proposalRef), after = parsed.data.experience.find(item => item.proposalRef === source.proposalRef)
-        const roleFields = (role: typeof before) => role && ({ kind: role.kind, organization: role.organization, title: role.title, startDate: role.startDate, endDate: role.endDate, description: role.description })
-        return Boolean(before && after && JSON.stringify(roleFields(before)) === JSON.stringify(roleFields(after)))
+        const roleFields = (role: typeof before) => role && ({ organization: role.organization, title: role.title, startDate: role.startDate, endDate: role.endDate, description: role.description })
+        return Boolean(before && after && (before.kind === after.kind || before.kind === 'unresolved' && ['employment', 'training'].includes(after.kind)) && JSON.stringify(roleFields(before)) === JSON.stringify(roleFields(after)))
       }
       if (source.field === 'experience.role.date') {
         const role = parsed.data.experience.find(item => item.proposalRef === source.proposalRef), prior = saved.proposals.experience.find(item => item.proposalRef === source.proposalRef)
@@ -85,7 +100,7 @@ export function registerProfileDocxImportIpc(getWindow: () => BrowserWindow, get
       return original !== undefined && JSON.stringify(original) === JSON.stringify(accepted)
     })
     const result = profilePdfApplyResultSchema.parse(await getStorage().importEmptyProfilePdf(saved.hash, saved.baseline, { ...parsed.data, sources }))
-    if (result.ok || /profile changed|profile is no longer empty/i.test(result.message)) discard(token)
+    if (result.ok) discard(token)
     return result
   })
   return { clear() { for (const token of pending.keys()) discard(token) } }

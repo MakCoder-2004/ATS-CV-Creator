@@ -471,6 +471,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
     },
     cancelProfileImportAi(runId: string) { dispatcher.cancel(runId); profileAiSelections.delete(runId) },
     async getProfileImportBaseline() { return profileImportBaseline() },
+    async getProfileImportRebase() { return { baseline: profileImportBaseline(), profile: readProfile(), experience: readExperience() } },
     async importEmptyProfilePdf(sourceHash: string, baseline: string, input: ProfilePdfProposal) {
       const validHash = /^[a-f0-9]{64}$/.test(sourceHash)
       const checked = profilePdfProposalSchema.safeParse(input)

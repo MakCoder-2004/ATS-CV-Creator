@@ -40,9 +40,11 @@ export interface WorkbenchAPI {
   getProfile(): Promise<ProfileSnapshot>
   previewProfilePdfImport(): Promise<ProfilePdfPreview>
   cancelProfilePdfImport(token: string): Promise<{ ok: boolean; message: string }>
+  rebaseProfilePdfImport(token: string): Promise<import('./profile-pdf-import').ProfilePdfRebaseResult>
   applyProfilePdfImport(token: string, proposals: ProfilePdfProposal): Promise<{ ok: boolean; message: string; profile?: ProfileSnapshot; experience?: ExperienceSnapshot }>
   previewProfileDocxImport(): Promise<ProfilePdfPreview>
   cancelProfileDocxImport(token: string): Promise<{ ok: boolean; message: string }>
+  rebaseProfileDocxImport(token: string): Promise<import('./profile-pdf-import').ProfilePdfRebaseResult>
   applyProfileDocxImport(token: string, proposals: ProfilePdfProposal): Promise<{ ok: boolean; message: string; profile?: ProfileSnapshot; experience?: ExperienceSnapshot }>
   previewProfileAiStructuring(importToken: string): Promise<ProfileAiConsentPreview>
   consentProfileAiStructuring(token: string, accepted: boolean): Promise<ProfileAiConsentAction>
@@ -110,11 +112,12 @@ export interface WorkbenchAPI {
   acceptDocumentCuts(jobId: string, documentHash: string, entryIds: string[]): Promise<{ ok: boolean; message: string; draft?: DraftRevision }>
 }
 
-export type WorkbenchStorageAPI = Omit<WorkbenchAPI, 'exportProfile' | 'previewProfileImport' | 'applyProfileImport' | 'cancelProfileImport' | 'previewProfilePdfImport' | 'cancelProfilePdfImport' | 'applyProfilePdfImport' | 'previewProfileDocxImport' | 'cancelProfileDocxImport' | 'applyProfileDocxImport' | 'previewProfileAiStructuring' | 'consentProfileAiStructuring' | 'runProfileAiStructuring' | 'cancelProfileAiStructuring' | 'exportWorkspaceBackup' | 'previewWorkspaceRestore' | 'applyWorkspaceRestore' | 'cancelWorkspaceRestore' | 'measureDocument' | 'getDocumentPdf' | 'exportApprovedPdf' | 'exportDraftDocx' | 'openPostingSource'> & {
+export type WorkbenchStorageAPI = Omit<WorkbenchAPI, 'exportProfile' | 'previewProfileImport' | 'applyProfileImport' | 'cancelProfileImport' | 'previewProfilePdfImport' | 'cancelProfilePdfImport' | 'rebaseProfilePdfImport' | 'applyProfilePdfImport' | 'previewProfileDocxImport' | 'cancelProfileDocxImport' | 'rebaseProfileDocxImport' | 'applyProfileDocxImport' | 'previewProfileAiStructuring' | 'consentProfileAiStructuring' | 'runProfileAiStructuring' | 'cancelProfileAiStructuring' | 'exportWorkspaceBackup' | 'previewWorkspaceRestore' | 'applyWorkspaceRestore' | 'cancelWorkspaceRestore' | 'measureDocument' | 'getDocumentPdf' | 'exportApprovedPdf' | 'exportDraftDocx' | 'openPostingSource'> & {
   saveDocumentFitReport(jobId: string, report: DocumentFitReport): Promise<DocumentFitReport>
   validateProfileImport(input: string): Promise<{ ok: boolean; message: string }>
   replaceProfile(input: string): Promise<{ ok: boolean; message: string; profile?: ProfileSnapshot }>
   getProfileImportBaseline(): Promise<string>
+  getProfileImportRebase(): Promise<{ baseline: string; profile: ProfileSnapshot; experience: ExperienceSnapshot }>
   importEmptyProfilePdf(sourceHash: string, baseline: string, proposals: ProfilePdfProposal): Promise<{ ok: boolean; message: string; profile?: ProfileSnapshot; experience?: ExperienceSnapshot }>
   authorizeProfileImportAi(runId: string): void
   generateProfileImportAi(runId: string, model: string, prompt: string, responseSchema: import('zod').ZodTypeAny): Promise<{ text: string; attempts: number }>
