@@ -1,0 +1,19 @@
+.job-research-review { display: grid; gap: 16px; min-width: 0; padding: 20px; border: 1px solid var(--line); border-radius: 8px; background: var(--canvas); }
+.job-research-review h3 { font: 700 16px/1.4 'Sora Variable', sans-serif; }
+.job-research-review h4 { font: 700 14px/1.4 'Sora Variable', sans-serif; }
+.job-research-review p { margin: 4px 0 0; max-width: 80ch; line-height: 1.55; overflow-wrap: anywhere; }
+.job-research-review button { width: fit-content; min-height: 44px; }
+.job-research-review :is(button, input):focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+.research-error { color: var(--error); }
+.research-status { color: var(--muted); }
+.research-identity, .research-search, .research-review-action { display: grid; justify-items: start; gap: 12px; min-width: 0; padding: 16px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
+.research-identity > p:first-of-type, .research-url { overflow-wrap: anywhere; }
+.research-group, .research-unknowns { min-width: 0; padding-top: 16px; border-top: 1px solid var(--line); }
+.research-group ul, .research-unknowns ul { display: grid; gap: 12px; margin: 12px 0 0; padding: 0; list-style: none; }
+.research-finding { min-width: 0; padding: 16px; border-left: 3px solid var(--link); background: var(--surface); }
+.research-finding .research-evidence { max-height: 320px; overflow: auto; white-space: pre-wrap; }
+.research-source, .research-url { color: var(--muted); font-size: 12px; }
+.research-choice { display: flex; align-items: flex-start; gap: 8px; min-height: 44px; font-weight: 650; line-height: 1.55; cursor: pointer; }
+.research-choice input { flex: none; width: 18px; height: 18px; margin-top: 3px; accent-color: var(--blue); }
+.research-unknowns li { padding-left: 12px; border-left: 3px solid var(--warning-border); }
+@media (max-width: 520px) { .job-research-review { padding: 16px; } .job-research-review button { width: 100%; } }

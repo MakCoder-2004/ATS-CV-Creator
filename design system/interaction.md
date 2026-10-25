@@ -19,6 +19,10 @@
 - Cancel and recoverable errors retain the selection. A stale preview requires a new review; a busy job requires the person to stop its operation in Tailor CV. Disable duplicate submit. Announce errors and committed success through status or alert semantics. Never announce success before the storage transaction commits.
 - After success, refresh Saved jobs and sidebar shortcuts. If the active posting was deleted, clear its Tailor CV selection and show the choose-a-posting state without starting another model run.
 
+### Public job-link research
+
+Only explicit button actions may begin a public read or indexed search; entering/pasting a URL and opening a preview make no network request. The first action may produce a complete editable direct-source preview or an incomplete-source notice. A separate research action reads the exact role into a temporary source-bound review; a further **Search indexed details** action discloses Tavily query terms, network/index sharing and possible free credit use before dispatch. Display missing key, billing restriction, denial and cancellation as distinct recovery states; failed/late results never replace newer views. Display source URLs as inert text; open only the canonical selected original through the trusted external-opening method. Role checkboxes never appear on employer-context findings; partial findings require explicit acknowledgment before review. Review freezes selected role IDs but is not consent or analysis. When there is no connected Outgoing data handoff, plainly say so and offer manual complete posting as the existing CV path.
+
 ### Saved jobs link intake and refresh
 
 - Pasting a link or opening the intake never starts a request. Keep **Fetch posting**, **Save job**, **Refresh**, and any model-analysis authorization as distinct decisions. Show the hostname before fetch; only report fetch/extraction/save completion after that operation succeeds.
