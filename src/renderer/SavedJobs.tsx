@@ -18,7 +18,7 @@ import './jobs.css'
 
 type DraftLabel = 'No draft' | 'Needs review' | 'Earlier target' | 'Blocked' | 'Approved'
 export function temporaryDirectNotice(notice: string) {
-  return /review before saving/i.test(notice) ? 'Review this temporary source before analysis; nothing is saved.' : notice
+  return /before saving/i.test(notice) ? 'Review this temporary source before analysis; nothing is saved.' : notice
 }
 const defaultRefreshChoices = (): PostingRefreshChoice => ({ title: 'working', company: 'working', description: 'working', optionalDetails: {} })
 const optionalPostingFields = [

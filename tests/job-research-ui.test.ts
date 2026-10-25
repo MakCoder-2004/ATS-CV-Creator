@@ -72,11 +72,12 @@ describe('universal research intake', () => {
     await Promise.resolve()
     expect(calls).toEqual(['posting:first-fetch-token', 'posting:second-fetch-token', 'cancel:manual-switch-token'])
   })
-  it('keeps the transferred child mounted while the fetch token is retained, and replaces saved-preview wording', () => {
+  it('keeps the transferred child mounted while the fetch token is retained, and replaces save-implying preview notices', () => {
     const source = readFileSync(new URL('../src/renderer/SavedJobs.tsx', import.meta.url), 'utf8')
     expect(source).toMatch(/function finishResearchHandoff\(\)\s*\{[^}]*Keep the fetch token/)
     expect(source).toMatch(/\{fetchToken && <JobResearchReview key=\{`full-\$\{fetchToken\}`\}/)
-    expect(temporaryDirectNotice('Complete source found. Review before saving.')).toBe('Review this temporary source before analysis; nothing is saved.')
+    expect(temporaryDirectNotice('Direct public posting text was captured for this exact role. Review the full wording and employer before saving; availability and completeness cannot be guaranteed.')).toBe('Review this temporary source before analysis; nothing is saved.')
+    expect(temporaryDirectNotice('This is a temporary source. Nothing is saved.')).toBe('This is a temporary source. Nothing is saved.')
     expect(temporaryDirectNotice('The source is temporary.')).toBe('The source is temporary.')
   })
   it('labels the captured full direct-posting handoff as temporary research without invoking it on render', () => {
@@ -85,6 +86,8 @@ describe('universal research intake', () => {
     expect(html).toContain('Review temporary findings')
     expect(html).toContain('Inspect the direct public findings captured during Fetch posting')
     expect(html).not.toContain('Save job')
+    expect(html).not.toMatch(/before saving/i)
+    expect(html).not.toMatch(/\bSave\b/i)
     expect(html).not.toContain('Refresh')
   })
   it('does not search on mount, identifies the optional separate search, and does not claim analysis ran', () => {
