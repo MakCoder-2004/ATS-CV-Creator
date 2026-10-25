@@ -5,10 +5,10 @@ export function escapeLatex(value: string): string {
   const symbols: Record<string, string> = { '\\': '\\textbackslash{}', '{': '\\{', '}': '\\}', '$': '\\$', '&': '\\&', '#': '\\#', '%': '\\%', '_': '\\_', '~': '\\textasciitilde{}', '^': '\\textasciicircum{}', '|': '\\textbar{}', '<': '\\textless{}', '>': '\\textgreater{}' }
   return value.normalize('NFC').replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '').replace(/[\\{}$&#%_~^|<>]/g, character => symbols[character]).replace(/[\r\n\t]+/g, ' ')
 }
-function link(url: string, label: string): string {
+function link(url: string, label: string, wrappable = false): string {
   if (!/^(?:https?:\/\/|mailto:)/i.test(url) || /[\s\u0000-\u001f\u007f\\{}]/u.test(url)) throw new Error('A CV link contains characters that cannot be safely compiled. Edit the link in My profile.')
   const target = escapeLatex(new URL(url).href).replaceAll('\\textasciitilde{}', '\\string~')
-  return `\\href{${target}}{\\underline{${escapeLatex(label)}}}`
+  return wrappable ? `\\href{${target}}{\\emph{${escapeLatex(label)}}}` : `\\href{${target}}{\\underline{${escapeLatex(label)}}}`
 }
 const itemList = (entry: CanonicalDocumentEntry, includeLinks = true) => {
   if (!entry.reviewItems?.length || entry.reviewItems.every(item => (item.descriptionFormat ?? 'bullets') === (entry.descriptionFormat ?? 'bullets'))) {
@@ -48,12 +48,16 @@ export function renderLatexSections(input: CanonicalDocument): Record<'heading.t
       files['skills.tex'] = `\\section{Technical Skills}\n\\begin{itemize}[leftmargin=0.15in, label={}]\n    \\small{\\item{\n${groups}\n    }}\n\\end{itemize}\n`
     } else {
       const entries = section.entries.map(entry => {
-        const projectRight = escapeLatex(entry.dates ?? '')
+        const paragraphFormat = entry.descriptionFormat === 'paragraph' || entry.reviewItems?.some(item => item.descriptionFormat === 'paragraph')
+        const projectRight = section.name === 'Projects'
+          ? [escapeLatex(entry.dates ?? ''), ...entry.links.map(value => link(value.url, value.label))].filter(Boolean).join(' \\quad ')
+          : ''
+        const paragraphProjectRight = [escapeLatex(entry.dates ?? ''), ...entry.links.map(value => link(value.url, value.label, true))].filter(Boolean).join('\\newline ')
+        const projectMacro = entry.links.length ? paragraphFormat ? 'resumeParagraphLinkedProjectHeading' : 'resumeLinkedProjectHeading' : 'resumeProjectHeading'
         const heading = section.name === 'Projects'
-          ? `\\${entry.links.length ? 'resumeLinkedProjectHeading' : 'resumeProjectHeading'}\n    {\\textbf{${escapeLatex(entry.heading)}}${entry.technologies?.length ? ` $|$ \\emph{${entry.technologies.map(escapeLatex).join(', ')}}` : ''}}{${projectRight}}`
+          ? `\\${projectMacro}\n    {\\textbf{${escapeLatex(entry.heading)}}${entry.technologies?.length ? ` $|$ \\emph{${entry.technologies.map(escapeLatex).join(', ')}}` : ''}}{${paragraphFormat ? paragraphProjectRight : projectRight}}`
           : `\\resumeSubheading\n    {${escapeLatex(entry.organization || entry.heading)}}{${escapeLatex(entry.dates ?? '')}}\n    {${escapeLatex(entry.organization ? entry.heading : '')}}{${escapeLatex(entry.grade ?? '')}}`
-        const projectLinks = section.name === 'Projects' && entry.links.length ? `\\resumeParagraphStart\\small{${entry.links.map(value => link(value.url, value.label)).join(' \\quad ')}}\\par\n` : ''
-        return `${heading}\n${projectLinks}${itemList(entry, section.name !== 'Projects')}`
+        return `${heading}\n${itemList(entry, section.name !== 'Projects')}`
       }).join('\n\n')
       files[`${section.name.toLowerCase()}.tex` as 'education.tex' | 'experience.tex' | 'projects.tex'] = `\\section{${section.name}}\n\\resumeSubHeadingListStart\n\n${entries}\n\n\\resumeSubHeadingListEnd\n`
     }

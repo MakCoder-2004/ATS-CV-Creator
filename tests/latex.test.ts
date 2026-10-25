@@ -32,7 +32,7 @@ test('template sections render employer once before locked role and use short co
 test('explicit paragraph descriptions compile as prose and legacy descriptions remain bullet items', () => {
   const paragraph = { ...document, sections: [{ ...document.sections[0], entries: [{ ...document.sections[0].entries[0], text: 'Contributed to reliable services with supported deployment practices.', descriptionFormat: 'paragraph' as const }] }] }
   const tex = renderLatexSections(paragraph)['experience.tex']
-  expect(tex).toContain('\\small{Contributed to reliable services with supported deployment practices.}\\par')
+  expect(tex).toContain('\\resumeParagraphStart\\small{Contributed to reliable services with supported deployment practices.}\\par')
   expect(tex).not.toContain('\\resumeItem{Contributed')
   expect(renderLatexSections(document)['experience.tex']).toContain('\\resumeItem{Built reliable APIs.}')
 })
@@ -44,6 +44,18 @@ test('frozen legacy role and project canonical JSON keeps its released hash', ()
   expect(legacy.sections.flatMap(section => section.entries).every(entry => !('descriptionFormat' in entry))).toBe(true)
   expect(createHash('sha256').update(JSON.stringify(legacy)).digest('hex')).toBe('df2f99c2991874ddd952d660114f910e128c341cf875668d26a81a3104869006')
 })
+test('legacy linked projects keep the exact right-side heading-row link layout', () => {
+  const legacy = { ...document, sections: [{ name: 'Projects' as const, entries: [{ id: 'projects-0', heading: 'Compiler', dates: '2024', text: 'Added diagnostics.', bullets: ['Added diagnostics.'], technologies: ['Rust'], links: [{ label: 'github/compiler', url: 'https://github.com/example/compiler' }] }] }] }
+  const tex = renderLatexSections(legacy)['projects.tex']
+  expect(tex).toContain('\\resumeLinkedProjectHeading\n    {\\textbf{Compiler} $|$ \\emph{Rust}}{2024 \\quad \\href{https://github.com/example/compiler}{\\underline{github/compiler}}}')
+  expect(tex).toContain('\\resumeItem{Added diagnostics.}')
+  expect(tex).not.toContain('resumeParagraphLinkedProjectHeading')
+  expect(tex).not.toContain('resumeParagraphStart')
+  const paragraph = { ...legacy, sections: [{ ...legacy.sections[0], entries: [{ ...legacy.sections[0].entries[0], descriptionFormat: 'paragraph' as const }] }] }
+  const paragraphTex = renderLatexSections(paragraph)['projects.tex']
+  expect(paragraphTex).toContain('\\resumeParagraphLinkedProjectHeading\n    {\\textbf{Compiler} $|$ \\emph{Rust}}{2024\\newline \\href{https://github.com/example/compiler}{\\emph{github/compiler}}}')
+  expect(paragraphTex).toContain('\\resumeParagraphStart\\small{Added diagnostics.}\\par')
+})
 test('mixed-format grouped items keep paragraph and legacy bullet siblings independent', () => {
   const mixed = { ...document, sections: [{ ...document.sections[0], entries: [{ ...document.sections[0].entries[0], text: 'First bullet.\\nLater paragraph.', bullets: ['First bullet.', 'Later paragraph.'], reviewItems: [
     { id: 'old-item', text: 'First bullet.', bullets: ['First bullet.'] },
@@ -51,7 +63,7 @@ test('mixed-format grouped items keep paragraph and legacy bullet siblings indep
   ] }] }] }
   const latex = renderLatexSections(mixed)['experience.tex']
   expect(latex).toContain('\\resumeItem{First bullet.}')
-  expect(latex).toContain('\\small{Later paragraph.}\\par')
+  expect(latex).toContain('\\resumeParagraphStart\\small{Later paragraph.}\\par')
   expect(latex).not.toContain('\\resumeItem{Later paragraph.}')
 })
 test('all user and model content is escaped once, not accepted as executable TeX', () => {
