@@ -44,7 +44,9 @@ describe('universal research intake', () => {
   it('does not search on mount, identifies the optional separate search, and does not claim analysis ran', () => {
     const html = renderToStaticMarkup(React.createElement(JobResearchReview, { url: 'https://www.linkedin.com/jobs/view/1234567890/' }))
     expect(html).toContain('Research indexed details')
+    expect(html).toContain('fresh public read of the selected job')
     expect(html).toContain('Indexed search is a separate, optional decision')
+    expect(html).not.toContain('Searching will read the public source again, then run')
     expect(html).not.toContain('Configure a free Tavily Researcher key in Settings')
     expect(html).not.toContain('Search query:')
     expect(html).not.toContain('Search indexed details')
