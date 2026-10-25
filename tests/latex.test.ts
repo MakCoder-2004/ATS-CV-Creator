@@ -53,8 +53,16 @@ test('legacy linked projects keep the exact right-side heading-row link layout',
   expect(tex).not.toContain('resumeParagraphStart')
   const paragraph = { ...legacy, sections: [{ ...legacy.sections[0], entries: [{ ...legacy.sections[0].entries[0], descriptionFormat: 'paragraph' as const }] }] }
   const paragraphTex = renderLatexSections(paragraph)['projects.tex']
-  expect(paragraphTex).toContain('\\resumeParagraphLinkedProjectHeading\n    {\\textbf{Compiler} $|$ \\emph{Rust}}{2024\\newline \\href{https://github.com/example/compiler}{\\emph{github/compiler}}}')
+  expect(paragraphTex).toContain('\\resumeParagraphLinkedProjectHeading\n    {\\textbf{Compiler} $|$ \\emph{Rust}}{2024 \\quad \\href{https://github.com/example/compiler}{\\underline{github/compiler}}}')
   expect(paragraphTex).toContain('\\resumeParagraphStart\\small{Added diagnostics.}\\par')
+  const unbrokenLabel = `github/${'x'.repeat(50)}`
+  const wrappable = { ...paragraph, sections: [{ ...paragraph.sections[0], entries: [{ ...paragraph.sections[0].entries[0], links: [{ label: unbrokenLabel, url: 'https://github.com/example/unbroken' }] }] }] }
+  expect(renderLatexSections(wrappable)['projects.tex']).toContain(`\\underline{github/xxxxxxxxx}\\allowbreak`)
+  expect(renderLatexSections(wrappable)['projects.tex']).toContain(`\\underline{${'x'.repeat(16)}}\\allowbreak`)
+  expect(renderLatexSections(wrappable)['projects.tex']).toContain(`\\underline{${'x'.repeat(9)}}}`)
+  const graphemeLabel = `github/${'e\u0301'.repeat(24)}`
+  const graphemeLink = { ...wrappable, sections: [{ ...wrappable.sections[0], entries: [{ ...wrappable.sections[0].entries[0], links: [{ label: graphemeLabel, url: 'https://github.com/example/graphemes' }] }] }] }
+  expect(renderLatexSections(graphemeLink)['projects.tex']).toContain('\\underline{github/ééééééééé}\\allowbreak')
 })
 test('mixed-format grouped items keep paragraph and legacy bullet siblings independent', () => {
   const mixed = { ...document, sections: [{ ...document.sections[0], entries: [{ ...document.sections[0].entries[0], text: 'First bullet.\\nLater paragraph.', bullets: ['First bullet.', 'Later paragraph.'], reviewItems: [

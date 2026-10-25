@@ -5,10 +5,25 @@ export function escapeLatex(value: string): string {
   const symbols: Record<string, string> = { '\\': '\\textbackslash{}', '{': '\\{', '}': '\\}', '$': '\\$', '&': '\\&', '#': '\\#', '%': '\\%', '_': '\\_', '~': '\\textasciitilde{}', '^': '\\textasciicircum{}', '|': '\\textbar{}', '<': '\\textless{}', '>': '\\textgreater{}' }
   return value.normalize('NFC').replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '').replace(/[\\{}$&#%_~^|<>]/g, character => symbols[character]).replace(/[\r\n\t]+/g, ' ')
 }
+function breakableUnderline(label: string): string {
+  const graphemes = [...new Intl.Segmenter('en', { granularity: 'grapheme' }).segment(label)].map(part => part.segment)
+  const chunks: string[] = []
+  for (let start = 0; start < graphemes.length;) {
+    let end = Math.min(start + 16, graphemes.length)
+    if (end < graphemes.length) {
+      for (let boundary = end; boundary > start + 8; boundary--) {
+        if (/[\/._-]/u.test(graphemes[boundary - 1])) { end = boundary; break }
+      }
+    }
+    chunks.push(graphemes.slice(start, end).join(''))
+    start = end
+  }
+  return chunks.map(chunk => `\\underline{${escapeLatex(chunk)}}`).join('\\allowbreak')
+}
 function link(url: string, label: string, wrappable = false): string {
   if (!/^(?:https?:\/\/|mailto:)/i.test(url) || /[\s\u0000-\u001f\u007f\\{}]/u.test(url)) throw new Error('A CV link contains characters that cannot be safely compiled. Edit the link in My profile.')
   const target = escapeLatex(new URL(url).href).replaceAll('\\textasciitilde{}', '\\string~')
-  return wrappable ? `\\href{${target}}{\\emph{${escapeLatex(label)}}}` : `\\href{${target}}{\\underline{${escapeLatex(label)}}}`
+  return `\\href{${target}}{${wrappable ? breakableUnderline(label) : `\\underline{${escapeLatex(label)}}`}}`
 }
 const itemList = (entry: CanonicalDocumentEntry, includeLinks = true) => {
   if (!entry.reviewItems?.length || entry.reviewItems.every(item => (item.descriptionFormat ?? 'bullets') === (entry.descriptionFormat ?? 'bullets'))) {
@@ -52,7 +67,7 @@ export function renderLatexSections(input: CanonicalDocument): Record<'heading.t
         const projectRight = section.name === 'Projects'
           ? [escapeLatex(entry.dates ?? ''), ...entry.links.map(value => link(value.url, value.label))].filter(Boolean).join(' \\quad ')
           : ''
-        const paragraphProjectRight = [escapeLatex(entry.dates ?? ''), ...entry.links.map(value => link(value.url, value.label, true))].filter(Boolean).join('\\newline ')
+        const paragraphProjectRight = [escapeLatex(entry.dates ?? ''), ...entry.links.map(value => link(value.url, value.label, true))].filter(Boolean).join(' \\quad ')
         const projectMacro = entry.links.length ? paragraphFormat ? 'resumeParagraphLinkedProjectHeading' : 'resumeLinkedProjectHeading' : 'resumeProjectHeading'
         const heading = section.name === 'Projects'
           ? `\\${projectMacro}\n    {\\textbf{${escapeLatex(entry.heading)}}${entry.technologies?.length ? ` $|$ \\emph{${entry.technologies.map(escapeLatex).join(', ')}}` : ''}}{${paragraphFormat ? paragraphProjectRight : projectRight}}`

@@ -70,6 +70,9 @@ test('legacy experience and project items sharing a locked parent render once an
   const mixedDraft = { ...original, content: { ...original.content, experience: original.content.experience.map((item, index) => index === 1 ? { ...item, descriptionFormat: 'paragraph' as const } : item), projects: original.content.projects.map((item, index) => index === 1 ? { ...item, descriptionFormat: 'paragraph' as const } : item) } }
   const canonical = createCanonicalDocument(mixedDraft, profile as never, { experience: [], projects: [] } as never)
   expect(canonical.style).toMatchObject({ templateRevision: 3 })
+  const oldLayoutHash = createHash('sha256').update(JSON.stringify(canonicalDocumentSchema.parse({ ...canonical, style: { ...canonical.style, templateRevision: 2 } }))).digest('hex')
+  const currentLayoutHash = createHash('sha256').update(JSON.stringify(canonical)).digest('hex')
+  expect(currentLayoutHash).not.toBe(oldLayoutHash)
   const role = canonical.sections.find(section => section.name === 'Experience')!.entries[0]
   const project = canonical.sections.find(section => section.name === 'Projects')!.entries[0]
   expect(canonical.sections.find(section => section.name === 'Experience')!.entries).toHaveLength(1)
