@@ -66,7 +66,7 @@ describe('volatile, reviewed job-research analysis boundary', () => {
     expect(f.completeSimple).toHaveBeenCalledWith(model, expect.objectContaining({ tools: [], messages: [expect.objectContaining({ content: p.outgoingText })] }), expect.objectContaining({ maxRetries: 0 }))
     await expect(f.controller.start(p.token)).rejects.toThrow(/fresh/)
     expect(() => f.controller.preview(runId)).toThrow(/already/)
-  })
+  }, 20_000) // Measured ~16s on the cold Pi runtime: this synthetic completion exercises the real Pi model-resolution/import path, without an external provider call.
   it('refuses modified evidence, model, effort or falsified review before dispatch', async () => {
     for (const alter of [(f: ReturnType<typeof fixture>) => { f.run.unknowns.push('New fact') },
       (f: ReturnType<typeof fixture>) => f.setChoice({ ...selection, modelId: 'different' }),

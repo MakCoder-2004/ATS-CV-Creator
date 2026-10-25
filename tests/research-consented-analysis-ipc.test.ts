@@ -19,8 +19,9 @@ const fixture: JobResearchRun = { version: 1, id, selected: { canonicalUrl: url,
 const model = { id: 'synthetic', name: 'Fake', api: 'synthetic' as Api, provider: 'fake', baseUrl: 'https://example.invalid', input: ['text'], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, reasoning: true, contextWindow: 8192, maxTokens: 4096 } as Model<Api>
 const selection = { providerId: 'fake', modelId: 'synthetic', thinkingLevel: 'low' as const }
 async function connected() {
+  let clock = 0
   const sessions = createJobResearchSessions({ credentials: { status: async () => ({ configured: false, storageAvailable: false, message: '' }), withKey: async () => { throw Error('No search') } } as never,
-    direct: async () => structuredClone(fixture) })
+    direct: async () => structuredClone(fixture), now: () => clock })
   const { token } = sessions.startJobResearch(url)
   await vi.waitFor(() => expect(sessions.getJobResearch(token).status).toBe('ready'))
   let choice: PiModelSelection = { ...selection }, epoch = 0
@@ -33,7 +34,8 @@ async function connected() {
   const controller = createVolatileResearchAnalysis({ getAppHeldRun: runId => sessions.getReviewedRunById(runId).run,
     getAppHeldReview: runId => sessions.getReviewedRunById(runId).review, getPiSelection: () => choice, getSelectionEpoch: () => epoch, piRuntime: sdk })
   return { sessions, token, controller, requests, getAvailable, changeModel: () => { choice = { ...selection, thinkingLevel: 'high' }; epoch++ },
-    holdAuth: () => { authGate = new Promise<void>(resolve => { releaseAuth = resolve }) }, releaseAuth: () => releaseAuth?.() }
+    holdAuth: () => { authGate = new Promise<void>(resolve => { releaseAuth = resolve }) }, releaseAuth: () => releaseAuth?.(),
+    advanceTime: (milliseconds: number) => { clock += milliseconds } }
 }
 
 describe('trusted provisional research analysis seam', () => {
@@ -56,6 +58,21 @@ describe('trusted provisional research analysis seam', () => {
     expect(f.requests).toHaveBeenCalledTimes(1)
     expect(() => f.sessions.getReviewedRunById('00000000-0000-4000-8000-000000000099')).toThrow()
     f.controller.close(); f.sessions.close()
+  }, 20_000) // Electron ABI 140 showed this real synthetic end-to-end consent/completion case can take ~16s on a cold Pi runtime; no external provider call is made.
+  it('revokes completed results and source evidence after research cancellation or expiry', async () => {
+    for (const revoke of ['cancel', 'expire'] as const) {
+      const f = await connected()
+      f.sessions.reviewJobResearch(f.token, [findingId], true)
+      const p = f.controller.preview(id)
+      f.controller.consent(p.token)
+      expect(await f.controller.start(p.token)).toMatchObject({ status: 'complete', result: { evidence: [{ text: 'TypeScript required.' }] } })
+      if (revoke === 'cancel') f.sessions.cancelJobResearch(f.token)
+      else f.advanceTime(15 * 60_000)
+      expect(() => f.controller.read(p.token)).toThrow()
+      expect(() => f.sessions.getReviewedRunById(id)).toThrow()
+      expect(f.requests).toHaveBeenCalledTimes(1)
+      f.controller.close(); f.sessions.close()
+    }
   })
   it('rejects changed model/effort before dispatch and revoked research after review', async () => {
     const f = await connected()
@@ -70,6 +87,19 @@ describe('trusted provisional research analysis seam', () => {
     await expect(g.controller.start(q.token)).rejects.toThrow()
     expect(g.requests).toHaveBeenCalledTimes(0)
     f.controller.close(); g.controller.close()
+  })
+  it('does not publish a provider response after the app-held research is revoked in flight', async () => {
+    const f = await connected(); f.sessions.reviewJobResearch(f.token, [findingId], true)
+    const p = f.controller.preview(id); f.controller.consent(p.token)
+    let release!: (value: { role: 'assistant'; content: { type: 'text'; text: string }[]; stopReason: 'stop'; usage: { output: number } }) => void
+    f.requests.mockImplementationOnce(() => new Promise(resolve => { release = resolve }))
+    const pending = f.controller.start(p.token)
+    await vi.waitFor(() => expect(f.requests).toHaveBeenCalledTimes(1))
+    f.sessions.cancelJobResearch(f.token)
+    release({ role: 'assistant', content: [{ type: 'text', text: JSON.stringify({ requirements: [] }) }], stopReason: 'stop', usage: { output: 1 } })
+    expect(await pending).toMatchObject({ status: 'uncertain', physicalRequests: 1 })
+    expect(() => f.controller.read(p.token)).toThrow()
+    f.controller.close(); f.sessions.close()
   })
   it('checks model selection again at the physical dispatch boundary after provider authentication', async () => {
     const f = await connected(); f.sessions.reviewJobResearch(f.token, [findingId], true)

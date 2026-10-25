@@ -149,7 +149,20 @@ export function createVolatileResearchAnalysis(options: VolatileResearchAnalysis
     entries.delete(token)
     seenRunIds.delete(entry.run.id)
   }
-  function read(token: string): VolatileAnalysisProgress { return snapshot(get(token)) }
+  function read(token: string): VolatileAnalysisProgress {
+    const entry = get(token)
+    try {
+      assertCurrent(entry)
+    } catch (error) {
+      // Revoke any previously completed result as soon as its app-held authority is gone.
+      entry.controller.abort()
+      entry.result = undefined
+      entry.status = 'cancelled'
+      entry.message = 'The underlying research or review is no longer current. This temporary analysis was discarded.'
+      throw error
+    }
+    return snapshot(entry)
+  }
 
   function currentStatus(entry: Entry): Status { return entry.status }
   async function start(token: string): Promise<VolatileAnalysisProgress> {
