@@ -26,6 +26,7 @@ These files describe the current code or govern changes to it.
 | [Pi SDK notices](../resources/licenses/README.md) | SDK license text and remaining redistribution review. |
 | [LaTeX license inventory](../resources/latex-licenses/README.md) | Bundled toolchain license inventory and its limits. |
 | [Spec 75 implementation evidence](validation/spec-75-implementation.md) | Focused paragraph-format checks and open provider and installed gates. |
+| [Integrated spec fixes](validation/specs-integration-fixes.md) | Root causes, fixture corrections, and focused verification after the integrated Node test failures. |
 
 Tailor CV and Saved jobs follow the approved Variant A visual direction. My profile and Settings keep their implemented structures. The design system is normative for UI decisions, but the prototype does not prove a feature ships. Read the relevant design contracts before renderer work.
 

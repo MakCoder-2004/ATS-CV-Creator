@@ -120,7 +120,7 @@ test('accepts profile import IDs only for dispatched attempt history, not postin
     expect(() => workbench.backup.previewRestore(JSON.stringify(forged))).toThrow(table)
   }
   const consent = structuredClone(valid)
-  consent.tables.outbound_consents.rows.push({ id: randomUUID(), run_id: randomUUID(), scope_hash: 'a'.repeat(64), created_at: now, revoked: 0 })
+  consent.tables.outbound_consents.rows.push({ id: randomUUID(), run_id: randomUUID(), scope_hash: 'a'.repeat(64), created_at: now, revoked: 0, job_id: null })
   expect(() => workbench.backup.previewRestore(JSON.stringify(consent))).not.toThrow()
   consent.tables.outbound_consents.rows[0].run_id = profileRun
   expect(() => workbench.backup.previewRestore(JSON.stringify(consent))).toThrow('outbound_consents')

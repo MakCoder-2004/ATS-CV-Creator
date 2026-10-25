@@ -244,6 +244,17 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
   const startedRegenerationTokens = new Set<string>()
   const analysisCacheKey = (source: ConsentSource) => createHash('sha256').update(JSON.stringify({ job: { title: source.job.title, company: source.job.company, description: source.job.description }, minimizedPosting: prepareOutboundBundle(source).outgoing.job, model: source.model, prompt: 'posting-analysis-v3', schema: JSON.stringify(z.toJSONSchema(postingAnalysisSchema)) })).digest('hex')
   const activeAnalysisByJob = new Map<string, string>()
+  const unsettledRunsByJob = new Map<string, Set<string>>()
+  const beginPhysicalRun = (jobId: string, runId: string) => {
+    const runs = unsettledRunsByJob.get(jobId) ?? new Set<string>()
+    runs.add(runId)
+    unsettledRunsByJob.set(jobId, runs)
+  }
+  const endPhysicalRun = (jobId: string, runId: string) => {
+    const runs = unsettledRunsByJob.get(jobId)
+    runs?.delete(runId)
+    if (!runs?.size) unsettledRunsByJob.delete(jobId)
+  }
   const recoveredRunIds = new Set<string>()
   const deletionPreviews = new Map<string, { ids: string[]; fingerprint: string }>()
   const externalJobOperations = new Map<string, string>()
@@ -265,7 +276,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
   const fixtureTransport: AnalysisTransport | undefined = scriptedTransport && {
     generate: input => scriptedTransport.generate(input)
   }
-  const dispatcher = scriptedTransport ? createAnalysisDispatcher({ transport: fixtureTransport!, onAttempt: (timestamp, runId) => { const dispatchedAt = new Date(timestamp).toISOString(); db.transaction(() => { db.prepare('INSERT INTO analysis_attempts (run_id, attempted_at) VALUES (?, ?)').run(runId, dispatchedAt); db.prepare('INSERT INTO provider_attempt_outcomes (run_id, dispatched_at, outcome) VALUES (?, ?, \'dispatched\')').run(runId, dispatchedAt) })() }, onAttemptComplete: (runId, received) => { db.prepare("UPDATE provider_attempt_outcomes SET outcome=?, settled_at=? WHERE id=(SELECT id FROM provider_attempt_outcomes WHERE run_id=? AND outcome='dispatched' AND checkpointed_at IS NULL ORDER BY id DESC LIMIT 1)").run(received ? 'response' : 'error', new Date().toISOString(), runId) }, onProgress: (runId, jobId, progress, attempts) => { if (jobId.startsWith('profile-import:')) return; const observed = (db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id = ?').get(runId) as { count: number }).count; const prior = currentAnalysis.get(jobId), sameRun = prior?.runId === runId; saveAnalysisState({ jobId, runId, status: 'running', analysis: sameRun ? prior.analysis : null, progress, attempts: observed || attempts, cacheHit: sameRun ? prior.cacheHit : false, ...(sameRun && prior.generationStep ? { generationStep: prior.generationStep } : {}), ...(sameRun && prior.completedSteps ? { completedSteps: prior.completedSteps } : {}) }) } }) : createPiWorkbenchDispatcher({
+  const dispatcher = scriptedTransport ? createAnalysisDispatcher({ transport: fixtureTransport!, onAttempt: (timestamp, runId) => { const dispatchedAt = new Date(timestamp).toISOString(); db.transaction(() => { db.prepare('INSERT INTO analysis_attempts (run_id, attempted_at) VALUES (?, ?)').run(runId, dispatchedAt); db.prepare('INSERT INTO provider_attempt_outcomes (run_id, dispatched_at, outcome) VALUES (?, ?, \'dispatched\')').run(runId, dispatchedAt) })() }, onAttemptComplete: (runId, received) => { db.prepare("UPDATE provider_attempt_outcomes SET outcome=?, settled_at=? WHERE id=(SELECT id FROM provider_attempt_outcomes WHERE run_id=? AND outcome='dispatched' AND checkpointed_at IS NULL ORDER BY id DESC LIMIT 1)").run(received ? 'response' : 'error', new Date().toISOString(), runId) }, onProgress: (runId, jobId, progress, attempts) => { if (jobId.startsWith('profile-import:') || activeAnalysisByJob.get(jobId) !== runId || dispatcher.isCancelled(runId)) return; const observed = (db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id = ?').get(runId) as { count: number }).count; const prior = currentAnalysis.get(jobId), sameRun = prior?.runId === runId; saveAnalysisState({ jobId, runId, status: 'running', analysis: sameRun ? prior.analysis : null, progress, attempts: observed || attempts, cacheHit: sameRun ? prior.cacheHit : false, ...(sameRun && prior.generationStep ? { generationStep: prior.generationStep } : {}), ...(sameRun && prior.completedSteps ? { completedSteps: prior.completedSteps } : {}) }) } }) : createPiWorkbenchDispatcher({
     runtime: piRuntime ?? Promise.resolve(null),
     selectionForRun: runId => {
       const source = [...pendingOutbound.values()].find(pending => pending.runId === runId)?.source.model
@@ -387,7 +398,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
     const pending = [...pendingOutbound.entries()].filter(([, item]) => ids.includes(item.jobId)).map(([token, item]) => [token, item.jobId, item.runId, item.consentId]).sort((a, b) => String(a[0]).localeCompare(String(b[0])))
     return { jobs: selected as Array<{ id: string; data: string }>, owned, runIds, fingerprint: createHash('sha256').update(JSON.stringify({ selected, owned, pending })).digest('hex') }
   }
-  const deletionBusy = (ids: string[]) => ids.find(id => activeAnalysisByJob.has(id) || externalJobOperations.has(id))
+  const deletionBusy = (ids: string[]) => ids.find(id => unsettledRunsByJob.has(id) || externalJobOperations.has(id))
   const api: WorkbenchStorageAPI = {
     async getWorkspaceBackupStatus() { return backupEngine.readBackupStatus() },
     async getSettings() {
@@ -1243,26 +1254,29 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       startedAnalysisTokens.add(token)
       dispatcher.authorize(pending.runId, pending.consentId)
       activeAnalysisByJob.set(pending.jobId, pending.runId)
-      let result: Awaited<ReturnType<typeof dispatcher.analyze>>
+      beginPhysicalRun(pending.jobId, pending.runId)
       try {
-        result = await dispatcher.analyze({ runId: pending.runId, jobId: pending.jobId, model: transportModel(pending.source.model.name), prompt: `Extract only explicit qualifications from this authorized minimized posting. Do not infer missing requirements. Return JSON with required, preferred, tools, responsibilities, keywords.\n${JSON.stringify(approvedPayload)}`, consentId: pending.consentId })
-      } catch (error) {
-        const stillCurrentRun = activeAnalysisByJob.get(pending.jobId) === pending.runId && pendingOutbound.get(token) === pending
-        if (activeAnalysisByJob.get(pending.jobId) === pending.runId) activeAnalysisByJob.delete(pending.jobId)
-        const failure = error instanceof AnalysisError ? error : new AnalysisError('PROVIDER', 'Analysis could not complete. Check Settings and try again.')
-        if (!stillCurrentRun) return analysisResultSchema.parse({ jobId: pending.jobId, runId: pending.runId, targetPostingUpdatedAt: pending.source.job.revision, status: 'cancelled', analysis: null, progress: 'Analysis was cancelled. Its late response was discarded.', attempts: failure.usage?.attempts ?? 0, cacheHit: false })
-        const status = failure.code === 'CANCELLED' ? 'cancelled' : 'failed'
-        const value = analysisResultSchema.parse({ jobId: pending.jobId, runId: pending.runId, status, analysis: null, progress: failure.message, attempts: failure.usage?.attempts ?? 0, error: failure.message, cacheHit: false })
-        if (!(failure.code === 'BUDGET' && /workspace change would exceed a backup safety limit/i.test(failure.message))) saveAnalysisState(value)
+        let result: Awaited<ReturnType<typeof dispatcher.analyze>>
+        try {
+          result = await dispatcher.analyze({ runId: pending.runId, jobId: pending.jobId, model: transportModel(pending.source.model.name), prompt: `Extract only explicit qualifications from this authorized minimized posting. Do not infer missing requirements. Return JSON with required, preferred, tools, responsibilities, keywords.\n${JSON.stringify(approvedPayload)}`, consentId: pending.consentId })
+        } catch (error) {
+          const stillCurrentRun = activeAnalysisByJob.get(pending.jobId) === pending.runId && pendingOutbound.get(token) === pending
+          if (activeAnalysisByJob.get(pending.jobId) === pending.runId) activeAnalysisByJob.delete(pending.jobId)
+          const failure = error instanceof AnalysisError ? error : new AnalysisError('PROVIDER', 'Analysis could not complete. Check Settings and try again.')
+          if (!stillCurrentRun) return analysisResultSchema.parse({ jobId: pending.jobId, runId: pending.runId, targetPostingUpdatedAt: pending.source.job.revision, status: 'cancelled', analysis: null, progress: 'Analysis was cancelled. Its late response was discarded.', attempts: failure.usage?.attempts ?? 0, cacheHit: false })
+          const status = failure.code === 'CANCELLED' ? 'cancelled' : 'failed'
+          const value = analysisResultSchema.parse({ jobId: pending.jobId, runId: pending.runId, status, analysis: null, progress: failure.message, attempts: failure.usage?.attempts ?? 0, error: failure.message, cacheHit: false })
+          if (!(failure.code === 'BUDGET' && /workspace change would exceed a backup safety limit/i.test(failure.message))) saveAnalysisState(value)
+          return value
+        }
+        if (activeAnalysisByJob.get(pending.jobId) !== pending.runId || pendingOutbound.get(token) !== pending) return analysisResultSchema.parse({ jobId: pending.jobId, runId: pending.runId, targetPostingUpdatedAt: pending.source.job.revision, status: 'cancelled', analysis: null, progress: 'Analysis was cancelled. Its late response was discarded.', attempts: result.usage.attempts, cacheHit: false })
+        activeAnalysisByJob.delete(pending.jobId)
+        db.prepare('INSERT OR REPLACE INTO posting_analysis_cache (cache_key, job_id, run_id, data) VALUES (?, ?, ?, ?)').run(cacheKey, pending.jobId, pending.runId, JSON.stringify(result.analysis))
+        db.prepare('UPDATE provider_attempt_outcomes SET checkpointed_at=? WHERE run_id=? AND checkpointed_at IS NULL').run(new Date().toISOString(), pending.runId)
+        const value = analysisResultSchema.parse({ jobId: pending.jobId, runId: pending.runId, status: 'complete', analysis: result.analysis, displayAnalysis: displayAnalysis(result.analysis), progress: `Posting analysis complete.${workingTextScopeNotice(pending.jobId)}`, attempts: result.usage.attempts, cacheHit: false, generationStep: 'parse-posting', completedSteps: ['parse-posting'] })
+        saveAnalysisState(value)
         return value
-      }
-      if (activeAnalysisByJob.get(pending.jobId) !== pending.runId || pendingOutbound.get(token) !== pending) return analysisResultSchema.parse({ jobId: pending.jobId, runId: pending.runId, targetPostingUpdatedAt: pending.source.job.revision, status: 'cancelled', analysis: null, progress: 'Analysis was cancelled. Its late response was discarded.', attempts: result.usage.attempts, cacheHit: false })
-      activeAnalysisByJob.delete(pending.jobId)
-      db.prepare('INSERT OR REPLACE INTO posting_analysis_cache (cache_key, job_id, run_id, data) VALUES (?, ?, ?, ?)').run(cacheKey, pending.jobId, pending.runId, JSON.stringify(result.analysis))
-      db.prepare('UPDATE provider_attempt_outcomes SET checkpointed_at=? WHERE run_id=? AND checkpointed_at IS NULL').run(new Date().toISOString(), pending.runId)
-      const value = analysisResultSchema.parse({ jobId: pending.jobId, runId: pending.runId, status: 'complete', analysis: result.analysis, displayAnalysis: displayAnalysis(result.analysis), progress: `Posting analysis complete.${workingTextScopeNotice(pending.jobId)}`, attempts: result.usage.attempts, cacheHit: false, generationStep: 'parse-posting', completedSteps: ['parse-posting'] })
-      saveAnalysisState(value)
-      return value
+      } finally { endPhysicalRun(pending.jobId, pending.runId) }
     },
     async generateDraft(token: string, pageTarget: 1 | 2 = 1, resumeRunId?: string) {
       if (pageTarget !== 1 && pageTarget !== 2) return { ok: false, message: 'Choose a one- or two-page target.' }
@@ -1270,6 +1284,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       if (!pending?.consentId) return { ok: false, message: 'Review and authorize this exact outgoing bundle before generation.' }
       if (externalJobOperations.has(pending.jobId)) return { ok: false, message: `Finish ${externalJobOperations.get(pending.jobId)} before generating.` }
       const recoveryRow = resumeRunId ? db.prepare('SELECT snapshot, status FROM generation_recovery WHERE run_id=? AND job_id=?').get(resumeRunId, pending.jobId) as { snapshot: string; status: string } | undefined : undefined
+      if (resumeRunId && unsettledRunsByJob.get(pending.jobId)?.has(resumeRunId)) return { ok: false, message: 'The earlier provider response has not settled. Wait before reviewing recovery.' }
       if (resumeRunId && (!recoveryRow || !['running','paused'].includes(recoveryRow.status) || pending.runId !== resumeRunId)) return { ok: false, message: 'This saved run is no longer resumable.' }
       let frozen: ReturnType<typeof generationRecoverySnapshotSchema.parse> | undefined
       if (recoveryRow) {
@@ -1319,7 +1334,6 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       const exactLocalDates = [...draftInputs.lockedFields.experience, ...draftInputs.lockedFields.education].flatMap(item => [item.startDate, item.endDate]).filter((value): value is string => Boolean(value))
       for (const date of exactLocalDates) minimizedStringPairs.push([date, ''])
       const minimizeRestoredText = (text: string) => minimizedStringPairs.reduce((value, [restored, minimized]) => value.replaceAll(restored, minimized), text)
-      activeAnalysisByJob.set(pending.jobId, pending.runId)
       const failedDraftIdentity = frozen?.identity ?? { id: randomUUID(), jobId: pending.jobId, revision: ((db.prepare('SELECT MAX(revision) AS revision FROM draft_revisions WHERE job_id = ?').get(pending.jobId) as { revision: number | null }).revision ?? 0) + 1, targetPostingUpdatedAt: pending.source.job.revision, createdAt: new Date().toISOString(), lockedFields: draftInputs.lockedFields }
       if (!resumeRunId) {
         const data = { runId: pending.runId, jobId: pending.jobId, consentId: pending.consentId, scopeHash: pending.bundle.scopeHash, analysis, job, profile, experience, draftInputs, safeItems, identity: failedDraftIdentity, pageTarget, source: pending.source, faithfulnessCheck: pending.faithfulnessCheck }
@@ -1330,8 +1344,10 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
         db.prepare('INSERT OR REPLACE INTO generation_recovery (run_id,job_id,consent_id,scope_hash,status,snapshot,updated_at) VALUES (?,?,?,?,?,?,?)').run(pending.runId,pending.jobId,pending.consentId,pending.bundle.scopeHash,'running',JSON.stringify(snapshot),new Date().toISOString())
       }
       else db.prepare("UPDATE generation_recovery SET status='running',updated_at=? WHERE run_id=?").run(new Date().toISOString(), resumeRunId)
+      activeAnalysisByJob.set(pending.jobId, pending.runId)
+      beginPhysicalRun(pending.jobId, pending.runId)
       try {
-        const result = await runSourceLinkedGraph({ job: approvedPayload.job, analysis: analysis.analysis, items: safeItems, savedSkillNames: profile.skills.map(skill => skill.name), sourceJobRevision: pending.source.job.revision, pageTarget, restoreText: pending.bundle.restoreIdentifiers, checkpointer: graphCheckpointer, threadId: pending.runId, resume: Boolean(resumeRunId), onProgress: (progress, generationStep, completedSteps) => { const observed = (db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id = ?').get(pending.runId) as { count: number }).count; saveAnalysisState({ jobId: pending.jobId, runId: pending.runId, status: 'running', analysis: analysis.analysis, progress, attempts: observed, cacheHit: analysis.cacheHit, generationStep, completedSteps }) }, identity: failedDraftIdentity, call: async (prompt, responseSchema) => {
+        const result = await runSourceLinkedGraph({ job: approvedPayload.job, analysis: analysis.analysis, items: safeItems, savedSkillNames: profile.skills.map(skill => skill.name), sourceJobRevision: pending.source.job.revision, pageTarget, restoreText: pending.bundle.restoreIdentifiers, checkpointer: graphCheckpointer, threadId: pending.runId, resume: Boolean(resumeRunId), onProgress: (progress, generationStep, completedSteps) => { if (activeAnalysisByJob.get(pending.jobId) !== pending.runId || dispatcher.isCancelled(pending.runId)) return; const observed = (db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id = ?').get(pending.runId) as { count: number }).count; saveAnalysisState({ jobId: pending.jobId, runId: pending.runId, status: 'running', analysis: analysis.analysis, progress, attempts: observed, cacheHit: analysis.cacheHit, generationStep, completedSteps }) }, identity: failedDraftIdentity, call: async (prompt, responseSchema) => {
           authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
           const generated = await dispatcher.generate({ runId: pending.runId, jobId: pending.jobId, model: transportModel(pending.source.model.name), prompt, consentId: pending.consentId!, responseSchema })
           authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
@@ -1447,8 +1463,9 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
         const totalAttempts = result.attempts + repairAttempts + coverageRepairAttempts + semanticAttempts
         const mergedReport = factualCheckReportSchema.parse({ ...report, passed: findings.length === 0, findings })
         if (dispatcher.isCancelled(pending.runId) || activeAnalysisByJob.get(pending.jobId) !== pending.runId) {
-          if (activeAnalysisByJob.get(pending.jobId) === pending.runId) activeAnalysisByJob.delete(pending.jobId)
-          saveAnalysisState({ jobId: pending.jobId, runId: pending.runId, status: 'cancelled', analysis: analysis.analysis, progress: 'Generation cancelled. A late response was discarded; no draft changes were saved.', attempts: (db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id = ?').get(pending.runId) as { count: number }).count, cacheHit: analysis.cacheHit })
+          const stillCurrent = activeAnalysisByJob.get(pending.jobId) === pending.runId
+          if (stillCurrent) activeAnalysisByJob.delete(pending.jobId)
+          if (stillCurrent) saveAnalysisState({ jobId: pending.jobId, runId: pending.runId, status: 'cancelled', analysis: analysis.analysis, progress: 'Generation cancelled. A late response was discarded; no draft changes were saved.', attempts: (db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id = ?').get(pending.runId) as { count: number }).count, cacheHit: analysis.cacheHit })
           db.prepare("UPDATE generation_recovery SET status='cancelled',updated_at=? WHERE run_id=?").run(new Date().toISOString(), pending.runId)
           return { ok: false, message: 'Generation was cancelled. Its late response was discarded; no draft changes were saved.' }
         }
@@ -1461,7 +1478,11 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
         saveAnalysisState({ jobId: pending.jobId, runId: pending.runId, status: 'complete', analysis: analysis.analysis, progress: result.draft.progress, attempts: analysis.attempts + totalAttempts, cacheHit: analysis.cacheHit, generationStep: 'check-document', completedSteps: ['parse-posting', 'score-evidence', 'select-content', 'tailor-paragraphs', 'verify-claims', 'check-document'] })
         return { ok: true, message: `${result.draft.status === 'blocked' ? 'Draft saved locally, editable, and blocked by factual findings.' : 'Draft saved locally. It is unverified and unapproved.'}${scopeNotice}`, draft: result.draft }
       } catch (error) {
-        if (activeAnalysisByJob.get(pending.jobId) === pending.runId) activeAnalysisByJob.delete(pending.jobId)
+        if (activeAnalysisByJob.get(pending.jobId) !== pending.runId) {
+          db.prepare("UPDATE generation_recovery SET status='cancelled',updated_at=? WHERE run_id=?").run(new Date().toISOString(), pending.runId)
+          return { ok: false, message: 'Generation was cancelled. Its late response was discarded; no draft changes were saved.' }
+        }
+        activeAnalysisByJob.delete(pending.jobId)
         const cancelled = error instanceof AnalysisError && error.code === 'CANCELLED'
         const observedAttempts = (db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id = ?').get(pending.runId) as { count: number }).count
         const message = cancelled ? 'Draft generation was cancelled. No generated wording was retained.' : 'The generated response could not be safely validated. No model wording was retained; author a correction in the blocked draft or retry.'
@@ -1497,7 +1518,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
         const priorProgress = currentAnalysis.get(pending.jobId)
         saveAnalysisState({ jobId: pending.jobId, runId: pending.runId, status: cancelled ? 'cancelled' : 'failed', analysis: analysis.analysis, progress: safeMessage, attempts: observedAttempts, error: safeMessage, cacheHit: analysis.cacheHit, ...(priorProgress?.runId === pending.runId ? { generationStep: priorProgress.generationStep, completedSteps: priorProgress.completedSteps } : {}) })
         return { ok: false, message: safeMessage }
-      }
+      } finally { endPhysicalRun(pending.jobId, pending.runId) }
     },
     async renewDraftReview(jobId: string) {
       if (!uuidSchema.safeParse(jobId).success) return { ok: false, message: 'Choose a valid saved job before renewing its review.' }
@@ -1575,15 +1596,17 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       startedRegenerationTokens.add(token)
       const proposalId = randomUUID(), runId = pending.runId
       activeAnalysisByJob.set(pending.jobId, runId)
+      beginPhysicalRun(pending.jobId, runId)
       const progress = `Preparing a ${parsedTarget.data.kind} replacement proposal…`
-      saveAnalysisState({ jobId: pending.jobId, runId, status: 'running', analysis: analysisResult.analysis, progress, attempts: 0, cacheHit: analysisResult.cacheHit })
       try {
+        saveAnalysisState({ jobId: pending.jobId, runId, status: 'running', analysis: analysisResult.analysis, progress, attempts: 0, cacheHit: analysisResult.cacheHit })
         authorizeOutboundPayload(runId, pending.bundle.outgoing)
         authorizeOutboundPayload(runId, sourceGroups)
         dispatcher.authorize(runId, pending.consentId)
         const generated = await dispatcher.generate({ runId, jobId: pending.jobId, model: transportModel(pending.source.model.name), prompt, consentId: pending.consentId, responseSchema })
         authorizeOutboundPayload(runId, pending.bundle.outgoing)
         authorizeOutboundPayload(runId, sourceGroups)
+        if (dispatcher.isCancelled(runId) || activeAnalysisByJob.get(pending.jobId) !== runId) throw new AnalysisError('CANCELLED', 'Regeneration was cancelled.')
         const currentScopeAfterDispatch = currentConsentSource(pending.jobId)
         if (!currentScopeAfterDispatch || prepareOutboundBundle(currentScopeAfterDispatch).scopeHash !== pending.bundle.scopeHash) throw new Error('Authorized scope changed during regeneration.')
         const decoded = responseSchema.parse(JSON.parse(generated.text))
@@ -1596,11 +1619,11 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
         saveAnalysisState({ jobId: pending.jobId, runId, status: 'complete', analysis: analysisResult.analysis, progress: proposal.progress, attempts: generated.attempts, cacheHit: analysisResult.cacheHit })
         return { ok: true, message: proposal.progress, proposal }
       } catch (error) {
-        const cancelled = error instanceof AnalysisError && error.code === 'CANCELLED'
+        const cancelled = error instanceof AnalysisError && error.code === 'CANCELLED' || activeAnalysisByJob.get(pending.jobId) !== runId
         const message = cancelled ? 'Regeneration was cancelled; the current draft was preserved.' : 'Replacement generation failed safely; the current draft was preserved. Review the source text and Pi model, then start a fresh authorized operation.'
-        saveAnalysisState({ jobId: pending.jobId, runId, status: cancelled ? 'cancelled' : 'failed', analysis: analysisResult.analysis, progress: message, attempts: (db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id = ?').get(runId) as { count: number }).count, error: message, cacheHit: analysisResult.cacheHit })
+        if (activeAnalysisByJob.get(pending.jobId) === runId) saveAnalysisState({ jobId: pending.jobId, runId, status: cancelled ? 'cancelled' : 'failed', analysis: analysisResult.analysis, progress: message, attempts: (db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id = ?').get(runId) as { count: number }).count, error: message, cacheHit: analysisResult.cacheHit })
         return { ok: false, message }
-      } finally { if (activeAnalysisByJob.get(pending.jobId) === runId) activeAnalysisByJob.delete(pending.jobId) }
+      } finally { if (activeAnalysisByJob.get(pending.jobId) === runId) activeAnalysisByJob.delete(pending.jobId); endPhysicalRun(pending.jobId, runId) }
     },
     async getRegenerationProposal(jobId: string) {
       const row = db.prepare('SELECT data FROM regeneration_proposals WHERE job_id = ? AND status = \'pending\' ORDER BY rowid DESC LIMIT 1').get(jobId) as { data: string } | undefined
@@ -1984,6 +2007,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       if (!activeRunId && previous) return analysisResultSchema.parse(previous)
       if (activeRunId) {
         dispatcher.cancel(activeRunId)
+        activeAnalysisByJob.delete(jobId)
       }
       const value = analysisResultSchema.parse({ jobId, ...(activeRunId ? { runId: activeRunId } : {}), status: 'cancelled', analysis: null, progress: 'Analysis cancelled. No further requests will be sent.', attempts: previous?.attempts ?? 0, cacheHit: false })
       saveAnalysisState(value)
@@ -1996,7 +2020,8 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
         const newer = legacy && db.prepare("SELECT 1 FROM generation_recovery WHERE job_id=? AND json_extract(snapshot,'$.version')>=2 AND updated_at>=?").get(jobId, legacy.updated_at)
         if (legacy && !newer) {
           const attempts = (db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id=?').get(legacy.run_id) as { count: number }).count
-          return generationRecoverySchema.parse({ jobId, runId: legacy.run_id, status: 'interrupted', attempts, uncertainAttempts: 0, progress: 'An earlier generation cannot resume with Pi. Your saved draft and history remain available. Review outgoing data, authorize a new run, analyze the posting, then generate again.', canResume: false })
+          const uncertainAttempts = (db.prepare('SELECT COUNT(*) AS count FROM provider_attempt_outcomes WHERE run_id=? AND checkpointed_at IS NULL').get(legacy.run_id) as { count: number }).count
+          return generationRecoverySchema.parse({ jobId, runId: legacy.run_id, status: uncertainAttempts ? 'uncertain' : 'interrupted', attempts, uncertainAttempts, progress: `An earlier generation cannot resume with Pi. ${uncertainAttempts ? 'A prior model request may have completed and may have incurred a charge. ' : ''}Your saved draft and history remain available. Review outgoing data, authorize a new run, analyze the posting, then generate again.`, canResume: false })
         }
       }
       if (!row) return null
@@ -2014,6 +2039,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
     async resumeGeneration(runId: string, choice?: RecoveryChoice) {
       const row = db.prepare("SELECT job_id,consent_id,scope_hash,status,snapshot FROM generation_recovery WHERE run_id=? AND status IN ('running','paused')").get(runId) as { job_id: string; consent_id: string; scope_hash: string; status: string; snapshot: string } | undefined
       if (!row || !db.prepare('SELECT 1 FROM jobs WHERE id=?').get(row.job_id)) return { ok: false, message: 'This generation has no recoverable saved checkpoint.' }
+      if (unsettledRunsByJob.get(row.job_id)?.has(runId)) return { ok: false, message: 'The earlier provider response has not settled. Wait before reviewing recovery.' }
       let frozen: ReturnType<typeof generationRecoverySnapshotSchema.parse>
       try { frozen = generationRecoverySnapshotSchema.parse(JSON.parse(row.snapshot)) }
       catch { return { ok: false, message: 'The saved recovery snapshot is corrupt or incompatible. No requests were sent; cancel this run and inspect the source data.' } }
@@ -2040,6 +2066,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       const row = db.prepare("SELECT job_id,consent_id FROM generation_recovery WHERE run_id=? AND status IN ('running','paused')").get(runId) as { job_id: string; consent_id: string } | undefined
       if (!row) return { ok: false, message: 'This generation is no longer awaiting recovery.' }
       dispatcher.cancel(runId)
+      if (activeAnalysisByJob.get(row.job_id) === runId) activeAnalysisByJob.delete(row.job_id)
       outboundEngine.revoke(row.consent_id)
       db.prepare('UPDATE outbound_consents SET revoked=1 WHERE id=?').run(row.consent_id)
       db.prepare("UPDATE generation_recovery SET status='cancelled',updated_at=? WHERE run_id=?").run(new Date().toISOString(), runId)
@@ -2054,7 +2081,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
         db.prepare('UPDATE outbound_consents SET revoked = 1 WHERE id = ?').run(pending.consentId)
       }
       const active = activeAnalysisByJob.get(pending.jobId) === pending.runId
-      if (active) dispatcher.cancel(pending.runId)
+      if (active) { dispatcher.cancel(pending.runId); activeAnalysisByJob.delete(pending.jobId) }
       const prior = currentAnalysis.get(pending.jobId)
       if (active || !prior) saveAnalysisState({ jobId: pending.jobId, runId: pending.runId, status: 'cancelled', analysis: null, progress: 'Run cancelled. Further dispatches are stopped.', attempts: prior?.attempts ?? 0, cacheHit: false })
       pendingOutbound.delete(token)
@@ -2073,7 +2100,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
     return outboundEngine.authorizePayload(runId, consent.bundle, payload)
   }
   const backupEngine = createWorkspaceBackupEngine(db, recoveryHooks?.workspaceBackupMaxBytes)
-  const assertIdle = () => { if (activeAnalysisByJob.size || externalJobOperations.size) throw new Error('A cloud operation is active. Cancel or finish it before backing up or restoring.') }
+  const assertIdle = () => { if (unsettledRunsByJob.size || externalJobOperations.size) throw new Error('A cloud operation is active. Cancel or finish it before backing up or restoring.') }
   const backup: WorkspaceBackupEngine = {
     readBackupStatus() { return backupEngine.readBackupStatus() },
     assertBackupCapacity(previousBytes) { return backupEngine.assertBackupCapacity(previousBytes) },
@@ -2163,5 +2190,5 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
     const statement = nativePrepare(source)
     return wrapStatement(statement, !statement.readonly)
   }
-  return { api, authorizeOutboundPayload, backup, beginJobOperation, hasActiveWork: () => activeAnalysisByJob.size > 0 || externalJobOperations.size > 0 || activeProfileAiRuns.size > 0 || [...postingFetches.values()].some(fetch => fetch.state.status === 'fetching'), close: () => { for (const fetch of postingFetches.values()) fetch.controller.abort(); postingFetches.clear(); db.close() } }
+  return { api, authorizeOutboundPayload, backup, beginJobOperation, hasActiveWork: () => unsettledRunsByJob.size > 0 || externalJobOperations.size > 0 || activeProfileAiRuns.size > 0 || [...postingFetches.values()].some(fetch => fetch.state.status === 'fetching'), close: () => { for (const fetch of postingFetches.values()) fetch.controller.abort(); postingFetches.clear(); db.close() } }
 }

@@ -1,10 +1,12 @@
 import { afterEach, expect, test } from 'vitest'
+import Database from 'better-sqlite3'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { listDraftRecords, mutateDraftRecordInputSchema } from '../src/shared/draft-records'
-import type { DraftRevision } from '../src/shared/draft'
+import { draftRevisionSchema, type DraftRevision } from '../src/shared/draft'
+import { registerWorkspaceBackupRowSizer } from '../src/main/workspace-backup'
 import { createWorkbench } from '../src/main/workbench'
 import type { AnalysisTransport } from '../src/main/posting-analysis'
 
@@ -48,7 +50,7 @@ async function generatedWorkspace(withGroupedExperience = false, childOnly = fal
     if (prompt.includes('Extract only explicit qualifications')) return JSON.stringify({ required: [], preferred: [], tools: postingSkill ? ['Docker'] : [], responsibilities: [], keywords: [] })
     if (prompt.startsWith('Score these numbered')) { const { items } = JSON.parse(prompt.slice(prompt.indexOf('{'))); return JSON.stringify({ relevance: items.map((item: { index: number }) => ({ index: item.index, score: 0.9, rationale: 'Relevant.' })) }) }
     const { selected } = JSON.parse(prompt.slice(prompt.indexOf('{')))
-    const byCategory = (category: string) => selected.filter((item: { category: string; text: string }) => item.category === category && (!childOnly || category !== 'experience' || item.text === 'Documented APIs.')).map((item: { index: number; text: string }) => ({ text: item.text, evidence: [item.index], rationale: 'User source.' }))
+    const byCategory = (category: string) => selected.filter((item: { category: string; text: string }) => item.category === category && (category !== 'experience' || (childOnly ? item.text === 'Documented APIs.' : !withGroupedExperience || item.text.includes('"title":"Engineer"')))).map((item: { index: number; text: string }) => ({ text: item.text, evidence: [item.index], rationale: 'User source.' }))
     return JSON.stringify({ headline: 'Engineer', summary: { text: 'Engineer.', evidence: [0], rationale: 'Profile.' }, education: byCategory('education'), experience: byCategory('experience'), projects: byCategory('projects'), skills: selected.filter((item: { category: string }) => item.category === 'skills').map((item: { index: number; text: string }) => ({ name: JSON.parse(item.text).name, evidence: [item.index], rationale: 'Profile.' })), certificates: [] })
   } }
   const wb = createWorkbench(dir, undefined, transport); opened.push(wb)
@@ -67,6 +69,19 @@ async function generatedWorkspace(withGroupedExperience = false, childOnly = fal
   const generated = await wb.api.generateDraft(consent.token)
   if (!generated.draft) throw Error(`draft setup: ${generated.message}`)
   return { wb, dir, jobId: job.value.id, draft: generated.draft }
+}
+
+async function seedLegacyGroupedRole(wb: ReturnType<typeof createWorkbench>, dir: string, jobId: string) {
+  const draft = (await wb.api.getDraft(jobId))!
+  const role = (await wb.api.getExperience()).experience[0]!
+  const legacy = draftRevisionSchema.parse({ ...draft, content: { ...draft.content, experience: role.factualItems.map(fact => ({ text: fact.text, citations: [{ evidenceId: fact.id, revision: fact.revision }], rationale: 'Frozen legacy role paragraph.' })) } })
+  const db = new Database(join(dir, 'workbench.sqlite'))
+  try {
+    registerWorkspaceBackupRowSizer(db)
+    db.prepare('UPDATE draft_revisions SET data=? WHERE id=?').run(JSON.stringify(legacy), draft.id)
+  } finally { db.close() }
+  expect((await wb.api.getDraft(jobId))?.content.experience).toHaveLength(role.factualItems.length)
+  return role
 }
 
 test('CV-only CRUD covers every record section without changing profile; stale CAS rejects writes', async () => {
@@ -197,11 +212,9 @@ test('profile-scope add/update/delete records immutable history transactionally 
 }, 30000)
 
 test('grouped legacy role paragraphs edit and delete as one profile record', async () => {
-  const { wb, jobId } = await generatedWorkspace(true)
+  const { wb, dir, jobId } = await generatedWorkspace(true)
+  const role = await seedLegacyGroupedRole(wb, dir, jobId)
   let draft = (await wb.api.getDraft(jobId))!
-  const role = (await wb.api.getExperience()).experience[0]!
-  for (const fact of role.factualItems) expect(await wb.api.addDraftItem({ jobId, section: 'experience', text: fact.text, citation: { evidenceId: fact.id, revision: fact.revision } })).not.toBeNull()
-  draft = (await wb.api.getDraft(jobId))!
   expect(draft.content.experience.length).toBeGreaterThan(1)
   const sourceIds = draft.content.experience.flatMap(item => item.citations.map(citation => citation.evidenceId))
   expect(sourceIds.every(id => draft.lockedFields.experience[0]!.sourceIds!.includes(id))).toBe(true)

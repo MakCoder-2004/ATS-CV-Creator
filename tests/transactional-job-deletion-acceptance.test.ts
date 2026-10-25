@@ -236,6 +236,114 @@ test('preview and execute delete 501 selected jobs and more than 999 owned runs 
   } finally { db.close() }
 }, 120_000)
 
+test('a superseded analysis cannot release the newer physical run or restore an old posting', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'job-delete-overlapping-analysis-')); directories.push(directory)
+  const responses: Array<(value: string) => void> = []
+  let dispatched!: () => void
+  const dispatch = new Promise<void>(resolve => { dispatched = resolve })
+  const transport: AnalysisTransport = { generate() { dispatched(); return new Promise(resolve => { responses.push(resolve) }) } }
+  const wb = createWorkbench(directory, undefined, transport); workbenches.push(wb)
+  const job = await wb.api.saveJob({ title: 'Engineer', company: 'Synthetic Co', description: 'TypeScript required.' })
+  if (!job.ok) throw Error('job fixture failed')
+  const authorize = async () => {
+    const consent = await wb.api.prepareOutboundConsent(job.value.id)
+    if (!consent.ok) throw Error('consent fixture failed')
+    expect(await wb.api.acceptOutboundConsent(consent.token, true, true)).toMatchObject({ ok: true })
+    return consent.token
+  }
+  const firstToken = await authorize()
+  const backup = wb.backup.createBackup()
+  const first = wb.api.startAnalysis(firstToken)
+  await dispatch
+  expect(() => wb.backup.createBackup()).toThrow(/active/i)
+  await wb.api.cancelAnalysis(job.value.id)
+  expect((await wb.api.saveJob({ id: job.value.id, title: job.value.title, company: job.value.company, description: 'Rust required.' })).ok).toBe(true)
+  const second = wb.api.startAnalysis(await authorize())
+  responses[0](JSON.stringify({ required: ['TypeScript'], preferred: [], tools: [], responsibilities: [], keywords: [] }))
+  expect(await first).toMatchObject({ status: 'cancelled' })
+  await Promise.resolve()
+  expect(responses).toHaveLength(2)
+  expect(wb.hasActiveWork()).toBe(true)
+  expect((await wb.api.previewJobDeletion([job.value.id])).ok).toBe(false)
+  expect(() => wb.backup.createBackup()).toThrow(/active/i)
+  expect(() => wb.backup.previewRestore(backup)).toThrow(/active/i)
+  responses[1](JSON.stringify({ required: ['Rust'], preferred: [], tools: [], responsibilities: [], keywords: [] }))
+  expect(await second).toMatchObject({ status: 'complete', analysis: { required: ['Rust'] } })
+  expect(await wb.api.getAnalysis(job.value.id)).toMatchObject({ analysis: { required: ['Rust'] } })
+  expect((await wb.api.previewJobDeletion([job.value.id])).ok).toBe(true)
+}, 30_000)
+
+test('cancelled generation keeps deletion and restore busy until its provider response settles', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'job-delete-generation-late-')); directories.push(directory)
+  let defer = false, respond!: (value: string) => void, dispatched!: () => void
+  const began = new Promise<void>(resolve => { dispatched = resolve })
+  const transport: AnalysisTransport = { generate(input) {
+    if (defer && input.prompt.startsWith('Score these numbered')) { dispatched(); return new Promise(resolve => { respond = resolve }) }
+    return scripted.generate(input)
+  } }
+  const wb = createWorkbench(directory, undefined, transport); workbenches.push(wb)
+  await wb.api.saveContact({ fullName: 'Synthetic Candidate' })
+  await wb.api.saveExperience({ kind: 'employment', title: 'Engineer', organization: 'Synthetic Co', description: 'Built systems.' })
+  const job = await wb.api.saveJob({ title: 'Engineer', company: 'Synthetic Co', description: 'Build systems.' })
+  if (!job.ok) throw Error('job fixture failed')
+  const consent = await wb.api.prepareOutboundConsent(job.value.id)
+  if (!consent.ok) throw Error('consent fixture failed')
+  const accepted = await wb.api.acceptOutboundConsent(consent.token, true, true)
+  if (!accepted.ok) throw Error('consent fixture failed')
+  expect((await wb.api.startAnalysis(consent.token)).status).toBe('complete')
+  const priorBackup = wb.backup.createBackup()
+  defer = true
+  const generating = wb.api.generateDraft(consent.token)
+  await began
+  await wb.api.cancelAnalysis(job.value.id)
+  expect(await wb.api.resumeGeneration(accepted.runId, 'retry-uncertain')).toMatchObject({ ok: false, message: expect.stringMatching(/not settled/i) })
+  expect((await wb.api.saveJob({ id: job.value.id, title: job.value.title, company: job.value.company, description: 'Build reliable systems.' })).ok).toBe(true)
+  expect((await wb.api.previewJobDeletion([job.value.id])).ok).toBe(false)
+  expect(() => wb.backup.previewRestore(priorBackup)).toThrow(/active/i)
+  respond(JSON.stringify({ relevance: [{ index: 0, score: 1, rationale: 'Relevant.' }] }))
+  expect(await generating).toMatchObject({ ok: false })
+  expect(await wb.api.getDraft(job.value.id)).toBeNull()
+  expect(await wb.api.openJob(job.value.id)).toMatchObject({ description: 'Build reliable systems.' })
+  expect((await wb.api.previewJobDeletion([job.value.id])).ok).toBe(true)
+}, 30_000)
+
+test('cancelled regeneration cannot save a late proposal and holds deletion until settled', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'job-delete-regeneration-late-')); directories.push(directory)
+  let defer = false, respond!: (value: string) => void, dispatched!: () => void
+  const began = new Promise<void>(resolve => { dispatched = resolve })
+  const transport: AnalysisTransport = { generate(input) {
+    if (defer && input.prompt.startsWith('Propose conservative replacement wording')) { dispatched(); return new Promise(resolve => { respond = resolve }) }
+    return scripted.generate(input)
+  } }
+  const wb = createWorkbench(directory, undefined, transport); workbenches.push(wb)
+  await wb.api.saveContact({ fullName: 'Synthetic Candidate' })
+  await wb.api.saveSkill({ name: 'TypeScript', category: 'Programming' })
+  const job = await wb.api.saveJob({ title: 'Engineer', company: 'Synthetic Co', description: 'TypeScript required.' })
+  if (!job.ok) throw Error('job fixture failed')
+  const authorize = async () => {
+    const consent = await wb.api.prepareOutboundConsent(job.value.id)
+    if (!consent.ok) throw Error('consent fixture failed')
+    await wb.api.acceptOutboundConsent(consent.token, true, true)
+    return consent.token
+  }
+  const first = await authorize()
+  expect((await wb.api.startAnalysis(first)).status).toBe('complete')
+  expect((await wb.api.generateDraft(first)).ok).toBe(true)
+  const draft = await wb.api.getDraft(job.value.id)
+  defer = true
+  const regenerating = wb.api.regenerateDraft(await authorize(), { kind: 'section', section: 'skills' })
+  await began
+  await wb.api.cancelAnalysis(job.value.id)
+  expect((await wb.api.saveJob({ id: job.value.id, title: job.value.title, company: job.value.company, description: 'Rust required.' })).ok).toBe(true)
+  expect((await wb.api.previewJobDeletion([job.value.id])).ok).toBe(false)
+  expect(() => wb.backup.createBackup()).toThrow(/active/i)
+  respond(JSON.stringify({ items: [{ text: 'TypeScript', rationale: 'Saved evidence.' }] }))
+  expect(await regenerating).toMatchObject({ ok: false })
+  expect(await wb.api.getRegenerationProposal(job.value.id)).toBeNull()
+  expect(await wb.api.getDraft(job.value.id)).toMatchObject({ id: draft?.id })
+  expect((await wb.api.previewJobDeletion([job.value.id])).ok).toBe(true)
+}, 30_000)
+
 test('cancelled in-flight analysis remains busy until its late response has settled', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'job-delete-late-response-'))
   directories.push(directory)

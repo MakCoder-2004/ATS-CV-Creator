@@ -7,10 +7,12 @@ import { createWorkbench } from '../src/main/workbench'
 import type { AnalysisTransport } from '../src/main/posting-analysis'
 import { registerWorkspaceBackupRowSizer } from '../src/main/workspace-backup'
 import { migrateLegacyOpenRouterWorkspace } from '../src/main/pi-settings-migration'
+import { generationRecoverySnapshotSchema } from '../src/shared/generation-recovery'
 
 const databases: Database.Database[] = []
+const workbenches: Array<ReturnType<typeof createWorkbench>> = []
 const directories: string[] = []
-afterEach(() => { for (const db of databases.splice(0)) db.close(); for (const dir of directories.splice(0)) rmSync(dir, { recursive: true, force: true }) })
+afterEach(() => { for (const wb of workbenches.splice(0)) wb.close(); for (const db of databases.splice(0)) db.close(); for (const dir of directories.splice(0)) rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) })
 
 test('legacy migration deletes only CV Tailor credentials and blocks old consent and recovery', () => {
   const db = new Database(':memory:')
@@ -64,10 +66,10 @@ test('an interrupted transaction keeps the synthetic old key and consent until a
 test('opening an old workspace deletes only the app-owned key and leaves saved jobs readable', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'pi-upgrade-workspace-'))
   directories.push(directory)
-  const legacy = createWorkbench(directory, undefined, { async generate() { throw new Error('No network in upgrade fixture.') } })
+  const legacy = createWorkbench(directory, undefined, { async generate() { throw new Error('No network in upgrade fixture.') } }); workbenches.push(legacy)
   const job = await legacy.api.saveJob({ title: 'Synthetic role', company: 'Example', description: 'A retained posting.' })
   if (!job.ok) throw new Error('Synthetic job could not be saved.')
-  legacy.close()
+  legacy.close(); workbenches.splice(workbenches.indexOf(legacy), 1)
   const db = new Database(join(directory, 'workbench.sqlite'))
   databases.push(db)
   registerWorkspaceBackupRowSizer(db)
@@ -75,10 +77,10 @@ test('opening an old workspace deletes only the app-owned key and leaves saved j
   db.prepare('INSERT OR REPLACE INTO settings (key,value) VALUES (?,?)').run('openrouter-model', 'author/model')
   db.close()
   databases.pop()
-  const upgraded = createWorkbench(directory)
+  const upgraded = createWorkbench(directory); workbenches.push(upgraded)
   expect((await upgraded.api.openJob(job.value.id))?.description).toBe('A retained posting.')
   expect((await upgraded.api.getSettings()).pi).toBeNull()
-  upgraded.close()
+  upgraded.close(); workbenches.splice(workbenches.indexOf(upgraded), 1)
   const inspected = new Database(join(directory, 'workbench.sqlite'))
   databases.push(inspected)
   expect(inspected.prepare('SELECT key FROM encrypted_credentials ORDER BY key').all()).toEqual([{ key: 'pi-owned-test-row' }])
@@ -98,7 +100,7 @@ test('a real paused legacy run stays visible but cannot resume after Pi upgrade'
     }
     throw Object.assign(new Error('Synthetic interrupted provider response.'), { code: 'ECONNRESET' })
   } }
-  const old = createWorkbench(directory, undefined, transport)
+  const old = createWorkbench(directory, undefined, transport); workbenches.push(old)
   const role = await old.api.saveExperience({ kind: 'employment', title: 'Engineer', organization: 'Example', description: 'Built systems.' })
   const job = await old.api.saveJob({ title: 'Engineer', company: 'Example', description: 'Build systems.' })
   if (!role.ok || !job.ok) throw new Error('Could not save synthetic recovery sources.')
@@ -109,13 +111,32 @@ test('a real paused legacy run stays visible but cannot resume after Pi upgrade'
   expect(await old.api.generateDraft(preview.token)).toMatchObject({ ok: false })
   const prior = await old.api.getGenerationRecovery(job.value.id)
   expect(prior).toMatchObject({ canResume: true, runId: expect.any(String) })
-  old.close()
+  old.close(); workbenches.splice(workbenches.indexOf(old), 1)
 
-  const upgraded = createWorkbench(directory)
+  const db = new Database(join(directory, 'workbench.sqlite')); databases.push(db)
+  registerWorkspaceBackupRowSizer(db)
+  const row = db.prepare('SELECT snapshot FROM generation_recovery WHERE run_id=?').get(prior!.runId) as { snapshot: string }
+  const current = JSON.parse(row.snapshot)
+  const legacy = generationRecoverySnapshotSchema.parse({
+    version: 1,
+    runId: current.runId, jobId: current.jobId, consentId: current.consentId, scopeHash: current.scopeHash,
+    analysis: current.analysis, job: current.job, profile: current.profile, experience: current.experience,
+    draftInputs: current.draftInputs, safeItems: current.safeItems, identity: current.identity,
+    pageTarget: current.pageTarget, source: { job: current.source.job, profile: current.source.profile, model: { name: current.source.model.name } },
+    faithfulnessCheck: current.faithfulnessCheck,
+    budgets: { minimumSpacingMs: 0, rateLimitAttempts: 100, rateLimitWindowMs: 86400000, configuredDailyLimit: 10000, runLimit: 12, runTimeLimitMs: 300000 }
+  })
+  expect(legacy).toMatchObject({ version: 1, budgets: { runLimit: 12 }, source: { model: { name: expect.any(String) } } })
+  db.prepare('UPDATE generation_recovery SET snapshot=? WHERE run_id=?').run(JSON.stringify(legacy), prior!.runId)
+  db.prepare('DELETE FROM schema_migrations WHERE version=9').run()
+  db.prepare('INSERT OR REPLACE INTO settings (key,value) VALUES (?,?)').run('openrouter-model', legacy.source.model.name)
+  db.close(); databases.pop()
+
+  const upgraded = createWorkbench(directory); workbenches.push(upgraded)
   const recovery = await upgraded.api.getGenerationRecovery(job.value.id)
-  expect(recovery).toMatchObject({ canResume: false, attempts: prior?.attempts, progress: expect.stringMatching(/cannot resume with Pi.*Review outgoing data/i) })
+  expect(prior?.uncertainAttempts).toBe(1)
+  expect(recovery).toMatchObject({ canResume: false, status: 'uncertain', attempts: prior?.attempts, uncertainAttempts: prior?.uncertainAttempts, progress: expect.stringMatching(/cannot resume with Pi.*may have incurred a charge.*Review outgoing data/i) })
   expect(await upgraded.api.resumeGeneration(prior!.runId, 'retry-uncertain')).toMatchObject({ ok: false })
   expect(await upgraded.api.openJob(job.value.id)).toMatchObject({ description: 'Build systems.' })
   expect(calls).toBe(3)
-  upgraded.close()
 })
