@@ -11,7 +11,8 @@ export const profileAiBaselineExpected = {
   unusualLayout: {
     role: { title: 'Data Analyst', organization: 'Harbor Cooperative', dates: '2019 to 2022', fact: 'Prepared monthly risk reports.' },
     link: 'https://example.test/risk-reports',
-    ambiguous: 'The document lists a second Harbor Cooperative role without a title.'
+    ambiguous: 'The document lists a second Harbor Cooperative role without a title.',
+    repeatedProjects: ['Atlas — React', 'Atlas — Python']
   }
 } as const
 
