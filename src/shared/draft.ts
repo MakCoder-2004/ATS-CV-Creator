@@ -3,7 +3,11 @@ import { factualCheckReportSchema } from './factual-report'
 import { qualificationAssessmentSchema } from './qualification-coverage'
 
 export const draftCitationSchema = z.object({ evidenceId: z.string().uuid(), revision: z.number().int().positive() }).strict()
-export const generatedParagraphSchema = z.object({ text: z.string().trim().min(1).max(3000), citations: z.array(draftCitationSchema).min(1), rationale: z.string().trim().min(1).max(500) }).strict()
+export const generatedDescriptionFormatSchema = z.enum(['paragraph', 'bullets'])
+export type GeneratedDescriptionFormat = z.infer<typeof generatedDescriptionFormatSchema>
+export const countEnglishWords = (text: string) => text.match(/[\p{L}\p{N}]+(?:['’][\p{L}\p{N}]+)*(?:[-‐‑‒–—][\p{L}\p{N}]+(?:['’][\p{L}\p{N}]+)*)*/gu)?.length ?? 0
+export const isGeneratedDescriptionParagraph = (text: string) => !/[\r\n]/.test(text) && !/^(?:[•●▪◦‣*-]|\d+[.)])\s/.test(text) && countEnglishWords(text) <= 60
+export const generatedParagraphSchema = z.object({ text: z.string().trim().min(1).max(3000), descriptionFormat: generatedDescriptionFormatSchema.optional(), citations: z.array(draftCitationSchema).min(1), rationale: z.string().trim().min(1).max(500) }).strict()
 export const generatedSkillSchema = z.object({ name: z.string().trim().min(1).max(160), citations: z.array(draftCitationSchema).min(1), rationale: z.string().trim().min(1).max(500) }).strict()
 export const draftContentSchema = z.object({ education: z.array(generatedParagraphSchema).max(20), experience: z.array(generatedParagraphSchema).max(30), projects: z.array(generatedParagraphSchema).max(30), skills: z.array(generatedSkillSchema).max(100), certificates: z.array(generatedParagraphSchema).max(30) }).strict()
 export const draftTailoringSchema = z.object({ headline: z.string().trim().min(1).max(160), summary: generatedParagraphSchema }).strict()

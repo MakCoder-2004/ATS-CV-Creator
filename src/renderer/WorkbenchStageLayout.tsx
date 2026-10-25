@@ -210,7 +210,7 @@ export function WorkbenchStageLayout(props: Props) {
   const selectedId = specialSelection ?? (activeSelection ? `${activeSelection.section}-${activeSelection.index}` : undefined)
   const pendingSkills = draft?.suggestedSkills?.filter(skill => skill.status === 'pending').length ?? 0
   const reviewFindings = draft?.checkReport?.findings.filter(finding => finding.code !== 'unconfirmed-skill') ?? []
-  const selectedEntry = canonical?.sections.flatMap(section => section.entries).flatMap(entry => entry.reviewItems?.map(item => ({ ...entry, id: item.id, text: item.text, bullets: item.bullets })) ?? [entry]).find(entry => entry.id === selectedId)
+  const selectedEntry = canonical?.sections.flatMap(section => section.entries).flatMap(entry => entry.reviewItems?.map(item => ({ ...entry, id: item.id, text: item.text, bullets: item.bullets, ...(item.descriptionFormat ? { descriptionFormat: item.descriptionFormat } : { descriptionFormat: undefined }) })) ?? [entry]).find(entry => entry.id === selectedId)
   const selectedSources = selectedDraftItem?.citations.map(citation => {
     const evidence = draft?.evidence.find(item => item.evidenceId === citation.evidenceId && item.revision === citation.revision)
     return describeSource(evidence?.snapshot)

@@ -19,8 +19,16 @@ export async function renderCanonicalDocx(document: CanonicalDocument): Promise<
     for (const entry of section.entries) {
       paragraphs.push(new Paragraph({ children: [new TextRun({ text: section.name === 'Projects' ? entry.heading : entry.organization || entry.heading, bold: true }), ...(section.name === 'Projects' && entry.technologies?.length ? [new TextRun({ text: ` | ${entry.technologies.join(', ')}`, italics: true })] : []), ...(entry.dates ? [new TextRun({ text: `\t${entry.dates}` })] : []), ...(section.name === 'Projects' && entry.links.length ? [new TextRun(entry.dates ? ' · ' : '\t'), ...hyperlinkRuns(entry.links)] : [])], tabStops: [{ type: 'right', position: 10800 }], spacing: { after: 30 }, keepNext: true }))
       if (section.name !== 'Projects' && (entry.organization || entry.grade)) paragraphs.push(new Paragraph({ children: [new TextRun({ text: entry.organization ? entry.heading : '', italics: true }), ...(entry.grade ? [new TextRun({ text: `\t${entry.grade}`, italics: true })] : [])], tabStops: [{ type: 'right', position: 10800 }], spacing: { after: 30 }, keepNext: Boolean(entry.text || entry.bullets?.length) }))
-      const bullets = entry.bullets?.length ? entry.bullets : splitDocumentBullets(entry.text)
-      for (const bullet of bullets) paragraphs.push(new Paragraph({ text: bullet, bullet: { level: 0 }, indent: { left: 360, hanging: 180 }, spacing: { after: 30 } }))
+      const mixed = entry.reviewItems?.some(item => (item.descriptionFormat ?? 'bullets') !== (entry.descriptionFormat ?? 'bullets'))
+      const descriptions = mixed ? entry.reviewItems! : [{ text: entry.text, bullets: entry.bullets?.length ? entry.bullets : splitDocumentBullets(entry.text), descriptionFormat: entry.descriptionFormat }]
+      for (const item of descriptions) {
+        if (item.descriptionFormat === 'paragraph') {
+          if (item.text) paragraphs.push(new Paragraph({ text: item.text, spacing: { after: 60 } }))
+        } else {
+          const bullets = item.bullets?.length ? item.bullets : splitDocumentBullets(item.text)
+          for (const bullet of bullets) paragraphs.push(new Paragraph({ text: bullet, bullet: { level: 0 }, indent: { left: 360, hanging: 180 }, spacing: { after: 30 } }))
+        }
+      }
       if (section.name !== 'Projects' && entry.links.length) paragraphs.push(hyperlinkParagraph(entry.links))
     }
   }
