@@ -23,8 +23,10 @@ const input = { kind: 'role' as const, title: 'Engineer', postingHost: 'jobs.exa
 
 test('preflights free plan for every basic search and forwards only bounded attributed links', async () => {
   const f = fixture()
-  const session = createTavilyResearchSession(f.credentials, { transport: f.transport })
+  const dispatches: string[] = []
+  const session = createTavilyResearchSession(f.credentials, { transport: f.transport, onSearchDispatch: () => { dispatches.push('dispatch') } })
   const result = await session.search(input)
+  expect(dispatches).toEqual(['dispatch'])
   expect(result).toEqual({ links: [{ url: 'https://jobs.example.org/posting/123', title: 'Engineer', snippet: 'Short public snippet.' }], credits: 1, requestId: 'request-123' })
   expect(f.sent.map(call => call.path)).toEqual(['https://api.tavily.com/usage', 'https://api.tavily.com/search'])
   expect(f.sent.map(call => call.method)).toEqual(['GET', 'POST'])
@@ -157,6 +159,36 @@ test.each([
   expect(error).toBeInstanceOf(TavilySearchError)
   expect(error.code).toBe(code)
   expect(error.message).not.toContain(f.key)
+})
+
+test('reports dispatch immediately before a failed search POST but not for preflight refusal', async () => {
+  const f = fixture()
+  const dispatches: string[] = []
+  const original = f.transport.request
+  f.transport.request = async (...args) => args[2] === 'POST' ? Promise.reject(new Error('transport down')) : original(...args)
+  const pending = createTavilyResearchSession(f.credentials, { transport: f.transport, onSearchDispatch: () => { dispatches.push('dispatch') } }).search(input)
+  await expect(pending).rejects.toThrow(/was accepted/)
+  expect(dispatches).toEqual(['dispatch'])
+  expect(f.sent.map(call => call.method)).toEqual(['GET'])
+  const preflight = fixture({ ...usage, account: { ...usage.account, current_plan: 'Project' } })
+  const before: string[] = []
+  await expect(createTavilyResearchSession(preflight.credentials, { transport: preflight.transport, onSearchDispatch: () => { before.push('dispatch') } }).search(input)).rejects.toThrow(/free Researcher plan/)
+  expect(before).toEqual([])
+})
+
+test.each(['unsafe DNS', 'cancelled during DNS'] as const)('does not report dispatch when %s prevents the search request', async failure => {
+  const f = fixture(), dispatches: string[] = [], controller = new AbortController()
+  let lookups = 0
+  f.transport.lookup = async () => {
+    lookups++
+    if (lookups === 2 && failure === 'cancelled during DNS') controller.abort()
+    return lookups === 2 && failure === 'unsafe DNS'
+      ? [{ address: '127.0.0.1', family: 4 }]
+      : [{ address: '8.8.8.8', family: 4 }]
+  }
+  await expect(createTavilyResearchSession(f.credentials, { transport: f.transport, signal: controller.signal, onSearchDispatch: () => { dispatches.push('dispatch') } }).search(input)).rejects.toThrow()
+  expect(dispatches).toEqual([])
+  expect(f.sent.map(call => call.method)).toEqual(['GET'])
 })
 
 test('billing refusal on search dispatch remains classified without leaking provider content', async () => {

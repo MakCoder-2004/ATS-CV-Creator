@@ -85,8 +85,19 @@ export function createJobResearchSessions(options: ResearchSessionOptions) {
     const session: Session = { state: { status: 'loading' }, controller: new AbortController(), generation: 0, searched: false, expiresAt: clock() + EXPIRY_MS }
     retain(token, session)
     const generation = session.generation
-    void direct(selected.canonicalUrl, { signal: session.controller.signal }).then(run => {
-      if (live(token, session, generation)) session.state = safeState({ status: 'ready', run: freeze(jobResearchRunSchema.parse(run)) })
+    void direct(selected.canonicalUrl, { signal: session.controller.signal }).then(inputRun => {
+      if (!live(token, session, generation)) return
+      try {
+        const run = jobResearchRunSchema.parse(inputRun)
+        const returned = run.selected
+        if (returned.canonicalUrl !== selected.canonicalUrl || returned.provider !== selected.provider || returned.host !== selected.host || returned.roleId !== selected.roleId) {
+          session.state = safeState({ status: 'unavailable', message: 'The public read did not confirm the selected role identity. No source content was accepted; verify the original link or paste the posting.', settingsAction: false })
+          return
+        }
+        session.state = safeState({ status: 'ready', run: freeze(run) })
+      } catch {
+        session.state = safeState({ status: 'unavailable', message: 'The public read failed. No source content was accepted; try the original link or paste a posting.', settingsAction: false })
+      }
     }, () => {
       if (live(token, session, generation)) session.state = safeState({ status: 'unavailable', message: 'The public read failed. No source content was accepted; try the original link or paste a posting.', settingsAction: false })
     })
@@ -103,18 +114,23 @@ export function createJobResearchSessions(options: ResearchSessionOptions) {
     const generation = ++session.generation
     const original = session.state.run
     session.state = { status: 'loading' }
+    if (original.accessFailure === 'unsafe') {
+      session.state = { status: 'ready', run: original }
+      return safeState({ status: 'unavailable', message: 'The selected page identifies a different role or failed a safety check. Search was not sent and this action used no credit; verify the role manually or paste the posting text.', settingsAction: false, searchOutcome: 'not-sent' })
+    }
     const available = await options.credentials.status().catch(() => ({ configured: false, storageAvailable: false, message: '' }))
     if (!live(token, session, generation)) throw new Error(missing)
     if (!available.configured || !available.storageAvailable) {
       session.state = { status: 'ready', run: original }
-      return safeState({ status: 'unavailable', message: available.storageAvailable ? 'Set up your Tavily key in Settings before searching. No request was sent.' : 'Encrypted search-key storage is unavailable on this device. Open Settings; no request was sent.', settingsAction: true })
+      return safeState({ status: 'unavailable', message: available.storageAvailable ? 'Set up your Tavily key in Settings before searching. No request was sent.' : 'Encrypted search-key storage is unavailable on this device. Open Settings; no request was sent.', settingsAction: true, searchOutcome: 'not-sent' })
     }
     // Only a canonical host and exact public role ID leave the device; no title, CV, profile,
     // contact detail, untrusted page words, or URL query string is sent to the index provider.
     const selected = original.selected
     const query = { kind: 'role' as const, title: 'job', postingHost: selected.host, ...(selected.roleId ? { roleId: selected.roleId } : {}) }
+    let searchPostAttempted = false
     try {
-      const result: TavilySearchResult = await searchFactory(options.credentials, { signal: session.controller.signal }).search(query)
+      const result: TavilySearchResult = await searchFactory(options.credentials, { signal: session.controller.signal, onSearchDispatch: () => { searchPostAttempted = true } }).search(query)
       if (!live(token, session, generation)) throw new Error(missing)
       // Search links are leads, not full role evidence. Never navigate to a search-provided
       // destination: only the canonical selected URL may be re-read by the pinned direct adapter.
@@ -131,7 +147,7 @@ export function createJobResearchSessions(options: ResearchSessionOptions) {
       })
       if (!candidates.length) {
         const run = jobResearchRunSchema.parse({ ...original, completedAt: new Date().toISOString(), unknowns: [...original.unknowns, 'No usable indexed result matched this exact selected role; similarly named employers and jobs were ignored.'] })
-        session.state = { status: 'ready', run: freeze(run) }
+        session.state = { status: 'ready', run: freeze(run), searchOutcome: 'one-credit-reported' }
         return getJobResearch(token)
       }
       // The only follow-up GET is to the already selected canonical URL. Only typed,
@@ -156,7 +172,7 @@ export function createJobResearchSessions(options: ResearchSessionOptions) {
         unknowns: [...new Set([...original.unknowns, ...(next?.unknowns ?? [])])],
       })
       if (verified?.status === 'full') {
-        session.state = { status: 'ready', run: freeze(jobResearchRunSchema.parse({ ...verified, id: original.id, startedAt: original.startedAt })) }
+        session.state = { status: 'ready', run: freeze(jobResearchRunSchema.parse({ ...verified, id: original.id, startedAt: original.startedAt })), searchOutcome: 'one-credit-reported' }
         return getJobResearch(token)
       }
       const base = preserved(verified?.status === 'provisional' ? verified : undefined)
@@ -164,7 +180,7 @@ export function createJobResearchSessions(options: ResearchSessionOptions) {
       const cannotFallback = (original.accessFailure !== undefined && original.accessFailure !== 'unreadable') || readFailed || identityMismatch ||
         (verified?.status !== 'provisional' && verified?.accessFailure !== 'unreadable')
       if (cannotFallback) {
-        session.state = { status: 'ready', run: freeze(jobResearchRunSchema.parse({ ...base, unknowns: [...base.unknowns, 'The selected source could not be safely reached; the indexed excerpt was not accepted.'] })) }
+        session.state = { status: 'ready', run: freeze(jobResearchRunSchema.parse({ ...base, unknowns: [...base.unknowns, 'The selected source could not be safely reached; the indexed excerpt was not accepted.'] })), searchOutcome: 'one-credit-reported' }
         return getJobResearch(token)
       }
       const directRoles = base.sources.filter(source => source.method === 'direct-html' && source.identity === 'exact-role' && source.title)
@@ -179,7 +195,7 @@ export function createJobResearchSessions(options: ResearchSessionOptions) {
       })
       const match = candidates.find(matchesDirect)
       if (!match) {
-        session.state = { status: 'ready', run: freeze(jobResearchRunSchema.parse({ ...base, unknowns: [...base.unknowns, 'Indexed title or employer did not match the directly read role; the snippet was discarded.'] })) }
+        session.state = { status: 'ready', run: freeze(jobResearchRunSchema.parse({ ...base, unknowns: [...base.unknowns, 'Indexed title or employer did not match the directly read role; the snippet was discarded.'] })), searchOutcome: 'one-credit-reported' }
         return getJobResearch(token)
       }
       const sourceId = randomUUID()
@@ -192,13 +208,13 @@ export function createJobResearchSessions(options: ResearchSessionOptions) {
       unknowns: [...base.unknowns, directRoles.length
         ? 'The indexed title and excerpt match directly read role metadata, but the excerpt is partial and not independently confirmed on source; verify on original.'
         : 'Identity matched by selected URL only; job title/employer and excerpt are indexed, not independently confirmed on source; verify on original.'] })
-      session.state = { status: 'ready', run: freeze(run) }
+      session.state = { status: 'ready', run: freeze(run), searchOutcome: 'one-credit-reported' }
       return getJobResearch(token)
     } catch (error) {
       if (!live(token, session, generation)) throw new Error(missing)
       session.state = { status: 'ready', run: original }
       const message = error instanceof TavilySearchError ? error.message : 'Search could not be verified or completed. No search result was accepted. Check your Tavily plan and key in Settings.'
-      return safeState({ status: 'unavailable', message, settingsAction: true })
+      return safeState({ status: 'unavailable', message, settingsAction: true, searchOutcome: searchPostAttempted ? 'charge-uncertain' : 'not-sent' })
     }
   }
   function reviewJobResearch(token: string, acceptedFindingIds: string[], acknowledgedPartial: boolean): ReviewedJobResearch {

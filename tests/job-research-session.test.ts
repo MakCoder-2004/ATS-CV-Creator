@@ -96,10 +96,25 @@ describe('volatile public research session', () => {
     sessions.close()
   })
 
+  it('rejects a valid direct result for a different selected role before enabling search', async () => {
+    const t = fixture(); let credentialChecks = 0
+    const wrongRole = { ...synthetic('none'), selected: normalizeJobResearchUrl('https://www.linkedin.com/jobs/view/4464025098/') }
+    const sessions = createJobResearchSessions({
+      credentials: { ...t.credentials, status: async () => { credentialChecks++; return { configured: true, storageAvailable: true, message: '' } } },
+      createSearch: t.createSearch, direct: async () => wrongRole,
+    })
+    const { token } = sessions.startJobResearch(URL); await tick()
+    expect(sessions.getJobResearch(token)).toMatchObject({ status: 'unavailable', message: expect.stringContaining('selected role identity') })
+    await expect(sessions.searchJobResearch(token)).rejects.toThrow(/public read/)
+    expect(credentialChecks).toBe(0)
+    expect(t.requests).toBe(0)
+    sessions.close()
+  })
+
   it('missing account gives a Settings action and sends no HTTP request', async () => {
     const t = fixture(), sessions = createJobResearchSessions({ credentials: { ...t.credentials, status: async () => ({ configured: false, storageAvailable: true, message: '' }) }, createSearch: t.createSearch, direct: async () => synthetic() })
     const { token } = sessions.startJobResearch(URL); await tick()
-    expect(await sessions.searchJobResearch(token)).toMatchObject({ status: 'unavailable', settingsAction: true, message: expect.stringContaining('Settings') })
+    expect(await sessions.searchJobResearch(token)).toMatchObject({ status: 'unavailable', settingsAction: true, searchOutcome: 'not-sent', message: expect.stringContaining('Settings') })
     expect(t.requests).toBe(0)
     expect(sessions.getJobResearch(token).status).toBe('ready')
     await expect(sessions.searchJobResearch(token)).rejects.toThrow(/one explicit/)
@@ -114,6 +129,7 @@ describe('volatile public research session', () => {
     expect(reads).toBe(1)
     const searched = await sessions.searchJobResearch(token)
     expect(t.searches).toBe(1)
+    expect(searched).toMatchObject({ status: 'ready', searchOutcome: 'one-credit-reported' })
     expect(t.requests).toBe(2) // free-plan /usage preflight and one /search
     expect(reads).toBe(2) // pinned exact selected URL re-read, never arbitrary result URL
     expect(searched.status).toBe('ready')
@@ -129,13 +145,57 @@ describe('volatile public research session', () => {
     sessions.close()
   })
 
+  it('marks an attempted but unverified search POST as charge-uncertain', async () => {
+    const t = fixture()
+    const original = t.createSearch
+    const sessions = createJobResearchSessions({ credentials: t.credentials, direct: async () => synthetic('none'), createSearch: (credentials, options) => {
+      const session = original(credentials, options)
+      return { ...session, search: async (query: Parameters<typeof session.search>[0]) => { options?.onSearchDispatch?.(); throw new Error('ambiguous transport result') } }
+    } })
+    const token = sessions.startJobResearch(URL).token; await tick()
+    expect(await sessions.searchJobResearch(token)).toMatchObject({ status: 'unavailable', searchOutcome: 'charge-uncertain' })
+    sessions.close()
+  })
+
+  it('reports not-sent when search DNS fails after free-plan preflight', async () => {
+    const t = fixture(); let lookups = 0
+    const transport: TavilyTransport = {
+      lookup: async () => ++lookups === 1 ? [{ address: '8.8.8.8', family: 4 }] : [{ address: '127.0.0.1', family: 4 }],
+      request: async (_url, _address, method) => method === 'GET'
+        ? { status: 200, headers: { 'content-type': 'application/json' }, body: Buffer.from(JSON.stringify({ account: { current_plan: 'Researcher', plan_limit: 1000, paygo_limit: 0, paygo_usage: 0, plan_usage: 0 }, key: { usage: 0, limit: 1000 } })) }
+        : { status: 200, headers: { 'content-type': 'application/json' }, body: Buffer.from('{}') },
+    }
+    const sessions = createJobResearchSessions({ credentials: t.credentials, direct: async () => synthetic('none'), createSearch: ((credentials, options) => createTavilyResearchSession(credentials, { ...options, transport })) })
+    const token = sessions.startJobResearch(URL).token; await tick()
+    expect(await sessions.searchJobResearch(token)).toMatchObject({ status: 'unavailable', searchOutcome: 'not-sent' })
+    expect(lookups).toBe(2)
+    sessions.close()
+  })
+
+  it('refuses an initially unsafe/mismatched canonical role before credential or provider access', async () => {
+    const t = fixture(); let credentialChecks = 0, directReads = 0
+    const unsafe = { ...synthetic('blocked'), accessFailure: 'unsafe' as const }
+    const sessions = createJobResearchSessions({
+      credentials: { ...t.credentials, status: async () => { credentialChecks++; return { configured: true, storageAvailable: true, message: '' } } },
+      createSearch: t.createSearch, direct: async () => { directReads++; return unsafe },
+    })
+    const token = sessions.startJobResearch(URL).token; await tick()
+    expect(sessions.getJobResearch(token)).toMatchObject({ status: 'ready', run: { accessFailure: 'unsafe' } })
+    expect(await sessions.searchJobResearch(token)).toMatchObject({ status: 'unavailable', searchOutcome: 'not-sent', message: expect.stringMatching(/not sent.*no credit/i) })
+    expect(credentialChecks).toBe(0)
+    expect(t.requests).toBe(0)
+    expect(directReads).toBe(1)
+    await expect(sessions.searchJobResearch(token)).rejects.toThrow(/one explicit/)
+    sessions.close()
+  })
+
   it('discards namesake search links and snippets without a direct verified role', async () => {
     const t = fixture('https://finaira.io/work-at-finaira/', 'Synthetic Engineer — Invented Corp')
     const sessions = createJobResearchSessions({ credentials: t.credentials, createSearch: t.createSearch, direct: async () => synthetic('none') })
     const { token } = sessions.startJobResearch(URL); await tick()
     const state = await sessions.searchJobResearch(token)
     expect(state.status).toBe('ready')
-    if (state.status === 'ready') { expect(state.run.findings).toHaveLength(0); expect(state.run.status).toBe('none') }
+    if (state.status === 'ready') { expect(state.run.findings).toHaveLength(0); expect(state.run.status).toBe('none'); expect(state.searchOutcome).toBe('one-credit-reported') }
     expect(t.searches).toBe(1)
     sessions.close()
   })

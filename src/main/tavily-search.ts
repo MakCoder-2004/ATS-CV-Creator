@@ -138,7 +138,7 @@ function parseResult(value: Record<string, unknown>): TavilySearchResult {
 }
 
 /** One explicit user action creates one session; it cannot dispatch more than three searches. */
-export function createTavilyResearchSession(credentials: Pick<ResearchSearchCredentials, 'withKey'>, options: { transport?: TavilyTransport; signal?: AbortSignal } = {}) {
+export function createTavilyResearchSession(credentials: Pick<ResearchSearchCredentials, 'withKey'>, options: { transport?: TavilyTransport; signal?: AbortSignal; onSearchDispatch?: () => void } = {}) {
   let dispatched = 0
   const network = options.transport ?? transport
   const request = async (key: string, route: '/usage' | '/search', body: Buffer | undefined) => {
@@ -159,6 +159,7 @@ export function createTavilyResearchSession(credentials: Pick<ResearchSearchCred
       if (!addresses.length || addresses.some(address => !isPublicAddress(address.address, address.family))) throw new Error(ERROR)
       if (controller.signal.aborted) throw new Error('Search cancelled or timed out.')
       const headers = Object.freeze({ Authorization: `Bearer ${key}`, Accept: 'application/json', 'Accept-Encoding': 'identity', ...(body ? { 'Content-Type': 'application/json', 'Content-Length': String(body.length) } : {}) })
+      if (route === '/search') options.onSearchDispatch?.()
       return parseBody(await bounded(network.request(url, addresses[0], body ? 'POST' : 'GET', headers, body, controller.signal)))
     } finally {
       clearTimeout(timeout)
