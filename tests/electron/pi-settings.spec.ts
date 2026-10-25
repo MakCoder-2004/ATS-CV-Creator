@@ -37,7 +37,7 @@ test('Settings exposes Pi model preferences without in-app credentials or analys
     const cancelRemoval = page.getByRole('button', { name: 'Cancel', exact: true })
     await expect(cancelRemoval).toBeFocused()
     await expect(tavilyKey).toHaveValue('tvly-next-key-keep-this')
-    await page.keyboard.press('Enter')
+    await cancelRemoval.click()
     await expect(removeKey).toBeFocused()
   } finally {
     await app.close()

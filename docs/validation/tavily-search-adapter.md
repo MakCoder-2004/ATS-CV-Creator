@@ -18,6 +18,8 @@ The [privacy policy](https://www.tavily.com/privacy) says queries can be retaine
 
 ## Verification
 
+Settings source renders configured-but-unavailable status as a locally stored encrypted key that cannot be used for searches now, while keeping local removal available; it does not expose key text. The focused Electron Settings regression asserts cancellation focus restoration after the confirmation controls unmount and preservation of an in-progress replacement key. Runtime verification was inconclusive: the bounded test launched the existing `out/main/index.js` without rebuilding its renderer bundle, and focus restoration did not pass against that artifact.
+
 Run targeted Node-only mocks, with this worktree's isolated `.audit/vitest.tavily.config.mts`, using `./node_modules/.bin/vitest run --config .audit/vitest.tavily.config.mts --maxWorkers=1`. Typecheck with `./node_modules/.bin/tsc --noEmit --pretty false`. No installed Electron, real DPAPI, Tavily request, package build, native rebuild, or full suite was run. The `.audit` test config and cache are private to this worktree and not committed.
 
 Model the Domain made a session own the three-dispatch counter and serialization, rather than spreading accounting across callers. Boundary Discipline put strict provider, DNS, encryption, and JSON checks at main-process boundaries; downstream orchestration still owns source identity and user consent.

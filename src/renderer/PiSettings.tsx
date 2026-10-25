@@ -14,6 +14,7 @@ function ResearchSearchKeySettings() {
   const [message, setMessage] = useState('')
   const removeTrigger = useRef<HTMLButtonElement>(null)
   const cancelRemove = useRef<HTMLButtonElement>(null)
+  const restoreRemoveFocus = useRef(false)
 
   useEffect(() => {
     let active = true
@@ -45,16 +46,20 @@ function ResearchSearchKeySettings() {
 
   useEffect(() => {
     if (confirmRemove) cancelRemove.current?.focus()
+    else if (restoreRemoveFocus.current) {
+      restoreRemoveFocus.current = false
+      window.requestAnimationFrame(() => removeTrigger.current?.focus())
+    }
   }, [confirmRemove])
 
   function cancelRemoval() {
+    restoreRemoveFocus.current = true
     setConfirmRemove(false)
-    removeTrigger.current?.focus()
   }
 
   return <section className="settings-block" aria-labelledby="research-key-heading">
     <div className="settings-block-heading"><span className="settings-block-icon"><KeyRound size={18} aria-hidden="true" /></span><div><h2 id="research-key-heading">Tavily search key</h2><p>Separate from your Pi model sign-in.</p></div></div>
-    <p className="settings-helper pi-settings-helper" role="status">{status ? status.storageAvailable ? status.configured ? 'A Tavily key is saved on this device.' : 'No Tavily key is saved on this device.' : 'Secure local key storage is unavailable. A Tavily key cannot be saved here.' : loadFailed ? 'Local key status is unavailable.' : 'Checking local key storage…'}</p>
+    <p className="settings-helper pi-settings-helper" role="status">{status ? status.configured && !status.storageAvailable ? 'A local encrypted Tavily key is stored, but device encryption is unavailable. Searches cannot use it now; you can still remove it.' : status.storageAvailable ? status.configured ? 'A Tavily key is saved on this device.' : 'No Tavily key is saved on this device.' : 'Secure local key storage is unavailable. A Tavily key cannot be saved here.' : loadFailed ? 'Local key status is unavailable.' : 'Checking local key storage…'}</p>
     <form className="profile-form" onSubmit={event => void save(event)}>
       <label className="form-field">Tavily API key<input type="password" value={key} onChange={event => setKey(event.target.value)} autoComplete="new-password" autoCapitalize="off" spellCheck={false} minLength={12} maxLength={512} required disabled={busy || !status?.storageAvailable} aria-describedby="research-key-help" /></label>
       <p className="settings-helper pi-settings-helper" id="research-key-help">Create and manage your own free Researcher account with Tavily. Saving a key makes no search request and does not enable a paid plan. The encrypted key stays outside workspace backups.</p>
