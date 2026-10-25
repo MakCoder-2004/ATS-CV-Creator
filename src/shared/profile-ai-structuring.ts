@@ -17,7 +17,7 @@ export type ProfileAiResult = z.infer<typeof profileAiResultSchema>
 
 export const PROFILE_AI_RESIDUAL_NOTICE = 'The selected text is sent through Pi to the selected model provider and may still contain identifying or sensitive information. Local redaction is incomplete and does not make this anonymous.'
 
-type ImportProposalAccess = { get: () => ProfilePdfProposal; set: (proposal: ProfilePdfProposal) => void; evidence?: ProfileSourceEvidenceDocument }
+type ImportProposalAccess = { get: () => ProfilePdfProposal; set: (proposal: ProfilePdfProposal) => void; evidence?: ProfileSourceEvidenceDocument; evidenceError?: string }
 const importProposals = new Map<string, ImportProposalAccess>()
 export function registerProfileAiImport(token: string, access: ImportProposalAccess) { importProposals.set(token, access) }
 export function unregisterProfileAiImport(token: string) { importProposals.delete(token) }
@@ -154,6 +154,7 @@ export function materializeProfileAiResult(current: ProfilePdfProposal, result: 
   const sources = result.citations.map(citation => {
     const unit = units.get(citation.unitId), field = fields.get(citation.proposalRef)
     if (!unit || !field) throw new Error('The AI cited a source or proposal outside this CV review. Keep the local proposals and review them manually.')
+    if (unit.kind === 'link') throw new Error('This hyperlink has no unambiguous source passage. Keep it unresolved for review instead of attaching it to a profile record.')
     const key = `${citation.proposalRef}|${citation.unitId}`
     if (citationKeys.has(key)) throw new Error('The AI repeated a source reference. Keep the local proposals and review them manually.')
     citationKeys.add(key); sourceRefs.add(citation.proposalRef); usedUnits.add(unit.unitId)

@@ -77,6 +77,18 @@ describe('profile AI outgoing projection', () => {
     expect(result.sources.every(item => item.proposalId === result.proposalIds[item.proposalRef])).toBe(true)
   })
 
+  it('leaves hyperlinks without a source passage unresolved', () => {
+    const ids = (() => { let index = 20; return () => `00000000-0000-4000-8000-${String(++index).padStart(12, '0')}` })()
+    const evidence = buildPdfSourceEvidence('d'.repeat(64), [{ page: 1, text: 'A readable source paragraph keeps this synthetic PDF above the minimum selectable-text threshold for import review.', links: [{ label: 'Portfolio', url: 'https://example.test/portfolio' }] }], ids)
+    const source = evidence.units.find(unit => unit.kind === 'link')!
+    const current = profilePdfProposalSchema.parse({ skills: [], experience: [], projects: [], entries: [], unmapped: [], sources: [], proposalIds: {} })
+    const output = {
+      skills: [], experience: [], projects: [{ name: 'Example work', description: 'Example work', factualItems: [], technologies: [], links: [{ label: 'Portfolio', url: 'https://example.test/portfolio' }], proposalRef: 'project' }], entries: [],
+      citations: [{ proposalRef: 'project', unitId: source.unitId }], unmappedUnitIds: evidence.units.filter(unit => unit.unitId !== source.unitId).map(unit => unit.unitId)
+    }
+    expect(() => materializeProfileAiResult(current, output as never, evidence, () => ids())).toThrow(/no unambiguous source passage/)
+  })
+
   it('rejects foreign source identities, silent omissions, and facts moved across role anchors', () => {
     const ids = (() => { let index = 10; return () => `00000000-0000-4000-8000-${String(++index).padStart(12, '0')}` })()
     const source = buildPdfSourceEvidence('c'.repeat(64), [{ page: 1, text: 'Experience One\nBuilt the first service.\nExperience Two\nBuilt the second service.' }], ids)
