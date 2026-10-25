@@ -165,6 +165,45 @@ test('a provider response without its graph checkpoint remains uncertain after r
   expect((await workspace.api.getDraft(jobId))?.content.experience).toHaveLength(1)
 }, 20000)
 
+test.each([['cancelled', false], ['new run', true]] as const)('cancellation at the last graph checkpoint cannot replace %s analysis state', async (_case, startNewRun) => {
+  const directory = mkdtempSync(join(tmpdir(), 'cv-tailor-final-checkpoint-')); dirs.push(directory)
+  let cancelAtLastCheckpoint = false, checkpointReached = false
+  let cancelled!: Promise<unknown>, newer!: Promise<unknown>
+  let nextToken = ''
+  const workspace = createWorkbench(directory, undefined, recoveryTransport(), { beforeGraphCheckpoint(metadata) {
+    if (!cancelAtLastCheckpoint || metadata.source !== 'loop' || metadata.step !== 2) return
+    cancelAtLastCheckpoint = false
+    checkpointReached = true
+    cancelled = workspace.api.cancelAnalysis(jobId)
+    if (startNewRun) newer = workspace.api.startAnalysis(nextToken)
+  } }); opened.push(workspace)
+  const { jobId, token } = await seed(workspace)
+  if (startNewRun) {
+    const preview = await workspace.api.prepareOutboundConsent(jobId)
+    if (!preview.ok) throw Error(preview.message)
+    expect(await workspace.api.acceptOutboundConsent(preview.token, true, true)).toMatchObject({ ok: true })
+    nextToken = preview.token
+  }
+  const priorAnalysis = await workspace.api.getAnalysis(jobId)
+  cancelAtLastCheckpoint = true
+  expect(await workspace.api.generateDraft(token)).toMatchObject({ ok: false, message: expect.stringMatching(/cancelled/i) })
+  expect(checkpointReached).toBe(true)
+  expect(await cancelled).toMatchObject({ status: 'cancelled' })
+  const nextAnalysis = startNewRun ? await newer : null
+  if (startNewRun) expect(nextAnalysis).toMatchObject({ status: 'complete', cacheHit: true })
+  const expectedRunId = startNewRun ? (nextAnalysis as { runId: string }).runId : priorAnalysis!.runId
+  expect(await workspace.api.getAnalysis(jobId)).toMatchObject({ runId: expectedRunId, status: startNewRun ? 'complete' : 'cancelled', analysis: startNewRun ? priorAnalysis!.analysis : null })
+  expect(await workspace.api.getDraft(jobId)).toBeNull()
+  expect(await workspace.api.getGenerationRecovery(jobId)).toBeNull()
+  const sqlite = new Database(join(directory, 'workbench.sqlite'), { readonly: true })
+  try {
+    expect(JSON.parse((sqlite.prepare('SELECT data FROM analysis_run_state WHERE job_id=?').get(jobId) as { data: string }).data)).toMatchObject({ runId: expectedRunId, status: startNewRun ? 'complete' : 'cancelled' })
+    const cached = sqlite.prepare('SELECT run_id, data FROM posting_analysis_cache WHERE job_id=?').get(jobId) as { run_id: string; data: string }
+    expect(cached.run_id).toBe(priorAnalysis!.runId)
+    expect(JSON.parse(cached.data)).toEqual(priorAnalysis!.analysis)
+  } finally { sqlite.close() }
+}, 20000)
+
 test('corrupt recovery snapshots fail closed without dispatch', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'cv-tailor-corrupt-recovery-')); dirs.push(directory)
   const transport = recoveryTransport(async () => { throw Object.assign(new Error('offline'), { code: 'ECONNRESET' }) })

@@ -1354,7 +1354,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
           return { value: responseSchema.parse(JSON.parse(generated.text)), attempts: generated.attempts }
         } })
         authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
-        const saveGenerationStep = (step: 'verify-claims' | 'check-document', progress: string, completed: string[]) => { const observed = (db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id = ?').get(pending.runId) as { count: number }).count; saveAnalysisState({ jobId: pending.jobId, runId: pending.runId, status: 'running', analysis: analysis.analysis, progress, attempts: observed, cacheHit: analysis.cacheHit, generationStep: step, completedSteps: completed }) }
+        const saveGenerationStep = (step: 'verify-claims' | 'check-document', progress: string, completed: string[]) => { if (activeAnalysisByJob.get(pending.jobId) !== pending.runId || dispatcher.isCancelled(pending.runId)) return; const observed = (db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id = ?').get(pending.runId) as { count: number }).count; saveAnalysisState({ jobId: pending.jobId, runId: pending.runId, status: 'running', analysis: analysis.analysis, progress, attempts: observed, cacheHit: analysis.cacheHit, generationStep: step, completedSteps: completed }) }
         saveGenerationStep('verify-claims', 'Checking generated claims against frozen evidence.', ['parse-posting', 'score-evidence', 'select-content', 'tailor-paragraphs'])
         const repairSchema = z.object({ corrections: z.array(z.object({ section: z.enum(['education', 'experience', 'projects', 'skills', 'certificates']), index: z.number().int().nonnegative(), text: z.string().trim().min(1).max(3000), citations: z.array(z.object({ evidenceId: uuidSchema, revision: z.number().int().positive() }).strict()).min(1) }).strict()).max(1) }).strict()
         let report = checkDraftFacts(result.draft, { includeSkillDecisions: false })
@@ -1765,7 +1765,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       } else {
         const value = supplied!.data
         const evidenceId = sourcePlan?.record.id ?? localSource?.evidenceId ?? randomUUID(), evidenceRevision = sourcePlan?.record.revision ?? (localSource ? localSource.revision + 1 : 1), citation = { evidenceId, revision: evidenceRevision }
-        let snapshot: Record<string, unknown>, draftItem: { text: string; citations: typeof citation[]; rationale: string } | { name: string; citations: typeof citation[]; rationale: string }
+        let snapshot: Record<string, unknown>, draftItem: { text: string; citations: typeof citation[]; rationale: string; descriptionFormat?: DraftRevision['content']['experience'][number]['descriptionFormat'] } | { name: string; citations: typeof citation[]; rationale: string }
         if (request.section === 'education') {
           const v = value as import('../shared/profile').ProfileEntryInput
           snapshot = { ...v, id: evidenceId, revision: evidenceRevision }
@@ -1797,6 +1797,10 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
           draftItem = { name: v.name, citations: [citation], rationale: 'User-authored record; manually declared for this CV.' }
         }
         if (sourcePlan) snapshot = sourcePlan.record as unknown as Record<string, unknown>
+        if (request.operation === 'update' && (request.section === 'experience' || request.section === 'projects')) {
+          const format = (items[request.index!] as DraftRevision['content']['experience'][number]).descriptionFormat
+          if (format !== undefined && 'text' in draftItem) draftItem = { ...draftItem, descriptionFormat: format }
+        }
         if (sourcePlan?.operation === 'update' || localSource) evidence.splice(0, evidence.length, ...evidence.filter(entry => entry.evidenceId !== evidenceId))
         evidence.push({ evidenceId, revision: evidenceRevision, snapshot, provenance: sourcePlan ? 'profile' : 'manual', ...(!sourcePlan && (profileOrigin || frozenSource) ? { profileOrigin: profileOrigin ?? { evidenceId: frozenSource!.evidenceId, revision: frozenSource!.revision } } : {}) })
         if (request.operation === 'add') { items.push(draftItem as never); recordIndex = items.length - 1 }

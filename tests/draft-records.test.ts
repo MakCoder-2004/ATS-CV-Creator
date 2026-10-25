@@ -211,6 +211,39 @@ test('profile-scope add/update/delete records immutable history transactionally 
   expect(await reopened.api.getEvidenceHistory(addedRecord.id)).toHaveLength(3)
 }, 30000)
 
+test.each(['experience', 'projects'] as const)('%s record updates retain selected paragraph format and legacy absence in both scopes', async section => {
+  for (const scope of ['cv-only', 'profile'] as const) {
+    const { wb, jobId } = await generatedWorkspace()
+    let draft = (await wb.api.getDraft(jobId))!
+    expect(draft.content[section][0]).toMatchObject({ descriptionFormat: 'paragraph' })
+    const canonical = (await wb.api.getCanonicalDocument(jobId))!
+    await wb.api.saveDocumentFitReport(jobId, { documentHash: createHash('sha256').update(JSON.stringify(canonical)).digest('hex'), targetPages: canonical.targetPages, actualPages: 1, extractedText: [], linkTargets: [], links: [], overflow: false, proposedCuts: [], measuredAt: new Date().toISOString() })
+    expect(await wb.api.approveDraft(jobId)).toMatchObject({ ok: true, draft: { approved: true } })
+    draft = (await wb.api.getDraft(jobId))!
+    const original = listDraftRecords(draft).find(record => record.section === section && record.index === 0)!
+    const editedText = Array(10).fill('Contributed to reliable services and supported deployment workflows.').join(' ')
+    expect(editedText.split(' ')).toHaveLength(80)
+    const edited = await wb.api.mutateDraftRecord({ jobId, draftId: draft.id, sourceRevision: draft.revision, section, index: 0, operation: 'update', scope, value: { ...original.value, description: editedText } })
+    expect(edited.ok, `${section} ${scope}: ${edited.message}`).toBe(true)
+    draft = edited.draft!
+    expect(draft.content[section][edited.recordIndex!]).toMatchObject({ text: editedText, descriptionFormat: 'paragraph' })
+    expect((await wb.api.getCanonicalDocument(jobId))?.sections.find(part => part.name === (section === 'experience' ? 'Experience' : 'Projects'))?.entries[edited.recordIndex!]).toMatchObject({ descriptionFormat: 'paragraph' })
+    expect(draft).toMatchObject({ approved: false, status: 'unverified', checkReport: { passed: true, findings: [] } })
+    expect(draft.approval).toBeUndefined()
+    expect(await wb.api.getDocumentFitReport(jobId)).toBeNull()
+    expect(await wb.api.assertDraftExportable(jobId)).toMatchObject({ ok: false })
+    const manualValue = section === 'experience' ? { kind: 'employment' as const, title: 'Manual role', organization: 'Manual org', description: 'Built a service.' } : { name: 'Manual project', description: 'Built a tool.' }
+    const added = await wb.api.mutateDraftRecord({ jobId, draftId: draft.id, sourceRevision: draft.revision, section, operation: 'add', scope, value: manualValue })
+    expect(added.ok, added.message).toBe(true)
+    draft = added.draft!
+    expect(draft.content[section][added.recordIndex!]).not.toHaveProperty('descriptionFormat')
+    const legacy = listDraftRecords(draft).find(record => record.section === section && record.index === added.recordIndex)!
+    const updated = await wb.api.mutateDraftRecord({ jobId, draftId: draft.id, sourceRevision: draft.revision, section, index: legacy.index, operation: 'update', scope, value: { ...legacy.value, description: 'Maintained a useful service.' } })
+    expect(updated.ok, updated.message).toBe(true)
+    expect(updated.draft!.content[section][updated.recordIndex!]).not.toHaveProperty('descriptionFormat')
+  }
+}, 30000)
+
 test('grouped legacy role paragraphs edit and delete as one profile record', async () => {
   const { wb, dir, jobId } = await generatedWorkspace(true)
   const role = await seedLegacyGroupedRole(wb, dir, jobId)
