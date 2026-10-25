@@ -12,13 +12,13 @@ function link(url: string, label: string): string {
 }
 const itemList = (entry: CanonicalDocumentEntry, includeLinks = true) => {
   if (!entry.reviewItems?.length || entry.reviewItems.every(item => (item.descriptionFormat ?? 'bullets') === (entry.descriptionFormat ?? 'bullets'))) {
-    if (entry.descriptionFormat === 'paragraph') return entry.text ? `\\small{${escapeLatex(entry.text)}}\\par${includeLinks && entry.links.length ? `\n${entry.links.map(value => link(value.url, value.label)).join(' \\quad ')}` : ''}` : ''
+    if (entry.descriptionFormat === 'paragraph') return entry.text ? `\\resumeParagraphStart\\small{${escapeLatex(entry.text)}}\\par${includeLinks && entry.links.length ? `\n${entry.links.map(value => link(value.url, value.label)).join(' \\quad ')}` : ''}` : ''
     const bullets = entry.bullets?.length ? entry.bullets : splitDocumentBullets(entry.text)
     const items = [...bullets.map(bullet => `    \\resumeItem{${escapeLatex(bullet)}}`), ...(includeLinks && entry.links.length ? [`    \\resumeItem{${entry.links.map(value => link(value.url, value.label)).join(' \\quad ')}}`] : [])]
     return items.length ? `\\resumeItemListStart\n${items.join('\n')}\n\\resumeItemListEnd` : ''
   }
   const renderDescription = (text: string, bullets: string[], format?: 'paragraph' | 'bullets') => {
-    if (format === 'paragraph') return text ? `\\small{${escapeLatex(text)}}\\par` : ''
+    if (format === 'paragraph') return text ? `\\resumeParagraphStart\\small{${escapeLatex(text)}}\\par` : ''
     const items = bullets.map(bullet => `    \\resumeItem{${escapeLatex(bullet)}}`)
     return items.length ? `\\resumeItemListStart\n${items.join('\n')}\n\\resumeItemListEnd` : ''
   }
@@ -48,11 +48,12 @@ export function renderLatexSections(input: CanonicalDocument): Record<'heading.t
       files['skills.tex'] = `\\section{Technical Skills}\n\\begin{itemize}[leftmargin=0.15in, label={}]\n    \\small{\\item{\n${groups}\n    }}\n\\end{itemize}\n`
     } else {
       const entries = section.entries.map(entry => {
-        const projectRight = [escapeLatex(entry.dates ?? ''), ...entry.links.map(value => link(value.url, value.label))].filter(Boolean).join(' \\quad ')
+        const projectRight = escapeLatex(entry.dates ?? '')
         const heading = section.name === 'Projects'
           ? `\\${entry.links.length ? 'resumeLinkedProjectHeading' : 'resumeProjectHeading'}\n    {\\textbf{${escapeLatex(entry.heading)}}${entry.technologies?.length ? ` $|$ \\emph{${entry.technologies.map(escapeLatex).join(', ')}}` : ''}}{${projectRight}}`
           : `\\resumeSubheading\n    {${escapeLatex(entry.organization || entry.heading)}}{${escapeLatex(entry.dates ?? '')}}\n    {${escapeLatex(entry.organization ? entry.heading : '')}}{${escapeLatex(entry.grade ?? '')}}`
-        return `${heading}\n${itemList(entry, section.name !== 'Projects')}`
+        const projectLinks = section.name === 'Projects' && entry.links.length ? `\\resumeParagraphStart\\small{${entry.links.map(value => link(value.url, value.label)).join(' \\quad ')}}\\par\n` : ''
+        return `${heading}\n${projectLinks}${itemList(entry, section.name !== 'Projects')}`
       }).join('\n\n')
       files[`${section.name.toLowerCase()}.tex` as 'education.tex' | 'experience.tex' | 'projects.tex'] = `\\section{${section.name}}\n\\resumeSubHeadingListStart\n\n${entries}\n\n\\resumeSubHeadingListEnd\n`
     }
