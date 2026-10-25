@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "tavily": {
+      "command": "node",
+      "args": ["scripts/project-tavily-mcp.cjs"],
+      "description": "Project-only Tavily search and extraction using the ignored local .env key"
+    }
+  }
+}
