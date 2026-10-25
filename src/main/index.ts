@@ -1,7 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } from 'electron'
 import type { ZodError } from 'zod'
 import { fileURLToPath } from 'node:url'
-import { existsSync, linkSync, lstatSync, mkdirSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, linkSync, lstatSync, mkdirSync, realpathSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
 import { basename, dirname, extname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { pdfFilename, writePdfAtomically } from '../shared/export'
@@ -68,6 +68,20 @@ async function openOriginalPosting(url: string): Promise<void> {
   await shell.openExternal(url)
 }
 
+// Test-only paths are set before readiness and credential construction. Never use an
+// inherited Windows APPDATA location for a test that saves a synthetic search key.
+if (!app.isPackaged && process.env.CV_TAILOR_TEST_APP_DATA_DIR) {
+  const root = process.env.CV_TAILOR_TEST_STORAGE_ROOT
+  const appData = process.env.CV_TAILOR_TEST_APP_DATA_DIR
+  const userData = process.env.CV_TAILOR_TEST_USER_DATA_DIR
+  if (!root || !userData ||
+      realpathSync.native(appData) !== realpathSync.native(join(root, 'appdata')) ||
+      realpathSync.native(userData) !== realpathSync.native(join(root, 'workspace')) ||
+      realpathSync.native(appData) === realpathSync.native(userData)) {
+    throw new Error('Test credential storage must use separate existing siblings inside the test root.')
+  }
+  app.setPath('appData', appData)
+}
 // The test override is disabled in packaged builds; production always uses Electron's userData.
 if (!app.isPackaged && process.env.CV_TAILOR_TEST_USER_DATA_DIR) {
   mkdirSync(process.env.CV_TAILOR_TEST_USER_DATA_DIR, { recursive: true })
