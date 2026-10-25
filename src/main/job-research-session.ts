@@ -85,8 +85,19 @@ export function createJobResearchSessions(options: ResearchSessionOptions) {
     const session: Session = { state: { status: 'loading' }, controller: new AbortController(), generation: 0, searched: false, expiresAt: clock() + EXPIRY_MS }
     retain(token, session)
     const generation = session.generation
-    void direct(selected.canonicalUrl, { signal: session.controller.signal }).then(run => {
-      if (live(token, session, generation)) session.state = safeState({ status: 'ready', run: freeze(jobResearchRunSchema.parse(run)) })
+    void direct(selected.canonicalUrl, { signal: session.controller.signal }).then(inputRun => {
+      if (!live(token, session, generation)) return
+      try {
+        const run = jobResearchRunSchema.parse(inputRun)
+        const returned = run.selected
+        if (returned.canonicalUrl !== selected.canonicalUrl || returned.provider !== selected.provider || returned.host !== selected.host || returned.roleId !== selected.roleId) {
+          session.state = safeState({ status: 'unavailable', message: 'The public read did not confirm the selected role identity. No source content was accepted; verify the original link or paste the posting.', settingsAction: false })
+          return
+        }
+        session.state = safeState({ status: 'ready', run: freeze(run) })
+      } catch {
+        session.state = safeState({ status: 'unavailable', message: 'The public read failed. No source content was accepted; try the original link or paste a posting.', settingsAction: false })
+      }
     }, () => {
       if (live(token, session, generation)) session.state = safeState({ status: 'unavailable', message: 'The public read failed. No source content was accepted; try the original link or paste a posting.', settingsAction: false })
     })

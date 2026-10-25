@@ -96,6 +96,21 @@ describe('volatile public research session', () => {
     sessions.close()
   })
 
+  it('rejects a valid direct result for a different selected role before enabling search', async () => {
+    const t = fixture(); let credentialChecks = 0
+    const wrongRole = { ...synthetic('none'), selected: normalizeJobResearchUrl('https://www.linkedin.com/jobs/view/4464025098/') }
+    const sessions = createJobResearchSessions({
+      credentials: { ...t.credentials, status: async () => { credentialChecks++; return { configured: true, storageAvailable: true, message: '' } } },
+      createSearch: t.createSearch, direct: async () => wrongRole,
+    })
+    const { token } = sessions.startJobResearch(URL); await tick()
+    expect(sessions.getJobResearch(token)).toMatchObject({ status: 'unavailable', message: expect.stringContaining('selected role identity') })
+    await expect(sessions.searchJobResearch(token)).rejects.toThrow(/public read/)
+    expect(credentialChecks).toBe(0)
+    expect(t.requests).toBe(0)
+    sessions.close()
+  })
+
   it('missing account gives a Settings action and sends no HTTP request', async () => {
     const t = fixture(), sessions = createJobResearchSessions({ credentials: { ...t.credentials, status: async () => ({ configured: false, storageAvailable: true, message: '' }) }, createSearch: t.createSearch, direct: async () => synthetic() })
     const { token } = sessions.startJobResearch(URL); await tick()
