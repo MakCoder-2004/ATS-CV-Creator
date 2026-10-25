@@ -138,7 +138,7 @@ function parseResult(value: Record<string, unknown>): TavilySearchResult {
 }
 
 /** One explicit user action creates one session; it cannot dispatch more than three searches. */
-export function createTavilyResearchSession(credentials: Pick<ResearchSearchCredentials, 'withKey'>, options: { transport?: TavilyTransport; signal?: AbortSignal } = {}) {
+export function createTavilyResearchSession(credentials: Pick<ResearchSearchCredentials, 'withKey'>, options: { transport?: TavilyTransport; signal?: AbortSignal; onSearchDispatch?: () => void } = {}) {
   let dispatched = 0
   const network = options.transport ?? transport
   const request = async (key: string, route: '/usage' | '/search', body: Buffer | undefined) => {
@@ -177,6 +177,7 @@ export function createTavilyResearchSession(credentials: Pick<ResearchSearchCred
             verifyFreePlan(await request(key, '/usage', undefined))
             if (options.signal?.aborted) throw new Error('Search cancelled.')
             const body = Buffer.from(JSON.stringify({ query, search_depth: 'basic', auto_parameters: false, include_answer: false, include_raw_content: false, max_results: 5, chunks_per_source: 1, topic: 'general', include_usage: true }))
+            options.onSearchDispatch?.()
             return parseResult(await request(key, '/search', body))
           } catch (error) {
             if (error instanceof TavilySearchError) throw error
