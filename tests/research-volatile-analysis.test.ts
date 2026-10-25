@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { Api, Model } from '@earendil-works/pi-ai'
-import { promoteJobResearch, type JobResearchRun } from '../src/shared/job-research'
+import { normalizeJobResearchUrl, promoteJobResearch, type JobResearchRun } from '../src/shared/job-research'
 import { createVolatileResearchAnalysis } from '../src/main/research-volatile-analysis'
 import type { PiModelRuntime } from '../src/main/pi-model'
 import type { PiModelSelection } from '../src/shared/pi-model'
@@ -118,11 +118,43 @@ describe('volatile, reviewed job-research analysis boundary', () => {
     expect(await pending).toMatchObject({ status: 'cancelled', physicalRequests: 1 })
     expect(f.controller.read(p.token).result).toBeUndefined()
   })
-  it('refuses source links with secret query parameters before consent or provider access', () => {
+  it('rejects sensitive values and opaque generic identity queries before consent or provider access', () => {
+    for (const query of ['candidate=alice%40example.com', 'ref=+1-202-555-0144', 'campaign=eyJhbGciOiJIUzI1NiJ9.payload.signature', 'posting=opaque-identity']) {
+      const f = fixture()
+      f.run.sources[0].url = `https://jobs.example.org/post/123?${query}`
+      f.run.selected.canonicalUrl = normalizeJobResearchUrl(f.run.sources[0].url).canonicalUrl
+      f.setReview(promoteJobResearch(f.run, [roleId], true))
+      expect(() => f.controller.preview(runId)).toThrow()
+      expect(f.completeSimple).toHaveBeenCalledTimes(0)
+    }
+  })
+  it('checks selected generic identity query values and sends query-free generic tracking URLs', () => {
     const f = fixture()
-    f.run.sources[0].url = 'https://jobs.example.org/post/123?api_key=PRIVATE'
+    f.run.sources[0].url = 'https://jobs.example.org/post/123?candidate=alice%40example.com'
+    f.run.selected.canonicalUrl = normalizeJobResearchUrl(f.run.sources[0].url).canonicalUrl
+    f.setReview(promoteJobResearch(f.run, [roleId], true))
     expect(() => f.controller.preview(runId)).toThrow()
-    expect(f.completeSimple).toHaveBeenCalledTimes(0)
+    const g = fixture()
+    g.run.sources[0].url += '?utm_source=search'
+    g.setReview(promoteJobResearch(g.run, [roleId], true))
+    const preview = g.controller.preview(runId)
+    expect(preview.outgoingText).toContain('https://jobs.example.org/post/123')
+    expect(preview.outgoingText).not.toContain('utm_source')
+  })
+  it('sends canonical LinkedIn and Indeed identities without original query context', () => {
+    for (const [provider, canonical, source] of [
+      ['linkedin', 'https://www.linkedin.com/jobs/view/4464025097/', 'https://www.linkedin.com/jobs/view/4464025097/?trackingId=synthetic'],
+      ['indeed', 'https://www.indeed.com/viewjob?jk=1234567890abcdef', 'https://www.indeed.com/viewjob?jk=1234567890abcdef&from=search'],
+    ] as const) {
+      const f = fixture()
+      f.run.selected = { canonicalUrl: canonical, host: new URL(canonical).hostname, provider, roleId: provider === 'linkedin' ? '4464025097' : '1234567890abcdef' }
+      f.run.sources[0].url = source
+      f.setReview(promoteJobResearch(f.run, [roleId], true))
+      const outgoing = f.controller.preview(runId).outgoingText
+      expect(outgoing).toContain(canonical)
+      expect(outgoing).not.toContain('trackingId')
+      expect(outgoing).not.toContain('from=search')
+    }
   })
   it('rejects no role evidence, expiry and declined consent without calls', async () => {
     const f = fixture()

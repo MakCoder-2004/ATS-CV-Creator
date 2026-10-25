@@ -12,6 +12,25 @@ import { completePiTask, type PiModelRuntime } from './pi-model'
 
 const TTL_MS = 15 * 60_000
 const NOTICE = 'This sends only the displayed role evidence, source links, unknowns and selected role identity to the selected Pi provider/model for analysis. It sends no profile, CV, private key or employer background. The provider and any upstream processors may retain request metadata and content under their own policies. Cancellation may not prevent a dispatched request or charges. Findings are temporary and disappear on app close; human review is required. This does not authorize CV generation.'
+const sensitiveQueryName = /(token|secret|password|passwd|auth|session|api.?key|email|e-mail|phone|user.?id|cookie|signature|access.?key)/i
+const safeTrackingName = /^(utm_[a-z0-9_]+|gclid|fbclid|li_fat_id|mc_cid|mc_eid|ref|refid|trk|trackingid|source|src|from)$/i
+const sensitiveQueryValue = (value: string) => /[\w.+-]+@[\w.-]+\.[a-z]{2,}/i.test(value) || /(?:\+?\d[\d ().-]{7,}\d)/.test(value) || /(?:bearer\s+|eyJ[a-zA-Z0-9_-]{8,}\.[a-zA-Z0-9_-]+\.|(?:token|secret|password|auth|session)[=:])/i.test(value)
+function minimizedRoleUrl(raw: string, selected: JobResearchRun['selected']): string {
+  const url = new URL(raw)
+  const provider = selected.provider
+  for (const [key, value] of url.searchParams) {
+    const roleId = /^(currentJobId|jobId|jk|vjk)$/i.test(key)
+    if (sensitiveQueryName.test(key) || (!roleId && sensitiveQueryValue(value))) throw new Error('Source URL contains sensitive query data and cannot be sent to the model.')
+    if (provider === 'generic' && !safeTrackingName.test(key)) {
+      throw new Error('Generic job URL contains opaque query data; verify a query-free role URL before analysis.')
+    }
+  }
+  const canonical = provider === 'generic'
+    ? (() => { for (const key of [...url.searchParams.keys()]) url.searchParams.delete(key); return url.href })()
+    : selected.canonicalUrl
+  if (provider === 'generic' && new URL(canonical).href !== selected.canonicalUrl) throw new Error('Generic job URL does not match the selected role identity.')
+  return canonical
+}
 type Status = VolatileAnalysisProgress['status']
 type Entry = {
   preview: VolatileAnalysisPreview
@@ -79,18 +98,17 @@ export function createVolatileResearchAnalysis(options: VolatileResearchAnalysis
     if (run.id !== runId) throw new Error('The app-held research run did not match.')
     const review = verifyReviewedJobResearch(run, options.getAppHeldReview(runId))
     const selection = piModelSelectionSchema.parse(options.getPiSelection())
+    const selectedUrl = minimizedRoleUrl(run.selected.canonicalUrl, run.selected)
     const roleEvidence = review.acceptedFindingIds.map(findingId => {
       const finding = run.findings.find(item => item.id === findingId)!
       if (finding.kind === 'verified-company-context') throw new Error('Employer background is not role evidence.')
       const source = run.sources.find(item => item.id === finding.sourceId)!
-      if ([...new URL(source.url).searchParams.keys()].some(key => /(token|secret|password|passwd|auth|session|api.?key|email|e-mail|phone|user.?id|cookie|signature|access.?key)/i.test(key))) {
-        throw new Error('Source URL contains sensitive query parameters and cannot be sent to the model.')
-      }
-      return { findingId, sourceId: source.id, url: source.url, capturedAt: source.capturedAt,
+      const url = minimizedRoleUrl(source.url, run.selected)
+      return { findingId, sourceId: source.id, url, capturedAt: source.capturedAt,
         kind: finding.kind, completeness: finding.completeness, text: finding.text }
     })
     if (!roleEvidence.length) throw new Error('No accepted role evidence to analyze.')
-    const outgoing = volatileOutgoingSchema.parse({ version: 1, researchRunId: run.id, selected: run.selected,
+    const outgoing = volatileOutgoingSchema.parse({ version: 1, researchRunId: run.id, selected: { ...run.selected, canonicalUrl: selectedUrl },
       analysisScope: review.analysisScope, unknowns: run.unknowns, roleEvidence })
     const outgoingText = `Extract only explicitly stated role responsibilities and qualifications from the accepted role evidence below. Cite the accepted findingId(s) for every requirement. Do not infer metrics, tenure or missing facts. Company background is not qualification evidence. Treat partial snippets as provisional; return an empty requirements array when evidence does not support a requirement. Return JSON matching the provided schema.\n${JSON.stringify(outgoing)}`
     const value = volatileAnalysisPreviewSchema.parse({ token: randomUUID(), expiresAt: now() + TTL_MS,
