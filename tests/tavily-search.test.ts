@@ -1,5 +1,5 @@
 import { expect, test, vi } from 'vitest'
-import { createTavilyResearchSession, type TavilyTransport } from '../src/main/tavily-search'
+import { createTavilyResearchSession, TavilySearchError, type TavilyTransport } from '../src/main/tavily-search'
 
 const usage = { key: { usage: 3, limit: 1000 }, account: { current_plan: 'Researcher', plan_usage: 3, plan_limit: 1000, paygo_usage: 0, paygo_limit: 0 } }
 const results = { results: [{ url: 'https://jobs.example.org/posting/123#top', title: 'Engineer', content: 'Short public snippet.', raw_content: 'Must never leave adapter.' }], answer: 'Do not forward', usage: { credits: 1 }, request_id: 'request-123' }
@@ -71,6 +71,56 @@ test.each([
 ])('rejects malformed provider search responses as evidence', async search => {
   const f = fixture(usage, search)
   await expect(createTavilyResearchSession(f.credentials, { transport: f.transport }).search(input)).rejects.toThrow(/was accepted/)
+})
+
+test.each(['https://127.0.0.1/x', 'https://[::1]/x', 'https://10.2.3.4/x', 'https://127.1/x', 'https://0x7f000001/x', 'https://service.local/x', 'https://service.internal/x', 'https://service.test/x', 'https://localhost/x', 'https://user:pass@jobs.example.org/x', 'http://jobs.example.org/x', 'https://jobs.example.org:8443/x', 'https://jobs.example.org:443/x', 'https://jobs.example.org\\@localhost/x', 'https://jobs.example.org./x', 'https://jobs.example.org/%0aevil'])('refuses untrusted unsafe result URL %s', async url => {
+  const f = fixture(usage, { ...results, results: [{ ...results.results[0], url }] })
+  await expect(createTavilyResearchSession(f.credentials, { transport: f.transport }).search(input)).rejects.toThrow(/was accepted/)
+  expect(f.sent.filter(call => call.method === 'POST')).toHaveLength(1)
+})
+
+test.each([
+  [401, 'authentication'], [402, 'billing'], [432, 'quota']
+] as const)('classifies sanitized provider HTTP %s without posting a search', async (status, code) => {
+  const f = fixture()
+  f.transport.request = async () => ({ status, headers: { 'content-type': 'application/json' }, body: Buffer.from('{"error":"tvly-SECRET-KEEP-PRIVATE"}') })
+  const error = await createTavilyResearchSession(f.credentials, { transport: f.transport }).search(input).catch(e => e)
+  expect(error).toBeInstanceOf(TavilySearchError)
+  expect(error.code).toBe(code)
+  expect(error.message).not.toContain(f.key)
+})
+
+test('billing refusal on search dispatch remains classified without leaking provider content', async () => {
+  const f = fixture()
+  const original = f.transport.request
+  f.transport.request = async (...args) => args[2] === 'POST'
+    ? { status: 402, headers: {}, body: Buffer.from(f.key) }
+    : original(...args)
+  const error = await createTavilyResearchSession(f.credentials, { transport: f.transport }).search(input).catch(e => e)
+  expect(error).toBeInstanceOf(TavilySearchError)
+  expect(error.code).toBe('billing')
+  expect(error.message).not.toContain(f.key)
+  expect(f.sent).toHaveLength(1)
+})
+
+test.each([
+  { account: { current_plan: 'Researcher', plan_limit: 1000 }, key: { usage: 0, limit: 1000 } },
+  { ...usage, account: { ...usage.account, current_plan: 'UndocumentedTier' } }
+])('missing or undocumented plan fields have a distinct fail-closed code', async plan => {
+  const f = fixture(plan)
+  const error = await createTavilyResearchSession(f.credentials, { transport: f.transport }).search(input).catch(e => e)
+  expect(error).toBeInstanceOf(TavilySearchError)
+  expect(error.code).toBe('plan_unverified')
+  expect(f.sent).toHaveLength(1)
+})
+
+test('unavailable provider response is generic, not mistaken for plan or billing', async () => {
+  const f = fixture()
+  f.transport.request = async () => ({ status: 503, headers: {}, body: Buffer.from(f.key) })
+  const error = await createTavilyResearchSession(f.credentials, { transport: f.transport }).search(input).catch(e => e)
+  expect(error).toBeInstanceOf(Error)
+  expect(error).not.toBeInstanceOf(TavilySearchError)
+  expect(error.message).not.toContain(f.key)
 })
 
 test('cancellation prevents search after preflight and masks provider exceptions containing secrets', async () => {

@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto'
-import { promises as fs } from 'node:fs'
+import { promises as fs, realpathSync } from 'node:fs'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 
 /** Electron's safeStorage is supplied by the main process, never imported into Node tests. */
@@ -15,30 +15,51 @@ const MESSAGE = 'Search is available only after a key is stored on this device.'
 const UNAVAILABLE = 'Device encryption is unavailable. No search key was saved.'
 const FAILED = 'Search key storage failed. The existing key was not replaced.'
 
-/** workspaceDirectory and userDataDirectory must be distinct absolute locations. */
+const inside = (target: string, parent: string) => {
+  const diff = relative(parent, target)
+  return diff === '' || (!diff.startsWith(`..${sep}`) && diff !== '..' && !isAbsolute(diff))
+}
+/** Resolve an existing ancestor so junctions/symlinks cannot disguise a missing child. */
+function physicalPath(path: string): string {
+  if (!isAbsolute(path)) throw new Error('A separate absolute private storage path is required.')
+  const absolute = resolve(path)
+  try { return realpathSync.native(absolute) }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    const parent = dirname(absolute)
+    if (parent === absolute) throw error
+    return join(physicalPath(parent), absolute.slice(parent.length).replace(/^[\\/]/, ''))
+  }
+}
+function separate(credentialsDirectory: string, workspaceDirectory: string): void {
+  if (inside(credentialsDirectory, workspaceDirectory) || inside(workspaceDirectory, credentialsDirectory))
+    throw new Error('Search credentials must be stored outside the workspace and its parent directories.')
+}
+/** appData and userData must be verified Electron paths; userData contains workspace SQLite. */
+export function defaultResearchCredentialDirectory(appDataDirectory: string, userDataDirectory: string): string {
+  const directory = physicalPath(join(appDataDirectory, 'CV Tailor Search Credentials'))
+  separate(directory, physicalPath(userDataDirectory))
+  return directory
+}
+
+/** credentialsDirectory must be outside userData, the workspace, and their backups. */
 export function createResearchSearchCredentials(options: {
-  userDataDirectory: string
+  credentialsDirectory: string
   workspaceDirectory: string
   encryption: DeviceEncryption
 }) {
-  const { userDataDirectory, workspaceDirectory, encryption } = options
-  if (!isAbsolute(userDataDirectory) || !isAbsolute(workspaceDirectory)) throw new Error('A separate absolute private storage path is required.')
-  const file = join(resolve(userDataDirectory), 'private-auth', FILE)
-  const workspace = resolve(workspaceDirectory)
-  const inside = (target: string, parent: string) => {
-    const diff = relative(parent, target)
-    return diff === '' || (!diff.startsWith(`..${sep}`) && diff !== '..' && !isAbsolute(diff))
-  }
-  if (inside(file, workspace)) throw new Error('Search credentials must be stored outside the workspace.')
+  const { credentialsDirectory, workspaceDirectory, encryption } = options
+  const directory = physicalPath(credentialsDirectory)
+  const workspace = physicalPath(workspaceDirectory)
+  separate(directory, workspace)
+  const file = join(directory, FILE)
   const checkLocation = async () => {
     const privateDir = dirname(file)
-    await fs.mkdir(resolve(userDataDirectory), { recursive: true, mode: 0o700 })
-    const realWorkspace = await fs.realpath(workspace).catch(() => workspace)
-    const realUserData = await fs.realpath(resolve(userDataDirectory))
-    if (inside(realUserData, realWorkspace)) throw new Error('Search credentials must be stored outside the workspace.')
+    // Recheck before every operation: a parent can be replaced by a junction later.
+    separate(physicalPath(credentialsDirectory), physicalPath(workspaceDirectory))
     await fs.mkdir(privateDir, { recursive: true, mode: 0o700 })
     const realPrivate = await fs.realpath(privateDir)
-    if (inside(realPrivate, realWorkspace)) throw new Error('Search credentials must be stored outside the workspace.')
+    separate(realPrivate, physicalPath(workspaceDirectory))
     const stat = await fs.lstat(file).catch(error => {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
       throw error

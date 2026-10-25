@@ -1,4 +1,5 @@
 import { lookup as dnsLookup } from 'node:dns/promises'
+import { isIP } from 'node:net'
 import { request as httpsRequest } from 'node:https'
 import type { IncomingHttpHeaders } from 'node:http'
 import { isPublicAddress, pinnedAddressLookup, type Address } from './safe-posting-fetch'
@@ -9,6 +10,16 @@ const MAX_RESPONSE = 256 * 1024
 const DEADLINE_MS = 12_000
 const ERROR = 'Search could not be verified or completed. No search result was accepted.'
 const PLAN_ERROR = 'This pilot requires a verifiable free Researcher plan with pay-as-you-go disabled and available credits. Confirm your account plan in Tavily before searching.'
+export type TavilySearchErrorCode = 'authentication' | 'billing' | 'quota' | 'plan_unverified'
+const SAFE_ERRORS: Record<TavilySearchErrorCode, string> = {
+  authentication: 'Search authentication failed. Reconnect your Tavily key.',
+  billing: 'Tavily reports a billing restriction. Search was stopped; check your account without enabling paid use.',
+  quota: 'Tavily reports exhausted search credits. Search was stopped.',
+  plan_unverified: PLAN_ERROR
+}
+export class TavilySearchError extends Error {
+  constructor(readonly code: TavilySearchErrorCode) { super(SAFE_ERRORS[code]); this.name = 'TavilySearchError' }
+}
 
 export type PublicJobSearch =
   | { kind: 'role'; title: string; postingHost: string; roleId?: string }
@@ -47,6 +58,9 @@ function record(value: unknown): Record<string, unknown> | null {
 }
 function integer(value: unknown): value is number { return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 }
 function parseBody(response: WireResponse): Record<string, unknown> {
+  if (response.status === 401 || response.status === 403) throw new TavilySearchError('authentication')
+  if (response.status === 402) throw new TavilySearchError('billing')
+  if (response.status === 432 || response.status === 429) throw new TavilySearchError('quota')
   if (response.status !== 200 || response.body.length > MAX_RESPONSE || response.body.length === 0 ||
       !/^application\/json(?:\s*;|$)/i.test(String(response.headers['content-type'] ?? '')) ||
       response.headers['content-encoding'] && response.headers['content-encoding'] !== 'identity') throw new Error(ERROR)
@@ -81,7 +95,26 @@ function verifyFreePlan(value: Record<string, unknown>): void {
   const account = record(value.account), key = record(value.key)
   if (!account || !key || account.current_plan !== 'Researcher' || account.plan_limit !== 1000 ||
       account.paygo_limit !== 0 || account.paygo_usage !== 0 || !integer(account.plan_usage) ||
-      account.plan_usage >= 1000 || !integer(key.usage) || !integer(key.limit) || key.usage >= key.limit) throw new Error(PLAN_ERROR)
+      account.plan_usage >= 1000 || !integer(key.usage) || !integer(key.limit) || key.usage >= key.limit) throw new TavilySearchError('plan_unverified')
+}
+// These are inert, untrusted leads, never verified source URLs. No candidate DNS lookup here:
+// the future fetcher MUST resolve all addresses again, reject private/mixed answers, pin
+// public IP + hostname TLS for every request/redirect, and verify exact role/employer identity.
+function candidateUrl(raw: string): string {
+  if (!/^https:\/\//i.test(raw) || /[\\\x00-\x20\x7f]/.test(raw) || /%0[0-9a-f]|%1[0-9a-f]|%7f/i.test(raw)) throw new Error(ERROR)
+  const authority = raw.slice(8).split(/[/?#]/, 1)[0]
+  // Explicit :443 is unsafe too: URL.port normalizes it away.
+  if (!authority || /[@:%\[\]]/.test(authority)) throw new Error(ERROR)
+  let url: URL
+  try { url = new URL(raw) } catch { throw new Error(ERROR) }
+  const hostname = url.hostname.toLowerCase()
+  const labels = hostname.split('.')
+  const reserved = new Set(['localhost', 'local', 'internal', 'test', 'invalid', 'example', 'onion', 'lan', 'corp', 'home', 'arpa'])
+  if (url.protocol !== 'https:' || url.username || url.password || url.port || isIP(hostname) ||
+      hostname.length > 253 || labels.length < 2 || labels.some(label => !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label) || label.startsWith('xn--')) ||
+      !/^[a-z]{2,63}$/.test(labels.at(-1)!) || reserved.has(labels.at(-1)!) || labels.some(label => ['localhost', 'local', 'internal'].includes(label)) || hostname !== authority.toLowerCase()) throw new Error(ERROR)
+  url.hash = ''
+  return url.href
 }
 function parseResult(value: Record<string, unknown>): TavilySearchResult {
   const usage = record(value.usage)
@@ -91,11 +124,7 @@ function parseResult(value: Record<string, unknown>): TavilySearchResult {
     const link = record(item)
     if (!link || typeof link.url !== 'string' || link.url.length > 2048 || typeof link.title !== 'string' ||
         !link.title.trim() || link.title.length > 240 || typeof link.content !== 'string' || link.content.length > 2000) throw new Error(ERROR)
-    let url: URL
-    try { url = new URL(link.url) } catch { throw new Error(ERROR) }
-    if (url.protocol !== 'https:' || !url.hostname || url.username || url.password || url.port) throw new Error(ERROR)
-    url.hash = ''
-    return { url: url.href, title: link.title, snippet: link.content }
+    return { url: candidateUrl(link.url), title: link.title, snippet: link.content }
   })
   return { links, credits: 1, requestId: value.request_id }
 }
@@ -143,7 +172,7 @@ export function createTavilyResearchSession(credentials: Pick<ResearchSearchCred
             const body = Buffer.from(JSON.stringify({ query, search_depth: 'basic', auto_parameters: false, include_answer: false, include_raw_content: false, max_results: 5, chunks_per_source: 1, topic: 'general', include_usage: true }))
             return parseResult(await request(key, '/search', body))
           } catch (error) {
-            if (error instanceof Error && error.message === PLAN_ERROR) throw error
+            if (error instanceof TavilySearchError) throw error
             throw new Error(options.signal?.aborted ? 'Search cancelled.' : ERROR)
           }
         })

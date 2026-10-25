@@ -2,7 +2,7 @@ import { afterEach, expect, test } from 'vitest'
 import { mkdir, mkdtemp, readFile, readdir, rm, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createResearchSearchCredentials, type DeviceEncryption } from '../src/main/research-search-credentials'
+import { createResearchSearchCredentials, defaultResearchCredentialDirectory, type DeviceEncryption } from '../src/main/research-search-credentials'
 
 const directories: string[] = []
 afterEach(async () => { for (const directory of directories.splice(0)) await rm(directory, { recursive: true, force: true }) })
@@ -14,16 +14,18 @@ async function fixture() {
     encryptString: value => Buffer.from(value.split('').reverse().join(''), 'utf8'),
     decryptString: value => value.toString('utf8').split('').reverse().join('')
   }
-  const userDataDirectory = join(directory, 'user-data'), workspaceDirectory = join(directory, 'workspace')
-  return { directory, encryption, userDataDirectory, workspaceDirectory, store: createResearchSearchCredentials({ encryption, userDataDirectory, workspaceDirectory }) }
+  const appDataDirectory = join(directory, 'app-data'), userDataDirectory = join(appDataDirectory, 'CV Tailor'), workspaceDirectory = userDataDirectory
+  await mkdir(userDataDirectory, { recursive: true })
+  const credentialsDirectory = defaultResearchCredentialDirectory(appDataDirectory, userDataDirectory)
+  return { directory, encryption, appDataDirectory, credentialsDirectory, userDataDirectory, workspaceDirectory, store: createResearchSearchCredentials({ encryption, credentialsDirectory, workspaceDirectory }) }
 }
 
 test('stores only encrypted bytes outside the workspace and exposes only safe status', async () => {
-  const { store, userDataDirectory, workspaceDirectory } = await fixture()
+  const { store, credentialsDirectory, workspaceDirectory } = await fixture()
   const key = 'tvly-SAMPLE-SECRET-12345'
   expect(await store.status()).toMatchObject({ configured: false, storageAvailable: true })
   expect(await store.save(key)).toMatchObject({ configured: true, storageAvailable: true })
-  const file = join(userDataDirectory, 'private-auth', 'tavily-key.dpapi')
+  const file = join(credentialsDirectory, 'tavily-key.dpapi')
   expect((await readFile(file)).toString()).not.toContain(key)
   expect(await readdir(workspaceDirectory).catch(() => [])).toEqual([])
   let keySeen = false
@@ -37,7 +39,7 @@ test('stores only encrypted bytes outside the workspace and exposes only safe st
 test('unavailable encryption and failed encryption never write plaintext or replace a previous key', async () => {
   const f = await fixture()
   await f.store.save('tvly-PREVIOUS-KEY')
-  const file = join(f.userDataDirectory, 'private-auth', 'tavily-key.dpapi')
+  const file = join(f.credentialsDirectory, 'tavily-key.dpapi')
   const before = await readFile(file)
   const broken = createResearchSearchCredentials({ ...f, encryption: { ...f.encryption, encryptString: () => { throw new Error('tvly-UNSAFE-DIAGNOSTIC') } } })
   await expect(broken.save('tvly-NEXT-SECRET')).rejects.toThrow(/storage failed/)
@@ -51,12 +53,16 @@ test('unavailable encryption and failed encryption never write plaintext or repl
 
 test('rejects storage below workspace, including an alias to it', async () => {
   const f = await fixture()
-  expect(() => createResearchSearchCredentials({ encryption: f.encryption, userDataDirectory: join(f.workspaceDirectory, 'private'), workspaceDirectory: f.workspaceDirectory })).toThrow(/outside/)
-  expect(() => createResearchSearchCredentials({ encryption: f.encryption, userDataDirectory: f.workspaceDirectory, workspaceDirectory: f.workspaceDirectory })).toThrow(/outside/)
-  await mkdir(f.workspaceDirectory)
-  const alias = join(f.directory, 'user-alias')
+  expect(() => createResearchSearchCredentials({ encryption: f.encryption, credentialsDirectory: join(f.workspaceDirectory, 'private'), workspaceDirectory: f.workspaceDirectory })).toThrow(/outside/)
+  expect(() => createResearchSearchCredentials({ encryption: f.encryption, credentialsDirectory: f.workspaceDirectory, workspaceDirectory: f.workspaceDirectory })).toThrow(/outside/)
+  const alias = join(f.directory, 'credentials-alias')
   await symlink(f.workspaceDirectory, alias, 'junction')
-  const store = createResearchSearchCredentials({ encryption: f.encryption, userDataDirectory: alias, workspaceDirectory: f.workspaceDirectory })
-  await expect(store.save('tvly-SAMPLE-KEY')).rejects.toThrow(/storage failed/)
+  expect(() => createResearchSearchCredentials({ encryption: f.encryption, credentialsDirectory: alias, workspaceDirectory: f.workspaceDirectory })).toThrow(/outside/)
   expect(await readdir(f.workspaceDirectory)).toEqual([])
+  expect(() => createResearchSearchCredentials({ encryption: f.encryption, credentialsDirectory: f.directory, workspaceDirectory: f.workspaceDirectory })).toThrow(/outside/)
+  expect(() => defaultResearchCredentialDirectory(f.userDataDirectory, f.userDataDirectory)).toThrow(/outside/)
+  const userAlias = join(f.directory, 'workspace-alias')
+  await symlink(f.userDataDirectory, userAlias, 'junction')
+  expect(() => defaultResearchCredentialDirectory(f.appDataDirectory, userAlias)).not.toThrow()
+  expect(() => defaultResearchCredentialDirectory(f.userDataDirectory, userAlias)).toThrow(/outside/)
 })
