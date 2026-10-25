@@ -35,6 +35,10 @@ SHA-256 3dc230cd5ba69400a8012c4a5f36147f9d93e430d61e985aafdfb6282d8a011e
 
 The packaging command timed out after 420 seconds; no successful final process exit was observed. The completed artifact and updater manifest independently matched in size and SHA-512. Its PE header and version-2 blockmap are valid. The packaged app declares `0.6.0`; all 23 built output files match its ASAR bytes. The unpacked native SQLite binary matches the Electron-ABI source binding, and the pinned LaTeX, template and license files are present. Windows reports the installer **unsigned**. The local build receipt at `.audit/linkedin-followup/package-0.6.json` contains the static checks, but `.audit` is ignored and is not part of the shared Git report. Static checks are not installed acceptance. The installer or packaged app was **not launched or installed** and requires fresh user approval.
 
+## Workspace cleanup
+
+All issue #88 task branches and registered Git worktrees were removed after the reviewed merge. Two unregistered, empty Windows directories, `E:/cv-wt-research-landing` and `E:/cv-wt-research-settings`, returned `EBUSY` on one bounded removal attempt and remain. The orchestrator did not kill unrelated processes or claim those empty folders were removed. The user's running 0.5 app and pre-existing untracked `docs/plans/pi-sdk-migration.md` were preserved.
+
 ## Open acceptance
 
 [Installed validation #89](https://github.com/MakCoder-2004/ATS-CV-Creator/issues/89) remains open. It requires the user's approved fresh Windows installation, native SQLite persistence and reopen, encrypted-key behavior, exact source review and run-specific consent, actual Pi output assessment, provider/network failure behavior and accessible light/dark/narrow interactions. A passing development build or a static installer inspection cannot satisfy those checks. Persistent rights for third-party fetched text and indexed snippets have not been established; the user chose temporary review and analysis, not storage. Existing saved drafts and exported files remain separate from this feature.
