@@ -387,6 +387,12 @@ app.whenReady().then(() => {
     trusted(event); if (args.length !== 1 || typeof args[0] !== 'string') throw new Error('Expected one public job URL.')
     return researchStartSchema.parse(research!.startJobResearch(args[0]))
   })
+  ipcMain.handle('job-research:from-posting', (event, ...args: unknown[]) => {
+    trusted(event); if (args.length !== 1) throw new Error('Expected one temporary posting token.')
+    const token = uuidSchema.parse(args[0])
+    research!.assertCanAcceptInitialDirectRun()
+    return researchStartSchema.parse(research!.acceptInitialDirectRun(workspace!.api.takePostingResearchRun(token)))
+  })
   ipcMain.handle('job-research:get', (event, ...args: unknown[]) => {
     trusted(event); if (args.length !== 1) throw new Error('Expected one research token.')
     return researchStateSchema.parse(research!.getJobResearch(uuidSchema.parse(args[0])))

@@ -24,7 +24,7 @@ function open(request: (url: URL) => { status: number; headers: Record<string, s
 }
 async function settled(wb: ReturnType<typeof createWorkbench>, token: string) {
   let state = await wb.api.readPostingPreview(token)
-  for (let i = 0; i < 100 && state.status === 'fetching'; i++) { await new Promise(resolve => setTimeout(resolve, 10)); state = await wb.api.readPostingPreview(token) }
+  for (let i = 0; i < 300 && state.status === 'fetching'; i++) { await new Promise(resolve => setTimeout(resolve, 10)); state = await wb.api.readPostingPreview(token) }
   return state
 }
 test('selected LinkedIn role follows direct full posting, review, durable source, explicit consent and current analysis run', async () => {
@@ -72,6 +72,7 @@ test('incomplete and blocked public sources cannot become a saved source, with n
     try {
       const { token } = await wb.api.startPostingFetch(selected)
       expect(await settled(wb, token)).toMatchObject({ status: 'research-notice', message: expect.stringMatching(/nothing was saved/i) })
+      expect(wb.api.takePostingResearchRun(token)).toMatchObject({ selected: { canonicalUrl: canonical }, status: 'blocked', findings: [] })
       expect(requested).toEqual([canonical])
       expect(await wb.api.listJobs()).toEqual([])
       expect(await wb.api.acceptPostingImport(token, 0)).toMatchObject({ ok: false })
@@ -88,7 +89,8 @@ test('full text without a source employer remains an unsaveable research notice'
   } })
   try {
     const { token } = await wb.api.startPostingFetch(selected)
-    expect(await settled(wb, token)).toMatchObject({ status: 'research-notice' })
+    expect(await settled(wb, token)).toMatchObject({ status: 'research-notice', message: expect.stringMatching(/saveable preview/i) })
+    expect(wb.api.takePostingResearchRun(token)).toMatchObject({ status: 'full', findings: [{ completeness: 'full' }] })
     expect(await wb.api.reviewPostingPreview(token, 0, { completenessConfirmed: true, conflictResolutions: {} })).toMatchObject({ ok: false })
     expect(await wb.api.listJobs()).toEqual([])
   } finally { wb.close() }
@@ -97,7 +99,8 @@ test('full text without a source employer remains an unsaveable research notice'
 test('synthetic exact-role JSON-LD is extracted by the real bounded worker', async () => {
   const folder = mkdtempSync(join(tmpdir(), 'cv-direct-worker-')); folders.push(folder)
   const url = 'https://careers.fictional.org/jobs/role-4'
-  const html = `<html><head><link rel="canonical" href="${url}"><script type="application/ld+json">${JSON.stringify({ '@context': 'https://schema.org', '@type': 'JobPosting', url, title: 'Synthetic Engineer', hiringOrganization: { name: 'Fictional Employer' }, description: body })}</script></head><body>Exact synthetic role</body></html>`
+  const structuredDescription = `<h2>Responsibilities</h2><p>${body}</p><h2>Requirements</h2><p>${body}</p>`
+  const html = `<html><head><link rel="canonical" href="${url}"><script type="application/ld+json">${JSON.stringify({ '@context': 'https://schema.org', '@type': 'JobPosting', url, title: 'Synthetic Engineer', hiringOrganization: { name: 'Fictional Employer' }, description: structuredDescription })}</script></head><body>Exact synthetic role</body></html>`
   const wb = createWorkbench(folder, undefined, undefined, undefined, { research: { lookup: async () => [{ address: '8.8.8.8', family: 4 }], request: async () => ({ status: 200, headers: { 'content-type': 'text/html' }, body: Buffer.from(html) }) } })
   try {
     const { token } = await wb.api.startPostingFetch(url)

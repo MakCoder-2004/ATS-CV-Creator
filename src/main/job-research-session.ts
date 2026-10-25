@@ -50,14 +50,29 @@ export function createJobResearchSessions(options: ResearchSessionOptions) {
   function live(token: string, session: Session, generation: number): boolean {
     return sessions.get(token) === session && session.generation === generation && !session.controller.signal.aborted && session.expiresAt > clock()
   }
-  function startJobResearch(input: string): { token: string } {
-    const selected = normalizeJobResearchUrl(input)
+  function makeRoom(): void {
     prune()
     if (sessions.size >= MAX_RUNS) {
       const oldest = [...sessions].find(([, session]) => session.state.status !== 'loading')
       if (!oldest) throw new Error('Temporary research is full. Wait for a read or cancel one before starting another.')
       cancelEntry(oldest[0])
     }
+  }
+  function assertCanAcceptInitialDirectRun(): void {
+    prune()
+    if (sessions.size >= MAX_RUNS && ![...sessions.values()].some(session => session.state.status !== 'loading')) throw new Error('Temporary research is full. Wait for a read or cancel one before starting another.')
+  }
+  function acceptInitialDirectRun(input: JobResearchRun): { token: string } {
+    const run = jobResearchRunSchema.parse(input)
+    assertCanAcceptInitialDirectRun()
+    makeRoom()
+    const token = randomUUID()
+    sessions.set(token, { state: safeState({ status: 'ready', run: freeze(clone(run)) }), controller: new AbortController(), generation: 0, searched: false, expiresAt: clock() + EXPIRY_MS })
+    return { token }
+  }
+  function startJobResearch(input: string): { token: string } {
+    const selected = normalizeJobResearchUrl(input)
+    makeRoom()
     const token = randomUUID()
     const session: Session = { state: { status: 'loading' }, controller: new AbortController(), generation: 0, searched: false, expiresAt: clock() + EXPIRY_MS }
     sessions.set(token, session)
@@ -111,20 +126,27 @@ export function createJobResearchSessions(options: ResearchSessionOptions) {
       }
       // Verified direct contents take precedence. A snippet alone never establishes a role
       // requirement; require both a fresh direct partial read and matching exact-role metadata.
+      // Retain the original direct capture even if the verification read improves it.
+      // Run IDs remain app-issued and the selected canonical identity stays unchanged.
+      const preserved = (next: JobResearchRun): JobResearchRun => jobResearchRunSchema.parse({ ...next,
+        sources: [...original.sources.filter(source => !next.sources.some(item => item.id === source.id)), ...next.sources],
+        findings: [...original.findings.filter(finding => !next.findings.some(item => item.id === finding.id)), ...next.findings],
+        unknowns: [...new Set([...original.unknowns, ...next.unknowns])],
+      })
       if (verified.status === 'full') {
-        session.state = { status: 'ready', run: freeze(verified) }
+        session.state = { status: 'ready', run: freeze(preserved(verified)) }
         return getJobResearch(token)
       }
       const role = verified.sources.find(source => source.identity === 'exact-role' && source.title && source.employer)
       const normalized = (value: string) => value.normalize('NFKC').toLocaleLowerCase('en').replace(/[^a-z0-9]+/g, ' ').trim()
       const match = role && candidates.find(candidate => normalized(candidate.title).includes(normalized(role.title!)) && normalized(candidate.title).includes(normalized(role.employer!)))
       if (!match || !role) {
-        session.state = { status: 'ready', run: freeze(jobResearchRunSchema.parse({ ...verified, unknowns: [...verified.unknowns, 'Indexed title or employer did not match the directly verified role; the snippet was discarded.'] })) }
+        session.state = { status: 'ready', run: freeze(preserved(jobResearchRunSchema.parse({ ...verified, unknowns: [...verified.unknowns, 'Indexed title or employer did not match the directly verified role; the snippet was discarded.'] }))) }
         return getJobResearch(token)
       }
       const sourceId = randomUUID()
       const run = jobResearchRunSchema.parse({ ...verified, sources: [...verified.sources, { version: 1, id: sourceId, url: selected.canonicalUrl, capturedAt: new Date().toISOString(), method: 'indexed-snippet', identity: 'exact-role', title: role.title, employer: role.employer, employerIdentityUrl: null }], findings: [...verified.findings, { version: 1, id: randomUUID(), sourceId, kind: 'indexed-role-claim', text: match.snippet, completeness: 'partial' }], unknowns: [...verified.unknowns, 'Indexed excerpt is partial and not an independently verified full posting.'] })
-      session.state = { status: 'ready', run: freeze(run) }
+      session.state = { status: 'ready', run: freeze(preserved(run)) }
       return getJobResearch(token)
     } catch (error) {
       if (!live(token, session, generation)) throw new Error(missing)
@@ -147,7 +169,7 @@ export function createJobResearchSessions(options: ResearchSessionOptions) {
     if (checked.evidenceHash !== session.reviewed.evidenceHash) throw new Error('Research review has changed. Review the current run again.')
     return checked
   }
-  return { startJobResearch, getJobResearch, searchJobResearch, reviewJobResearch, verifyAppHeldReview,
+  return { startJobResearch, assertCanAcceptInitialDirectRun, acceptInitialDirectRun, getJobResearch, searchJobResearch, reviewJobResearch, verifyAppHeldReview,
     cancelJobResearch(token: string): { ok: boolean } { const found = sessions.has(token); cancelEntry(token); return { ok: found } },
     close(): void { for (const token of sessions.keys()) cancelEntry(token) } }
 }

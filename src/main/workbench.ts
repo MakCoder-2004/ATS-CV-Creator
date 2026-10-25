@@ -59,7 +59,20 @@ function repairsIncompletePosting(source: import('../shared/posting-import').Pos
   const descriptionIsComplete = hasCompleteReviewedPostingText(working.description) && (!descriptionNeedsRepair || working.description !== source.description)
   return titleIsConsciouslySupplied && !!working.company.trim() && descriptionIsComplete
 }
-class DirectResearchNotice extends Error {}
+class DirectResearchNotice extends Error {
+  constructor(readonly run: JobResearchRun) {
+    super(run.unknowns[0] ?? 'No complete exact-role posting with a named employer was found.')
+  }
+}
+function immutableDirectRun(run: JobResearchRun): JobResearchRun {
+  const copy = jobResearchRunSchema.parse(structuredClone(run))
+  const freeze = (value: object): void => {
+    for (const child of Object.values(value)) if (child && typeof child === 'object') freeze(child)
+    Object.freeze(value)
+  }
+  freeze(copy)
+  return copy
+}
 function completeDirectPreview(input: string, result: JobResearchRun): PostingPreview | null {
   const run = jobResearchRunSchema.parse(result)
   const selected = normalizeJobResearchUrl(input)
@@ -119,7 +132,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
   registerWorkspaceBackupRowSizer(db)
   db.pragma('journal_mode = WAL')
   const graphCheckpointer = new SqliteCheckpointSaver(db, recoveryHooks?.beforeGraphCheckpoint)
-  const postingFetches = new Map<string, { controller: AbortController; state: ReturnType<typeof postingFetchStateSchema.parse>; revision: number; working?: PostingPreviewEdit; reviewed?: { revision: number; input: ReturnType<typeof jobInputSchema.parse>; review: import('../shared/posting-import').PostingReview } }>()
+  const postingFetches = new Map<string, { controller: AbortController; state: ReturnType<typeof postingFetchStateSchema.parse>; expiresAt: number; directRun?: JobResearchRun; revision: number; working?: PostingPreviewEdit; reviewed?: { revision: number; input: ReturnType<typeof jobInputSchema.parse>; review: import('../shared/posting-import').PostingReview } }>()
   db.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY);
     CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS encrypted_credentials (key TEXT PRIMARY KEY, ciphertext TEXT NOT NULL);
@@ -912,19 +925,19 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       const lever = validateLeverPostingUrl(input)
       if (!lever) normalizeJobResearchUrl(input)
       if ([...postingFetches.values()].some(fetch => fetch.state.status === 'fetching')) throw new Error('A posting fetch is already active. Cancel it or wait for it to finish.')
-      for (const prior of postingFetches.values()) if (prior.state.status === 'ready' || prior.state.status === 'incomplete') { prior.state = { status: 'cancelled' }; prior.reviewed = undefined; prior.working = undefined }
+      for (const prior of postingFetches.values()) if (['ready', 'incomplete', 'research-notice'].includes(prior.state.status)) { prior.state = { status: 'cancelled' }; prior.reviewed = undefined; prior.working = undefined; prior.directRun = undefined }
       while (postingFetches.size >= 5) {
         const expired = [...postingFetches.entries()].find(([, fetch]) => fetch.state.status !== 'fetching')
         if (!expired) throw new Error('Temporary posting previews are full. Close an earlier preview and try again.')
         postingFetches.delete(expired[0])
       }
       const token = randomUUID(), controller = new AbortController()
-      postingFetches.set(token, { controller, state: { status: 'fetching' }, revision: 0 })
+      postingFetches.set(token, { controller, state: { status: 'fetching' }, expiresAt: Date.now() + 15 * 60_000, revision: 0 })
       const request = lever
         ? fetchLeverPosting(input, { ...safePostingFetchOptions, signal: controller.signal })
         : fetchDirectJobResearch(input, { ...safePostingFetchOptions?.research, signal: controller.signal }).then(run => {
           const preview = completeDirectPreview(input, run)
-          if (!preview) throw new DirectResearchNotice(run.unknowns[0] ?? 'No complete exact-role posting with a named employer was found. Nothing can be saved from this source.')
+          if (!preview) throw new DirectResearchNotice(run)
           return preview
         })
       void request.then(preview => {
@@ -936,7 +949,16 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       }).catch(error => {
         const current = postingFetches.get(token)
         if (!current) return
-        current.state = controller.signal.aborted ? { status: 'cancelled' } : error instanceof DirectResearchNotice ? { status: 'research-notice', message: `${error.message} Direct research is incomplete; nothing was saved. Open the original source or paste complete posting text instead.` } : { status: 'failed', message: error instanceof Error ? error.message : 'The posting could not be fetched. Open it or paste posting text instead.' }
+        if (controller.signal.aborted) { current.state = { status: 'cancelled' }; current.directRun = undefined; return }
+        if (error instanceof DirectResearchNotice) {
+          const selected = normalizeJobResearchUrl(input)
+          if (error.run.selected.canonicalUrl === selected.canonicalUrl && error.run.selected.provider === selected.provider && Date.now() < current.expiresAt) {
+            current.directRun = immutableDirectRun(error.run)
+            current.state = { status: 'research-notice', message: `${error.message} ${error.run.status === 'full' ? 'The captured text could not form a complete saveable preview.' : 'Direct research is incomplete.'} Nothing was saved. Review the available findings or open the original source.` }
+            return
+          }
+        }
+        current.state = { status: 'failed', message: error instanceof Error ? error.message : 'The posting could not be fetched. Open it or paste posting text instead.' }
       })
       return { token }
     },
@@ -945,13 +967,22 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       if (!checked.success) return postingFetchStateSchema.parse({ status: 'failed', message: 'This temporary preview is no longer available.' })
       return postingFetchStateSchema.parse(postingFetches.get(checked.data)?.state ?? { status: 'failed', message: 'This temporary preview is no longer available.' })
     },
+    // Main-only, one-time transfer of an app-captured run; the renderer never supplies evidence.
+    takePostingResearchRun(token: string) {
+      const checked = uuidSchema.safeParse(token)
+      const pending = checked.success ? postingFetches.get(checked.data) : undefined
+      if (!pending || pending.controller.signal.aborted || pending.expiresAt <= Date.now() || pending.state.status !== 'research-notice' || !pending.directRun) throw new Error('This temporary posting research is unavailable. Fetch the source again.')
+      const run = immutableDirectRun(pending.directRun)
+      pending.directRun = undefined
+      return run
+    },
     async cancelPostingFetch(token: string) {
       const checked = uuidSchema.safeParse(token)
       if (!checked.success) return { ok: false }
       const fetch = postingFetches.get(checked.data)
       if (!fetch) return { ok: false }
       fetch.controller.abort()
-      fetch.state = { status: 'cancelled' }; fetch.reviewed = undefined; fetch.working = undefined
+      fetch.state = { status: 'cancelled' }; fetch.reviewed = undefined; fetch.working = undefined; fetch.directRun = undefined
       return { ok: true }
     },
     async updatePostingPreview(token: string, expectedRevision: number, input) {

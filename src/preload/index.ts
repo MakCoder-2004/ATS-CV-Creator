@@ -128,6 +128,7 @@ const api: WorkbenchAPI = Object.freeze({
     // Normalize only public metadata; never accept credential-bearing or tracking-laden IPC inputs.
     return researchStartSchema.parse(await ipcRenderer.invoke('job-research:start', normalizeJobResearchUrl(url).canonicalUrl))
   },
+  async startJobResearchFromPosting(token: string) { return researchStartSchema.parse(await ipcRenderer.invoke('job-research:from-posting', uuidSchema.parse(token))) },
   async getJobResearch(token: string) { return researchStateSchema.parse(await ipcRenderer.invoke('job-research:get', uuidSchema.parse(token))) },
   async searchJobResearch(token: string) { return researchStateSchema.parse(await ipcRenderer.invoke('job-research:search', uuidSchema.parse(token))) },
   async reviewJobResearch(token: string, acceptedFindingIds: string[], acknowledgedPartial: boolean) {
