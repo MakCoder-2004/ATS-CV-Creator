@@ -75,10 +75,12 @@ app.whenReady().then(() => {
   })
   let scriptedAttempts = 0
   let recoveryFailureSent = false
-  const scriptedAnalysis: AnalysisTransport | undefined = !app.isPackaged && ['1', 'retry', 'generation', 'factual', 'invalid', 'foreign-citation', 'faithfulness', 'recovery', 'delayed', 'tailored-flow', 'profile-ai', 'profile-ai-delayed', 'profile-ai-wrong-fact', 'profile-ai-late'].includes(process.env.CV_TAILOR_SCRIPTED_ANALYSIS ?? '') ? { generate: async ({ prompt, signal }) => {
+  const scriptedAnalysis: AnalysisTransport | undefined = !app.isPackaged && ['1', 'retry', 'generation', 'factual', 'invalid', 'foreign-citation', 'faithfulness', 'recovery', 'delayed', 'tailored-flow', 'profile-ai', 'profile-ai-delayed', 'profile-ai-wrong-fact', 'profile-ai-late', 'profile-ai-malformed', 'profile-ai-provider-failure'].includes(process.env.CV_TAILOR_SCRIPTED_ANALYSIS ?? '') ? { generate: async ({ prompt, signal }) => {
     scriptedAttempts++
     const isTailoring = /^Write (?:conservative|concise)/.test(prompt)
     if (process.env.CV_TAILOR_SCRIPTED_ANALYSIS === 'profile-ai-delayed' && prompt.startsWith('Organize only facts')) return await new Promise<string>((_resolve, reject) => signal.addEventListener('abort', () => reject(Object.assign(new Error('scripted request cancelled'), { code: 'ECONNRESET' })), { once: true }))
+    if (process.env.CV_TAILOR_SCRIPTED_ANALYSIS === 'profile-ai-malformed' && prompt.startsWith('Organize only facts')) return '{not-json'
+    if (process.env.CV_TAILOR_SCRIPTED_ANALYSIS === 'profile-ai-provider-failure' && prompt.startsWith('Organize only facts')) throw new Error('scripted provider unavailable')
     if (process.env.CV_TAILOR_SCRIPTED_ANALYSIS === 'profile-ai-late' && prompt.startsWith('Organize only facts')) await new Promise<void>(resolve => setTimeout(resolve, 1_500))
     if (['profile-ai', 'profile-ai-wrong-fact', 'profile-ai-late'].includes(process.env.CV_TAILOR_SCRIPTED_ANALYSIS ?? '') && prompt.startsWith('Organize only facts')) {
       if (['ada@example.test', '+1 555 123 4567', '%PDF', 'PROFILE_SECRET_CANARY'].some(value => prompt.includes(value))) throw new Error('The scripted outbound request contained unapproved source data.')
@@ -87,11 +89,39 @@ app.whenReady().then(() => {
         const match = block.match(/^\[(page-\d+-passage-\d+)[^\]]*\]\n([\s\S]*)$/)
         return match ? [{ unitId: match[1]!, text: match[2]! }] : []
       })
-      const source = units.find(item => /^SKILLS:\s*/i.test(item.text))
-      if (!source) return JSON.stringify({ skills: [], experience: [], projects: [], entries: [], citations: [], unmappedUnitIds: units.map(item => item.unitId) })
-      const originalSkill = source.text.replace(/^SKILLS:\s*/i, '').split(/[\n,;|]/)[0]?.trim() ?? ''
-      const skill = process.env.CV_TAILOR_SCRIPTED_ANALYSIS === 'profile-ai-wrong-fact' ? 'Rust' : originalSkill
-      return JSON.stringify({ skills: [{ name: skill, category: 'Technical', proposalRef: 'ai-skill-1' }], experience: [], projects: [], entries: [], citations: [{ proposalRef: 'ai-skill-1', unitId: source.unitId }], unmappedUnitIds: units.filter(item => item.unitId !== source.unitId).map(item => item.unitId) })
+      const used = new Set<string>(), citations: Array<{ proposalRef: string; unitId: string }> = []
+      const cite = (ref: string, unit: { unitId: string }) => { citations.push({ proposalRef: ref, unitId: unit.unitId }); used.add(unit.unitId) }
+      const find = (pattern: RegExp) => units.find(item => pattern.test(item.text))
+      const name = find(/^NAME:\s*/i), email = find(/^EMAIL:\s*/i), phone = find(/^PHONE:\s*/i)
+      const contact = name || email || phone ? { proposalRef: 'ai-contact', ...(name ? { fullName: name.text.replace(/^NAME:\s*/i, '').trim() } : {}), ...(email ? { email: email.text.replace(/^EMAIL:\s*/i, '').trim() } : {}), ...(phone ? { phone: phone.text.replace(/^PHONE:\s*/i, '').trim() } : {}) } : undefined
+      if (name) cite('ai-contact', name)
+      if (email) cite('ai-contact', email)
+      if (phone) cite('ai-contact', phone)
+      const skillSource = find(/^SKILLS:\s*/i), skillName = skillSource?.text.replace(/^SKILLS:\s*/i, '').split(/[\n,;|]/)[0]?.trim()
+      const skill = process.env.CV_TAILOR_SCRIPTED_ANALYSIS === 'profile-ai-wrong-fact' ? 'Rust' : skillName
+      const skills = skill ? [{ name: skill, category: 'Technical', proposalRef: 'ai-skill-1' }] : []
+      if (skillSource && skill) cite('ai-skill-1', skillSource)
+      const roleSource = find(/^EXPERIENCE:\s*/i), roleParts = roleSource?.text.replace(/^EXPERIENCE:\s*/i, '').split(/\s+\|\s+/)
+      const roleFact = find(/^FACT:\s*/i)
+      const experience = roleParts?.length === 3 ? [{ kind: 'employment', organization: roleParts[0], title: roleParts[1], startDate: roleParts[2]?.split(/\s+[-–]\s+/)[0], endDate: roleParts[2]?.split(/\s+[-–]\s+/)[1], description: roleSource!.text, factualItems: roleFact ? [{ text: roleFact.text.replace(/^FACT:\s*/i, '').trim(), proposalRef: 'ai-role-fact' }] : [], proposalRef: 'ai-role' }] : []
+      if (experience.length && roleSource) cite('ai-role', roleSource)
+      if (experience.length && roleFact) cite('ai-role-fact', roleFact)
+      const projectSource = find(/^PROJECT:\s*/i), projectParts = projectSource?.text.replace(/^PROJECT:\s*/i, '').split(/\s+\|\s+/)
+      const projectLink = find(/^PROJECT LINK:\s*/i)
+      const projectIndex = projectSource ? units.indexOf(projectSource) : -1
+      const projectFact = projectIndex >= 0 ? units[projectIndex + 1] : undefined
+      const factualProjectText = projectFact && !/^(?:PROJECT LINK:|EDUCATION:|UNKNOWN:|INSTRUCTIONS:|EXPERIENCE:|FACT:|SKILLS:)/i.test(projectFact.text) ? projectFact.text.trim() : undefined
+      const educationSource = find(/^EDUCATION:\s*/i), educationParts = educationSource?.text.replace(/^EDUCATION:\s*/i, '').split(/\s+\|\s+/)
+      const entries = educationParts?.length === 3 ? [{ section: 'education', title: educationParts[0], institution: educationParts[1], startDate: educationParts[2]?.split(/\s+[-–]\s+/)[0], endDate: educationParts[2]?.split(/\s+[-–]\s+/)[1], proposalRef: 'ai-education' }] : []
+      if (entries.length && educationSource) cite('ai-education', educationSource)
+      const link = projectLink?.text.match(/^PROJECT LINK:\s*([^\n|]+)(?:\s*\|\s*([^\n]+))?(?:\nLink:\s*[^\n]+\s+—\s+(https?:\/\/\S+))?/i)
+      const attachedLink = projectLink?.text.match(/(?:^|\n)Link:\s*(.*?)\s+—\s+(https?:\/\/\S+)/i)
+      const projectUrl = attachedLink?.[2] ?? link?.[2], projectLabel = attachedLink?.[1] ?? link?.[1]
+      const projects = projectParts?.length === 2 ? [{ name: projectParts[0], description: projectSource!.text, factualItems: factualProjectText ? [{ text: factualProjectText, proposalRef: 'ai-project-fact' }] : [], technologies: [{ text: projectParts[1], proposalRef: 'ai-project-technology' }], links: projectUrl && projectLabel ? [{ label: projectLabel.trim(), url: projectUrl.trim() }] : [], proposalRef: 'ai-project' }] : []
+      if (projects.length && projectSource) { cite('ai-project', projectSource); cite('ai-project-technology', projectSource) }
+      if (projects.length && projectLink) cite('ai-project', projectLink)
+      if (projects.length && factualProjectText && projectFact) cite('ai-project-fact', projectFact)
+      return JSON.stringify({ ...(contact ? { contact } : {}), skills, experience, projects, entries, citations, unmappedUnitIds: units.filter(item => !used.has(item.unitId)).map(item => item.unitId) })
     }
     if (process.env.CV_TAILOR_SCRIPTED_ANALYSIS === 'delayed' && isTailoring) await new Promise<void>(resolve => setTimeout(resolve, 30000))
     if (process.env.CV_TAILOR_SCRIPTED_ANALYSIS === 'recovery' && isTailoring && !recoveryFailureSent) { recoveryFailureSent = true; throw Object.assign(new Error('scripted offline interruption'), { code: 'ECONNRESET' }) }

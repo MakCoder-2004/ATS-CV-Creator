@@ -6,7 +6,7 @@ import type { ProfileSourceEvidenceDocument } from './profile-source-evidence'
 const uuid = z.string().uuid()
 const sourceCitationSchema = z.object({ proposalRef: z.string().min(1).max(160), unitId: z.string().regex(/^page-\d+-passage-\d+$/) }).strict()
 export const profileAiResultSchema = z.object({
-  contact: profilePdfProposalSchema.shape.contact,
+  contact: profilePdfProposalSchema.shape.contact.unwrap().extend({ email: z.string().max(320).optional(), phone: z.string().max(80).optional() }).optional(),
   skills: profilePdfProposalSchema.shape.skills,
   experience: profilePdfProposalSchema.shape.experience,
   projects: profilePdfProposalSchema.shape.projects,
@@ -34,6 +34,7 @@ export function minimizeProfileText(text: string, recognizable: string[] = []) {
   redacted = redacted.replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, value => {
     const token = `[EMAIL_${replacements.length + 1}]`; replacements.push({ token, value }); return token
   }).replace(/(?:\+?\d[\d ().-]{7,}\d)/g, value => {
+    if (/^(?:19|20)\d{2}(?:-\d{2})?\s*[-–]\s*(?:19|20)\d{2}(?:-\d{2})?$/.test(value)) return value
     const token = `[PHONE_${replacements.length + 1}]`; replacements.push({ token, value }); return token
   })
   return { text: redacted, replacements }
@@ -83,7 +84,14 @@ export function validateProfileAiDraft(current: ProfilePdfProposal, draft: Profi
     if (parentFor(project.proposalRef) !== parentFor(item.proposalRef)) throw new Error('A project fact cites a different project than its parent. Keep the local proposals and review them manually.')
   }
   const normalized = (value: string) => value.normalize('NFKC').replace(/\s+/g, ' ').trim().toLocaleLowerCase()
-  const citedText = (ref: string) => normalized(draft.sources.filter(source => source.proposalRef === ref).map(source => source.passage).join('\n'))
+  const citedSources = (ref: string) => draft.sources.filter(source => source.proposalRef === ref)
+  const citedText = (ref: string) => normalized(citedSources(ref).map(source => source.passage).join('\n'))
+  const assertLink = (ref: string, url: string, label: string) => {
+    const supported = citedSources(ref).some(source => evidence
+      ? evidence.units.some(unit => unit.page === source.page && [unit.text, ...unit.links.map(link => `${link.label} — ${link.url}`)].join('\n').includes(source.passage) && (unit.text.includes(url) || unit.links.some(link => link.url === url && (!label || link.label === label))))
+      : source.passage.includes(url))
+    if (!supported) throw new Error('The AI suggested a link that is not present in its own cited CV passage. Keep the local proposals and review them manually.')
+  }
   const assertSupported = (ref: string, value: string | number | undefined, label: string) => {
     if (value === undefined || value === '') return
     if (!citedText(ref).includes(normalized(String(value)))) throw new Error(`The AI suggested ${label} that is not present in its cited CV passages. Keep the local proposals and review them manually.`)
@@ -107,7 +115,7 @@ export function validateProfileAiDraft(current: ProfilePdfProposal, draft: Profi
   if ([...refs].some(ref => !citedRefs.has(ref))) throw new Error('The model returned a proposal without source support. Keep the local proposals and review them manually.')
   if (draft.contact) {
     for (const field of ['fullName', 'headline', 'email', 'phone', 'location'] as const) assertSupported(draft.contact.proposalRef, draft.contact[field], `contact ${field}`)
-    for (const link of draft.contact.links ?? []) { assertSupported(draft.contact.proposalRef, link.label, 'contact link label'); assertSupported(draft.contact.proposalRef, link.url, 'contact link URL') }
+    for (const link of draft.contact.links ?? []) { assertSupported(draft.contact.proposalRef, link.label, 'contact link label'); assertLink(draft.contact.proposalRef, link.url, link.label) }
   }
   const categories = new Set(['Technical', 'Tools', 'Domain', 'Languages', 'Leadership', 'Other'])
   for (const item of draft.skills) {
@@ -117,7 +125,9 @@ export function validateProfileAiDraft(current: ProfilePdfProposal, draft: Profi
   }
   for (const role of draft.experience) {
     const root = parentFor(role.proposalRef), original = current.experience.find(item => item.proposalRef === root)
-    if (original ? role.kind !== original.kind : role.kind !== 'unresolved') throw new Error('The AI could not establish this role type from a source-matched local role.')
+    const explicitKind = role.kind === 'employment' ? /^\s*(?:employment|work experience|professional experience)\s*:/i : /^\s*(?:training|internship|apprenticeship)\s*:/i
+    const kindSupported = citedSources(role.proposalRef).some(source => explicitKind.test(source.passage) && (normalized(source.passage).includes(normalized(role.organization)) || normalized(source.passage).includes(normalized(role.title))))
+    if (original ? role.kind !== original.kind && !(original.kind === 'unresolved' && kindSupported) : role.kind !== 'unresolved' && !kindSupported) throw new Error('The AI could not establish this role type from exact cited role text.')
     assertSupported(role.proposalRef, role.organization, 'experience organization'); assertSupported(role.proposalRef, role.title, 'experience title'); assertSupported(role.proposalRef, role.description, 'experience description'); assertSupported(role.proposalRef, role.startDate, 'experience start date'); assertSupported(role.proposalRef, role.endDate, 'experience end date')
     for (const fact of role.factualItems) assertSupported(fact.proposalRef, fact.text, 'experience fact')
   }
@@ -125,11 +135,12 @@ export function validateProfileAiDraft(current: ProfilePdfProposal, draft: Profi
     assertSupported(project.proposalRef, project.name, 'project name'); assertSupported(project.proposalRef, project.description, 'project description')
     for (const item of project.factualItems) assertSupported(item.proposalRef, item.text, 'project fact')
     for (const item of project.technologies) assertSupported(item.proposalRef, item.text, 'project technology')
-    for (const link of project.links) { assertSupported(project.proposalRef, link.label, 'project link label'); assertSupported(project.proposalRef, link.url, 'project link URL') }
+    for (const link of project.links) { assertSupported(project.proposalRef, link.label, 'project link label'); assertLink(project.proposalRef, link.url, link.label) }
   }
   for (const entry of draft.entries) {
     if (!(entry.section === 'summary' && entry.title === 'Summary')) assertSupported(entry.proposalRef, entry.title, `${entry.section} title`)
     assertSupported(entry.proposalRef, entry.institution, 'institution'); assertSupported(entry.proposalRef, entry.issuer, 'issuer'); assertSupported(entry.proposalRef, entry.description, `${entry.section} description`); assertSupported(entry.proposalRef, entry.startDate, `${entry.section} start date`); assertSupported(entry.proposalRef, entry.endDate, `${entry.section} end date`); assertSupported(entry.proposalRef, entry.year, `${entry.section} year`)
+    if (entry.link) assertLink(entry.proposalRef, entry.link, '')
   }
   const proposalIds = Object.fromEntries([...refs].map(ref => [ref, current.proposalIds[ref] ?? newId()]))
   return profilePdfProposalSchema.parse({ ...draft, proposalIds, sources: draft.sources.map(source => ({ ...source, proposalId: proposalIds[source.proposalRef] })) })
@@ -205,5 +216,38 @@ export function materializeProfileAiResult(current: ProfilePdfProposal, result: 
     projects: result.projects, entries: result.entries, sources, unmapped: unresolved
   })
   if (!parsedDraft.success) throw new Error('Pi returned profile details outside the supported profile schema. Nothing was applied; continue with local review.')
-  return validateProfileAiDraft(current, parsedDraft.data, newId, evidence)
+  const proposed = validateProfileAiDraft(current, parsedDraft.data, newId, evidence)
+  const same = (left: string | number | undefined, right: string | number | undefined) => left !== undefined && right !== undefined && String(left).normalize('NFKC').trim().toLocaleLowerCase() === String(right).normalize('NFKC').trim().toLocaleLowerCase()
+  const supported = (ref: string, value: string | number | undefined, field: string, link = false) => value !== undefined && current.sources.some(source => source.proposalRef === ref && source.field.startsWith(field) && source.passage.includes(String(value)) && (field !== 'skills.' || /^\s*(?:skills|technical skills|tools|programming languages|concepts)\s*:/i.test(source.passage)) && evidence.units.some(unit => unit.page === source.page && unit.kind === 'text' && (unit.text.includes(source.passage) || unit.text.includes(String(value)) || link && unit.links.some(item => item.url === value && source.passage.includes(item.label))) && (!link || unit.text.includes(String(value)) || unit.links.some(item => item.url === value))))
+  const requirePreserved = (ref: string, value: string | number | undefined, field: string, found: boolean, link = false) => {
+    if (supported(ref, value, field, link) && !found) throw new Error('The AI omitted a source-backed profile fact already present in the local review. Keep the local proposals and review the source manually.')
+  }
+  if (current.contact) {
+    const next = proposed.contact
+    for (const field of ['fullName', 'email', 'phone', 'headline', 'location'] as const) requirePreserved(current.contact.proposalRef, current.contact[field], `contact.${field}`, same(current.contact[field], next?.[field]))
+    for (const link of current.contact.links ?? []) requirePreserved(current.contact.proposalRef, link.url, 'contact.links', Boolean(next?.links?.some(item => same(item.url, link.url))), true)
+  }
+  for (const skill of current.skills) requirePreserved(skill.proposalRef, skill.name, 'skills.', proposed.skills.some(item => same(item.name, skill.name)))
+  for (const role of current.experience) {
+    const next = proposed.experience.find(item => same(item.organization, role.organization) && same(item.title, role.title))
+    requirePreserved(role.proposalRef, role.organization, 'experience.role', Boolean(next))
+    requirePreserved(role.proposalRef, role.title, 'experience.role', Boolean(next))
+    for (const field of ['startDate', 'endDate', 'description'] as const) requirePreserved(role.proposalRef, role[field], 'experience.role', same(role[field], next?.[field]))
+    for (const fact of role.factualItems) requirePreserved(fact.proposalRef, fact.text, 'experience.factualItem', Boolean(next?.factualItems.some(item => same(item.text, fact.text))))
+  }
+  for (const project of current.projects) {
+    const next = proposed.projects.find(item => same(item.name, project.name))
+    requirePreserved(project.proposalRef, project.name, 'projects.project', Boolean(next))
+    requirePreserved(project.proposalRef, project.description, 'projects.project', same(project.description, next?.description))
+    for (const fact of project.factualItems) requirePreserved(fact.proposalRef, fact.text, 'projects.factualItem', Boolean(next?.factualItems.some(item => same(item.text, fact.text))))
+    for (const technology of project.technologies) requirePreserved(technology.proposalRef, technology.text, 'projects.technology', Boolean(next?.technologies.some(item => same(item.text, technology.text))))
+    for (const link of project.links) requirePreserved(project.proposalRef, link.url, 'projects.links', Boolean(next?.links.some(item => same(item.url, link.url))), true)
+  }
+  for (const entry of current.entries) {
+    const next = proposed.entries.find(item => item.section === entry.section && same(item.title, entry.title))
+    requirePreserved(entry.proposalRef, entry.title, `entries.${entry.section}`, Boolean(next))
+    for (const field of ['institution', 'issuer', 'description', 'startDate', 'endDate', 'year'] as const) requirePreserved(entry.proposalRef, entry[field], `entries.${entry.section}`, same(entry[field], next?.[field]))
+    if (entry.link) requirePreserved(entry.proposalRef, entry.link, `entries.${entry.section}`, same(entry.link, next?.link), true)
+  }
+  return proposed
 }

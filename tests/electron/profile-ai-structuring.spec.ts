@@ -75,18 +75,19 @@ test('requires run-specific consent for the frozen minimized CV text and returns
     await consent.getByLabel(/I authorize this one-time request/).check()
     await consent.getByRole('button', { name: 'Send text and structure' }).click()
     await expect(consent).toHaveCount(0)
+    await expect(page.getByRole('status')).toContainText('AI suggestions are ready')
     await expect(review.getByRole('group', { name: 'Skill 1' }).getByLabel('Skill name')).toHaveValue('Python')
     expect(await page.evaluate(() => window.workbench.getProfile())).toMatchObject({ contact: null, skills: [] })
     await review.getByRole('button', { name: 'Apply accepted details' }).click()
     await expect(page.getByRole('status')).toContainText('added to your profile')
-    expect(await page.evaluate(() => window.workbench.getProfile())).toMatchObject({ skills: [{ name: 'Python', category: 'Technical' }] })
+    expect(await page.evaluate(() => window.workbench.getProfile())).toMatchObject({ skills: [expect.objectContaining({ name: 'Python', category: 'Technical' })] })
   } finally { await running?.close(); await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }) }
 })
 
 test('continues through local review without opening an AI preview', async () => {
   test.setTimeout(60_000)
   const root = mkdtempSync(join(tmpdir(), 'cv-tailor-local-cv-review-')), userData = join(root, 'workspace'), sourceFile = join(root, 'cv.pdf')
-  writeFileSync(sourceFile, makePdf(['SKILLS: Python', 'A longer synthetic passage keeps local CV review available without sending it through Pi.']))
+  writeFileSync(sourceFile, makePdf(['NAME: Ada Example', 'SKILLS: Python', 'Built a Python parser for sample reporting work and documented the data model.', 'Maintained internal tools with colleagues and recorded the exact supported workflow details for local review.']))
   let running: ElectronApplication | undefined
   try {
     running = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData, CV_TAILOR_SCRIPTED_ANALYSIS: 'profile-ai', CV_TAILOR_SCRIPTED_PI_MODEL: '1' } })

@@ -114,7 +114,7 @@ export function registerProfilePdfImportIpc(getWindow: () => BrowserWindow, getS
       const detail = error instanceof Error ? error.message : ''
       const cancelled = /cancel|abort/i.test(detail)
       if (ai.get(args[0]) === state) clearAi(args[0])
-      const known = /not present|outside this CV review|different role|different project|source support|source block|source reference|parent record|nested fact|unassigned source passage|parent proposal cites|profile schema|role type|output limit|input limit|selected Pi model|authentication|malformed structured data|does not match the profile proposal format/i.test(detail)
+      const known = /not present|outside this CV review|different role|different project|source support|source-backed profile fact|link that is not present|source block|source reference|parent record|nested fact|unassigned source passage|parent proposal cites|profile schema|role type|output limit|input limit|selected Pi model|authentication|invalid response|malformed structured data|does not match the profile proposal format/i.test(detail)
       const base = cancelled ? 'The AI request was cancelled.' : known ? detail : 'Pi could not complete this request.'
       const recovery = cancelled ? 'Nothing was applied. A dispatched request may still have been processed, and CV Tailor cannot reverse its charge.' : 'Nothing was applied. If Pi dispatched the request, provider processing and charges may be uncertain. Continue locally or prepare a fresh preview and authorize a new request.'
       return profileAiRunResultSchema.parse({ ok: false, cancelled, message: `${base} ${recovery}` })
@@ -186,10 +186,15 @@ export function registerProfilePdfImportIpc(getWindow: () => BrowserWindow, getS
         const field = source.field.slice('contact.'.length) as keyof NonNullable<typeof proposals.data.contact>
         return JSON.stringify(saved.proposals.contact?.[field]) === JSON.stringify(proposals.data.contact?.[field])
       }
+      if (source.field === 'experience.role') {
+        const before = saved.proposals.experience.find(item => item.proposalRef === source.proposalRef), after = proposals.data.experience.find(item => item.proposalRef === source.proposalRef)
+        const fields = (role: typeof before) => role && ({ organization: role.organization, title: role.title, startDate: role.startDate, endDate: role.endDate, description: role.description })
+        return Boolean(before && after && (before.kind === after.kind || before.kind === 'unresolved' && ['employment', 'training'].includes(after.kind)) && JSON.stringify(fields(before)) === JSON.stringify(fields(after)))
+      }
       return original !== undefined && JSON.stringify(original) === JSON.stringify(accepted)
     })
     const result = profilePdfApplyResultSchema.parse(await getStorage().importEmptyProfilePdf(saved.sourceHash, saved.baseline, { ...proposals.data, sources: acceptedSources }))
-    if (result.ok || /profile changed|profile is no longer empty/i.test(result.message)) discard(args[0])
+    if (result.ok) discard(args[0])
     return result
   })
   return { clear() { for (const token of ai.keys()) clearAi(token); for (const token of pending.keys()) discard(token) }, clearAiForImport }

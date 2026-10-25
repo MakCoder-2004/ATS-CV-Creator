@@ -105,6 +105,17 @@ test('merges updated experience and project records while preserving unrelated n
   expect(afterProvenance).toHaveLength(beforeProvenance.length)
 })
 
+test('backs up only well-formed profile import attempt identities', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'cv-tailor-profile-attempt-backup-')); directories.push(directory)
+  const workbench = createWorkbench(directory); instances.push(workbench)
+  const valid = JSON.parse(workbench.backup.createBackup())
+  valid.tables.analysis_attempts.rows.push({ id: 1, run_id: `profile-import:${randomUUID()}`, attempted_at: new Date().toISOString() })
+  expect(() => workbench.backup.previewRestore(JSON.stringify(valid))).not.toThrow()
+  const forged = structuredClone(valid)
+  forged.tables.analysis_attempts.rows[0].run_id = 'profile-import:not-a-uuid'
+  expect(() => workbench.backup.previewRestore(JSON.stringify(forged))).toThrow('analysis_attempts')
+})
+
 test('rejects provenance attached to another owner type or field before workspace restore', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'cv-tailor-forged-provenance-')); directories.push(directory)
   const workbench = createWorkbench(directory); instances.push(workbench)

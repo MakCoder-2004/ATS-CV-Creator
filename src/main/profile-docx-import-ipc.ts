@@ -78,8 +78,8 @@ export function registerProfileDocxImportIpc(getWindow: () => BrowserWindow, get
       const original = valueForRef(saved.proposals, source.proposalRef), accepted = valueForRef(parsed.data, source.proposalRef)
       if (source.field === 'experience.role') {
         const before = saved.proposals.experience.find(item => item.proposalRef === source.proposalRef), after = parsed.data.experience.find(item => item.proposalRef === source.proposalRef)
-        const roleFields = (role: typeof before) => role && ({ kind: role.kind, organization: role.organization, title: role.title, startDate: role.startDate, endDate: role.endDate, description: role.description })
-        return Boolean(before && after && JSON.stringify(roleFields(before)) === JSON.stringify(roleFields(after)))
+        const roleFields = (role: typeof before) => role && ({ organization: role.organization, title: role.title, startDate: role.startDate, endDate: role.endDate, description: role.description })
+        return Boolean(before && after && (before.kind === after.kind || before.kind === 'unresolved' && ['employment', 'training'].includes(after.kind)) && JSON.stringify(roleFields(before)) === JSON.stringify(roleFields(after)))
       }
       if (source.field === 'experience.role.date') {
         const role = parsed.data.experience.find(item => item.proposalRef === source.proposalRef), prior = saved.proposals.experience.find(item => item.proposalRef === source.proposalRef)
@@ -100,7 +100,7 @@ export function registerProfileDocxImportIpc(getWindow: () => BrowserWindow, get
       return original !== undefined && JSON.stringify(original) === JSON.stringify(accepted)
     })
     const result = profilePdfApplyResultSchema.parse(await getStorage().importEmptyProfilePdf(saved.hash, saved.baseline, { ...parsed.data, sources }))
-    if (result.ok || /profile changed|profile is no longer empty/i.test(result.message)) discard(token)
+    if (result.ok) discard(token)
     return result
   })
   return { clear() { for (const token of pending.keys()) discard(token) } }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { getProfileAiImport, materializeProfileAiResult, minimizeProfileText, PROFILE_AI_RESIDUAL_NOTICE, registerProfileAiImport, unregisterProfileAiImport, validateProfileAiDraft } from '../src/shared/profile-ai-structuring'
+import { getProfileAiImport, materializeProfileAiResult, minimizeProfileText, profileAiResultSchema, PROFILE_AI_RESIDUAL_NOTICE, registerProfileAiImport, unregisterProfileAiImport, validateProfileAiDraft } from '../src/shared/profile-ai-structuring'
 import { profilePdfProposalSchema } from '../src/shared/profile-pdf-import'
 import { buildPdfSourceEvidence } from '../src/shared/profile-source-evidence'
 
@@ -26,6 +26,12 @@ describe('profile AI outgoing projection', () => {
     expect(minimized.text).toBe('Contact [EMAIL_1] or [PHONE_2] about confidential work')
     expect(minimized.replacements).toEqual([{ token: '[EMAIL_1]', value: 'ada@example.test' }, { token: '[PHONE_2]', value: '+1 (555) 123-4567' }])
     expect(PROFILE_AI_RESIDUAL_NOTICE).toMatch(/does not make this anonymous/i)
+    expect(minimizeProfileText('EXPERIENCE: Example Labs | Engineer | 2021-01 - 2024-12').text).toContain('2021-01 - 2024-12')
+  })
+
+  it('accepts temporary redaction tokens at the transport boundary but not as final profile values', () => {
+    expect(profileAiResultSchema.safeParse({ contact: { proposalRef: 'contact', fullName: '[PERSONAL_1]', email: '[EMAIL_2]', phone: '[PHONE_3]' }, skills: [], experience: [], projects: [], entries: [], citations: [], unmappedUnitIds: [] }).success).toBe(true)
+    expect(profilePdfProposalSchema.shape.contact.safeParse({ proposalRef: 'contact', fullName: '[PERSONAL_1]', email: '[EMAIL_2]' }).success).toBe(false)
   })
 
   it('rejects a schema-valid but unsupported replacement skill value', () => {
@@ -75,6 +81,38 @@ describe('profile AI outgoing projection', () => {
     expect(result.unmapped).toContainEqual({ page: 1, text: instructionUnit.text })
     expect(result.proposalIds.role).toMatch(/^[0-9a-f-]{36}$/)
     expect(result.sources.every(item => item.proposalId === result.proposalIds[item.proposalRef])).toBe(true)
+  })
+
+  it('does not force a heuristic skill inferred from unlabelled narrative text', () => {
+    const ids = (() => { let serial = 100; return () => `00000000-0000-4000-8000-${String(serial++).padStart(12, '0')}` })()
+    const evidence = buildPdfSourceEvidence('e'.repeat(64), [{ page: 1, text: 'SKILLS: Python\nA longer supporting paragraph is not itself a skill.' }], ids)
+    const firstId = ids(), secondId = ids()
+    const local = profilePdfProposalSchema.parse({ skills: [{ name: 'Python', category: 'Technical', proposalRef: 'skill-a' }, { name: 'A longer supporting paragraph is not itself a skill.', category: 'Technical', proposalRef: 'skill-b' }], experience: [], projects: [], entries: [], unmapped: [], sources: [{ proposalRef: 'skill-a', proposalId: firstId, page: 1, field: 'skills.Python', passage: 'SKILLS: Python' }, { proposalRef: 'skill-b', proposalId: secondId, page: 1, field: 'skills.narrative', passage: 'A longer supporting paragraph is not itself a skill.' }], proposalIds: { 'skill-a': firstId, 'skill-b': secondId } })
+    expect(local.skills).toHaveLength(2)
+    const output = { skills: [{ name: 'Python', category: 'Technical', proposalRef: 'ai-skill' }], experience: [], projects: [], entries: [], citations: [{ proposalRef: 'ai-skill', unitId: evidence.units[0]!.unitId }], unmappedUnitIds: [evidence.units[1]!.unitId] }
+    expect(materializeProfileAiResult(local, output, evidence, ids).skills.map(item => item.name)).toEqual(['Python'])
+  })
+
+  it('rejects fabricated certificate links and accepts only exact links on its own cited passage', () => {
+    const ids = () => '00000000-0000-4000-8000-000000000011'
+    const local = profilePdfProposalSchema.parse({ skills: [], experience: [], projects: [], entries: [], unmapped: [], sources: [], proposalIds: {} })
+    const linked = buildPdfSourceEvidence('e'.repeat(64), [{ page: 1, text: 'CERTIFICATE: Cloud Foundations | Example Institute', links: [{ label: 'Certificate', url: 'https://example.test/certificate', lineIndex: 0 }] }], ids)
+    const textOnly = buildPdfSourceEvidence('f'.repeat(64), [{ page: 1, text: 'CERTIFICATE: Cloud Foundations | Example Institute' }], ids)
+    const result = (unitId: string) => ({ skills: [], experience: [], projects: [], entries: [{ section: 'certificates' as const, title: 'Cloud Foundations', issuer: 'Example Institute', link: 'https://example.test/certificate', proposalRef: 'certificate' }], citations: [{ proposalRef: 'certificate', unitId }], unmappedUnitIds: [] })
+    expect(() => materializeProfileAiResult(local, result(textOnly.units[0]!.unitId), textOnly, ids)).toThrow(/link that is not present/)
+    expect(materializeProfileAiResult(local, result(linked.units[0]!.unitId), linked, ids).entries[0]?.link).toBe('https://example.test/certificate')
+  })
+
+  it('accepts explicitly labeled new employment and training but leaves ambiguous kinds unresolved', () => {
+    let serial = 12
+    const ids = () => `00000000-0000-4000-8000-${String(serial++).padStart(12, '0')}`
+    const evidence = buildPdfSourceEvidence('a'.repeat(64), [{ page: 1, text: 'EMPLOYMENT: Engineer at Harbor Cooperative\nTRAINING: Analyst at Example Institute\nAnalyst at Other Institute' }], ids)
+    const local = profilePdfProposalSchema.parse({ skills: [], experience: [], projects: [], entries: [], unmapped: [], sources: [], proposalIds: {} })
+    const role = (organization: string, title: string, kind: 'employment' | 'training' | 'unresolved', proposalRef: string) => ({ kind, organization, title, description: title, factualItems: [], proposalRef })
+    const output = { skills: [], experience: [role('Harbor Cooperative', 'Engineer', 'employment', 'employment'), role('Example Institute', 'Analyst', 'training', 'training'), role('Other Institute', 'Analyst', 'unresolved', 'ambiguous')], projects: [], entries: [], citations: evidence.units.map((unit, index) => ({ unitId: unit.unitId, proposalRef: ['employment', 'training', 'ambiguous'][index]! })), unmappedUnitIds: [] }
+    expect(materializeProfileAiResult(local, output, evidence, ids).experience.map(item => item.kind)).toEqual(['employment', 'training', 'unresolved'])
+    expect(() => materializeProfileAiResult(local, { ...output, experience: [role('Harbor Cooperative', 'Engineer', 'training', 'employment'), ...output.experience.slice(1)] }, evidence, ids)).toThrow(/role type/)
+    expect(() => materializeProfileAiResult(local, { ...output, experience: [...output.experience.slice(0, 2), role('Other Institute', 'Analyst', 'employment', 'ambiguous')] }, evidence, ids)).toThrow(/role type/)
   })
 
   it('leaves hyperlinks without a source passage unresolved', () => {

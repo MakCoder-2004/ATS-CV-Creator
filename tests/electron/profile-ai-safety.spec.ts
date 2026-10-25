@@ -54,6 +54,26 @@ test('rejects an AI-invented skill even when it cites a real CV passage', async 
   } finally { await running?.close(); await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }) }
 })
 
+for (const scenario of ['profile-ai-malformed', 'profile-ai-provider-failure'] as const) test(`${scenario} retains the local proposal and changes no saved facts`, async () => {
+  const root = mkdtempSync(join(tmpdir(), `cv-tailor-${scenario}-`)), userData = join(root, 'workspace'), sourceFile = join(root, 'cv.pdf')
+  writeFileSync(sourceFile, makePdf(['NAME: Ada Example', 'SKILLS: Python', 'A longer supporting source paragraph preserves selectable text for this local review without real provider data.', 'The document stays available for a deliberate local correction after the scripted service failure.']))
+  let running: ElectronApplication | undefined
+  try {
+    running = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData, CV_TAILOR_SCRIPTED_ANALYSIS: scenario, CV_TAILOR_SCRIPTED_PI_MODEL: '1' } })
+    const page = await running.firstWindow()
+    await expect(page.locator('[data-ui-ready="true"]')).toBeVisible({ timeout: 15_000 })
+    await selectScriptedPiModel(page)
+    await page.getByRole('button', { name: 'My profile' }).click()
+    const { review } = await prepareReview(running, sourceFile)
+    await authorizeAndRun(page)
+    await expect(page.getByRole('alert')).toContainText(scenario === 'profile-ai-malformed' ? 'provider returned an invalid response' : 'Pi could not complete this request')
+    await expect(review.getByRole('group', { name: 'Skill 1' }).getByLabel('Skill name')).toHaveValue('Python')
+    expect(await page.evaluate(() => window.workbench.getProfile())).toMatchObject({ contact: null, skills: [] })
+    await review.getByRole('button', { name: 'Continue locally' }).click()
+    await expect(review).toContainText('No further AI request was sent.')
+  } finally { await running?.close(); await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }) }
+})
+
 test('discards a non-abortable late response after cancel and protects the next CV preview', async () => {
   const root = mkdtempSync(join(tmpdir(), 'cv-tailor-profile-ai-late-')), userData = join(root, 'workspace'), firstFile = join(root, 'first.pdf'), secondFile = join(root, 'second.pdf')
   writeFileSync(firstFile, makePdf(['SKILLS: Python', 'A lengthy synthetic career passage with selectable source wording satisfies the local PDF extraction minimum and preserves text review.']))
