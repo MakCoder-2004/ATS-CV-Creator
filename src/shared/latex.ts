@@ -11,10 +11,22 @@ function link(url: string, label: string): string {
   return `\\href{${target}}{\\underline{${escapeLatex(label)}}}`
 }
 const itemList = (entry: CanonicalDocumentEntry, includeLinks = true) => {
-  if (entry.descriptionFormat === 'paragraph') return entry.text ? `\\small{${escapeLatex(entry.text)}}\\par${includeLinks && entry.links.length ? `\n${entry.links.map(value => link(value.url, value.label)).join(' \\quad ')}` : ''}` : ''
-  const bullets = entry.bullets?.length ? entry.bullets : splitDocumentBullets(entry.text)
-  const items = [...bullets.map(bullet => `    \\resumeItem{${escapeLatex(bullet)}}`), ...(includeLinks && entry.links.length ? [`    \\resumeItem{${entry.links.map(value => link(value.url, value.label)).join(' \\quad ')}}`] : [])]
-  return items.length ? `\\resumeItemListStart\n${items.join('\n')}\n\\resumeItemListEnd` : ''
+  if (!entry.reviewItems?.length || entry.reviewItems.every(item => (item.descriptionFormat ?? 'bullets') === (entry.descriptionFormat ?? 'bullets'))) {
+    if (entry.descriptionFormat === 'paragraph') return entry.text ? `\\small{${escapeLatex(entry.text)}}\\par${includeLinks && entry.links.length ? `\n${entry.links.map(value => link(value.url, value.label)).join(' \\quad ')}` : ''}` : ''
+    const bullets = entry.bullets?.length ? entry.bullets : splitDocumentBullets(entry.text)
+    const items = [...bullets.map(bullet => `    \\resumeItem{${escapeLatex(bullet)}}`), ...(includeLinks && entry.links.length ? [`    \\resumeItem{${entry.links.map(value => link(value.url, value.label)).join(' \\quad ')}}`] : [])]
+    return items.length ? `\\resumeItemListStart\n${items.join('\n')}\n\\resumeItemListEnd` : ''
+  }
+  const renderDescription = (text: string, bullets: string[], format?: 'paragraph' | 'bullets') => {
+    if (format === 'paragraph') return text ? `\\small{${escapeLatex(text)}}\\par` : ''
+    const items = bullets.map(bullet => `    \\resumeItem{${escapeLatex(bullet)}}`)
+    return items.length ? `\\resumeItemListStart\n${items.join('\n')}\n\\resumeItemListEnd` : ''
+  }
+  const descriptions = entry.reviewItems?.length
+    ? entry.reviewItems.map(item => renderDescription(item.text, item.bullets, item.descriptionFormat)).filter(Boolean)
+    : [renderDescription(entry.text, entry.bullets?.length ? entry.bullets : splitDocumentBullets(entry.text), entry.descriptionFormat)].filter(Boolean)
+  if (includeLinks && entry.links.length) descriptions.push(`\\resumeItemListStart\n    \\resumeItem{${entry.links.map(value => link(value.url, value.label)).join(' \\quad ')}}\n\\resumeItemListEnd`)
+  return descriptions.join('\n')
 }
 /** File names and commands are application-owned; only macro argument text varies. */
 export function renderLatexSections(input: CanonicalDocument): Record<'heading.tex' | 'education.tex' | 'experience.tex' | 'projects.tex' | 'skills.tex', string> {

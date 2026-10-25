@@ -23,7 +23,7 @@ import { regenerationProposalSchema, regenerationTargetSchema, type Regeneration
 import { outboundConsentActionSchema, outboundConsentPreviewSchema } from '../shared/outbound-consent-contract'
 import { AnalysisError, createAnalysisDispatcher, type AnalysisTransport } from './posting-analysis'
 import { z } from 'zod'
-import { analysisBudgetsSchema, analysisResultSchema, generationRecoverySchema, postingAnalysisSchema, displayPostingAnalysisSchema, type AnalysisResult, type RecoveryChoice } from '../shared/posting-analysis'
+import { analysisResultSchema, generationRecoverySchema, postingAnalysisSchema, displayPostingAnalysisSchema, type AnalysisResult, type RecoveryChoice } from '../shared/posting-analysis'
 import { addDraftItemInputSchema, isGeneratedDescriptionParagraph, draftCorrectionInputSchema, draftRevisionSchema, suggestedSkillDecisionSchema, draftTailoringCorrectionSchema, type DraftRevision } from '../shared/draft'
 import { mutateDraftRecordInputSchema, type MutateDraftRecordInput } from '../shared/draft-records'
 import { CitationValidationError, IncompatibleGenerationCheckpointError, runSourceLinkedGraph } from './source-linked-generation'
@@ -1179,7 +1179,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       if (recoveryRow) {
         try { frozen = generationRecoverySnapshotSchema.parse(JSON.parse(recoveryRow.snapshot)) }
         catch { return { ok: false, message: 'The saved recovery snapshot is corrupt or incompatible. No requests were sent; cancel this run and inspect the source data.' } }
-        if (!scriptedTransport && (frozen.version !== 2 || !isDeepStrictEqual(frozen.model, readPiSelection()))) return { ok: false, message: 'This saved run needs a new Pi model preview, consent, analysis, and generation. No previous request was replayed.' }
+        if (frozen.version !== 3 || (!scriptedTransport && !isDeepStrictEqual(frozen.model, readPiSelection()))) return { ok: false, message: 'This saved run predates paragraph generation or its Pi model changed. Review outgoing data, authorize a fresh run, analyze the posting, then generate again. No previous request was replayed.' }
         if (frozen.runId !== resumeRunId || frozen.jobId !== pending.jobId || frozen.consentId !== pending.consentId || frozen.scopeHash !== pending.bundle.scopeHash) return { ok: false, message: 'Saved run identity or consent no longer matches this recovery request. No requests were sent.' }
       }
       const latestScope = resumeRunId ? null : currentConsentSource(pending.jobId)
@@ -1228,10 +1228,9 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       if (!resumeRunId) {
         const data = { runId: pending.runId, jobId: pending.jobId, consentId: pending.consentId, scopeHash: pending.bundle.scopeHash, analysis, job, profile, experience, draftInputs, safeItems, identity: failedDraftIdentity, pageTarget, source: pending.source, faithfulnessCheck: pending.faithfulnessCheck }
         const sourceModel = pending.source.model
-        // Version 1 is kept only for scripted legacy recovery fixtures; Pi runs store version 2 without budgets.
         const snapshot = generationRecoverySnapshotSchema.parse(scriptedTransport
-          ? { ...data, version: 1, budgets: analysisBudgetsSchema.parse({ minimumSpacingMs: 0, rateLimitAttempts: 100, rateLimitWindowMs: 86400000, configuredDailyLimit: 10000, runLimit: 12, runTimeLimitMs: 300000 }) }
-          : { ...data, version: 2, model: piModelSelectionSchema.parse({ providerId: sourceModel.providerId, modelId: sourceModel.name, thinkingLevel: sourceModel.thinkingLevel }) })
+          ? { ...data, version: 3 }
+          : { ...data, version: 3, model: piModelSelectionSchema.parse({ providerId: sourceModel.providerId, modelId: sourceModel.name, thinkingLevel: sourceModel.thinkingLevel }) })
         db.prepare('INSERT OR REPLACE INTO generation_recovery (run_id,job_id,consent_id,scope_hash,status,snapshot,updated_at) VALUES (?,?,?,?,?,?,?)').run(pending.runId,pending.jobId,pending.consentId,pending.bundle.scopeHash,'running',JSON.stringify(snapshot),new Date().toISOString())
       }
       else db.prepare("UPDATE generation_recovery SET status='running',updated_at=? WHERE run_id=?").run(new Date().toISOString(), resumeRunId)
@@ -1264,7 +1263,9 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
           for (const correction of response.corrections) {
             const section = [...result.draft.content[correction.section]], prior = section[correction.index]
             if (!prior || !correction.citations.every(citation => result.draft.evidence.some(source => source.evidenceId === citation.evidenceId && source.revision === citation.revision) && safeItems.some(source => source.id === citation.evidenceId && source.category === correction.section))) continue
-            section[correction.index] = 'text' in prior ? { ...prior, text: pending.bundle.restoreIdentifiers(correction.text), citations: correction.citations } : { ...prior, name: pending.bundle.restoreIdentifiers(correction.text), citations: correction.citations }
+            const restored = pending.bundle.restoreIdentifiers(correction.text)
+            if ((correction.section === 'experience' || correction.section === 'projects') && !isGeneratedDescriptionParagraph(restored)) continue
+            section[correction.index] = 'text' in prior ? { ...prior, text: restored, citations: correction.citations } : { ...prior, name: restored, citations: correction.citations }
             result.draft.content = { ...result.draft.content, [correction.section]: section }
           }
           result.draft.attempts += repair.attempts
@@ -1292,7 +1293,9 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
               const term = escapeCoverageTerm(opportunity.matchedAs)
               const withoutTerm = correction.text.replace(new RegExp(`(?:^|\\s)${term}(?=$|\\s)`, 'iu'), ' ').replace(/\s+/g, ' ').trim()
               if (withoutTerm !== pending.bundle.minimizeIdentifiers(priorText).replace(/\s+/g, ' ').trim()) continue
-              section[eligible.index] = 'text' in prior ? { ...prior, text: pending.bundle.restoreIdentifiers(correction.text) } : { ...prior, name: pending.bundle.restoreIdentifiers(correction.text) }
+              const restored = pending.bundle.restoreIdentifiers(correction.text)
+              if ((eligible.section === 'experience' || eligible.section === 'projects') && !isGeneratedDescriptionParagraph(restored)) continue
+              section[eligible.index] = 'text' in prior ? { ...prior, text: restored } : { ...prior, name: restored }
               result.draft.content = { ...result.draft.content, [eligible.section]: section }
             }
             result.draft.attempts += coverageRepair.attempts
@@ -1341,6 +1344,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
             }
           }
         }
+        if ((['experience', 'projects'] as const).some(section => result.draft.content[section].some(item => item.descriptionFormat === 'paragraph' && !isGeneratedDescriptionParagraph(item.text)))) throw new Error('Final generated paragraphs failed their format contract.')
         saveGenerationStep('check-document', 'Checking draft structure and document readiness.', ['parse-posting', 'score-evidence', 'select-content', 'tailor-paragraphs', 'verify-claims'])
         report = checkDraftFacts(result.draft)
         const findings = [...report.findings, ...semanticFindings]
@@ -1903,10 +1907,14 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       if (!row) return null
       const attempts = (db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id=?').get(row.run_id) as { count: number }).count
       const uncertainAttempts = (db.prepare('SELECT COUNT(*) AS count FROM provider_attempt_outcomes WHERE run_id=? AND checkpointed_at IS NULL').get(row.run_id) as { count: number }).count
-      const progress = uncertainAttempts
-        ? 'A model request may have completed before the app closed. No new request will be sent until you choose to retry. Retrying could incur another charge.'
-        : 'Generation stopped before completion. Your saved draft and source facts remain available. No request will be sent until you choose to resume.'
-      return generationRecoverySchema.parse({ jobId, runId: row.run_id, status: uncertainAttempts ? 'uncertain' : row.status === 'paused' ? 'paused' : 'interrupted', attempts, uncertainAttempts, progress, canResume: true })
+      let compatible = false
+      try { const snapshot = generationRecoverySnapshotSchema.parse(JSON.parse(row.snapshot)); compatible = snapshot.version === 3 && (Boolean(scriptedTransport) || isDeepStrictEqual(snapshot.model, readPiSelection())) } catch { compatible = false }
+      const progress = !compatible
+        ? `This saved run predates paragraph generation or its model/format is incompatible. ${uncertainAttempts ? 'A prior model request may have completed and may have incurred a charge. ' : ''}No request will be replayed. Review outgoing data and authorize fresh analysis and generation.`
+        : uncertainAttempts
+          ? 'A model request may have completed before the app closed. No new request will be sent until you choose to retry. Retrying could incur another charge.'
+          : 'Generation stopped before completion. Your saved draft and source facts remain available. No request will be sent until you choose to resume.'
+      return generationRecoverySchema.parse({ jobId, runId: row.run_id, status: uncertainAttempts ? 'uncertain' : row.status === 'paused' ? 'paused' : 'interrupted', attempts, uncertainAttempts, progress, canResume: compatible })
     },
     async resumeGeneration(runId: string, choice?: RecoveryChoice) {
       const row = db.prepare("SELECT job_id,consent_id,scope_hash,status,snapshot FROM generation_recovery WHERE run_id=? AND status IN ('running','paused')").get(runId) as { job_id: string; consent_id: string; scope_hash: string; status: string; snapshot: string } | undefined
@@ -1914,7 +1922,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       let frozen: ReturnType<typeof generationRecoverySnapshotSchema.parse>
       try { frozen = generationRecoverySnapshotSchema.parse(JSON.parse(row.snapshot)) }
       catch { return { ok: false, message: 'The saved recovery snapshot is corrupt or incompatible. No requests were sent; cancel this run and inspect the source data.' } }
-      if (!scriptedTransport && (frozen.version !== 2 || !isDeepStrictEqual(frozen.model, readPiSelection()))) return { ok: false, message: 'This older or changed-model run cannot resume under Pi. Review outgoing data, authorize a new run, analyze the posting, then generate again. No request was replayed.' }
+      if (frozen.version !== 3 || (!scriptedTransport && !isDeepStrictEqual(frozen.model, readPiSelection()))) return { ok: false, message: 'This saved run predates paragraph generation or its Pi model changed. Review outgoing data, authorize a fresh run, analyze the posting, then generate again. No previous request was replayed.' }
       if (frozen.runId !== runId || frozen.jobId !== row.job_id || frozen.consentId !== row.consent_id || frozen.scopeHash !== row.scope_hash) return { ok: false, message: 'Saved run identity or consent does not match its recovery record. No requests were sent.' }
       const uncertain = (db.prepare('SELECT COUNT(*) AS count FROM provider_attempt_outcomes WHERE run_id=? AND checkpointed_at IS NULL').get(runId) as { count: number }).count
       if (uncertain && choice !== 'retry-uncertain') return { ok: false, message: 'A provider request may have completed before interruption. Choose explicitly to retry that uncertain step, or cancel this saved run.' }

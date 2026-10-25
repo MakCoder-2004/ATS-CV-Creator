@@ -5,8 +5,8 @@ These synthetic cases freeze required and forbidden concepts before generation c
 | Case | Same-record supported concepts to preserve when selected | Tempting claims to reject | Locked fields |
 | --- | --- | --- | --- |
 | Backend/API | API integration, backend workflows, deployment pipelines | AWS, Docker, Kubernetes, REST, metrics | Employer, title, dates |
-| Frontend | Interface implementation and relevant saved UI facts | API ownership, backend scale, unrecorded framework | Employer, title, dates |
-| Data/ML | Data or ML work explicitly in this record | Production AI, model accuracy, data volume | Project name, technologies, links |
+| Frontend | Full-stack applications and maintainability are saved. No interface accessibility work is evidenced. | Accessibility, React, frontend ownership, unrecorded framework | Employer, title, dates |
+| Data/ML | Monitoring dashboard for model evaluation runs | Production AI, model accuracy, data-quality ownership | Project name, technologies, links |
 | Sparse | Only the short source fact | Padding, inferred outcome, posting-only tool | Role or project identity |
 | Long generic | Relevant same-record details selected for posting | Full unchanged generic source, new metrics | Role identity and chronology |
 | Other-role tool | No attribution from the separate record | Treating a profile skill as used in this role | Both parent records |

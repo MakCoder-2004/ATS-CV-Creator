@@ -1,5 +1,6 @@
 import { expect, test } from 'vitest'
 import { readFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { canonicalDocumentSchema, canonicalDocumentTextParts, createCanonicalDocument, removeRepeatedEntryHeading } from '../src/shared/document'
 import { escapeLatex, renderLatexSections } from '../src/shared/latex'
 
@@ -34,6 +35,24 @@ test('explicit paragraph descriptions compile as prose and legacy descriptions r
   expect(tex).toContain('\\small{Contributed to reliable services with supported deployment practices.}\\par')
   expect(tex).not.toContain('\\resumeItem{Contributed')
   expect(renderLatexSections(document)['experience.tex']).toContain('\\resumeItem{Built reliable APIs.}')
+})
+test('frozen legacy role and project canonical JSON keeps its released hash', () => {
+  const legacy = canonicalDocumentSchema.parse({ ...document, sections: [
+    { name: 'Experience', entries: [{ id: 'experience-0', heading: 'Engineer', organization: 'Example Co', dates: 'Jan 2020 – Present', text: 'Built reliable services.', bullets: ['Built reliable services.'], links: [] }] },
+    { name: 'Projects', entries: [{ id: 'projects-0', heading: 'Compiler', text: 'Added diagnostics.', bullets: ['Added diagnostics.'], technologies: ['Rust'], links: [] }] }
+  ] })
+  expect(legacy.sections.flatMap(section => section.entries).every(entry => !('descriptionFormat' in entry))).toBe(true)
+  expect(createHash('sha256').update(JSON.stringify(legacy)).digest('hex')).toBe('df2f99c2991874ddd952d660114f910e128c341cf875668d26a81a3104869006')
+})
+test('mixed-format grouped items keep paragraph and legacy bullet siblings independent', () => {
+  const mixed = { ...document, sections: [{ ...document.sections[0], entries: [{ ...document.sections[0].entries[0], text: 'First bullet.\\nLater paragraph.', bullets: ['First bullet.', 'Later paragraph.'], reviewItems: [
+    { id: 'old-item', text: 'First bullet.', bullets: ['First bullet.'] },
+    { id: 'new-item', text: 'Later paragraph.', bullets: ['Later paragraph.'], descriptionFormat: 'paragraph' as const }
+  ] }] }] }
+  const latex = renderLatexSections(mixed)['experience.tex']
+  expect(latex).toContain('\\resumeItem{First bullet.}')
+  expect(latex).toContain('\\small{Later paragraph.}\\par')
+  expect(latex).not.toContain('\\resumeItem{Later paragraph.}')
 })
 test('all user and model content is escaped once, not accepted as executable TeX', () => {
   expect(escapeLatex('\\input{secret} 50% & C# $ _ ~ ^')).toBe('\\textbackslash{}input\\{secret\\} 50\\% \\& C\\# \\$ \\_ \\textasciitilde{} \\textasciicircum{}')

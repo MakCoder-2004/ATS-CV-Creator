@@ -25,6 +25,18 @@ test('paragraph metadata writes a prose paragraph without changing legacy bullet
   expect(legacy).toContain('<w:numPr>')
 })
 
+test('mixed-format grouped items keep paragraph and legacy bullet siblings independent', async () => {
+  const mixed = canonicalDocumentSchema.parse({ ...canonical, sections: [{ name: 'Experience', entries: [{ ...canonical.sections[1].entries[0], text: 'First bullet.\nLater paragraph.', bullets: ['First bullet.', 'Later paragraph.'], reviewItems: [
+    { id: 'old-item', text: 'First bullet.', bullets: ['First bullet.'] },
+    { id: 'new-item', text: 'Later paragraph.', bullets: ['Later paragraph.'], descriptionFormat: 'paragraph' }
+  ] }] }] })
+  const xml = await (await JSZip.loadAsync(await renderCanonicalDocx(mixed))).file('word/document.xml')!.async('string')
+  expect(xml).toContain('First bullet.')
+  expect(xml).toContain('Later paragraph.')
+  expect(xml).toContain('<w:numPr>')
+  expect(xml.match(/<w:numPr>/g)).toHaveLength(1)
+})
+
 test('writes an editable single-column DOCX with ordered text, Unicode and live hyperlinks', async () => {
   const zip = await JSZip.loadAsync(await renderCanonicalDocx(canonical))
   const xml = await zip.file('word/document.xml')!.async('string')

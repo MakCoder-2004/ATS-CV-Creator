@@ -40,5 +40,8 @@ const legacyGenerationRecoverySnapshotSchema = z.object({
 const piGenerationRecoverySnapshotSchema = legacyGenerationRecoverySnapshotSchema.omit({ version: true, source: true, budgets: true }).extend({
   version: z.literal(2), source: piConsentSourceSchema, model: piModelSelectionSchema
 }).strict()
-export const generationRecoverySnapshotSchema = z.discriminatedUnion('version', [legacyGenerationRecoverySnapshotSchema, piGenerationRecoverySnapshotSchema])
+const paragraphGenerationRecoverySnapshotSchema = legacyGenerationRecoverySnapshotSchema.omit({ version: true, source: true, budgets: true }).extend({
+  version: z.literal(3), source: z.union([legacyConsentSourceSchema, piConsentSourceSchema]), model: piModelSelectionSchema.optional()
+}).strict()
+export const generationRecoverySnapshotSchema = z.discriminatedUnion('version', [legacyGenerationRecoverySnapshotSchema, piGenerationRecoverySnapshotSchema, paragraphGenerationRecoverySnapshotSchema])
 export type GenerationRecoverySnapshot = z.infer<typeof generationRecoverySnapshotSchema>

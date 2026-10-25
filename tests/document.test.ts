@@ -1,4 +1,5 @@
 import { expect, test } from 'vitest'
+import { createHash } from 'node:crypto'
 import { draftRevisionSchema } from '../src/shared/draft'
 import { profileSnapshotSchema } from '../src/shared/profile'
 import { canonicalDocumentSchema, canonicalDocumentTextParts, createCanonicalDocument, renderDocumentHtml, splitDocumentBullets, type CanonicalDocument } from '../src/shared/document'
@@ -62,15 +63,23 @@ test('legacy experience and project items sharing a locked parent render once an
   })
   const profile = { contact: null, skills: [], education: [], certificates: [], summary: [], languages: [], extras: [] }
   const before = JSON.stringify({ original, profile })
-  const canonical = createCanonicalDocument(original, profile as never, { experience: [], projects: [] } as never)
+  const oldCanonical = createCanonicalDocument(original, profile as never, { experience: [], projects: [] } as never)
+  expect(oldCanonical.sections.flatMap(section => section.entries).every(entry => !('descriptionFormat' in entry))).toBe(true)
+  expect(createHash('sha256').update(JSON.stringify(oldCanonical)).digest('hex')).toBe('d0e1cc83466cbedda103c6ae3eb343105343fa8eeb94265aa7f022aa631cb4e2')
+  const mixedDraft = { ...original, content: { ...original.content, experience: original.content.experience.map((item, index) => index === 1 ? { ...item, descriptionFormat: 'paragraph' as const } : item), projects: original.content.projects.map((item, index) => index === 1 ? { ...item, descriptionFormat: 'paragraph' as const } : item) } }
+  const canonical = createCanonicalDocument(mixedDraft, profile as never, { experience: [], projects: [] } as never)
   const role = canonical.sections.find(section => section.name === 'Experience')!.entries[0]
   const project = canonical.sections.find(section => section.name === 'Projects')!.entries[0]
   expect(canonical.sections.find(section => section.name === 'Experience')!.entries).toHaveLength(1)
   expect(role.text).toBe('Built parser.\nReduced errors.')
-  expect(role.reviewItems?.map(item => [item.id, item.text])).toEqual([['experience-0', 'Built parser.'], ['experience-1', 'Reduced errors.']])
+  expect(role).not.toHaveProperty('descriptionFormat')
+  expect(role.reviewItems?.map(item => [item.id, item.text, item.descriptionFormat ?? 'bullets'])).toEqual([['experience-0', 'Built parser.', 'bullets'], ['experience-1', 'Reduced errors.', 'paragraph']])
+  expect(renderDocumentHtml(canonical)).toContain('<p class="paper-paragraph">Reduced errors.</p>')
+  expect(renderDocumentHtml(canonical)).toContain('<li>Built parser.</li>')
   expect(canonical.sections.find(section => section.name === 'Projects')!.entries).toHaveLength(1)
   expect(project.text).toBe('Faster builds.\nAdded diagnostics.')
-  expect(project.reviewItems?.map(item => [item.id, item.text])).toEqual([['projects-0', 'Faster builds.'], ['projects-1', 'Added diagnostics.']])
+  expect(project).not.toHaveProperty('descriptionFormat')
+  expect(project.reviewItems?.map(item => [item.id, item.text, item.descriptionFormat ?? 'bullets'])).toEqual([['projects-0', 'Faster builds.', 'bullets'], ['projects-1', 'Added diagnostics.', 'paragraph']])
   expect(JSON.stringify({ original, profile })).toBe(before)
   const single = createCanonicalDocument({ ...original, content: { ...original.content, experience: [original.content.experience[0]], projects: [original.content.projects[0]] } }, { contact: null, skills: [], education: [], certificates: [], summary: [], languages: [], extras: [] } as never, { experience: [], projects: [] } as never)
   expect(single.sections.find(section => section.name === 'Experience')!.entries[0]).not.toHaveProperty('reviewItems')

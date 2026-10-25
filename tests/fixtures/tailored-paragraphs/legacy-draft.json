@@ -7,19 +7,30 @@
   "approved": false,
   "lockedFields": {
     "fullName": "Synthetic Candidate",
-    "experience": [],
+    "experience": [{ "evidenceId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "sourceIds": ["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"], "title": "Engineer", "organization": "Sample Systems", "startDate": "2020-01" }],
     "education": [],
-    "projects": [],
+    "projects": [{ "evidenceId": "cccccccc-cccc-4ccc-8ccc-cccccccccccc", "sourceIds": ["cccccccc-cccc-4ccc-8ccc-cccccccccccc", "dddddddd-dddd-4ddd-8ddd-dddddddddddd"], "name": "Monitoring" }],
     "certificates": []
   },
   "content": {
     "education": [],
-    "experience": [],
-    "projects": [],
+    "experience": [
+      { "text": "Engineer — Sample Systems | Built reliable services.", "citations": [{ "evidenceId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "revision": 1 }], "rationale": "Saved role." },
+      { "text": "Engineer — Sample Systems | Supported deployment.", "citations": [{ "evidenceId": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", "revision": 1 }], "rationale": "Saved role detail." }
+    ],
+    "projects": [
+      { "text": "Monitoring — Built an evaluation dashboard.", "citations": [{ "evidenceId": "cccccccc-cccc-4ccc-8ccc-cccccccccccc", "revision": 1 }], "rationale": "Saved project." },
+      { "text": "Monitoring — Documented model checks.", "citations": [{ "evidenceId": "dddddddd-dddd-4ddd-8ddd-dddddddddddd", "revision": 1 }], "rationale": "Saved project detail." }
+    ],
     "skills": [],
     "certificates": []
   },
-  "evidence": [],
+  "evidence": [
+    { "evidenceId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "revision": 1, "snapshot": { "title": "Engineer", "organization": "Sample Systems", "description": "Built reliable services." } },
+    { "evidenceId": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", "revision": 1, "snapshot": { "text": "Supported deployment." } },
+    { "evidenceId": "cccccccc-cccc-4ccc-8ccc-cccccccccccc", "revision": 1, "snapshot": { "name": "Monitoring", "description": "Built an evaluation dashboard." } },
+    { "evidenceId": "dddddddd-dddd-4ddd-8ddd-dddddddddddd", "revision": 1, "snapshot": { "text": "Documented model checks." } }
+  ],
   "progress": "Legacy synthetic fixture",
   "attempts": 0,
   "createdAt": "1970-01-01T00:00:00.000Z"

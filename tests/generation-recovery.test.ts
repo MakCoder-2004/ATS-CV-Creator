@@ -183,6 +183,33 @@ test('corrupt recovery snapshots fail closed without dispatch', async () => {
   expect(calls).toBe(0)
 }, 20000)
 
+test.each([1, 2])('pre-paragraph recovery v%s remains readable but cannot dispatch under old consent', async version => {
+  const directory = mkdtempSync(join(tmpdir(), 'cv-tailor-old-prompt-recovery-')); dirs.push(directory)
+  const initial = createWorkbench(directory, undefined, recoveryTransport(async () => { throw Object.assign(new Error('interrupted'), { code: 'ECONNRESET' }) })); opened.push(initial)
+  const { jobId, token } = await seed(initial)
+  expect((await initial.api.generateDraft(token)).ok).toBe(false)
+  const recovery = await initial.api.getGenerationRecovery(jobId)
+  initial.close(); opened.pop()
+  const sqlite = new Database(join(directory, 'workbench.sqlite'))
+  registerWorkspaceBackupRowSizer(sqlite)
+  const row = sqlite.prepare('SELECT snapshot FROM generation_recovery WHERE run_id=?').get(recovery!.runId) as { snapshot: string }
+  const snapshot = JSON.parse(row.snapshot)
+  snapshot.version = version
+  if (version === 1) snapshot.budgets = { minimumSpacingMs: 0, rateLimitAttempts: 100, rateLimitWindowMs: 86400000, configuredDailyLimit: 10000, runLimit: 12, runTimeLimitMs: 300000 }
+  else { snapshot.source.model = { name: 'test/model', providerId: 'test', thinkingLevel: 'medium' }; snapshot.model = { providerId: 'test', modelId: 'test/model', thinkingLevel: 'medium' } }
+  sqlite.prepare('UPDATE generation_recovery SET snapshot=? WHERE run_id=?').run(JSON.stringify(snapshot), recovery!.runId)
+  sqlite.close()
+  let calls = 0
+  const reopened = createWorkbench(directory, undefined, { async generate() { calls++; throw new Error('old consent must never dispatch') } }); opened.push(reopened)
+  expect(await reopened.api.getGenerationRecovery(jobId)).toMatchObject({ status: 'uncertain', uncertainAttempts: 1, canResume: false, progress: expect.stringMatching(/may have completed.*authorize fresh/i) })
+  expect(await reopened.api.resumeGeneration(recovery!.runId, 'retry-uncertain')).toMatchObject({ ok: false, message: expect.stringMatching(/predates paragraph generation.*fresh run/i) })
+  expect(calls).toBe(0)
+  const backup = reopened.backup.createBackup()
+  expect(JSON.parse(backup).tables.generation_recovery.rows).toHaveLength(1)
+  expect(reopened.backup.previewRestore(backup).rowCounts.generation_recovery.restored).toBe(1)
+  expect(await reopened.api.cancelGenerationRecovery(recovery!.runId)).toMatchObject({ ok: true })
+}, 20000)
+
 test('an uncertain dispatched request requires an explicit duplicate-risk choice before replay', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'cv-tailor-uncertain-recovery-')); dirs.push(directory)
   const initialTransport = recoveryTransport(async () => { throw Object.assign(new Error('response was interrupted'), { code: 'ECONNRESET' }) })
