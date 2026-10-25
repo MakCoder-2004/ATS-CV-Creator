@@ -159,6 +159,7 @@ export function createTavilyResearchSession(credentials: Pick<ResearchSearchCred
       if (!addresses.length || addresses.some(address => !isPublicAddress(address.address, address.family))) throw new Error(ERROR)
       if (controller.signal.aborted) throw new Error('Search cancelled or timed out.')
       const headers = Object.freeze({ Authorization: `Bearer ${key}`, Accept: 'application/json', 'Accept-Encoding': 'identity', ...(body ? { 'Content-Type': 'application/json', 'Content-Length': String(body.length) } : {}) })
+      if (route === '/search') options.onSearchDispatch?.()
       return parseBody(await bounded(network.request(url, addresses[0], body ? 'POST' : 'GET', headers, body, controller.signal)))
     } finally {
       clearTimeout(timeout)
@@ -177,7 +178,6 @@ export function createTavilyResearchSession(credentials: Pick<ResearchSearchCred
             verifyFreePlan(await request(key, '/usage', undefined))
             if (options.signal?.aborted) throw new Error('Search cancelled.')
             const body = Buffer.from(JSON.stringify({ query, search_depth: 'basic', auto_parameters: false, include_answer: false, include_raw_content: false, max_results: 5, chunks_per_source: 1, topic: 'general', include_usage: true }))
-            options.onSearchDispatch?.()
             return parseResult(await request(key, '/search', body))
           } catch (error) {
             if (error instanceof TavilySearchError) throw error

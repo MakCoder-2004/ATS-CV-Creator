@@ -105,7 +105,7 @@ export function createJobResearchSessions(options: ResearchSessionOptions) {
     session.state = { status: 'loading' }
     if (original.accessFailure === 'unsafe') {
       session.state = { status: 'ready', run: original }
-      return safeState({ status: 'unavailable', message: 'The selected posting redirected to a different role or unsafe destination. Search was not sent and no credit was used; verify the role manually or paste the posting text.', settingsAction: false, searchOutcome: 'not-sent' })
+      return safeState({ status: 'unavailable', message: 'The selected page identifies a different role or failed a safety check. Search was not sent and this action used no credit; verify the role manually or paste the posting text.', settingsAction: false, searchOutcome: 'not-sent' })
     }
     const available = await options.credentials.status().catch(() => ({ configured: false, storageAvailable: false, message: '' }))
     if (!live(token, session, generation)) throw new Error(missing)

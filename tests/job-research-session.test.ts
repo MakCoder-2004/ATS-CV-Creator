@@ -142,6 +142,21 @@ describe('volatile public research session', () => {
     sessions.close()
   })
 
+  it('reports not-sent when search DNS fails after free-plan preflight', async () => {
+    const t = fixture(); let lookups = 0
+    const transport: TavilyTransport = {
+      lookup: async () => ++lookups === 1 ? [{ address: '8.8.8.8', family: 4 }] : [{ address: '127.0.0.1', family: 4 }],
+      request: async (_url, _address, method) => method === 'GET'
+        ? { status: 200, headers: { 'content-type': 'application/json' }, body: Buffer.from(JSON.stringify({ account: { current_plan: 'Researcher', plan_limit: 1000, paygo_limit: 0, paygo_usage: 0, plan_usage: 0 }, key: { usage: 0, limit: 1000 } })) }
+        : { status: 200, headers: { 'content-type': 'application/json' }, body: Buffer.from('{}') },
+    }
+    const sessions = createJobResearchSessions({ credentials: t.credentials, direct: async () => synthetic('none'), createSearch: ((credentials, options) => createTavilyResearchSession(credentials, { ...options, transport })) })
+    const token = sessions.startJobResearch(URL).token; await tick()
+    expect(await sessions.searchJobResearch(token)).toMatchObject({ status: 'unavailable', searchOutcome: 'not-sent' })
+    expect(lookups).toBe(2)
+    sessions.close()
+  })
+
   it('refuses an initially unsafe/mismatched canonical role before credential or provider access', async () => {
     const t = fixture(); let credentialChecks = 0, directReads = 0
     const unsafe = { ...synthetic('blocked'), accessFailure: 'unsafe' as const }

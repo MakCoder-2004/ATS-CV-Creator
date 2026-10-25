@@ -176,6 +176,21 @@ test('reports dispatch immediately before a failed search POST but not for prefl
   expect(before).toEqual([])
 })
 
+test.each(['unsafe DNS', 'cancelled during DNS'] as const)('does not report dispatch when %s prevents the search request', async failure => {
+  const f = fixture(), dispatches: string[] = [], controller = new AbortController()
+  let lookups = 0
+  f.transport.lookup = async () => {
+    lookups++
+    if (lookups === 2 && failure === 'cancelled during DNS') controller.abort()
+    return lookups === 2 && failure === 'unsafe DNS'
+      ? [{ address: '127.0.0.1', family: 4 }]
+      : [{ address: '8.8.8.8', family: 4 }]
+  }
+  await expect(createTavilyResearchSession(f.credentials, { transport: f.transport, signal: controller.signal, onSearchDispatch: () => { dispatches.push('dispatch') } }).search(input)).rejects.toThrow()
+  expect(dispatches).toEqual([])
+  expect(f.sent.map(call => call.method)).toEqual(['GET'])
+})
+
 test('billing refusal on search dispatch remains classified without leaking provider content', async () => {
   const f = fixture()
   const original = f.transport.request
