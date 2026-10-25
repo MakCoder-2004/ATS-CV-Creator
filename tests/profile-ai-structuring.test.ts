@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { getProfileAiImport, materializeProfileAiResult, minimizeProfileText, profileAiResultSchema, PROFILE_AI_RESIDUAL_NOTICE, registerProfileAiImport, unregisterProfileAiImport, validateProfileAiDraft } from '../src/shared/profile-ai-structuring'
 import { mapProfilePdfPages, profilePdfProposalSchema } from '../src/shared/profile-pdf-import'
-import { buildPdfSourceEvidence } from '../src/shared/profile-source-evidence'
+import { buildDocxSourceEvidence, buildPdfSourceEvidence } from '../src/shared/profile-source-evidence'
 
 const proposal = profilePdfProposalSchema.parse({
   skills: [], experience: [], projects: [], entries: [], unmapped: [],
@@ -128,6 +128,37 @@ describe('profile AI outgoing projection', () => {
     expect(materializeProfileAiResult(local, { ...result, experience: [engineer], citations: [{ proposalRef: 'engineer', unitId: evidence.units[0]!.unitId }], unmappedUnitIds: [evidence.units[1]!.unitId] }, evidence, ids).experience[0]?.kind).toBe('employment')
   })
 
+  it.each([
+    ['EMPLOYMENT: Engineer at Harbor Cooperative; TRAINING: Analyst at Harbor Cooperative', 'employment'],
+    ['EMPLOYMENT: Engineer at Harbor Cooperative; EMPLOYMENT: Analyst at Harbor Cooperative', 'employment'],
+    ['EMPLOYMENT: Engineer at Harbor Cooperative / TRAINING: Analyst at Harbor Cooperative', 'employment']
+  ] as const)('refuses a role and its facts from one source unit containing multiple role headings (%s)', (line, kind) => {
+    const ids = () => '00000000-0000-4000-8000-000000000019'
+    const evidence = buildPdfSourceEvidence('d'.repeat(64), [{ page: 1, text: line }], ids)
+    const local = profilePdfProposalSchema.parse({ skills: [], experience: [], projects: [], entries: [], unmapped: [{ page: 1, text: line }], sources: [], proposalIds: {} })
+    const result = { skills: [], experience: [{ kind, organization: 'Harbor Cooperative', title: 'Analyst', description: 'Analyst at Harbor Cooperative', factualItems: [], proposalRef: 'analyst' }], projects: [], entries: [], citations: [{ proposalRef: 'analyst', unitId: evidence.units[0]!.unitId }], unmappedUnitIds: [] }
+    expect(() => materializeProfileAiResult(local, result, evidence, ids)).toThrow(/multiple role headings.*local review/i)
+    expect(() => materializeProfileAiResult(local, { ...result, experience: [{ ...result.experience[0]!, kind: 'unresolved' as const }] }, evidence, ids)).toThrow(/multiple role headings.*local review/i)
+    const crossParent = { ...result, experience: [{ ...result.experience[0]!, factualItems: [{ text: 'Engineer at Harbor Cooperative', proposalRef: 'borrowed-fact' }] }], citations: [...result.citations, { proposalRef: 'borrowed-fact', unitId: evidence.units[0]!.unitId }] }
+    expect(() => materializeProfileAiResult(local, crossParent, evidence, ids)).toThrow(/multiple role headings.*local review/i)
+    const wrongSection = { skills: [], experience: [], projects: [{ name: 'Engineer', description: 'Analyst at Harbor Cooperative', factualItems: [], technologies: [], links: [], proposalRef: 'project' }], entries: [], citations: [{ proposalRef: 'project', unitId: evidence.units[0]!.unitId }], unmappedUnitIds: [] }
+    expect(() => materializeProfileAiResult(local, wrongSection, evidence, ids)).toThrow(/multiple role headings.*local review/i)
+    expect(local.unmapped).toContainEqual({ page: 1, text: line })
+    const linked = buildPdfSourceEvidence('e'.repeat(64), [{ page: 1, text: line, links: [{ label: 'Harbor Cooperative', url: 'https://example.test/employer', lineIndex: 0 }] }], ids)
+    expect(() => materializeProfileAiResult(local, { ...result, citations: [{ proposalRef: 'analyst', unitId: linked.units[0]!.unitId }] }, linked, ids)).toThrow(/multiple role headings.*local review/i)
+  })
+
+  it('keeps an ambiguous DOCX fact unassigned even when its proposed role has a clear heading', () => {
+    const ids = () => '00000000-0000-4000-8000-000000000019'
+    const heading = 'EMPLOYMENT: Engineer at Harbor Cooperative'
+    const mixed = 'EMPLOYMENT: Built a service; TRAINING: Prepared reports'
+    const evidence = buildDocxSourceEvidence('d'.repeat(64), [{ page: 1, text: `${heading}\n${mixed}`, paragraphs: [{ text: heading, links: [] }, { text: mixed, links: [] }] }], ids)
+    const local = profilePdfProposalSchema.parse({ skills: [], experience: [], projects: [], entries: [], unmapped: [{ page: 1, text: mixed }], sources: [], proposalIds: {} })
+    const result = { skills: [], experience: [{ kind: 'employment' as const, organization: 'Harbor Cooperative', title: 'Engineer', description: 'Engineer at Harbor Cooperative', factualItems: [{ text: 'Prepared reports', proposalRef: 'fact' }], proposalRef: 'role' }], projects: [], entries: [], citations: [{ proposalRef: 'role', unitId: evidence.units[0]!.unitId }, { proposalRef: 'fact', unitId: evidence.units[1]!.unitId }], unmappedUnitIds: [] }
+    expect(() => materializeProfileAiResult(local, result, evidence, ids)).toThrow(/multiple role headings.*local review/i)
+    expect(materializeProfileAiResult(local, { ...result, experience: [{ ...result.experience[0]!, factualItems: [] }], citations: [result.citations[0]!], unmappedUnitIds: [evidence.units[1]!.unitId] }, evidence, ids).unmapped).toContainEqual({ page: 1, text: mixed })
+  })
+
   it('corrects only a clearly labeled heuristic role kind on its own parent passage', () => {
     let serial = 20
     const ids = () => `00000000-0000-4000-8000-${String(serial++).padStart(12, '0')}`
@@ -158,6 +189,21 @@ describe('profile AI outgoing projection', () => {
     const result = { skills: [{ name: 'TypeScript', category: 'Tools', proposalRef: 'skill:0' }], experience: [], projects: [], entries: [], citations: [{ proposalRef: 'skill:0', unitId: evidence.units[0]!.unitId }], unmappedUnitIds: [] }
     expect(materializeProfileAiResult(local, result, evidence, ids).skills[0]?.category).toBe('Tools')
     expect(() => materializeProfileAiResult(local, { ...result, skills: [{ ...result.skills[0], category: 'Leadership' }] }, evidence, ids)).toThrow(/source-backed skill category/)
+  })
+
+  it('does not borrow the first skill heading to recategorize another skill in a mixed unit', () => {
+    const ids = () => '00000000-0000-4000-8000-000000000021'
+    const line = 'TOOLS: TypeScript; SKILLS: React'
+    const evidence = buildPdfSourceEvidence('d'.repeat(64), [{ page: 1, text: line }], ids)
+    const local = profilePdfProposalSchema.parse({ skills: [{ name: 'React', category: 'Technical', proposalRef: 'skill:0' }], experience: [], projects: [], entries: [], unmapped: [], sources: [{ proposalRef: 'skill:0', proposalId: ids(), page: 1, passage: line, field: 'skills.React' }], proposalIds: { 'skill:0': ids() } })
+    const result = { skills: [{ name: 'React', category: 'Tools', proposalRef: 'skill:0' }], experience: [], projects: [], entries: [], citations: [{ proposalRef: 'skill:0', unitId: evidence.units[0]!.unitId }], unmappedUnitIds: [] }
+    expect(() => materializeProfileAiResult(local, result, evidence, ids)).toThrow(/multiple skill headings/)
+    expect(() => materializeProfileAiResult(profilePdfProposalSchema.parse({ skills: [], experience: [], projects: [], entries: [], unmapped: [{ page: 1, text: line }], sources: [], proposalIds: {} }), { ...result, skills: [{ ...result.skills[0]!, proposalRef: 'new-skill' }], citations: [{ proposalRef: 'new-skill', unitId: evidence.units[0]!.unitId }] }, evidence, ids)).toThrow(/multiple skill headings/)
+    expect(materializeProfileAiResult(local, { ...result, skills: [{ ...result.skills[0]!, category: 'Technical' }] }, evidence, ids).skills[0]?.category).toBe('Technical')
+    const slash = line.replace('; ', ' / ')
+    const slashEvidence = buildPdfSourceEvidence('e'.repeat(64), [{ page: 1, text: slash }], ids)
+    const slashLocal = profilePdfProposalSchema.parse({ ...local, sources: [{ ...local.sources[0]!, passage: slash }] })
+    expect(() => materializeProfileAiResult(slashLocal, { ...result, citations: [{ proposalRef: 'skill:0', unitId: slashEvidence.units[0]!.unitId }] }, slashEvidence, ids)).toThrow(/multiple skill headings/)
   })
 
   it('leaves hyperlinks without a source passage unresolved', () => {

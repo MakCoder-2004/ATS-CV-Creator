@@ -4,9 +4,14 @@ import { PI_THINKING_LEVELS } from './pi-model'
 import type { ProfileSourceEvidenceDocument } from './profile-source-evidence'
 
 const uuid = z.string().uuid()
+const roleHeadings = (passage: string) => [...passage.matchAll(/\b(?:employment|work experience|professional experience|training|internship|apprenticeship)\s*:|(?:^|[;\n|•]|[.!?]\s+)\s*internship\s+[—–-]\s+/gi)]
+const skillHeadings = (passage: string) => [...passage.matchAll(/\b(technical skills|programming languages|skills|languages|tools|concepts)\s*:/gi)]
 const explicitSkillCategory = (passage: string) => {
-  const label = passage.match(/^\s*(skills|technical skills|programming languages|languages|tools|concepts)\s*:/i)?.[1]?.toLowerCase()
-  return label === 'programming languages' || label === 'languages' ? 'Languages' : label === 'tools' ? 'Tools' : label === 'concepts' ? 'Domain' : label ? 'Technical' : undefined
+  const headings = skillHeadings(passage)
+  if (headings.length !== 1) return undefined
+  const label = passage.match(/^\s*(technical skills|programming languages|skills|languages|tools|concepts)\s*:/i)?.[1]?.toLowerCase()
+  if (!label) return undefined
+  return label === 'programming languages' || label === 'languages' ? 'Languages' : label === 'tools' ? 'Tools' : label === 'concepts' ? 'Domain' : 'Technical'
 }
 const sourceCitationSchema = z.object({ proposalRef: z.string().min(1).max(160), unitId: z.string().regex(/^page-\d+-passage-\d+$/) }).strict()
 export const profileAiResultSchema = z.object({
@@ -114,6 +119,7 @@ export function validateProfileAiDraft(current: ProfilePdfProposal, draft: Profi
     const expectedFamily = family(fieldPrefixes.get(source.proposalRef)?.[0] ?? '')
     if (original.length && original.some(item => family(item.field) !== expectedFamily)) throw new Error('The AI moved a source passage into an unrelated profile section.')
     if (!original.length && evidence && !evidenceSupports(source.page, source.passage)) throw new Error('The model cited text outside this CV review. Keep the local proposals and review them manually.')
+    if (evidence ? evidence.units.some(unit => unit.kind === 'text' && unit.page === source.page && (unit.text.includes(source.passage) || source.passage.includes(unit.text)) && roleHeadings(unit.text).length > 1) : roleHeadings(source.passage).length > 1) throw new Error('This source unit contains multiple role headings. Keep its facts in local review instead of assigning them to one role.')
   }
   const citedRefs = new Set(draft.sources.map(source => source.proposalRef))
   if ([...refs].some(ref => !citedRefs.has(ref))) throw new Error('The model returned a proposal without source support. Keep the local proposals and review them manually.')
@@ -172,6 +178,10 @@ export function materializeProfileAiResult(current: ProfilePdfProposal, result: 
     const unit = units.get(citation.unitId), field = fields.get(citation.proposalRef)
     if (!unit || !field) throw new Error('The AI cited a source or proposal outside this CV review. Keep the local proposals and review them manually.')
     if (unit.kind === 'link') throw new Error('This hyperlink has no unambiguous source passage. Keep it unresolved for review instead of attaching it to a profile record.')
+    if (field.startsWith('skills.') && skillHeadings(unit.text).length > 1) {
+      const skill = result.skills.find(item => item.proposalRef === citation.proposalRef)
+      if (!skill || !current.skills.some(item => item.name === skill.name && item.category === skill.category && current.sources.some(source => source.proposalRef === item.proposalRef && source.page === unit.page && unit.text.includes(source.passage)))) throw new Error('The AI changed or assigned a skill category from a source unit with multiple skill headings. Keep the local proposals and review the source manually.')
+    }
     const key = `${citation.proposalRef}|${citation.unitId}`
     if (citationKeys.has(key)) throw new Error('The AI repeated a source reference. Keep the local proposals and review them manually.')
     citationKeys.add(key); sourceRefs.add(citation.proposalRef); usedUnits.add(unit.unitId)

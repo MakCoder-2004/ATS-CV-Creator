@@ -114,7 +114,7 @@ export function registerProfilePdfImportIpc(getWindow: () => BrowserWindow, getS
       const detail = error instanceof Error ? error.message : ''
       const cancelled = /cancel|abort/i.test(detail)
       if (ai.get(args[0]) === state) clearAi(args[0])
-      const known = /not present|outside this CV review|different role|different project|source support|source-backed profile fact|link that is not present|source block|source reference|parent record|nested fact|unassigned source passage|parent proposal cites|profile schema|role type|output limit|input limit|selected Pi model|authentication|invalid response|malformed structured data|does not match the profile proposal format/i.test(detail)
+      const known = /not present|outside this CV review|different role|different project|source support|source-backed profile fact|link that is not present|source block|source reference|parent record|nested fact|unassigned source passage|parent proposal cites|profile schema|role type|multiple role headings|multiple skill headings|output limit|input limit|selected Pi model|authentication|invalid response|malformed structured data|does not match the profile proposal format/i.test(detail)
       const base = cancelled ? 'The AI request was cancelled.' : known ? detail : 'Pi could not complete this request.'
       const recovery = cancelled ? 'Nothing was applied. A dispatched request may still have been processed, and CV Tailor cannot reverse its charge.' : 'Nothing was applied. If Pi dispatched the request, provider processing and charges may be uncertain. Continue locally or prepare a fresh preview and authorize a new request.'
       return profileAiRunResultSchema.parse({ ok: false, cancelled, message: `${base} ${recovery}` })
