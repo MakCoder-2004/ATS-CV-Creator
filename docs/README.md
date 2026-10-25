@@ -28,6 +28,7 @@ These files describe the current code or govern changes to it.
 | [Spec 75 implementation evidence](validation/spec-75-implementation.md) | Focused paragraph-format checks and open provider and installed gates. |
 | [Integrated spec fixes](validation/specs-integration-fixes.md) | Root causes, fixture corrections, and focused verification after the integrated Node test failures. |
 | [Stage D temporary research integration](validation/universal-research-stage-d.md) | Development checks for reviewed source rights, full/provisional Pi analysis and remaining release gates; not installed-app proof. |
+| [Optional faithfulness removal](validation/remove-faithfulness.md) | Development evidence for Settings simplification, old preference cleanup and paused-run compatibility; installed acceptance remains open. |
 
 Tailor CV and Saved jobs follow the approved Variant A visual direction. My profile and Settings keep their implemented structures. The design system is normative for UI decisions, but the prototype does not prove a feature ships. Read the relevant design contracts before renderer work.
 

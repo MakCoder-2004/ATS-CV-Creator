@@ -75,11 +75,11 @@ Preserve existing live information architecture and functionality. Do not substi
 
 ## Settings — current implementation contract
 
-Preserve the existing two-column Settings structure, appearance, faithfulness and backup controls. Replace the legacy OpenRouter model, in-app credential and local analysis-budget controls with Pi provider/model preference controls. An old OpenRouter model ID is never treated as a Pi selection. The person chooses a new model and effort before a model run.
+Preserve the existing two-column Settings structure, appearance and backup controls. Replace the legacy OpenRouter model, in-app credential and local analysis-budget controls with Pi provider/model preference controls. An old OpenRouter model ID is never treated as a Pi selection. The person chooses a new model and effort before a model run.
 
-- Retain the existing grid: two equal columns on wide screens, single column at 980px; faithfulness-wide section spans both columns above the breakpoint. Blocks use responsive 20–32px padding, 10px radius, 1px border and surface background.
+- Retain the existing grid: two equal columns on wide screens, single column at 980px. The Pi model and Tavily search key blocks sit side by side above the breakpoint. Blocks use responsive 20–32px padding, 10px radius, 1px border and surface background.
 - Each block starts with a 38px raised icon tile and heading/description; form controls and explanatory text stay in the same logical group. The Pi model reference starts blank when no preference is saved and displays the exact saved provider/model reference and thinking level after reload.
 - Provide a labeled provider/model reference field and thinking-level choice. The UI must not split or parse provider/model IDs because either ID may contain slashes; main resolves the exact reference.
-- When Pi authentication is absent, explain plainly that sign-in happens through Pi outside CV Tailor. Do not provide an in-app key, budget, credential reveal, copy, or credential-change control.
+- In the Pi model block, explain in one line that sign-in happens through Pi outside CV Tailor. There is no separate provider sign-in block or optional faithfulness review control. Do not provide an in-app key, budget, credential reveal, copy, or credential-change control.
 - Settings controls are at least 48px high; helper text is 12px with readable 1.5–1.65 line spacing. Disclosures are plain, scannable, link-underlined and max 100ch.
 - Do not state a setting was saved until persistence confirms it. Preserve typed model input on recoverable errors. Loading, storage errors and disabled states remain visible and accurately described.
