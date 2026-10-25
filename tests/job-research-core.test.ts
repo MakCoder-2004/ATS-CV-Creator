@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { randomUUID } from 'node:crypto'
 import { gzipSync } from 'node:zlib'
+import { Worker } from 'node:worker_threads'
+import { resolve } from 'node:path'
 import { normalizeJobResearchUrl, jobResearchRunSchema, reviewedJobResearchSchema, promoteJobResearch, verifyReviewedJobResearch } from '../src/shared/job-research'
 import { normalizeJobResearchUrl as normalizeBrowserJobUrl } from '../src/shared/job-research-url'
 import { directPostingIdentity, samePostingSource } from '../src/shared/posting-identity'
@@ -20,6 +22,13 @@ const description = 'Build practical software with measured outcomes. Collaborat
 const completeDescription = '<h2>Responsibilities</h2><p>Build practical software with measured outcomes. Collaborate with colleagues to maintain useful systems and explain technical decisions to reviewers. Document service boundaries and keep systems reliable for customers.</p><h2>Qualifications</h2><p>Experience building production services, reviewing code, resolving incidents, and communicating decisions with a cross-functional team. Apply for this role if you enjoy developing reliable software.</p>'
 const response = (body: string | Buffer, status = 200, headers: Record<string, string> = {}) => ({ status, body: Buffer.isBuffer(body) ? body : Buffer.from(body), headers: { 'content-type': 'text/html; charset=utf-8', ...headers } })
 const fixtures = { lookup: async () => [{ address: '8.8.8.8', family: 4 }], request: async () => response(html(description)) }
+const structuredRole = (overrides: Record<string, unknown> = {}) => ({ '@type': 'JobPosting', url: canonical, identifier: { value: roleId }, title: 'Wrong employer role', hiringOrganization: { name: 'Wrong employer' }, description: completeDescription, ...overrides })
+const structuredPage = (role: unknown, head = '', body = '') => `<html><head>${head}<script type="application/ld+json">${JSON.stringify(role)}</script></head><body>${body}</body></html>`
+const extractWorker = (page: string): Promise<{ outcome: string; reason?: string }> => new Promise((resolveResult, reject) => {
+  const worker = new Worker(resolve('src/main/job-research-extraction-worker.cjs'), { workerData: { html: page, selected } })
+  worker.once('message', resolveResult)
+  worker.once('error', reject)
+})
 
 describe('job research identities', () => {
   it('selects exact LinkedIn and Indeed roles without keeping tracking', () => {
@@ -158,6 +167,41 @@ describe('bounded direct read', () => {
     expect(exact.status).toBe('full')
     const namesake = await fetchDirectJobResearch(generic, { ...fixtures, request: async () => response(structured('https://jobs.example.org/positions/other-engineer')) })
     expect(namesake.status).toBe('none')
+  })
+  it.each([
+    ['wrong URL with correct identifier', structuredRole({ url: 'https://www.linkedin.com/jobs/view/9999999999/' }), ''],
+    ['wrong mainEntityOfPage @id with correct URL', structuredRole({ mainEntityOfPage: { '@id': 'https://www.linkedin.com/jobs/view/9999999999/', url: canonical } }), ''],
+    ['wrong mainEntityOfPage URL with correct @id', structuredRole({ mainEntityOfPage: { '@id': canonical, url: 'https://www.linkedin.com/jobs/view/9999999999/' } }), ''],
+    ['wrong decorated ID with correct structured role', structuredRole(), '<code id="decoratedJobPostingId"><!--"9999999999"--></code>'],
+    ['wrong scripted ID with correct structured role', structuredRole(), '<script>window.data={"decoratedJobPostingId":"9999999999"}</script>'],
+    ['wrong canonical with correct identifier', structuredRole({ url: undefined }), '<link rel="canonical" href="https://www.linkedin.com/jobs/view/9999999999/">'],
+    ['empty URL with correct identifier', structuredRole({ url: '' }), ''],
+    ['malformed mainEntityOfPage with correct URL', structuredRole({ mainEntityOfPage: { url: null } }), ''],
+    ['conflicting role ID in URL query', structuredRole({ url: `${canonical}?currentJobId=9999999999` }), ''],
+    ['wrong identifier value with correct URL', structuredRole({ identifier: { value: '9999999999' } }), ''],
+    ['wrong identifier URL with correct value', structuredRole({ identifier: { value: roleId, url: 'https://www.linkedin.com/jobs/view/9999999999/' } }), ''],
+    ['two roles, one matching', [structuredRole(), structuredRole({ url: 'https://www.linkedin.com/jobs/view/9999999999/' })], ''],
+  ])('rejects %s rather than attributing wrong-role text', async (_, role, extra) => {
+    const page = structuredPage(role, '', extra)
+    expect((await extractWorker(page)).outcome).toBe('none')
+    const run = await fetchDirectJobResearch(canonical, { ...fixtures, request: async () => response(page) })
+    expect(run.status).toBe('none')
+    expect(run.sources).toEqual([])
+    expect(run.findings).toEqual([])
+  })
+  it('accepts mutually consistent structured, page, canonical and decorated identity signals', async () => {
+    const page = structuredPage(structuredRole({ mainEntityOfPage: { '@id': canonical, url: canonical }, identifier: { value: roleId, url: canonical } }),
+      `<link rel="canonical" href="${canonical}">`, `<code id="decoratedJobPostingId"><!--"${roleId}"--></code><script>window.data={"decoratedJobPostingId":"${roleId}"}</script>`)
+    expect((await extractWorker(page)).outcome).toBe('full')
+    const run = await fetchDirectJobResearch(canonical, { ...fixtures, request: async () => response(page) })
+    expect(run.status).toBe('full')
+    expect(run.findings[0].text).toContain('Qualifications')
+  })
+  it('requires a generic posting URL and refuses contradictory identifier URLs', async () => {
+    const generic = 'https://jobs.example.org/positions/engineer'
+    const role = { '@type': 'JobPosting', url: generic, identifier: { value: 'employer-opaque-id', url: 'https://jobs.example.org/positions/other' }, title: 'Wrong employer role', description: completeDescription }
+    const run = await fetchDirectJobResearch(generic, { ...fixtures, request: async () => response(structuredPage(role)) })
+    expect(run).toMatchObject({ status: 'none', findings: [], sources: [] })
   })
   it('treats read-more controls in job description as provisional, not unrelated controls or LinkedIn clamps', async () => {
     const generic = 'https://jobs.example.org/positions/engineer'

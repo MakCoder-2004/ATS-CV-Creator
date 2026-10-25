@@ -38,7 +38,7 @@ function sourceMatches(value, selected) {
   try {
     const target = new URL(value), expected = new URL(selected.canonicalUrl)
     if (target.protocol !== 'https:' || target.username || target.password || target.port) return false
-    if (selected.roleId && selected.provider === 'linkedin') return /(?:^|\/)jobs\/view\/(?:[a-z0-9-]*-)?(\d{5,20})\/?$/i.exec(target.pathname)?.[1] === selected.roleId && ['linkedin.com','www.linkedin.com'].includes(target.hostname)
+    if (selected.roleId && selected.provider === 'linkedin') return !target.search && !target.hash && /^\/jobs\/view\/(?:[a-z0-9-]*-)?(\d{5,20})\/?$/i.exec(target.pathname)?.[1] === selected.roleId && ['linkedin.com','www.linkedin.com'].includes(target.hostname)
     if (selected.roleId && selected.provider === 'indeed') return !target.hash && target.hostname === selected.host && target.pathname === '/viewjob' && target.searchParams.size === 1 && target.searchParams.get('jk') === selected.roleId
     target.hash = ''; expected.hash = ''
     return target.href === expected.href
@@ -73,9 +73,39 @@ function completeStructuredDescription(raw, description) {
   return description.length >= 300 && /[.!?]$/.test(description) && labeled.some(label => duties.test(label)) && labeled.some(label => qualifications.test(label))
 }
 function selectedRole(posting, selected) {
-  if (sourceMatches(posting.url || posting.mainEntityOfPage?.['@id'] || posting.mainEntityOfPage?.url, selected)) return true
-  if (selected.provider === 'linkedin') return String(posting.identifier?.value || posting.identifier || '') === selected.roleId
-  return false
+  const urls = []
+  const ids = []
+  if ('url' in posting) urls.push(posting.url)
+  if ('mainEntityOfPage' in posting) {
+    const page = posting.mainEntityOfPage
+    if (typeof page === 'string') urls.push(page)
+    else if (page && typeof page === 'object' && !Array.isArray(page) && ('@id' in page || 'url' in page)) {
+      if ('@id' in page) urls.push(page['@id'])
+      if ('url' in page) urls.push(page.url)
+    } else return false
+  }
+  if ('identifier' in posting) {
+    const identifier = posting.identifier
+    if (typeof identifier === 'string' || typeof identifier === 'number') ids.push(identifier)
+    else if (identifier && typeof identifier === 'object' && !Array.isArray(identifier) && ('value' in identifier || 'url' in identifier)) {
+      if ('value' in identifier) ids.push(identifier.value)
+      if ('url' in identifier) urls.push(identifier.url)
+    } else return false
+  }
+  if (urls.some(url => !sourceMatches(url, selected))) return false
+  for (const id of ids) {
+    if (typeof id !== 'string' && typeof id !== 'number') return false
+    const value = String(id).trim()
+    if (!value) return false
+    // Generic identifier values may be an employer's own opaque keys; they do not prove a role.
+    if (/^https?:/i.test(value)) { if (!sourceMatches(value, selected)) return false }
+    else if (selected.provider === 'linkedin' || selected.provider === 'indeed') {
+      if (value !== selected.roleId) return false
+    } else if (/^[a-z][a-z\d+.-]*:/i.test(value)) return false
+  }
+  // A LinkedIn ID can establish identity only when every supplied URL also agrees.
+  // Generic and Indeed roles still require the exact structured posting URL.
+  return selected.provider === 'linkedin' ? urls.length > 0 || ids.length > 0 : urls.length > 0
 }
 function extract() {
   const { html, selected } = workerData
@@ -88,20 +118,22 @@ function extract() {
     try { return roles(JSON.parse((node.childNodes || []).map(child => child.value || '').join(''))) } catch { return [] }
   })
   const exact = structured.filter(item => selectedRole(item, selected))
-  if (exact.length > 1 || structured.length > 1 && exact.length !== 1) return { outcome: 'none', reason: 'Multiple roles were found without one exact match.' }
+  if (structured.length > 1) return { outcome: 'none', reason: 'Multiple roles were found without one unambiguous match.' }
   if (structured.length && !exact.length) return { outcome: 'none', reason: 'Structured data belongs to another role.' }
   const posting = exact[0]
-  if (posting?.validThrough && !Number.isNaN(Date.parse(posting.validThrough)) && Date.parse(posting.validThrough) < Date.now()) return { outcome: 'blocked', reason: 'The posting deadline has passed.' }
   const candidates = elements.filter(node => (attrs(node, 'class').split(/\s+/).includes('show-more-less-html__markup') || attrs(node, 'class').split(/\s+/).includes('description__text--rich')))
   const decoratedNodes = elements.filter(node => node.tagName === 'code' && attrs(node, 'id') === 'decoratedJobPostingId')
-  const embeddedId = decoratedNodes.length === 1 ? (decoratedNodes[0].childNodes || []).map(node => node.value || node.data || '').join('').trim().replace(/^"|"$/g, '') : ''
-  const scriptedId = html.match(/"decoratedJobPostingId"\s*:\s*"(\d{5,20})"/)?.[1] || ''
-  if (embeddedId && scriptedId && embeddedId !== scriptedId) return { outcome: 'none', reason: 'Conflicting posting IDs were found.' }
-  const decorated = embeddedId || scriptedId
-  const linkedInExact = selected.provider === 'linkedin' && /^\d{5,20}$/.test(decorated) && decorated === selected.roleId
-  const canonical = elements.filter(node => node.tagName === 'link' && attrs(node, 'rel').toLowerCase() === 'canonical')
+  const embeddedIds = decoratedNodes.map(node => (node.childNodes || []).map(child => child.value || child.data || '').join('').trim().replace(/^"|"$/g, ''))
+  const scriptedIds = [...html.matchAll(/"decoratedJobPostingId"\s*:\s*("(?:\\.|[^"\\])*"|[^,}\s]+)/g)].map(match => {
+    try { return JSON.parse(match[1]) } catch { return null }
+  })
+  if (decoratedNodes.length > 1 || [...embeddedIds, ...scriptedIds].some(id => typeof id !== 'string' || !/^\d{5,20}$/.test(id) || selected.provider !== 'linkedin' || id !== selected.roleId))
+    return { outcome: 'none', reason: 'A posting ID differs from the selected role.' }
+  const linkedInExact = selected.provider === 'linkedin' && embeddedIds.concat(scriptedIds).length > 0
+  const canonical = elements.filter(node => node.tagName === 'link' && attrs(node, 'rel').toLowerCase().split(/\s+/).includes('canonical'))
   const canonicalExact = canonical.length === 1 && sourceMatches(attrs(canonical[0], 'href'), selected)
   if (canonical.length > 1 || canonical.length === 1 && !canonicalExact) return { outcome: 'none', reason: 'The page canonical identity differs from the selected role.' }
+  if (posting?.validThrough && !Number.isNaN(Date.parse(posting.validThrough)) && Date.parse(posting.validThrough) < Date.now()) return { outcome: 'blocked', reason: 'The posting deadline has passed.' }
   const exactIdentity = !!posting || linkedInExact || selected.provider !== 'generic' && canonicalExact
   if (!exactIdentity) return { outcome: 'none', reason: 'The page did not prove it describes the selected role.' }
   const linkedinPrimary = selected.provider === 'linkedin' && candidates.length ? candidates.filter(node => attrs(node, 'class').split(/\s+/).includes('show-more-less-html__markup')) : []
