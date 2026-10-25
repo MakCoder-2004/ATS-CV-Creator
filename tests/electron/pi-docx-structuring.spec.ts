@@ -28,7 +28,7 @@ test('Word CV structuring through Pi leaves facts as proposals until review and 
     await page.getByRole('button', { name: 'Upload Word CV' }).click()
     const review = page.getByRole('region', { name: 'Review proposed profile details' })
     await expect(review).toBeVisible()
-    await page.getByRole('button', { name: 'Optional AI structuring' }).click()
+    await page.getByRole('button', { name: 'Preview AI request' }).click()
     const consent = page.getByRole('region', { name: 'Review text sent through Pi' })
     await expect(consent).toContainText('Provider: scripted')
     await expect(consent).toContainText('Thinking level: off')

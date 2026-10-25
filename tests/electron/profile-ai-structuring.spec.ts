@@ -33,10 +33,13 @@ test('requires run-specific consent for the frozen minimized CV text and returns
     await page.getByRole('button', { name: 'Upload CV' }).click()
     const review = page.getByRole('region', { name: 'Review proposed profile details' })
     await expect(review).toBeVisible()
-    await page.getByRole('button', { name: 'Optional AI structuring' }).click()
+    await page.getByRole('button', { name: 'Preview AI request' }).click()
     const consent = page.getByRole('region', { name: 'Review text sent through Pi' })
     await expect(consent).toBeVisible()
     const outgoing = consent.getByLabel('Exact outgoing text')
+    await expect(outgoing).toContainText('Page 1 · passage 1')
+    await expect(outgoing).not.toContainText('"unitId"')
+    await expect(outgoing).toContainText('SKILLS: Python')
     await expect(outgoing).toContainText('[PERSONAL_1]')
     await expect(outgoing).not.toContainText('ada@example.test')
     await expect(outgoing).not.toContainText('+1 555 123 4567')
@@ -60,7 +63,7 @@ test('requires run-specific consent for the frozen minimized CV text and returns
       expect((await page.evaluate(() => window.workbench.getProfile())).skills).toHaveLength(0)
       await consent.getByRole('button', { name: 'Decline AI assistance' }).click()
       await page.evaluate(() => window.workbench.setPiModel({ reference: 'scripted/cv-tailor-fixture', thinkingLevel: 'off' }))
-      await page.getByRole('button', { name: 'Optional AI structuring' }).click()
+      await page.getByRole('button', { name: 'Preview AI request' }).click()
       await expect(consent).toBeVisible()
     }
     await rejectChangedSelection('scripted/cv-tailor-fixture-alt', 'off')
@@ -80,6 +83,32 @@ test('requires run-specific consent for the frozen minimized CV text and returns
   } finally { await running?.close(); await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }) }
 })
 
+test('continues through local review without opening an AI preview', async () => {
+  test.setTimeout(60_000)
+  const root = mkdtempSync(join(tmpdir(), 'cv-tailor-local-cv-review-')), userData = join(root, 'workspace'), sourceFile = join(root, 'cv.pdf')
+  writeFileSync(sourceFile, makePdf(['SKILLS: Python', 'A longer synthetic passage keeps local CV review available without sending it through Pi.']))
+  let running: ElectronApplication | undefined
+  try {
+    running = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData, CV_TAILOR_SCRIPTED_ANALYSIS: 'profile-ai', CV_TAILOR_SCRIPTED_PI_MODEL: '1' } })
+    const page = await running.firstWindow()
+    await expect(page.locator('[data-ui-ready="true"]')).toBeVisible({ timeout: 15_000 })
+    await selectScriptedPiModel(page)
+    await page.getByRole('button', { name: 'My profile' }).click()
+    await running.evaluate(({ dialog }, selectedPath) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selectedPath] }); return true }, sourceFile)
+    await page.getByRole('button', { name: 'Upload CV' }).click()
+    const review = page.getByRole('region', { name: 'Review proposed profile details' })
+    await expect(review).toBeVisible()
+    await expect(review.getByRole('button', { name: 'Preview AI request' })).toBeVisible()
+    await review.getByRole('button', { name: 'Continue locally' }).click()
+    await expect(review).toContainText('Local review selected. No request was sent.')
+    await expect(page.getByRole('region', { name: 'Review text sent through Pi' })).toHaveCount(0)
+    expect((await page.evaluate(() => window.workbench.getProfile())).skills).toHaveLength(0)
+    await review.getByRole('button', { name: 'Apply accepted details' }).click()
+    await expect(page.getByRole('status').filter({ hasText: 'added to your profile' })).toBeVisible()
+    expect((await page.evaluate(() => window.workbench.getProfile())).skills).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'Python' })]))
+  } finally { await running?.close(); await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }) }
+})
+
 test('cancels an authorized in-flight request and retains the local correction route', async () => {
   test.setTimeout(60_000)
   const root = mkdtempSync(join(tmpdir(), 'cv-tailor-profile-ai-cancel-')), userData = join(root, 'workspace'), sourceFile = join(root, 'cv.pdf')
@@ -95,7 +124,7 @@ test('cancels an authorized in-flight request and retains the local correction r
     await page.getByRole('button', { name: 'Upload CV' }).click()
     const review = page.getByRole('region', { name: 'Review proposed profile details' })
     await expect(review).toBeVisible()
-    await page.getByRole('button', { name: 'Optional AI structuring' }).click()
+    await page.getByRole('button', { name: 'Preview AI request' }).click()
     const consent = page.getByRole('region', { name: 'Review text sent through Pi' })
     await expect(consent).toBeVisible()
     await consent.getByLabel(/I authorize this one-time request/).check()

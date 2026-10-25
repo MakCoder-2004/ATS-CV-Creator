@@ -82,7 +82,7 @@ test('installed Pi structures synthetic PDF and DOCX CVs into reviewable, unconf
       await page.getByRole('button', { name: format === 'PDF' ? 'Upload CV' : 'Upload Word CV' }).click()
       const review = page.getByRole('region', { name: 'Review proposed profile details' })
       await expect(review).toBeVisible({ timeout: 30_000 })
-      await page.getByRole('button', { name: 'Optional AI structuring' }).click()
+      await page.getByRole('button', { name: 'Preview AI request' }).click()
       const consent = page.getByRole('region', { name: 'Review text sent through Pi' })
       await expect(consent).toBeVisible({ timeout: 30_000 })
       await expect(consent).toContainText(`Provider: ${selectedModel?.providerId}`)

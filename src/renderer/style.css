@@ -283,6 +283,10 @@ nav button:hover, nav button[aria-current=page] { background: var(--raised); col
 .profile-message button { color: inherit; }
 .profile-panel[role=status] { color: var(--muted); }
 .pdf-import-review { display: grid; gap: 16px; }
+.profile-ai-route { display: grid; gap: 12px; padding: 16px; border: 1px solid var(--selected-job-border); border-radius: 8px; background: var(--selected-job); }
+.profile-ai-route h3 { margin-top: 4px; font: 700 15px 'Sora Variable', sans-serif; }
+.profile-ai-route p { max-width: 70ch; margin-top: 6px; color: var(--muted); }
+.profile-ai-route .form-actions { align-items: center; }
 .profile-ai-proposals { min-width: 0; display: grid; gap: 16px; }
 .ai-consent-review { display: grid; gap: 12px; }
 .ai-consent-review textarea { width: 100%; min-height: 200px; padding: 12px; color: var(--ink); background: var(--canvas); border: 1px solid var(--control-border); border-radius: 6px; font: inherit; font-weight: 450; overflow-wrap: anywhere; }
