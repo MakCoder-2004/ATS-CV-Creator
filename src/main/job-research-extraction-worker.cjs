@@ -39,10 +39,26 @@ function sourceMatches(value, selected) {
     const target = new URL(value), expected = new URL(selected.canonicalUrl)
     if (target.protocol !== 'https:' || target.username || target.password || target.port) return false
     if (selected.roleId && selected.provider === 'linkedin') return /(?:^|\/)jobs\/view\/(?:[a-z0-9-]*-)?(\d{5,20})\/?$/i.exec(target.pathname)?.[1] === selected.roleId && ['linkedin.com','www.linkedin.com'].includes(target.hostname)
-    if (selected.roleId && selected.provider === 'indeed') return target.hostname === selected.host && (target.searchParams.get('jk') === selected.roleId || target.searchParams.get('vjk') === selected.roleId)
+    if (selected.roleId && selected.provider === 'indeed') return !target.hash && target.hostname === selected.host && target.pathname === '/viewjob' && target.searchParams.size === 1 && target.searchParams.get('jk') === selected.roleId
     target.hash = ''; expected.hash = ''
     return target.href === expected.href
   } catch { return false }
+}
+function listingShell(elements) {
+  return elements.some(node =>
+    node.tagName === 'h1' && /^(search results|job search|jobs matching|matching jobs)\b/i.test(content(node)) ||
+    /(?:^|\s)(?:search-results|job-list|job-results|jobsearch-serp)(?:\s|$)/i.test(attrs(node, 'class')) ||
+    node.tagName === 'form' && (node.childNodes || []).some(child => child.tagName === 'input' && ['q', 'query', 'keywords'].includes(attrs(child, 'name').toLowerCase()))
+  )
+}
+function truncatedDescription(description) { return /(?:\.\.\.|…|\b(?:read|show|see|view) more\b|\bcontinue reading\b)\s*[.!?]?\s*$/i.test(description) }
+function completeStructuredDescription(raw, description) {
+  // Exact JSON-LD identity proves ownership, not that a search card contains the whole posting.
+  const sections = walk(parse5.parseFragment(raw)).filter(node => ['h2', 'h3', 'h4', 'strong'].includes(node.tagName)).map(content)
+  const duties = /^(responsibilities|duties|what you(?:'|’)ll do|the role|role overview|about the role)\b/i
+  const qualifications = /^(qualifications|requirements|what (?:you(?:'|’)ll|we) (?:need|look for)|you bring|your experience|who you are)\b/i
+  const labeled = sections.concat(description.split('\n').filter(line => /:\s*$/.test(line)))
+  return description.length >= 300 && /[.!?]$/.test(description) && labeled.some(label => duties.test(label)) && labeled.some(label => qualifications.test(label))
 }
 function selectedRole(posting, selected) {
   if (sourceMatches(posting.url || posting.mainEntityOfPage?.['@id'] || posting.mainEntityOfPage?.url, selected)) return true
@@ -80,11 +96,13 @@ function extract() {
   const descriptionNode = linkedinPrimary.length === 1 ? linkedinPrimary[0] : null
   const body = posting && typeof posting.description === 'string' ? content(parse5.parseFragment(posting.description)) : ''
   if (linkedinPrimary.length > 1 || structured.length > 1) return { outcome: 'none', reason: 'The page contains ambiguous role descriptions.' }
-  const description = body || (linkedInExact && descriptionNode ? content(descriptionNode) : '')
+  const primary = linkedInExact && descriptionNode ? content(descriptionNode) : ''
+  const description = primary.length > body.length ? primary : body
   const titleNode = elements.filter(node => node.tagName === 'h1' && attrs(node, 'class').split(/\s+/).some(value => value === 'top-card-layout__title' || value === 'topcard__title'))
   const title = typeof posting?.title === 'string' ? posting.title.trim() : titleNode.length === 1 ? content(titleNode[0]) : null
   const employer = typeof posting?.hiringOrganization?.name === 'string' ? posting.hiringOrganization.name.trim() : null
   if (!description || !title || description.length < 80) return { outcome: 'none', reason: 'The selected page lacks a substantive readable job posting.' }
-  return { outcome: description.length > 16_000 ? 'partial' : 'full', description: description.slice(0, 16_000), title: title.slice(0, 500), employer: employer?.slice(0, 500) || null }
+  const complete = description.length <= 16_000 && !listingShell(elements) && !truncatedDescription(description) && (description === primary && !!primary || !!posting && completeStructuredDescription(posting.description, description))
+  return { outcome: complete ? 'full' : 'partial', reason: description.length > 16_000 ? 'The readable description exceeded 16,000 characters; the captured text is incomplete.' : 'The selected page may contain only a job teaser or search listing; the description is provisional.', description: description.slice(0, 16_000), title: title.slice(0, 500), employer: employer?.slice(0, 500) || null }
 }
 try { parentPort.postMessage(extract()) } catch (error) { parentPort.postMessage({ outcome: 'none', reason: error instanceof Error ? error.message : 'Extraction failed.' }) }

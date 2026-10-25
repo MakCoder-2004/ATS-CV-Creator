@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { isDeepStrictEqual } from 'node:util'
 import { z } from 'zod'
 
 const text = z.string().trim().min(1).max(16_000)
@@ -12,7 +13,14 @@ export const jobResearchIdentitySchema = z.object({
   host: z.string().min(1).max(253),
   provider: z.enum(['linkedin', 'indeed', 'generic']),
   roleId: z.string().min(1).max(160).nullable(),
-}).strict()
+}).strict().superRefine((selected, ctx) => {
+  try {
+    const normalized = normalizeJobResearchUrl(selected.canonicalUrl)
+    if (normalized.canonicalUrl !== selected.canonicalUrl || normalized.host !== selected.host || normalized.provider !== selected.provider || normalized.roleId !== selected.roleId) {
+      ctx.addIssue({ code: 'custom', message: 'Selected fields must match the canonical role identity.' })
+    }
+  } catch { ctx.addIssue({ code: 'custom', message: 'Selected URL is not a canonical role identity.' }) }
+})
 export type JobResearchIdentity = z.infer<typeof jobResearchIdentitySchema>
 
 export const jobResearchSourceSchema = z.object({
@@ -124,6 +132,14 @@ export function promoteJobResearch(runInput: unknown, acceptedFindingIds: string
   })
   return reviewedJobResearchSchema.parse({ version: 1, runId: run.id, selected: run.selected, acceptedFindingIds: acceptedFindingIds.slice(), references, acknowledgedPartial, analysisScope: scope,
     evidenceHash: createHash('sha256').update(JSON.stringify({ version: 1, runId: run.id, selected: run.selected, scope, evidence, unknowns: run.unknowns })).digest('hex') })
+}
+
+/** A review is authenticated only against the immutable app-held run, never by its shape or hash alone. */
+export function verifyReviewedJobResearch(runInput: unknown, reviewInput: unknown): ReviewedJobResearch {
+  const review = reviewedJobResearchSchema.parse(reviewInput)
+  const expected = promoteJobResearch(runInput, review.acceptedFindingIds, review.acknowledgedPartial)
+  if (!isDeepStrictEqual(review, expected)) throw new Error('Reviewed evidence does not match the app-held research run.')
+  return review
 }
 
 const tracking = /^(utm_[a-z0-9_]+|gclid|fbclid|li_fat_id|mc_cid|mc_eid|ref|refid|trk|trackingid|source|src|from)$/i

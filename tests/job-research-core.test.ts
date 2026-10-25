@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { randomUUID } from 'node:crypto'
 import { gzipSync } from 'node:zlib'
-import { normalizeJobResearchUrl, jobResearchRunSchema, promoteJobResearch } from '../src/shared/job-research'
+import { normalizeJobResearchUrl, jobResearchRunSchema, reviewedJobResearchSchema, promoteJobResearch, verifyReviewedJobResearch } from '../src/shared/job-research'
 import { fetchDirectJobResearch } from '../src/main/job-research-fetch'
 
 const roleId = '4464025097'
@@ -15,6 +15,7 @@ const base = {
 }
 const html = (body: string, id = roleId) => `<html><head><link rel="canonical" href="https://www.linkedin.com/jobs/view/${id}/"></head><body><h1 class="top-card-layout__title">Synthetic engineer</h1><div class="description__text"><div class="show-more-less-html__markup">${body}</div></div><code id="decoratedJobPostingId" style="display: none"><!--"${id}"--></code></body></html>`
 const description = 'Build practical software with measured outcomes. Collaborate with colleagues to maintain useful systems and explain technical decisions to reviewers.'
+const completeDescription = '<h2>Responsibilities</h2><p>Build practical software with measured outcomes. Collaborate with colleagues to maintain useful systems and explain technical decisions to reviewers. Document service boundaries and keep systems reliable for customers.</p><h2>Qualifications</h2><p>Experience building production services, reviewing code, resolving incidents, and communicating decisions with a cross-functional team. Apply for this role if you enjoy developing reliable software.</p>'
 const response = (body: string | Buffer, status = 200, headers: Record<string, string> = {}) => ({ status, body: Buffer.isBuffer(body) ? body : Buffer.from(body), headers: { 'content-type': 'text/html; charset=utf-8', ...headers } })
 const fixtures = { lookup: async () => [{ address: '8.8.8.8', family: 4 }], request: async () => response(html(description)) }
 
@@ -55,6 +56,35 @@ describe('immutable research and review contracts', () => {
     expect(() => promoteJobResearch(company, [findingId], true)).toThrow()
     expect(() => promoteJobResearch(base, [randomUUID()], true)).toThrow()
   })
+  it('refuses selected identity mutations even when canonical URL remains unchanged', () => {
+    for (const selectedMutation of [
+      { ...selected, roleId: '9999999999' },
+      { ...selected, host: 'other.example.org' },
+      { ...selected, provider: 'generic' as const },
+    ]) {
+      expect(jobResearchRunSchema.safeParse({ ...base, selected: selectedMutation }).success).toBe(false)
+    }
+  })
+  it('verifies review scope, references and evidence against the app-held run', () => {
+    const review = promoteJobResearch(base, [findingId], false)
+    expect(verifyReviewedJobResearch(base, review)).toEqual(review)
+    const alternateUrl = 'https://www.linkedin.com/jobs/view/9999999999/'
+    const forged = [
+      { ...review, runId: randomUUID() },
+      { ...review, selected: { ...selected, roleId: '9999999999' } },
+      { ...review, selected: { ...selected, host: 'other.example.org' } },
+      { ...review, selected: normalizeJobResearchUrl(alternateUrl) },
+      { ...review, references: [{ ...review.references[0], url: alternateUrl }] },
+      { ...review, references: [{ ...review.references[0], sourceId: randomUUID() }] },
+      { ...review, references: [{ ...review.references[0], completeness: 'partial' as const }] },
+      { ...review, evidenceHash: 'a'.repeat(64) },
+      { ...review, analysisScope: 'provisional' as const },
+    ]
+    // A shape-only schema cannot authenticate a review without the app-held run.
+    expect(reviewedJobResearchSchema.safeParse(forged.at(-1)).success).toBe(true)
+    for (const mutation of forged) expect(() => verifyReviewedJobResearch(base, mutation)).toThrow()
+    expect(() => verifyReviewedJobResearch({ ...base, findings: [{ ...base.findings[0], text: description.repeat(2) }] }, review)).toThrow()
+  })
   it('rejects unsupported and unverified findings', () => {
     expect(jobResearchRunSchema.safeParse({ ...base, sources: [{ ...base.sources[0], identity: 'unverified-role' }] }).success).toBe(false)
     expect(jobResearchRunSchema.safeParse({ ...base, sources: [] }).success).toBe(false)
@@ -69,13 +99,52 @@ describe('bounded direct read', () => {
     expect(run.status).toBe('full')
     expect(run.findings[0]).toMatchObject({ kind: 'direct-role-text', text: description, completeness: 'full' })
   })
+  it('keeps the selected LinkedIn primary markup when JSON-LD is a teaser', async () => {
+    const structured = `<script type="application/ld+json">${JSON.stringify({ '@type': 'JobPosting', url: canonical, title: 'Synthetic engineer', description })}</script>`
+    const run = await fetchDirectJobResearch(canonical, { ...fixtures, request: async () => response(html(completeDescription) + structured) })
+    expect(run.status).toBe('full')
+    expect(run.findings[0].text).toContain('Qualifications')
+  })
+  it('marks a selected LinkedIn primary with an explicit truncation marker provisional', async () => {
+    const run = await fetchDirectJobResearch(canonical, { ...fixtures, request: async () => response(html(`${description} Read more`)) })
+    expect(run.status).toBe('provisional')
+  })
   it('accepts one exact structured generic role but not a different role on the same page', async () => {
     const generic = 'https://jobs.example.org/positions/engineer'
-    const structured = (url: string) => `<script type="application/ld+json">${JSON.stringify({ '@type': 'JobPosting', url, title: 'Synthetic engineer', hiringOrganization: { name: 'Example Ltd' }, description: `<p>${description}</p>` })}</script>`
+    const structured = (url: string) => `<script type="application/ld+json">${JSON.stringify({ '@type': 'JobPosting', url, title: 'Synthetic engineer', hiringOrganization: { name: 'Example Ltd' }, description: completeDescription })}</script>`
     const exact = await fetchDirectJobResearch(generic, { ...fixtures, request: async () => response(structured(generic)) })
     expect(exact.status).toBe('full')
     const namesake = await fetchDirectJobResearch(generic, { ...fixtures, request: async () => response(structured('https://jobs.example.org/positions/other-engineer')) })
     expect(namesake.status).toBe('none')
+  })
+  it('rejects search-page or query-conflicting Indeed structured identities', async () => {
+    const indeed = 'https://www.indeed.com/viewjob?jk=1234567890abcdef'
+    const structured = (url: string) => `<script type="application/ld+json">${JSON.stringify({ '@type': 'JobPosting', url, title: 'Synthetic engineer', description: completeDescription })}</script>`
+    expect((await fetchDirectJobResearch(indeed, { ...fixtures, request: async () => response(structured(indeed)) })).status).toBe('full')
+    for (const url of [
+      'https://www.indeed.com/jobs?q=engineer&jk=1234567890abcdef',
+      'https://www.indeed.com/viewjob?jk=1234567890abcdef&q=engineer',
+      'https://www.indeed.com/viewjob?jk=1234567890abcdef&vjk=1111111111111111',
+      'https://www.indeed.com/rc/clk?jk=1234567890abcdef',
+      'https://www.indeed.com/viewjob?jk=1234567890abcdef#other',
+    ]) {
+      expect((await fetchDirectJobResearch(indeed, { ...fixtures, request: async () => response(structured(url)) })).status).toBe('none')
+    }
+  })
+  it.each([
+    ['listing shell', '<h1>Search results</h1><form><input name="q"></form><div class="job-list">More jobs</div>', completeDescription],
+    ['short teaser', '', description],
+    ['long teaser mentioning sections without sections', '', `${description} Responsibilities include collaboration and delivery. Qualifications include software experience. ${description} ${description}`],
+    ['unfinished sectioned teaser', '', `${completeDescription.slice(0, -10)}`],
+    ['trailing ellipsis', '', `${completeDescription.slice(0, 220)}...`],
+    ['read-more marker', '', `${completeDescription.slice(0, 220)} Read more`],
+    ['truncated role text', '', `${completeDescription.slice(0, 220)}…`],
+  ])('does not mark %s JSON-LD as full', async (_, shell, teaser) => {
+    const generic = 'https://jobs.example.org/positions/engineer'
+    const html = `${shell}<script type="application/ld+json">${JSON.stringify({ '@type': 'JobPosting', url: generic, title: 'Synthetic engineer', description: teaser })}</script>`
+    const run = await fetchDirectJobResearch(generic, { ...fixtures, request: async () => response(html) })
+    expect(run.status).toBe('provisional')
+    expect(run.findings[0].completeness).toBe('partial')
   })
   it('does not treat namesakes or mixed roles as the selected full posting', async () => {
     const mismatch = await fetchDirectJobResearch(canonical, { ...fixtures, request: async () => response(html(description, '9999999999')) })

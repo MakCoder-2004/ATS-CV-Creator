@@ -11,7 +11,7 @@ import { jobResearchRunSchema, normalizeJobResearchUrl, type JobResearchIdentity
 
 type Address = { address: string; family: number }
 type Response = { status: number; headers: IncomingHttpHeaders; body: Buffer }
-type Extraction = { outcome: 'full'; description: string; title: string; employer: string | null } | { outcome: 'partial'; description: string; title: string; employer: string | null } | { outcome: 'none' | 'blocked'; reason: string }
+type Extraction = { outcome: 'full'; description: string; title: string; employer: string | null } | { outcome: 'partial'; description: string; title: string; employer: string | null; reason?: string } | { outcome: 'none' | 'blocked'; reason: string }
 export type JobResearchFetchOptions = {
   signal?: AbortSignal
   lookup?: (host: string) => Promise<Address[]>
@@ -124,7 +124,7 @@ export async function fetchDirectJobResearch(input: string, options: JobResearch
       const extracted = await bounded((options.extract ?? extractInWorker)(html, selected, controller.signal), 2_500)
       if (controller.signal.aborted) throw new Error('Fetch cancelled.')
       if (extracted.outcome === 'full') return finish('full', [], extracted, current)
-      if (extracted.outcome === 'partial') return finish('provisional', ['The readable description exceeded 16,000 characters; the captured text is incomplete.'], extracted, current)
+      if (extracted.outcome === 'partial') return finish('provisional', [extracted.reason ?? 'The selected role description may be incomplete.'], extracted, current)
       return finish(extracted.outcome, [extracted.reason])
     }
     return finish('blocked', ['Too many redirects.'])
