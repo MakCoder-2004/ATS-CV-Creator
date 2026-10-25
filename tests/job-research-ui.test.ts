@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { JobResearchFindings, JobResearchReview } from '../src/renderer/JobResearchReview'
+import { JobResearchFindings, JobResearchReview, startJobResearchFromIntake } from '../src/renderer/JobResearchReview'
 import type { JobResearchRun } from '../src/shared/job-research-schema'
 import { buildJobResearchQuery } from '../src/shared/job-research-search-query'
 import { SavedJobs } from '../src/renderer/SavedJobs'
@@ -40,6 +40,15 @@ describe('universal research intake', () => {
     expect(buildJobResearchQuery({ host: 'jobs.example.org', roleId: null })).toBe('job site:jobs.example.org')
     expect(buildJobResearchQuery({ host: '', roleId: null })).toBeUndefined()
     expect(buildJobResearchQuery({ host: 'jobs.example.org', roleId: '' })).toBeUndefined()
+  })
+  it('hands the first posting token to research instead of starting a duplicate public read', async () => {
+    const calls: string[] = []
+    const api = {
+      startJobResearch: async (url: string) => { calls.push(`url:${url}`); return { token: 'wrong-token' } },
+      startJobResearchFromPosting: async (token: string) => { calls.push(`posting:${token}`); return { token: 'research-token' } }
+    }
+    await expect(startJobResearchFromIntake(api, 'https://jobs.example.org/role/1', 'first-fetch-token')).resolves.toEqual({ token: 'research-token' })
+    expect(calls).toEqual(['posting:first-fetch-token'])
   })
   it('does not search on mount, identifies the optional separate search, and does not claim analysis ran', () => {
     const html = renderToStaticMarkup(React.createElement(JobResearchReview, { url: 'https://www.linkedin.com/jobs/view/1234567890/' }))
