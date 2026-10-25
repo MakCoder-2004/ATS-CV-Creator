@@ -297,6 +297,51 @@ test('fresh authorized generation cannot silently waive an unchanged historical 
   expect(await state.workspace.api.approveDraft(state.jobId)).toMatchObject({ ok: false })
 })
 
+test('ambiguous duplicates cannot be waived by shifting a finding onto unrelated wording', async () => {
+  const base = await fixture()
+  const extra = await base.workspace.api.saveSkill({ name: 'Rust', category: 'Programming' })
+  if (!extra.ok) throw new Error('Missing unrelated cited source')
+  await base.workspace.api.addDraftItem({ jobId: base.jobId, section: 'skills', text: 'TypeScript', citation: { evidenceId: base.skillId, revision: 1 } })
+  const state = await seedHistoricalFinding(base, 'skills[1]')
+  const remove = async (index: number) => {
+    const current = (await state.workspace.api.getDraft(state.jobId))!
+    return state.workspace.api.mutateDraftRecord({ jobId: state.jobId, draftId: current.id, sourceRevision: current.revision, section: 'skills', operation: 'remove', scope: 'cv-only', index })
+  }
+  expect(await remove(0)).toMatchObject({ ok: true })
+  expect(await state.workspace.api.checkDraft(state.jobId)).toMatchObject({ passed: false })
+  const rust = extra.value.skills.find(item => item.name === 'Rust')!
+  await state.workspace.api.addDraftItem({ jobId: state.jobId, section: 'skills', text: 'Rust', citation: { evidenceId: rust.id, revision: 1 } })
+  expect(await remove(1)).toMatchObject({ ok: true })
+  expect(await state.workspace.api.checkDraft(state.jobId)).toMatchObject({ passed: false, findings: expect.arrayContaining([expect.objectContaining({ code: 'semantic-unsupported' })]) })
+  expect(await remove(0)).toMatchObject({ ok: true })
+  expect(await state.workspace.api.checkDraft(state.jobId)).toMatchObject({ passed: true })
+})
+
+test('restored validation-failure revision cannot erase earlier findings on later success', async () => {
+  const base = await fixture(undefined, true)
+  const state = await seedHistoricalFinding(base, 'experience[0]')
+  state.workspace.close(); opened.splice(opened.indexOf(state.workspace), 1)
+  const database = new Database(join(state.directory, 'workbench.sqlite'))
+  registerWorkspaceBackupRowSizer(database)
+  const old = JSON.parse((database.prepare('SELECT data FROM draft_revisions WHERE id = ?').get(state.flagged.id) as { data: string }).data)
+  const failed = { ...old, id: randomUUID(), revision: old.revision + 1, content: { education: [], experience: [], projects: [], skills: [], certificates: [] }, status: 'blocked', approved: false, checkReport: { ...old.checkReport, draftId: '', draftRevision: old.revision + 1, passed: false, findings: [...old.checkReport.findings.map((item: object) => ({ ...item, historical: true })), { code: 'schema', itemPath: 'generation', message: 'Output discarded.', correction: 'Generate again.' }] } }
+  failed.checkReport.draftId = failed.id
+  database.prepare('INSERT INTO draft_revisions (id,job_id,revision,data) VALUES (?,?,?,?)').run(failed.id, state.jobId, failed.revision, JSON.stringify(failed))
+  database.close()
+  const workspace = createWorkbench(state.directory, undefined, state.transport); opened.push(workspace)
+  expect(await workspace.api.checkDraft(state.jobId)).toMatchObject({ passed: false, findings: expect.arrayContaining([expect.objectContaining({ code: 'semantic-unsupported' }), expect.objectContaining({ itemPath: 'generation' })]) })
+  await workspace.api.addDraftItem({ jobId: state.jobId, section: 'skills', text: 'TypeScript', citation: { evidenceId: state.skillId, revision: 1 } })
+  expect(await workspace.api.checkDraft(state.jobId)).toMatchObject({ passed: false, findings: expect.arrayContaining([expect.objectContaining({ code: 'semantic-unsupported' }), expect.objectContaining({ itemPath: 'generation' })]) })
+  const preview = await workspace.api.prepareOutboundConsent(state.jobId)
+  if (!preview.ok) throw new Error('Missing consent')
+  await workspace.api.acceptOutboundConsent(preview.token, true, true)
+  await workspace.api.startAnalysis(preview.token)
+  const recovered = await workspace.api.generateDraft(preview.token)
+  expect(recovered.draft?.content.experience[0]).toEqual(state.flagged.content.experience[0])
+  expect(recovered.draft?.checkReport).toMatchObject({ passed: false, findings: expect.arrayContaining([expect.objectContaining({ code: 'semantic-unsupported', originDraftId: state.flagged.id })]) })
+  expect(recovered.draft?.checkReport?.findings.some(finding => finding.itemPath === 'generation')).toBe(false)
+})
+
 test('regeneration reuses cached analysis without automatically retrying provider failures', async () => {
   let retryCalls = 0
   const retryState = await fixture(async () => { retryCalls++; throw Object.assign(new Error('temporary provider failure'), { status: 503 }) })
