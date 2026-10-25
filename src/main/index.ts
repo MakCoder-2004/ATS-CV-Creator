@@ -82,12 +82,16 @@ app.whenReady().then(() => {
     if (process.env.CV_TAILOR_SCRIPTED_ANALYSIS === 'profile-ai-late' && prompt.startsWith('Organize only facts')) await new Promise<void>(resolve => setTimeout(resolve, 1_500))
     if (['profile-ai', 'profile-ai-wrong-fact', 'profile-ai-late'].includes(process.env.CV_TAILOR_SCRIPTED_ANALYSIS ?? '') && prompt.startsWith('Organize only facts')) {
       if (['ada@example.test', '+1 555 123 4567', '%PDF', 'PROFILE_SECRET_CANARY'].some(value => prompt.includes(value))) throw new Error('The scripted outbound request contained unapproved source data.')
-      const authorized = prompt.split('AUTHORIZED CV TEXT (this exact minimized text only):\n')[1] ?? '{}'
-      const input = JSON.parse(authorized) as { sources?: Array<{ sourceRef: string; page: number; field: string; text: string }> }
-      const source = input.sources?.find(item => item.field.startsWith('skills.'))
-      if (!source) return JSON.stringify({ contact: undefined, skills: [], experience: [], projects: [], entries: [], sources: [], unmapped: [] })
-      const skill = process.env.CV_TAILOR_SCRIPTED_ANALYSIS === 'profile-ai-wrong-fact' ? 'Rust' : source.field.slice('skills.'.length)
-      return JSON.stringify({ skills: [{ name: skill, category: 'Technical', proposalRef: 'ai-skill-1' }], experience: [], projects: [], entries: [], unmapped: [], sources: [{ proposalRef: 'ai-skill-1', page: source.page, passage: source.text, field: `skills.${skill}` }] })
+      const authorized = prompt.split('AUTHORIZED CV SOURCE TEXT (this exact minimized text only):\n')[1] ?? ''
+      const units = authorized.split(/\n\n(?=\[page-\d+-passage-\d+\s·)/).flatMap(block => {
+        const match = block.match(/^\[(page-\d+-passage-\d+)[^\]]*\]\n([\s\S]*)$/)
+        return match ? [{ unitId: match[1]!, text: match[2]! }] : []
+      })
+      const source = units.find(item => /^SKILLS:\s*/i.test(item.text))
+      if (!source) return JSON.stringify({ skills: [], experience: [], projects: [], entries: [], citations: [], unmappedUnitIds: units.map(item => item.unitId) })
+      const originalSkill = source.text.replace(/^SKILLS:\s*/i, '').split(/[\n,;|]/)[0]?.trim() ?? ''
+      const skill = process.env.CV_TAILOR_SCRIPTED_ANALYSIS === 'profile-ai-wrong-fact' ? 'Rust' : originalSkill
+      return JSON.stringify({ skills: [{ name: skill, category: 'Technical', proposalRef: 'ai-skill-1' }], experience: [], projects: [], entries: [], citations: [{ proposalRef: 'ai-skill-1', unitId: source.unitId }], unmappedUnitIds: units.filter(item => item.unitId !== source.unitId).map(item => item.unitId) })
     }
     if (process.env.CV_TAILOR_SCRIPTED_ANALYSIS === 'delayed' && isTailoring) await new Promise<void>(resolve => setTimeout(resolve, 30000))
     if (process.env.CV_TAILOR_SCRIPTED_ANALYSIS === 'recovery' && isTailoring && !recoveryFailureSent) { recoveryFailureSent = true; throw Object.assign(new Error('scripted offline interruption'), { code: 'ECONNRESET' }) }

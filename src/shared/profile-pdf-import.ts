@@ -47,9 +47,14 @@ export const profilePdfApplyResultSchema = z.discriminatedUnion('ok', [
   z.object({ ok: z.literal(true), message: z.string(), profile: profileSnapshotSchema, experience: experienceSnapshotSchema }).strict(),
   z.object({ ok: z.literal(false), message: z.string() }).strict()
 ])
+export const profilePdfRebaseResultSchema = z.discriminatedUnion('ok', [
+  z.object({ ok: z.literal(true), message: z.string(), profile: profileSnapshotSchema, experience: experienceSnapshotSchema }).strict(),
+  z.object({ ok: z.literal(false), message: z.string() }).strict()
+])
 export type ProfilePdfProposal = z.infer<typeof profilePdfProposalSchema>
 export type ProfilePdfProposalDraft = z.infer<typeof profilePdfProposalDraftSchema>
 export type ProfilePdfPreview = z.infer<typeof profilePdfPreviewSchema>
+export type ProfilePdfRebaseResult = z.infer<typeof profilePdfRebaseResultSchema>
 export type ProfilePdfSourcePage = { page: number; text: string; links?: Array<{ label: string; url: string; lineIndex?: number }>; warnings?: string[] }
 
 const sectionNames = new Set(['experience', 'employment', 'work experience', 'professional experience', 'employment history', 'training', 'education', 'skills', 'technical skills', 'programming languages', 'tools', 'concepts', 'summary', 'professional summary', 'projects', 'personal projects', 'certificates', 'certifications', 'languages'])
