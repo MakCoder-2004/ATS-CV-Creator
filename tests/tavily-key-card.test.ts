@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { TavilyKeyCard, type TavilyKeyCardClient } from '../src/renderer/TavilyKeyCard'
+import { TavilyKeyCard, TavilyKeySummary, type TavilyKeyCardClient } from '../src/renderer/TavilyKeyCard'
 import type { ResearchSearchKeyStatus } from '../src/shared/research-search-settings'
 
 const configured: ResearchSearchKeyStatus = {
@@ -19,10 +19,12 @@ const client: TavilyKeyCardClient = {
 }
 
 describe('TavilyKeyCard', () => {
-  it('does not render a key or configured controls before status resolves', () => {
+  it('renders one field with unknown status disabled until inspection completes', () => {
     const html = renderToStaticMarkup(createElement(TavilyKeyCard, { client }))
     expect(html).toContain('Checking local key storage')
-    expect(html).toContain('type="password"')
+    expect(html).toContain('Key status is unknown')
+    expect(html.match(/<input /g)).toHaveLength(1)
+    expect(html).toContain('Tavily API key')
     expect(html).not.toContain('Saved key')
     expect(html).not.toContain('never-render-this-by-default')
   })
@@ -30,35 +32,46 @@ describe('TavilyKeyCard', () => {
   it('does not display configured key details before status resolves', () => {
     const pendingClient = { ...client, getResearchSearchKeyStatus: () => new Promise<ResearchSearchKeyStatus>(() => {}) }
     const html = renderToStaticMarkup(createElement(TavilyKeyCard, { client: pendingClient }))
-    expect(html).toContain('Checking local key storage')
-    expect(html).not.toContain('Saved key')
+    expect(html).not.toContain('Replace</button>')
+    expect(html).not.toContain('Revoke locally')
   })
 
-  it('renders a truthful failure summary and keeps confirmation inline', () => {
+  it('distinguishes a failed private-storage inspection from an absent key without leaking its message', async () => {
+    const injectedClient: TavilyKeyCardClient = { ...client, getResearchSearchKeyStatus: async () => ({
+      configured: false, storageAvailable: false,
+      message: 'Search key storage failed. The existing key was not replaced.'
+    }) }
+    const status = await injectedClient.getResearchSearchKeyStatus()
+    const html = renderToStaticMarkup(createElement(TavilyKeySummary, { status, loadFailed: false }))
+    expect(html).toContain('An existing key may still be saved')
+    expect(html).toContain('Reopen Settings to retry')
+    expect(html).not.toContain('No Tavily key is saved')
+    expect(html).not.toContain('Secure local key storage is unavailable')
+    expect(html).not.toContain(status.message)
     const source = readFileSync(new URL('../src/renderer/TavilyKeyCard.tsx', import.meta.url), 'utf8')
-    expect(source).toContain("setLoadFailed(true); setError('Tavily key status could not be loaded.")
-    expect(source).toContain("loadFailed ? 'Local key status unavailable. Reopen Settings to retry.'")
+    expect(source).toContain('status.message !== STORAGE_FAILURE')
     expect(source).toContain('role="group" aria-labelledby="tavily-confirm-title"')
     expect(source).not.toContain('aria-modal')
-    expect(source).toContain('setConfirm(false); requestAnimationFrame(() => revokeRef.current?.focus())')
   })
 
-  it('clears on model-context changes before paint without remounting or resetting replacement input', () => {
+  it('clears on model-context changes before paint without remounting or resetting typed replacement', () => {
     const source = readFileSync(new URL('../src/renderer/TavilyKeyCard.tsx', import.meta.url), 'utf8')
     const settings = readFileSync(new URL('../src/renderer/PiSettings.tsx', import.meta.url), 'utf8')
     expect(source).toContain('useLayoutEffect(() => {')
     expect(source).toContain('}, [modelContext])')
     expect(settings).toContain('<TavilyKeyCard modelContext={`${reference}\\u0000${thinkingLevel}\\u0000${modelSaveEpoch}`} />')
-    expect(settings).toContain('setModelSaveEpoch(epoch => epoch + 1)')
     expect(source).not.toContain('key={modelContext}')
-    expect(source).toContain('const [keyInput, setKeyInput] = useState(\'\')')
+    expect(source).toContain("const [keyInput, setKeyInput] = useState('')")
+    expect(source).toContain('value={editing ? keyInput : revealed} placeholder={!editing && !revealed')
   })
 
-  it('provides explicit Hide during a pending reveal and invalidates its late result', () => {
+  it('invalidates late reveal and keeps typed key controls distinct from stored key controls', () => {
     const source = readFileSync(new URL('../src/renderer/TavilyKeyCard.tsx', import.meta.url), 'utf8')
     expect(source).toContain('function hideReveal() { clearReveal(); setRevealPending(false); setBusy(false) }')
-    expect(source).toContain('revealed || revealPending ? <button className="secondary-button" type="button" onClick={hideReveal}>Hide</button>')
     expect(source).toContain('if (generation.current === request) { revealedRef.current = result.key; setRevealed(result.key) }')
+    expect(source).toContain('clearReveal(); setRevealPending(false); setConfirm(false); setReplacing(true)')
+    expect(source).toContain('Hide typed key')
+    expect(source).toContain('Cancel replacement')
     expect(source).toContain('Tavily may share the public query with other search-index providers and receive network metadata. No profile data is sent.')
   })
 })

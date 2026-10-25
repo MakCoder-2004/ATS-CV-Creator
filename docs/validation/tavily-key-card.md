@@ -2,7 +2,7 @@
 
 Issue [#90](https://github.com/Makrious/cv-tailor/issues/90), integration branch `feat/settings-controls-integration`. This is development-build evidence, **not** an installed-app or real Tavily account check. The user's running unpacked 0.6 app and installed executable were not touched.
 
-The Settings grid now mounts `TavilyKeyCard` instead of the earlier inline key form. The saved value starts masked; Reveal alone returns decrypted plaintext to the renderer, Hide clears it, and leaving Settings unmounts the card. Any edit to the Pi provider/model reference or thinking level, and each successful Pi model save, also clears revealed plaintext in a layout effect before paint without remounting the key card or clearing replacement input. A model-context change invalidates a pending reveal response while leaving unrelated work alone. Copy decrypts only in trusted main IPC and writes to Electron's clipboard in normal use; it returns a secret-free notice. A separate replacement field does not overwrite the saved key until Save. Removing the device copy requires confirmation, initially focuses Cancel, and explains that Tavily account revocation is separate. Ordinary status, Settings and workspace backups exclude the key; these controls do not initiate search or Pi model work.
+The Settings grid now mounts `TavilyKeyCard` instead of the earlier inline key form. The saved value starts masked; Reveal alone returns decrypted plaintext to the renderer, Hide clears it, and leaving Settings unmounts the card. Any edit to the Pi provider/model reference or thinking level, and each successful Pi model save, also clears revealed plaintext in a layout effect before paint without remounting the key card or clearing replacement input. A model-context change invalidates a pending reveal response while leaving unrelated work alone. Copy decrypts only in trusted main IPC and writes to Electron's clipboard in normal use; it returns a secret-free notice. At the time of this earlier validation, a separate replacement field did not overwrite the saved key until Save. The later single-field correction is documented in [Settings controls integration](settings-followup.md): Replace now empties the same labeled field; Cancel restores the masked saved view, and successful Save replaces it. Removing the device copy requires confirmation, initially focuses Cancel, and explains that Tavily account revocation is separate. Ordinary status, Settings and workspace backups exclude the key; these controls do not initiate search or Pi model work.
 
 ## Focused receipts
 
@@ -16,6 +16,10 @@ The Settings grid now mounts `TavilyKeyCard` instead of the earlier inline key f
 
 - A focused Settings Electron regression now reveals the synthetic saved key, edits the provider/model field, and verifies it is masked; it repeats for a thinking-level change before saving the scripted Pi selection. The existing Hide/page-exit checks remain in the same bounded UI case.
 - `tests/tavily-key-card.test.ts` verifies layout-effect invalidation, generation protection against late responses, stable card mounting, and preservation of replacement input. No delayed IPC response was injected into the Electron test.
+
+## Later single-field correction
+
+The redundant lower input was removed after user screenshot feedback. The current card has one `Tavily API key` field, saved view masked first, explicit Replace to edit an empty field, Cancel without a storage write and success only after persisted Save. Saved-key actions do not appear while editing. Failed private-storage inspection explicitly leaves saved-key existence unknown. See [single-field development checks and new masked screenshots](settings-followup.md#single-field-correction-on-this-branch). Earlier screenshots and results above are historical evidence, not the current field arrangement.
 
 ## Open gates
 
