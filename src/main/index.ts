@@ -195,17 +195,21 @@ app.whenReady().then(() => {
   } : undefined
   const singleRequestReleaseCheck = process.env.CV_TAILOR_SINGLE_POSTING_REQUEST === '1'
   const scriptedResearchMode = !app.isPackaged ? process.env.CV_TAILOR_TEST_RESEARCH : undefined
-  const scriptedResearch = (scriptedResearchMode === '1' || scriptedResearchMode === 'full' || scriptedResearchMode === 'full-delayed') ? {
+  const scriptedResearch = (scriptedResearchMode === '1' || scriptedResearchMode === 'full' || scriptedResearchMode === 'full-delayed' || scriptedResearchMode === 'unsafe') ? {
     lookup: async () => [{ address: '8.8.8.8', family: 4 }],
     request: async (url: URL) => {
-      if (url.href !== (scriptedResearchMode !== '1' ? 'https://www.linkedin.com/jobs/view/4464025097/' : 'https://jobs.example.org/role/123')) throw new Error('The scripted research received an unexpected URL.')
+      const expectedUrl = scriptedResearchMode === 'unsafe' ? 'https://www.linkedin.com/jobs/view/4482137197/'
+        : scriptedResearchMode !== '1' ? 'https://www.linkedin.com/jobs/view/4464025097/' : 'https://jobs.example.org/role/123'
+      if (url.href !== expectedUrl) throw new Error('The scripted research received an unexpected URL.')
       if (scriptedResearchMode === 'full-delayed') await new Promise(resolve => setTimeout(resolve, 1500))
       if (scriptedResearchMode !== '1') appendFileSync(join(app.getPath('userData'), 'research-direct-requests.log'), 'request\n')
       return { status: 200, headers: { 'content-type': 'text/html' }, body: Buffer.from('<html><title>Synthetic Engineer</title></html>') }
     },
-    extract: async () => scriptedResearchMode !== '1'
-      ? { outcome: 'full' as const, title: 'Synthetic Research Engineer', employer: 'Example Research', description: 'Build accessible TypeScript interfaces and test resilient desktop workflows. Document operational decisions, review privacy boundaries, collaborate with the engineering team, and maintain reliable services. Qualifications include TypeScript, careful written communication, and experience testing user-facing software.' }
-      : { outcome: 'partial' as const, title: 'Synthetic Engineer', employer: 'Example Research', description: 'Review TypeScript systems and document operational decisions. This partial synthetic role wording omits the complete requirements.', reason: 'Full role wording was not available.' }
+    extract: async () => scriptedResearchMode === 'unsafe'
+      ? { outcome: 'none' as const, reason: 'The page canonical identity differs from the selected role.' }
+      : scriptedResearchMode !== '1'
+        ? { outcome: 'full' as const, title: 'Synthetic Research Engineer', employer: 'Example Research', description: 'Build accessible TypeScript interfaces and test resilient desktop workflows. Document operational decisions, review privacy boundaries, collaborate with the engineering team, and maintain reliable services. Qualifications include TypeScript, careful written communication, and experience testing user-facing software.' }
+        : { outcome: 'partial' as const, title: 'Synthetic Engineer', employer: 'Example Research', description: 'Review TypeScript systems and document operational decisions. This partial synthetic role wording omits the complete requirements.', reason: 'Full role wording was not available.' }
   } : undefined
   const postingFetchOptions: SafePostingFetchOptions & { research?: import('./job-research-fetch').JobResearchFetchOptions } = {
     ...scriptedPostingFetch,
