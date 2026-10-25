@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
@@ -31,5 +32,22 @@ describe('TavilyKeyCard', () => {
     const html = renderToStaticMarkup(createElement(TavilyKeyCard, { client: pendingClient }))
     expect(html).toContain('Checking local key storage')
     expect(html).not.toContain('Saved key')
+  })
+
+  it('renders a truthful failure summary and keeps confirmation inline', () => {
+    const source = readFileSync(new URL('../src/renderer/TavilyKeyCard.tsx', import.meta.url), 'utf8')
+    expect(source).toContain("setLoadFailed(true); setError('Tavily key status could not be loaded.")
+    expect(source).toContain("loadFailed ? 'Local key status unavailable. Reopen Settings to retry.'")
+    expect(source).toContain('role="group" aria-labelledby="tavily-confirm-title"')
+    expect(source).not.toContain('aria-modal')
+    expect(source).toContain('setConfirm(false); requestAnimationFrame(() => revokeRef.current?.focus())')
+  })
+
+  it('provides explicit Hide during a pending reveal and invalidates its late result', () => {
+    const source = readFileSync(new URL('../src/renderer/TavilyKeyCard.tsx', import.meta.url), 'utf8')
+    expect(source).toContain('function hideReveal() { clearReveal(); setRevealPending(false); setBusy(false) }')
+    expect(source).toContain('revealed || revealPending ? <button className="secondary-button" type="button" onClick={hideReveal}>Hide</button>')
+    expect(source).toContain('if (generation.current === request) { revealedRef.current = result.key; setRevealed(result.key) }')
+    expect(source).toContain('Tavily may share the public query with other search-index providers and receive network metadata. No profile data is sent.')
   })
 })
