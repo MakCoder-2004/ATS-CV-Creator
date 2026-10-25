@@ -1,12 +1,28 @@
-import React, { useEffect, useMemo, useRef, useSyncExternalStore } from 'react'
+import React, { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import type { WorkbenchAPI } from '../shared/appearance'
 import { volatileOutgoingSchema, type VolatileAnalysisPreview, type VolatileAnalysisProgress, type VolatileAnalysisResult } from '../shared/research-volatile-analysis'
 import './provisional-research-analysis.css'
 
 type AnalysisAPI = Pick<WorkbenchAPI, 'previewResearchAnalysis' | 'consentResearchAnalysis' | 'startResearchAnalysis' | 'cancelResearchAnalysis' | 'discardResearchAnalysis'>
+type SourceAPI = Pick<WorkbenchAPI, 'openPostingSource'>
 type Phase = 'idle' | 'inspecting' | 'preview' | 'authorizing' | 'authorized' | 'running' | 'complete' | 'cancelled' | 'uncertain' | 'error'
 type Outgoing = ReturnType<typeof volatileOutgoingSchema.parse>
 export type ProvisionalReviewState = { phase: Phase; preview?: VolatileAnalysisPreview; outgoing?: Outgoing; result?: VolatileAnalysisResult; reviewed: boolean; message: string }
+export const PROVISIONAL_REVIEW_ACKNOWLEDGEMENT = 'I reviewed the displayed user message and understand a separate JSON-schema instruction is sent to Pi'
+
+/** Called only by a visible source button; raw IPC errors are deliberately not exposed in the renderer. */
+export function createSourceOpenHandler(api: SourceAPI, url: string, finding: string, report: (message: string, failed: boolean) => void) {
+  return async () => {
+    report(`Opening source for ${finding}…`, false)
+    try {
+      const result = await api.openPostingSource(url)
+      report(result.ok ? `Opened source for ${finding} in your default browser.` : `Could not open source for ${finding}. Check the source address and try again; unsupported or unavailable sources cannot be opened.`, !result.ok)
+    } catch {
+      report(`Could not open source for ${finding}. Check the source address and try again; unsupported or unavailable sources cannot be opened.`, true)
+    }
+  }
+}
+
 export type ProvisionalResearchAnalysisProps = { researchToken: string; onClose(): void; onStatus?: (status: Phase) => void; api?: AnalysisAPI }
 
 /** Deliberate, one-use outgoing consent. No network call is made by construction or subscription. */
@@ -126,6 +142,8 @@ export function ProvisionalResearchAnalysis({ researchToken, onClose, onStatus, 
   const state = useSyncExternalStore(session.subscribe, session.getSnapshot, session.getSnapshot)
   const returnFocus = useRef<HTMLElement | null>(null)
   const statusElement = useRef<HTMLParagraphElement>(null)
+  const [sourceStatuses, setSourceStatuses] = useState<Record<string, { message: string; failed: boolean }>>({})
+  const [openingSources, setOpeningSources] = useState<Set<string>>(() => new Set())
   useEffect(() => { if (state.phase === 'cancelled') statusElement.current?.focus() }, [state.phase])
   useEffect(() => {
     returnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
@@ -155,11 +173,17 @@ export function ProvisionalResearchAnalysis({ researchToken, onClose, onStatus, 
       <h3>Reviewed role sources</h3>
       <ol className="provisional-analysis-evidence">{outgoing.roleEvidence.map((item, index) => <li key={item.findingId} id={`research-finding-${index + 1}`}>
         <strong>Finding {index + 1}: {item.kind === 'indexed-role-claim' ? 'Indexed role claim (partial)' : `Direct role text (${item.completeness})`}</strong>
-        <span>Source URL: {item.url}</span><span>Finding ID: {item.findingId}</span><blockquote>{item.text}</blockquote>
+        <span>Source URL: {item.url}</span><span>Finding ID: {item.findingId}</span><button type="button" className="secondary-button" aria-label={`Open source for finding ${index + 1}`} disabled={openingSources.has(item.findingId)} onClick={() => {
+          setOpeningSources(current => new Set(current).add(item.findingId))
+          const handler = createSourceOpenHandler(window.workbench, item.url, `finding ${index + 1}`, (message, failed) => {
+            setSourceStatuses(current => ({ ...current, [item.findingId]: { message, failed } }))
+          })
+          void handler().finally(() => setOpeningSources(current => { const next = new Set(current); next.delete(item.findingId); return next }))
+        }}>{openingSources.has(item.findingId) ? 'Opening source…' : `Open source for finding ${index + 1}`}</button>{sourceStatuses[item.findingId] && <span role={sourceStatuses[item.findingId].failed ? 'alert' : 'status'}>{sourceStatuses[item.findingId].message}</span>}<blockquote>{item.text}</blockquote>
       </li>)}</ol>
       {outgoing.unknowns.length > 0 && <section aria-label="Unknowns"><h3>Still unknown</h3><ul>{outgoing.unknowns.map((text, index) => <li key={index}>{text}</li>)}</ul></section>}
-      {state.phase === 'preview' && <div className="provisional-analysis-actions"><label className="provisional-analysis-check"><input type="checkbox" checked={state.reviewed} onChange={event => session.setReviewed(event.target.checked)} />I reviewed exactly what will be sent</label><button className="primary-button" type="button" disabled={!state.reviewed} onClick={() => void session.authorize()}>Authorize analysis</button><button className="secondary-button" type="button" onClick={() => void session.cancel()}>Cancel review</button></div>}
-      {state.phase === 'authorized' && <div className="provisional-analysis-actions"><button type="button" className="primary-button" onClick={() => void session.start()}>Generate analysis</button><button type="button" className="secondary-button" onClick={() => void session.cancel()}>Cancel analysis</button></div>}
+      {state.phase === 'preview' && <div className="provisional-analysis-actions"><label className="provisional-analysis-check"><input type="checkbox" checked={state.reviewed} onChange={event => session.setReviewed(event.target.checked)} />{PROVISIONAL_REVIEW_ACKNOWLEDGEMENT}</label><button className="primary-button" type="button" disabled={!state.reviewed} onClick={() => void session.authorize()}>Authorize analysis</button><button className="secondary-button" type="button" onClick={() => void session.cancel()}>Cancel review</button></div>}
+      {state.phase === 'authorized' && <div className="provisional-analysis-actions"><button type="button" className="primary-button" onClick={() => void session.start()}>Start analysis</button><button type="button" className="secondary-button" onClick={() => void session.cancel()}>Cancel analysis</button></div>}
       {['authorizing', 'running'].includes(state.phase) && <button type="button" className="secondary-button" onClick={() => void session.cancel()}>Cancel analysis</button>}
     </>}
     {result && state.phase === 'complete' && <section aria-label="Analysis suggestions" className="provisional-analysis-result">

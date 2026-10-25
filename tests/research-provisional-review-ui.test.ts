@@ -1,7 +1,7 @@
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, test, vi } from 'vitest'
-import { ProvisionalResearchAnalysis, createProvisionalReviewSession } from '../src/renderer/ProvisionalResearchAnalysis'
+import { PROVISIONAL_REVIEW_ACKNOWLEDGEMENT, ProvisionalResearchAnalysis, createProvisionalReviewSession, createSourceOpenHandler } from '../src/renderer/ProvisionalResearchAnalysis'
 import type { WorkbenchAPI } from '../src/shared/appearance'
 import type { VolatileAnalysisPreview, VolatileAnalysisProgress } from '../src/shared/research-volatile-analysis'
 
@@ -25,6 +25,20 @@ function fixture() {
 }
 
 describe('temporary research review', () => {
+  test('source open is inert until its explicit action runs; reports a sanitized failure and truthful acknowledgement', async () => {
+    const openPostingSource = vi.fn(async () => { throw new Error('Unsupported URL: private internal detail') })
+    const report = vi.fn()
+    const onClick = createSourceOpenHandler({ openPostingSource }, evidence.url, 'finding 1', report)
+    expect(openPostingSource).not.toHaveBeenCalled()
+    expect(PROVISIONAL_REVIEW_ACKNOWLEDGEMENT).toBe('I reviewed the displayed user message and understand a separate JSON-schema instruction is sent to Pi')
+
+    await onClick()
+    expect(openPostingSource).toHaveBeenCalledTimes(1)
+    expect(openPostingSource).toHaveBeenCalledWith(evidence.url)
+    expect(report).toHaveBeenNthCalledWith(1, 'Opening source for finding 1…', false)
+    expect(report).toHaveBeenNthCalledWith(2, 'Could not open source for finding 1. Check the source address and try again; unsupported or unavailable sources cannot be opened.', true)
+    expect(report.mock.calls.flat().join(' ')).not.toContain('private internal detail')
+  })
   test('no preview or provider dispatch on render; inspection, checkbox and consent never dispatch', async () => {
     const api = fixture()
     const html = renderToStaticMarkup(React.createElement(ProvisionalResearchAnalysis, { researchToken: runId, onClose() {}, api }))
