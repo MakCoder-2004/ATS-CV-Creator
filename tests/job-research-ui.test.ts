@@ -71,6 +71,14 @@ describe('universal research intake', () => {
     await Promise.resolve()
     expect(calls).toEqual(['posting:first-fetch-token', 'posting:second-fetch-token', 'cancel:manual-switch-token'])
   })
+  it('labels the captured full direct-posting handoff as temporary research without invoking it on render', () => {
+    const html = renderToStaticMarkup(React.createElement(JobResearchReview, { url: 'https://jobs.example.org/role/1', postingFetchToken: 'first-fetch-token', temporaryFullPosting: true }))
+    expect(html).toContain('Temporary research')
+    expect(html).toContain('Review temporary findings')
+    expect(html).toContain('Inspect the direct public findings captured during Fetch posting')
+    expect(html).not.toContain('Save job')
+    expect(html).not.toContain('Refresh')
+  })
   it('does not search on mount, identifies the optional separate search, and does not claim analysis ran', () => {
     const html = renderToStaticMarkup(React.createElement(JobResearchReview, { url: 'https://www.linkedin.com/jobs/view/1234567890/' }))
     expect(html).toContain('Research indexed details')

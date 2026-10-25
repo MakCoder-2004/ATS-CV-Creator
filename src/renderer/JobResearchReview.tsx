@@ -43,7 +43,7 @@ export function JobResearchFindings({ run, selected, disabled, onToggle }: { run
 }
 
 /** Source links are text, never untrusted navigation targets. Only the selected canonical role can be opened via the trusted shell method. */
-export function JobResearchReview({ url, postingFetchToken, onPostingHandoff, onFetchAgain, onReviewedResearch, onDiscardReviewedResearch }: { url: string; postingFetchToken?: string; onPostingHandoff?: () => void; onFetchAgain?: () => void; onReviewedResearch?: (token: string, reviewed: ReviewedJobResearch) => void; onDiscardReviewedResearch?: () => void }) {
+export function JobResearchReview({ url, postingFetchToken, onPostingHandoff, onFetchAgain, onReviewedResearch, onDiscardReviewedResearch, temporaryFullPosting = false }: { url: string; postingFetchToken?: string; onPostingHandoff?: () => void; onFetchAgain?: () => void; onReviewedResearch?: (token: string, reviewed: ReviewedJobResearch) => void; onDiscardReviewedResearch?: () => void; temporaryFullPosting?: boolean }) {
   const [token, setToken] = useState<string>()
   const tokenRef = useRef<string | undefined>(undefined)
   const sequence = useRef(0)
@@ -143,8 +143,8 @@ export function JobResearchReview({ url, postingFetchToken, onPostingHandoff, on
   const role = run?.findings.filter(finding => finding.kind !== 'verified-company-context') ?? []
   const partial = !!run && !selected.some(id => role.some(finding => finding.id === id && finding.kind === 'direct-role-text' && finding.completeness === 'full'))
   return <section className="job-research-review" aria-label="Temporary job research">
-    <header><h3>Research this exact role</h3><p>{capturedReadLifecycle !== 'available' ? 'The captured read was used. Fetch posting again to restart. Nothing is saved or analyzed here.' : postingFetchToken ? 'Inspect the direct public findings captured during Fetch posting. Indexed search is a separate, optional decision and may make another public check only if an exact indexed candidate matches. Nothing is saved or analyzed here.' : 'Starting this action makes a fresh public read of the selected job. First inspect the direct public role. Indexed search is a separate, optional decision. Nothing is saved or analyzed here.'}</p></header>
-    {!token && !handoffUnavailable && <button ref={researchButtonRef} type="button" className="secondary-button" disabled={busy || !postingFetchToken && !url} onClick={() => void start()}>{busy ? 'Reading…' : postingFetchToken ? 'Inspect captured findings' : 'Research indexed details'}</button>}
+    <header><h3>{temporaryFullPosting ? 'Temporary research' : 'Research this exact role'}</h3><p>{capturedReadLifecycle !== 'available' ? 'The captured read was used. Fetch posting again to restart. Nothing is saved or analyzed here.' : postingFetchToken ? 'Inspect the direct public findings captured during Fetch posting. Indexed search is a separate, optional decision and may make another public check only if an exact indexed candidate matches. Nothing is saved or analyzed here.' : 'Starting this action makes a fresh public read of the selected job. First inspect the direct public role. Indexed search is a separate, optional decision. Nothing is saved or analyzed here.'}</p></header>
+    {!token && !handoffUnavailable && <button ref={researchButtonRef} type="button" className="secondary-button" disabled={busy || !postingFetchToken && !url} onClick={() => void start()}>{busy ? 'Reviewing…' : temporaryFullPosting ? 'Review temporary findings' : postingFetchToken ? 'Inspect captured findings' : 'Research indexed details'}</button>}
     {token && <button ref={cancelButtonRef} type="button" className="secondary-button" onClick={cancel}>Cancel and discard research</button>}
     {notice && <p ref={statusRef} tabIndex={-1} role="status" className="research-status">{notice}</p>}
     {error && <p role="alert" className="research-error">{error}</p>}
