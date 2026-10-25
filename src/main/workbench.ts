@@ -113,17 +113,41 @@ function reconcileNestedItems(items: NestedInput[], previous: NestedRecord[], ow
 /** One workspace per userData directory. Opening a workspace applies forward-only migrations. */
 const escapeCoverageTerm = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
-function preserveKnownFindings(checked: ReturnType<typeof checkDraftFacts>, prior: DraftRevision) {
+function preserveKnownFindings(checked: ReturnType<typeof checkDraftFacts>, prior: DraftRevision, next: DraftRevision = prior) {
   const isLegacyNarrativeFinding = (finding: { itemPath: string }) => finding.itemPath.startsWith('tailoring.') || finding.itemPath === 'summary[0]'
-  const known = prior.checkReport?.findings.filter(finding => !isLegacyNarrativeFinding(finding) && (finding.itemPath === 'generation' || finding.code === 'semantic-unsupported')).map(finding => {
-    if (finding.code !== 'semantic-unsupported') return finding
+  const known = prior.checkReport?.findings.flatMap(finding => {
+    if (isLegacyNarrativeFinding(finding) || (finding.itemPath !== 'generation' && finding.code !== 'semantic-unsupported')) return []
+    if (finding.code !== 'semantic-unsupported') return [finding]
     const originDraftId = finding.originDraftId ?? prior.checkReport?.draftId ?? prior.id
     const originDraftRevision = finding.originDraftRevision ?? prior.checkReport?.draftRevision ?? prior.revision
     const originEvidenceRevisionHash = finding.originEvidenceRevisionHash ?? prior.checkReport?.evidenceRevisionHash
-    return { ...finding, originDraftId, originDraftRevision, ...(originEvidenceRevisionHash ? { originEvidenceRevisionHash } : {}), historical: originDraftId !== checked.draftId || originDraftRevision !== checked.draftRevision }
+    const inherited = { ...finding, originDraftId, originDraftRevision, ...(originEvidenceRevisionHash ? { originEvidenceRevisionHash } : {}), historical: originDraftId !== checked.draftId || originDraftRevision !== checked.draftRevision }
+    // A global legacy finding has no attributable item: unrelated cuts or edits cannot waive it.
+    const path = /^(education|experience|projects|skills|certificates)\[(\d+)\]$/.exec(finding.itemPath)
+    if (!path) return [inherited]
+    const section = path[1] as keyof DraftRevision['content'], index = Number(path[2])
+    const flagged = prior.content[section][index]
+    if (!flagged) return [inherited]
+    const wording = (item: typeof flagged) => 'text' in item ? item.text : item.name
+    const same = (item: typeof flagged) => wording(item) === wording(flagged) && isDeepStrictEqual(item.citations, flagged.citations)
+    const oldMatches = prior.content[section].filter(same)
+    const newMatches = next.content[section].map((item, at) => ({ item, at })).filter(({ item }) => same(item))
+    // Duplicate indistinguishable items cannot be assigned a safe identity. Do not infer a waiver.
+    if (oldMatches.length !== 1 || newMatches.length > 1) return [inherited]
+    if (newMatches.length === 1) return [{ ...inherited, itemPath: `${section}[${newMatches[0].at}]` }]
+    // A citation revision can change without changing the flagged claim; keep it blocked.
+    if (next.content[section].some(item => wording(item) === wording(flagged))) return [inherited]
+    // The flagged wording was removed or replaced. Fresh deterministic/source checks still apply.
+    return []
   }) ?? []
   const findings = [...known, ...checked.findings.filter(finding => !known.some(item => item.code === finding.code && item.itemPath === finding.itemPath))]
   return factualCheckReportSchema.parse({ ...checked, passed: checked.passed && known.length === 0, findings })
+}
+
+function inheritRevisionFindings(prior: DraftRevision, next: DraftRevision): DraftRevision {
+  if (!prior.checkReport?.findings.some(finding => finding.itemPath === 'generation' || finding.code === 'semantic-unsupported')) return next
+  const report = preserveKnownFindings(checkDraftFacts(next), prior, next)
+  return draftRevisionSchema.parse({ ...next, checkReport: report, status: report.passed ? 'unverified' : 'blocked' })
 }
 
 export function createWorkbench(userData: string, _legacySecureStorage?: unknown, scriptedTransport?: AnalysisTransport, recoveryHooks?: { beforeGraphCheckpoint?: (metadata: import('@langchain/langgraph').CheckpointMetadata) => void; workspaceBackupMaxBytes?: number }, safePostingFetchOptions?: SafePostingFetchOptions & { research?: JobResearchFetchOptions }, piRuntime?: PiModelRuntime | Promise<PiModelRuntime | null>): { api: WorkbenchStorageAPI; authorizeOutboundPayload<T>(runId: string, payload: T): T; backup: WorkspaceBackupEngine; beginJobOperation(jobId: string, action: string): () => void; hasActiveWork(): boolean; close(): void } {
@@ -1572,7 +1596,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       const revision = ((db.prepare('SELECT MAX(revision) AS revision FROM draft_revisions WHERE job_id = ?').get(jobId) as { revision: number | null }).revision ?? prior.revision) + 1
       const sources = prepareDraftInputs(readProfile(), readExperience()).items.map(item => ({ evidenceId: item.id, revision: item.revision, snapshot: item.snapshot }))
       const coverage = qualificationCoverage(analysis.runId ?? jobId, analysis.displayAnalysis ?? analysis.analysis, prior, sources)
-      const renewed = draftRevisionSchema.parse({ ...prior, id: randomUUID(), revision, targetPostingUpdatedAt: job.updatedAt, approved: false, approval: undefined, checkReport: undefined, coverage: { ...coverage, stale: false }, status: 'unverified', progress: 'Existing CV wording retained. Review it against the current posting, then run current checks and page measurement before approval.', createdAt: new Date().toISOString() })
+      const renewed = inheritRevisionFindings(prior, draftRevisionSchema.parse({ ...prior, id: randomUUID(), revision, targetPostingUpdatedAt: job.updatedAt, approved: false, approval: undefined, checkReport: undefined, coverage: { ...coverage, stale: false }, status: 'unverified', progress: 'Existing CV wording retained. Review it against the current posting, then run current checks and page measurement before approval.', createdAt: new Date().toISOString() }))
       const tx = db.transaction(() => {
         const latestJob = db.prepare('SELECT updated_at FROM jobs WHERE id = ?').get(jobId) as { updated_at: string } | undefined
         const latest = db.prepare('SELECT data FROM draft_revisions WHERE job_id = ? ORDER BY revision DESC LIMIT 1').get(jobId) as { data: string } | undefined
@@ -1694,12 +1718,12 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       })
       const now = new Date().toISOString()
       const candidate = draftRevisionSchema.parse({ ...current, id: randomUUID(), revision: current.revision + 1, createdAt: now, content: nextContent, approved: false, approval: undefined, status: 'unverified', checkReport: undefined, progress: `Replacement accepted and factual checks rerun. Actual Electron PDF page measurement is pending at the application boundary; approval remains blocked.${proposalScopeSuffix}` })
-      const checked = checkDraftFacts(candidate)
+      const checked = preserveKnownFindings(checkDraftFacts(candidate), current, candidate)
       const next = draftRevisionSchema.parse({ ...candidate, status: checked.passed ? 'unverified' : 'blocked', checkReport: checked, progress: checked.passed ? candidate.progress : `Accepted replacement is blocked by ${checked.findings.length} factual finding(s). Actual Electron PDF page measurement is pending at the application boundary.${proposalScopeSuffix}` })
       const tx = db.transaction(() => {
         db.prepare('INSERT INTO draft_revisions (id,job_id,revision,data) VALUES (?,?,?,?)').run(next.id, next.jobId, next.revision, JSON.stringify(next))
         db.prepare('DELETE FROM document_fit_reports WHERE job_id = ?').run(jobId)
-        const accepted = regenerationProposalSchema.parse({ ...proposal, status: 'accepted', progress: `Proposal accepted as a new draft revision. Factual checks passed; application-boundary PDF measurement and renewed approval are required.${proposalScopeSuffix}` })
+        const accepted = regenerationProposalSchema.parse({ ...proposal, status: 'accepted', progress: `Proposal accepted as a new draft revision. ${checked.passed ? 'Factual checks passed' : 'Factual findings remain blocked'}; application-boundary PDF measurement and renewed approval are required.${proposalScopeSuffix}` })
         db.prepare('UPDATE regeneration_proposals SET status = ?, data = ? WHERE id = ?').run(accepted.status, JSON.stringify(accepted), proposal.id)
       })
       tx()
@@ -1714,7 +1738,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       if (index < 0) return { ok: false, message: 'This skill suggestion is no longer available.' }
       suggestions[index] = { ...suggestions[index], status: parsed.data.decision, ...(parsed.data.decision === 'pending' ? { decidedAt: undefined } : { decidedAt: new Date().toISOString() }) }
       const next = draftRevisionSchema.parse({ ...prior, id: randomUUID(), revision: prior.revision + 1, suggestedSkills: suggestions, approved: false, approval: undefined, checkReport: undefined, status: 'blocked', progress: 'Skill review decision saved. Run checks and review the current draft again.' })
-      let report = preserveKnownFindings(checkDraftFacts(next), prior)
+      let report = preserveKnownFindings(checkDraftFacts(next), prior, next)
       const stale = currentSourceStatus(next)
       if (stale.length) report = factualCheckReportSchema.parse({ ...report, passed: false, findings: [...report.findings, ...stale.map(evidenceId => ({ code: 'stale-source' as const, itemPath: 'sources', evidenceId, message: 'A cited profile source changed or was deleted after this draft was created.', correction: 'Review current evidence and create a draft from its current revision.' }))] })
       const checked = draftRevisionSchema.parse({ ...next, status: report.passed && !suggestions.some(item => item.status === 'pending') ? 'unverified' : 'blocked', checkReport: report })
@@ -1731,7 +1755,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       if (!prior || prior.id !== parsed.data.draftId || !prior.tailoring) return { ok: false, message: 'This draft changed or has no tailored narrative to edit.' }
       const tailoring = parsed.data.field === 'headline' ? { ...prior.tailoring, headline: parsed.data.text } : { ...prior.tailoring, summary: { ...prior.tailoring.summary, text: parsed.data.text } }
       const next = draftRevisionSchema.parse({ ...prior, id: randomUUID(), revision: prior.revision + 1, tailoring, approved: false, approval: undefined, checkReport: undefined, status: 'unverified', progress: 'Tailored narrative corrected locally. Recheck and remeasure before approval.' })
-      let report = preserveKnownFindings(checkDraftFacts(next), prior)
+      let report = preserveKnownFindings(checkDraftFacts(next), prior, next)
       const stale = currentSourceStatus(next)
       if (stale.length) report = factualCheckReportSchema.parse({ ...report, passed: false, findings: [...report.findings, ...stale.map(evidenceId => ({ code: 'stale-source' as const, itemPath: 'sources', evidenceId, message: 'A cited profile source changed or was deleted after this draft was created.', correction: 'Review current evidence and create a draft from its current revision.' }))] })
       const checked = draftRevisionSchema.parse({ ...next, status: report.passed ? 'unverified' : 'blocked', checkReport: report })
@@ -1858,7 +1882,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       // A manual skill declaration resolves its suggestion, but retain posting provenance so it cannot authorize past role usage.
       const suggestedSkills = prior.suggestedSkills?.map(skill => declaredSkill && skill.name.normalize('NFKC').trim().toLocaleLowerCase() === declaredSkill ? { ...skill, status: 'confirmed' as const, decidedAt: new Date().toISOString() } : skill)
       const next = draftRevisionSchema.parse({ ...prior, ...(suggestedSkills ? { suggestedSkills } : {}), id: randomUUID(), revision: prior.revision + 1, createdAt: new Date().toISOString(), content, evidence, lockedFields: locks, approved: false, approval: undefined, checkReport: undefined, coverage: undefined, status: 'blocked', progress: 'Manual CV record saved locally. Recheck the draft and review factual findings before approval.' })
-      let report = preserveKnownFindings(checkDraftFacts(next), prior)
+      let report = preserveKnownFindings(checkDraftFacts(next), prior, next)
       const stale = currentSourceStatus(next).filter(id => !(sourcePlan && id === sourcePlan.record.id))
       if (stale.length) report = factualCheckReportSchema.parse({ ...report, passed: false, findings: [...report.findings, ...stale.map(evidenceId => ({ code: 'stale-source' as const, itemPath: 'sources', evidenceId, message: 'A cited profile source changed or was deleted after this draft was created.', correction: 'Review current evidence and create a draft from its current revision.' }))] })
       const saved = draftRevisionSchema.parse({ ...next, status: report.passed ? 'unverified' : 'blocked', checkReport: report })
@@ -1890,7 +1914,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       const linkedEvidence = parsed.data.editIntent === 'new-fact' ? [...prior.evidence, ...citations.filter(citation => !prior.evidence.some(source => source.evidenceId === citation.evidenceId && source.revision === citation.revision)).map(citation => { const source = liveItems.find(item => item.id === citation.evidenceId)!; return { evidenceId: source.id, revision: source.revision, snapshot: source.snapshot } })] : prior.evidence
       const updatedContent = { ...prior.content, [parsed.data.section]: section.map((item, index) => index !== parsed.data.index ? item : 'text' in item ? { ...item, text: parsed.data.text, citations } : { ...item, name: parsed.data.text, citations }) }
       const next = draftRevisionSchema.parse({ ...prior, id: randomUUID(), revision: prior.revision + 1, status: 'unverified', approved: false, approval: undefined, checkReport: undefined, evidence: linkedEvidence, content: updatedContent, progress: 'Draft wording corrected locally. Recheck before human review.' })
-      let report = preserveKnownFindings(checkDraftFacts(next), prior)
+      let report = preserveKnownFindings(checkDraftFacts(next), prior, next)
       const stale = currentSourceStatus(next)
       if (stale.length) report = factualCheckReportSchema.parse({ ...report, passed: false, findings: [...report.findings, ...stale.map(evidenceId => ({ code: 'stale-source' as const, itemPath: 'sources', evidenceId, message: 'A cited profile source changed or was deleted after this draft was created.', correction: 'Review and save current evidence, then create a draft using its current revision.' }))] })
       const checked = draftRevisionSchema.parse({ ...next, status: report.passed ? 'unverified' : 'blocked', checkReport: report, progress: report.findings.some(finding => finding.itemPath === 'generation') ? 'Correction saved, but the known generation failure remains unresolved. Only a new authorized generation that passes validation can resolve it.' : report.passed ? 'Correction passes deterministic checks; semantic truth still requires human review. Wording-only versus new-fact is user-declared and cannot be inferred perfectly.' : `Blocked by ${report.findings.length} factual finding(s). Use the correction guidance below.` })
@@ -1913,7 +1937,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       items.push(draftItem as never)
       const evidence = selected ? prior.evidence : [...prior.evidence, { evidenceId: current.id, revision: current.revision, snapshot: current.snapshot }]
       const next = draftRevisionSchema.parse({ ...prior, id: randomUUID(), revision: prior.revision + 1, status: 'blocked', approved: false, approval: undefined, checkReport: undefined, evidence, content: { ...prior.content, [parsed.data.section]: items }, progress: 'Locally authored, cited content was saved. Automated checks do not replace human review.' })
-      const report = preserveKnownFindings(checkDraftFacts(next), prior)
+      const report = preserveKnownFindings(checkDraftFacts(next), prior, next)
       const saved = draftRevisionSchema.parse({ ...next, status: report.passed ? 'unverified' : 'blocked', checkReport: report, progress: report.findings.some(finding => finding.itemPath === 'generation') ? 'Locally authored wording was added, but the known generation failure remains unresolved. Only a new authorized generation that passes validation can resolve it.' : next.progress })
       db.prepare('INSERT INTO draft_revisions (id,job_id,revision,data) VALUES (?,?,?,?)').run(saved.id, saved.jobId, saved.revision, JSON.stringify(saved))
       db.prepare('DELETE FROM document_fit_reports WHERE job_id = ?').run(saved.jobId)
@@ -2021,7 +2045,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       const content = { ...current.content }
       for (const section of ['education', 'experience', 'projects', 'skills', 'certificates'] as const) content[section] = content[section].filter((_, index) => !selected.has(`${section}-${index}`)) as never
       const suggestedSkills = current.suggestedSkills?.map(skill => selected.has(`suggested-skills-${skill.id}`) ? { ...skill, status: 'removed' as const, decidedAt: new Date().toISOString() } : skill)
-      const revised = draftRevisionSchema.parse({ ...current, ...(suggestedSkills ? { suggestedSkills } : {}), id: randomUUID(), revision: current.revision + 1, content, approved: false, approval: undefined, checkReport: undefined, status: 'unverified', progress: 'Accepted page-fit cuts. Factual checks were invalidated; recheck and remeasure before review.', createdAt: new Date().toISOString() })
+      const revised = inheritRevisionFindings(current, draftRevisionSchema.parse({ ...current, ...(suggestedSkills ? { suggestedSkills } : {}), id: randomUUID(), revision: current.revision + 1, content, approved: false, approval: undefined, checkReport: undefined, status: 'unverified', progress: 'Accepted page-fit cuts. Factual checks were invalidated; recheck and remeasure before review.', createdAt: new Date().toISOString() }))
       db.prepare('INSERT INTO draft_revisions (id,job_id,revision,data) VALUES (?,?,?,?)').run(revised.id, revised.jobId, revised.revision, JSON.stringify(revised))
       db.prepare('DELETE FROM document_fit_reports WHERE job_id = ?').run(jobId)
       return { ok: true, message: 'Accepted cuts saved as a new draft revision; remeasure and review it.', draft: revised }
