@@ -119,14 +119,16 @@ export async function fetchDirectJobResearch(input: string, options: JobResearch
         try { current = new URL(location, current).href } catch { return finish('blocked', ['The source returned an invalid redirect.'], undefined, 'unsafe') }
         continue
       }
-      if ([401,403,404,410,429,451].includes(response.status)) return finish('blocked', [`The selected posting was unavailable (HTTP ${response.status}). This does not prove the role was removed.`], undefined, 'unreadable')
-      if (response.status !== 200) return finish('none', [`The source returned HTTP ${response.status}; no role evidence was collected.`], undefined, 'unreadable')
+      if ([401,403].includes(response.status)) return finish('blocked', [`The selected posting requires access (HTTP ${response.status}).`], undefined, 'unreadable')
+      if ([404,410].includes(response.status)) return finish('blocked', [`The selected posting was unavailable (HTTP ${response.status}); no indexed excerpt can establish that it remains active.`], undefined, 'removed')
+      if (response.status >= 500 && response.status <= 599) return finish('none', [`The source returned a server error (HTTP ${response.status}); no role evidence was collected.`], undefined, 'server-error')
+      if (response.status !== 200) return finish('none', [`The source returned HTTP ${response.status}; no role evidence was collected.`], undefined, 'unsafe')
       const contentType = String(response.headers['content-type'] ?? '').toLowerCase()
-      if (!/^text\/html\b|^application\/xhtml\+xml\b/.test(contentType)) return finish('none', ['The response was not an HTML posting page.'], undefined, 'unreadable')
+      if (!/^text\/html\b|^application\/xhtml\+xml\b/.test(contentType)) return finish('none', ['The response was not an HTML posting page.'], undefined, 'unsafe')
       const encoding = String(response.headers['content-encoding'] ?? 'identity').toLowerCase()
       const decoded = await bounded(expand(response.body, encoding, controller.signal), 5_000)
       let html: string
-      try { html = new TextDecoder('utf-8', { fatal: true }).decode(decoded) } catch { return finish('none', ['The response was not valid UTF-8.'], undefined, 'unreadable') }
+      try { html = new TextDecoder('utf-8', { fatal: true }).decode(decoded) } catch { return finish('none', ['The response was not valid UTF-8.'], undefined, 'unsafe') }
       const extracted = await bounded((options.extract ?? extractInWorker)(html, selected, controller.signal), 2_500)
       if (controller.signal.aborted) throw new Error('Fetch cancelled.')
       if (extracted.outcome === 'full') return finish('full', [], extracted, undefined, current)

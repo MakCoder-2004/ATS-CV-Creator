@@ -110,14 +110,14 @@ export function createJobResearchSessions(options: ResearchSessionOptions) {
       if (!live(token, session, generation)) throw new Error(missing)
       // Search links are leads, not full role evidence. Never navigate to a search-provided
       // destination: only the canonical selected URL may be re-read by the pinned direct adapter.
-      const normalized = (value: string) => value.normalize('NFKC').toLocaleLowerCase('en').replace(/[^a-z0-9]+/g, ' ').trim()
+      const normalized = (value: string) => value.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim()
       const candidates = result.links.filter(link => {
         try {
           // An indexed URL is an identity lead, not proof that the snippet describes the posting.
           // Generic links have no role ID: their *entire* canonical URL must still match.
           return normalizeJobResearchUrl(link.url).canonicalUrl === selected.canonicalUrl &&
             typeof link.title === 'string' && link.title.trim().length <= 240 &&
-            /[a-z]{3}/i.test(link.title) && !/^(?:job|jobs|apply|sign in|log in)$/i.test(link.title.trim()) &&
+            /[\p{L}\p{N}]{3}/u.test(link.title) && !/^(?:job|jobs|apply|sign in|log in)$/i.test(link.title.trim()) &&
             typeof link.snippet === 'string' && !!link.snippet.trim() && link.snippet.length <= 2000
         } catch { return false }
       })
@@ -153,7 +153,7 @@ export function createJobResearchSessions(options: ResearchSessionOptions) {
       }
       const base = preserved(verified?.status === 'provisional' ? verified : undefined)
       // Untagged historical blocked/none runs remain readable but cannot grant fallback.
-      const cannotFallback = original.accessFailure === 'unsafe' || readFailed || identityMismatch ||
+      const cannotFallback = (original.accessFailure !== undefined && original.accessFailure !== 'unreadable') || readFailed || identityMismatch ||
         (verified?.status !== 'provisional' && verified?.accessFailure !== 'unreadable')
       if (cannotFallback) {
         session.state = { status: 'ready', run: freeze(jobResearchRunSchema.parse({ ...base, unknowns: [...base.unknowns, 'The selected source could not be safely reached; the indexed excerpt was not accepted.'] })) }

@@ -91,6 +91,10 @@ describe('immutable research and review contracts', () => {
   it('keeps legacy runs readable but limits typed access failures to blocked/none', () => {
     expect(jobResearchRunSchema.safeParse(base).success).toBe(true)
     expect(jobResearchRunSchema.safeParse({ ...base, status: 'none', findings: [], sources: [], accessFailure: 'unreadable' }).success).toBe(true)
+    for (const accessFailure of ['removed', 'server-error'] as const) {
+      expect(jobResearchRunSchema.safeParse({ ...base, status: 'none', findings: [], sources: [], accessFailure }).success).toBe(true)
+      expect(jobResearchRunSchema.safeParse({ ...base, accessFailure }).success).toBe(false)
+    }
     expect(jobResearchRunSchema.safeParse({ ...base, accessFailure: 'unsafe' }).success).toBe(false)
     expect(jobResearchRunSchema.safeParse({ ...base, status: 'none', findings: [], sources: [], accessFailure: 'arbitrary' }).success).toBe(false)
   })
@@ -215,6 +219,13 @@ describe('bounded direct read', () => {
     const generic = 'https://jobs.example.org/positions/engineer'
     const genericLogin = await fetchDirectJobResearch(generic, { ...fixtures, request: async () => response('', 302, { location: 'https://jobs.example.org/login' }) })
     expect(genericLogin).toMatchObject({ status: 'blocked', accessFailure: 'unreadable' })
+  })
+  it.each([
+    [404, 'removed'], [410, 'removed'], [500, 'server-error'], [503, 'server-error'], [429, 'unsafe'], [451, 'unsafe'],
+  ] as const)('does not classify HTTP %s as a benign indexed fallback', async (status, accessFailure) => {
+    const run = await fetchDirectJobResearch(canonical, { ...fixtures, request: async () => response('', status) })
+    expect(run).toMatchObject({ accessFailure, findings: [] })
+    expect(['none', 'blocked']).toContain(run.status)
   })
   it.each([
     ['different host', 'https://other.example.org/jobs/view/4464025097/'],

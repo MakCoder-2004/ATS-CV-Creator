@@ -52,7 +52,7 @@ export const jobResearchRunSchema = z.object({
   completedAt: timestamp,
   status: z.enum(['full', 'provisional', 'none', 'blocked']),
   // Optional for older ephemeral runs; absence never authorizes an indexed fallback.
-  accessFailure: z.enum(['unreadable', 'unsafe']).optional(),
+  accessFailure: z.enum(['unreadable', 'unsafe', 'removed', 'server-error']).optional(),
   sources: z.array(jobResearchSourceSchema).max(24),
   findings: z.array(jobResearchFindingSchema).max(48),
   unknowns: z.array(z.string().trim().min(1).max(500)).max(32),

@@ -241,7 +241,7 @@ describe('volatile public research session', () => {
     sessions.close()
   })
 
-  it.each(['cross-origin', 'role redirect', 'loop', 'private DNS', 'TLS', 'login', 'HTTP 403'] as const)('uses typed direct access outcome for %s fallback', async scenario => {
+  it.each(['cross-origin', 'role redirect', 'loop', 'private DNS', 'TLS', 'login', 'HTTP 403', 'HTTP 404', 'HTTP 410', 'HTTP 500', 'HTTP 429'] as const)('uses typed direct access outcome for %s fallback', async scenario => {
     const t = fixture(); let reads = 0
     const safeResponse = (status: number, location?: string) => ({ status, headers: location ? { location } : {}, body: Buffer.alloc(0) })
     const direct = async () => {
@@ -250,7 +250,7 @@ describe('volatile public research session', () => {
         lookup: async () => scenario === 'private DNS' ? [{ address: '127.0.0.1', family: 4 }] : [{ address: '8.8.8.8', family: 4 }],
         request: async () => {
           if (scenario === 'TLS') throw new Error('synthetic TLS certificate failure')
-          if (scenario === 'HTTP 403') return safeResponse(403)
+          if (scenario.startsWith('HTTP ')) return safeResponse(Number(scenario.slice(5)))
           const location = scenario === 'cross-origin' ? 'https://other.example.org/jobs/view/4464025097/'
             : scenario === 'role redirect' ? 'https://www.linkedin.com/jobs/view/4464025098/'
             : scenario === 'loop' ? URL : 'https://www.linkedin.com/login'
@@ -272,6 +272,23 @@ describe('volatile public research session', () => {
     sessions.close()
   })
 
+  it.each([404, 410, 500] as const)('rejects an indexed excerpt after an initial HTTP %s even if a later read is unreadable', async status => {
+    const t = fixture(); let reads = 0
+    const direct = async () => ++reads === 1
+      ? fetchDirectJobResearch(URL, { lookup: async () => [{ address: '8.8.8.8', family: 4 }], request: async () => ({ status, headers: {}, body: Buffer.alloc(0) }) })
+      : synthetic('blocked')
+    const sessions = createJobResearchSessions({ credentials: t.credentials, createSearch: t.createSearch, direct })
+    const token = sessions.startJobResearch(URL).token; await tick()
+    const state = await sessions.searchJobResearch(token)
+    expect(state.status).toBe('ready')
+    if (state.status === 'ready') {
+      expect(state.run.findings).toHaveLength(0)
+      expect(state.run.status).not.toBe('provisional')
+    }
+    expect(reads).toBe(2)
+    sessions.close()
+  })
+
   it.each([
     ['Senior Synthetic Engineer — Invented Corp', false],
     ['Synthetic Engineer — Different Corp', false],
@@ -288,6 +305,27 @@ describe('volatile public research session', () => {
       expect(state.run.findings.some(finding => finding.kind === 'indexed-role-claim')).toBe(accepted)
       expect(state.run.status).toBe('provisional')
     }
+    sessions.close()
+  })
+
+  it.each([
+    ['高级 Engineer', '北京 Ltd', '初级 Engineer — 上海 Ltd', false],
+    ['高级 Engineer', '北京 Ltd', '高级 Engineer — 上海 Ltd', false],
+    ['高级 Engineer', '北京 Ltd', '高级 Engineer — 北京 Ltd', true],
+    ['高级 Engineer', '北京 Ltd', '高級 Engineer — 北京 Ltd', false],
+    ['مهندس Senior', 'شركة 北京', 'مهندس Senior — شركة 上海', false],
+    ['مهندس Senior', 'شركة 北京', 'مهندس Senior — شركة 北京', true],
+    ['高级 Engineer', '北京 Ltd', '高级 Ｅｎｇｉｎｅｅｒ — 北京 Ltd', true],
+  ] as const)('preserves Unicode title/employer identity for %s at %s vs %s', async (title, employer, indexedTitle, accepted) => {
+    const t = fixture(URL, indexedTitle)
+    const sessions = createJobResearchSessions({ credentials: t.credentials, createSearch: t.createSearch, direct: async () => {
+      const run = synthetic()
+      return { ...run, sources: run.sources.map(source => ({ ...source, title, employer })) }
+    } })
+    const token = sessions.startJobResearch(URL).token; await tick()
+    const state = await sessions.searchJobResearch(token)
+    expect(state.status).toBe('ready')
+    if (state.status === 'ready') expect(state.run.findings.some(finding => finding.kind === 'indexed-role-claim')).toBe(accepted)
     sessions.close()
   })
 
