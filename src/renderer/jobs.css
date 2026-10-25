@@ -9,7 +9,7 @@
 .saved-jobs-selection .danger-button { margin-left: auto; }
 .saved-jobs-selection input, .saved-job-select input { width: 18px; height: 18px; margin: 0; accent-color: var(--blue); }
 .saved-job-posting-cell { display: flex; align-items: flex-start; gap: 12px; }
-.saved-job-select { display: grid; flex: 0 0 24px; min-height: 40px; place-items: center; cursor: pointer; }
+.saved-job-select { display: grid; flex: 0 0 24px; min-height: 40px; padding-top: 3px; justify-items: center; align-content: start; cursor: pointer; }
 .saved-job-posting-cell .saved-job-description { flex: 1; }
 .saved-jobs-page :is(input, button, .saved-jobs-message[tabindex="-1"]):focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
 .danger-button { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: 8px 14px; border: 1px solid var(--error); border-radius: 6px; background: transparent; color: var(--error); font: inherit; font-weight: 650; cursor: pointer; }
@@ -33,8 +33,8 @@
 .saved-jobs-table th, .saved-jobs-table td { padding: 16px 20px; text-align: left; vertical-align: middle; }
 .saved-jobs-table th { background: var(--raised); color: var(--muted); font-size: 12px; font-weight: 650; }
 .saved-jobs-table th:first-child { width: auto; }
-.saved-jobs-table th:nth-child(2) { width: 150px; }
-.saved-jobs-table th:nth-child(3) { width: 250px; }
+.saved-jobs-table th:nth-child(2) { width: 160px; }
+.saved-jobs-table th:nth-child(3) { width: 320px; }
 .saved-job-row + .saved-job-row td { border-top: 1px solid var(--line); }
 .saved-job-row[aria-current=true] td { background: var(--selected-job); }
 .saved-job-row[aria-current=true] td:first-child { border-left: 3px solid var(--blue); padding-left: 17px; }
@@ -61,10 +61,16 @@
 .draft-status { display: inline-flex; padding: 4px 8px; border-radius: 5px; background: var(--raised); color: var(--muted); font-size: 12px; }
 .draft-status.is-approved { background: color-mix(in srgb, var(--success) 12%, var(--surface)); color: var(--success); }
 .draft-status.is-blocked { background: color-mix(in srgb, var(--error) 10%, var(--surface)); color: var(--error); }
-.saved-job-actions { display: flex; align-items: center; justify-content: flex-start; gap: 8px; }
+.saved-job-actions { display: flex; align-items: center; gap: 8px; }
+.saved-job-action { display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; min-height: 44px; padding: 8px; border: 1px solid var(--muted); border-radius: 5px; background: var(--surface); color: var(--ink); font: inherit; font-size: 13px; font-weight: 650; line-height: 1.4; white-space: nowrap; cursor: pointer; }
+.saved-job-action:disabled { opacity: .55; cursor: not-allowed; }
+.saved-job-action-primary { width: 112px; border-color: var(--blue); background: var(--blue); color: #fff; }
+.saved-job-action-primary:hover:not(:disabled) { background: color-mix(in srgb, var(--blue) 88%, var(--ink)); }
+.saved-job-action-secondary { width: 64px; }
+.saved-job-action-destructive { width: 72px; margin-left: 8px; border-color: var(--error); color: var(--error); }
+.saved-job-action-secondary:hover:not(:disabled) { background: var(--raised); }
+.saved-job-action-destructive:hover:not(:disabled) { background: color-mix(in srgb, var(--error) 8%, var(--surface)); }
 .current-target { display: inline-flex; align-items: center; min-height: 24px; padding: 3px 8px; border-radius: 5px; background: var(--raised); color: var(--link); font-size: 11px; font-weight: 650; white-space: nowrap; }
-.saved-job-actions .secondary-button { min-width: 64px; min-height: 44px; }
-.saved-job-actions .text-button { min-height: 44px; white-space: nowrap; }
 .saved-jobs-empty { display: grid; justify-items: start; gap: 16px; width: min(100%, 760px); margin: 32px auto; padding: 32px; border: 1px dashed var(--line); border-radius: 8px; background: var(--surface); }
 .saved-jobs-empty .job-dialog-form { width: 100%; padding: 0; }
 .saved-jobs-empty > .saved-jobs-intake { width: 100%; margin: 0; padding: 0; border: 0; background: transparent; }
@@ -145,7 +151,7 @@
   .saved-job-row td[data-label="Posting"], .saved-job-row td[data-label="Next action"] { grid-column: 1 / -1; }
   .saved-job-row td[data-label="Draft status"] { grid-column: 1; }
   .saved-job-row[aria-current=true] td:first-child { padding-left: 13px; }
-  .saved-job-actions { justify-content: flex-start; gap: 8px; }
+  .saved-job-actions { flex-wrap: wrap; }
 }
 @media (max-width: 760px) {
   .saved-jobs-page { padding: 16px 16px 24px; }
@@ -167,8 +173,6 @@
   .saved-job-select { flex-basis: 24px; }
   .saved-job-row { grid-template-columns: minmax(0, 1fr); }
   .saved-job-row td[data-label="Draft status"], .saved-job-row td[data-label="Next action"] { grid-column: auto; }
-  .saved-job-actions { justify-content: space-between; }
-  .saved-job-actions .text-button { padding-inline: 8px; }
   .job-dialog-heading, .job-dialog-form { padding-inline: 20px; }
   .job-dialog-form .form-grid { grid-template-columns: minmax(0, 1fr); }
   .job-dialog-form .wide-field { grid-column: auto; }
