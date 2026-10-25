@@ -1,3 +1,5 @@
+import { normalizeJobResearchUrl } from './job-research'
+
 const trackingParameters = new Set(['gclid', 'fbclid', 'li_fat_id', 'mc_cid', 'mc_eid'])
 
 /** Canonicalize transport-only URL variation without erasing posting identity. */
@@ -24,11 +26,21 @@ export function leverPostingIdentity(value: string): string | null {
   return null
 }
 
+export function directPostingIdentity(value: string): string | null {
+  try {
+    const selected = normalizeJobResearchUrl(value)
+    return `${selected.provider}:${selected.canonicalUrl}`
+  } catch { return null }
+}
+
 export function samePostingSource(a: { submittedUrl: string; finalUrl: string; sourceIdentity?: string }, b: { submittedUrl: string; finalUrl: string; sourceIdentity?: string }): boolean {
   // Persisted identity/canonical hints are untrusted; derive provider IDs only from validated URLs.
   const aProvider = leverPostingIdentity(a.submittedUrl) ?? leverPostingIdentity(a.finalUrl)
   const bProvider = leverPostingIdentity(b.submittedUrl) ?? leverPostingIdentity(b.finalUrl)
   if (aProvider && bProvider) return aProvider === bProvider
+  const aDirect = directPostingIdentity(a.submittedUrl)
+  const bDirect = directPostingIdentity(b.submittedUrl)
+  if (aDirect && bDirect && !aProvider && !bProvider) return aDirect === bDirect
   const aUrls = new Set([normalizePostingUrl(a.submittedUrl), normalizePostingUrl(a.finalUrl)].filter((item): item is string => !!item))
   return [normalizePostingUrl(b.submittedUrl), normalizePostingUrl(b.finalUrl)].some(item => !!item && aUrls.has(item))
 }

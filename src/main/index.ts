@@ -29,6 +29,7 @@ import { factualCheckReportSchema } from '../shared/factual-report'
 import { regenerationProposalSchema, regenerationResultSchema, regenerationTargetSchema } from '../shared/regeneration'
 import { mutateDraftRecordInputSchema } from '../shared/draft-records'
 import { validateLeverPostingUrl, type SafePostingFetchOptions } from './safe-posting-fetch'
+import { normalizeJobResearchUrl } from '../shared/job-research'
 import { postingPreviewEditSchema, postingReviewSchema } from '../shared/posting-import'
 
 let window: BrowserWindow | undefined
@@ -370,8 +371,9 @@ app.whenReady().then(() => {
     return await workspace!.api.cancelPostingFetch(uuidSchema.parse(args[0]))
   })
   ipcMain.handle('posting-import:open-source', async (event, ...args: unknown[]) => {
-    trusted(event); if (args.length !== 1 || typeof args[0] !== 'string' || !validateLeverPostingUrl(args[0])) throw new Error('Only a validated HTTPS Lever posting can be opened.')
-    await openOriginalPosting(args[0]); return { ok: true, message: 'Opened the posting in your default browser.' }
+    trusted(event); if (args.length !== 1 || typeof args[0] !== 'string') throw new Error('Expected a public posting link.')
+    const selected = validateLeverPostingUrl(args[0]) ? args[0] : normalizeJobResearchUrl(args[0]).canonicalUrl
+    await openOriginalPosting(selected); return { ok: true, message: 'Opened the posting in your default browser.' }
   })
   ipcMain.handle('consent:outbound:preview', async (event, ...args: unknown[]) => {
     trusted(event); if (args.length !== 1) throw new Error('Expected saved job ID')

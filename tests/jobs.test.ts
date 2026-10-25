@@ -566,7 +566,7 @@ test('posting fetch rejects unsupported links before contacting a source and can
       lookup: async () => { dnsLookups++; return [{ address: '8.8.4.4', family: 4 }] },
       request: async () => new Promise(resolve => { requestStarted(); resolveLate = resolve })
     })
-    await expect(apiWorkbench.api.startPostingFetch('https://unknown.example/job')).rejects.toThrow(/Lever job-detail/)
+    await expect(apiWorkbench.api.startPostingFetch('https://unknown.example/job')).rejects.toThrow(/public HTTPS/)
     expect(dnsLookups).toBe(0)
     const active = await apiWorkbench.api.startPostingFetch('https://api.lever.co/v0/postings/example-board/cancel-me')
     await startedRequest

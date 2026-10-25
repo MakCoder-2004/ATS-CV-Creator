@@ -40,7 +40,7 @@ const boundedPostingSnapshotText = z.string()
 export const postingSourceSnapshotSchema = z.object({
   title: z.string().max(200), company: requiredText(200).nullable(), description: boundedPostingSnapshotText,
   submittedUrl: z.string().url(), finalUrl: z.string().url(), sourceIdentity: z.string().min(1).max(500), capturedAt: z.string().datetime(),
-  extractionMethod: z.enum(['lever-json-v1', 'lever-html-jsonld-v1', 'lever-html-static-v1']), extractionVersion: z.literal(1),
+  extractionMethod: z.enum(['lever-json-v1', 'lever-html-jsonld-v1', 'lever-html-static-v1', 'linkedin-public-html-v1', 'public-jsonld-v1']), extractionVersion: z.literal(1),
   optionalDetails: postingOptionalDetailsSchema,
   conflicts: z.array(postingFieldConflictSchema).default([]),
   hashes: z.object({ title: z.string().length(64), company: z.string().length(64).nullable(), description: z.string().length(64) }).strict(),

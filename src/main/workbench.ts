@@ -12,8 +12,8 @@ import { migrateLegacyOpenRouterWorkspace } from './pi-settings-migration'
 import { defaultOpenRouterModel, openRouterModelSchema } from '../shared/openrouter-settings'
 import { contactInputSchema, contactRecordSchema, evidenceRevisionSchema, profileEntryInputSchema, profileEntrySchema, profileMutationResultSchema, profileSnapshotSchema, skillInputSchema, skillRecordSchema, uuidSchema, type ContactRecord, type EvidenceRevision, type ProfileEntry, type ProfileSnapshot, type SkillRecord } from '../shared/profile'
 import { experienceInputSchema, experienceRecordSchema, experienceSnapshotSchema, experienceMutationResultSchema, projectInputSchema, projectRecordSchema, type ExperienceRecord, type ProjectRecord, type FactualItemRecord, type ExperienceSnapshot } from '../shared/experience'
-import { jobInputSchema, jobRecordSchema, jobSaveResultSchema, jobDeletionSelectionSchema, jobDeletionPreviewSchema, jobDeletionResultSchema, MAX_JOB_RECORD_UTF8_BYTES, MAX_POSTING_REVISIONS, legacyDraftTargetBaseline, postingOptionalFieldNames, postingRefreshChoiceSchema, type PostingRefreshChoice } from '../shared/jobs'
-import { normalizePostingUrl, samePostingSource } from '../shared/posting-identity'
+import { emptyPostingOptionalDetails, jobInputSchema, jobRecordSchema, jobSaveResultSchema, jobDeletionSelectionSchema, jobDeletionPreviewSchema, jobDeletionResultSchema, MAX_JOB_RECORD_UTF8_BYTES, MAX_POSTING_REVISIONS, legacyDraftTargetBaseline, postingOptionalFieldNames, postingRefreshChoiceSchema, type PostingRefreshChoice } from '../shared/jobs'
+import { directPostingIdentity, normalizePostingUrl, samePostingSource } from '../shared/posting-identity'
 import type { JobRecord } from '../shared/jobs'
 import { profileExchangeSchema, type ProfileExchange } from '../shared/profile-exchange'
 import { prepareOutboundBundle, type ConsentSource, type EvidenceScopeRevision, type OutboundBundle, type OutboundPayload } from '../shared/outbound-consent'
@@ -39,6 +39,9 @@ import { generationRecoverySnapshotSchema } from '../shared/generation-recovery'
 import { profilePdfProposalSchema, type ProfilePdfProposal } from '../shared/profile-pdf-import'
 import { postingFetchStateSchema, postingPreviewEditSchema, postingReviewSchema, type PostingPreviewEdit } from '../shared/posting-import'
 import { fetchLeverPosting, validateLeverPostingUrl, type SafePostingFetchOptions } from './safe-posting-fetch'
+import { fetchDirectJobResearch, type JobResearchFetchOptions } from './job-research-fetch'
+import { jobResearchRunSchema, normalizeJobResearchUrl, type JobResearchRun } from '../shared/job-research'
+import { postingPreviewSchema, type PostingPreview } from '../shared/posting-import'
 
 type NestedInput = { id?: string; text: string }
 type NestedRecord = { id: string; revision: number; text: string }
@@ -55,6 +58,24 @@ function repairsIncompletePosting(source: import('../shared/posting-import').Pos
   const descriptionNeedsRepair = source.notices.some(notice => /source did not provide posting text|structured source sections could not be interpreted|lacks enough posting-detail structure/i.test(notice))
   const descriptionIsComplete = hasCompleteReviewedPostingText(working.description) && (!descriptionNeedsRepair || working.description !== source.description)
   return titleIsConsciouslySupplied && !!working.company.trim() && descriptionIsComplete
+}
+class DirectResearchNotice extends Error {}
+function completeDirectPreview(input: string, result: JobResearchRun): PostingPreview | null {
+  const run = jobResearchRunSchema.parse(result)
+  const selected = normalizeJobResearchUrl(input)
+  if (run.status !== 'full' || run.selected.canonicalUrl !== selected.canonicalUrl || run.selected.provider !== selected.provider) return null
+  const full = run.findings.filter(finding => finding.kind === 'direct-role-text' && finding.completeness === 'full')
+  if (full.length !== 1) return null
+  const source = run.sources.find(item => item.id === full[0].sourceId)
+  if (!source || source.method !== 'direct-html' || source.identity !== 'exact-role' || !source.title?.trim() || !source.employer?.trim() || !full[0].text.trim()) return null
+  if (source.title.length > 200 || source.employer.length > 200 || source.url !== selected.canonicalUrl) return null
+  return postingPreviewSchema.parse({ title: source.title, company: source.employer, description: full[0].text,
+    optionalDetails: emptyPostingOptionalDetails(), submittedUrl: selected.canonicalUrl, finalUrl: source.url,
+    notices: ['Direct public posting text was captured for this exact role. Review the full wording and employer before saving; availability and completeness cannot be guaranteed.'], conflicts: [],
+    extractionMethod: selected.provider === 'linkedin' ? 'linkedin-public-html-v1' : 'public-jsonld-v1' })
+}
+function postingSourceIdentity(value: string): string | null {
+  return leverSourceIdentity(value) ?? directPostingIdentity(value)
 }
 function leverSourceIdentity(value: string): string | null {
   try {
@@ -92,7 +113,7 @@ function preserveKnownFindings(checked: ReturnType<typeof checkDraftFacts>, prio
   return factualCheckReportSchema.parse({ ...checked, passed: checked.passed && known.length === 0, findings })
 }
 
-export function createWorkbench(userData: string, _legacySecureStorage?: unknown, scriptedTransport?: AnalysisTransport, recoveryHooks?: { beforeGraphCheckpoint?: (metadata: import('@langchain/langgraph').CheckpointMetadata) => void; workspaceBackupMaxBytes?: number }, safePostingFetchOptions?: SafePostingFetchOptions, piRuntime?: PiModelRuntime | Promise<PiModelRuntime | null>): { api: WorkbenchStorageAPI; authorizeOutboundPayload<T>(runId: string, payload: T): T; backup: WorkspaceBackupEngine; beginJobOperation(jobId: string, action: string): () => void; hasActiveWork(): boolean; close(): void } {
+export function createWorkbench(userData: string, _legacySecureStorage?: unknown, scriptedTransport?: AnalysisTransport, recoveryHooks?: { beforeGraphCheckpoint?: (metadata: import('@langchain/langgraph').CheckpointMetadata) => void; workspaceBackupMaxBytes?: number }, safePostingFetchOptions?: SafePostingFetchOptions & { research?: JobResearchFetchOptions }, piRuntime?: PiModelRuntime | Promise<PiModelRuntime | null>): { api: WorkbenchStorageAPI; authorizeOutboundPayload<T>(runId: string, payload: T): T; backup: WorkspaceBackupEngine; beginJobOperation(jobId: string, action: string): () => void; hasActiveWork(): boolean; close(): void } {
   mkdirSync(userData, { recursive: true })
   const db = new Database(join(userData, 'workbench.sqlite'))
   registerWorkspaceBackupRowSizer(db)
@@ -888,7 +909,8 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       return tx()
     },
     async startPostingFetch(input: string) {
-      if (!validateLeverPostingUrl(input)) throw new Error('Only a named HTTPS Lever job-detail link is supported. Paste posting text instead for other sources.')
+      const lever = validateLeverPostingUrl(input)
+      if (!lever) normalizeJobResearchUrl(input)
       if ([...postingFetches.values()].some(fetch => fetch.state.status === 'fetching')) throw new Error('A posting fetch is already active. Cancel it or wait for it to finish.')
       for (const prior of postingFetches.values()) if (prior.state.status === 'ready' || prior.state.status === 'incomplete') { prior.state = { status: 'cancelled' }; prior.reviewed = undefined; prior.working = undefined }
       while (postingFetches.size >= 5) {
@@ -898,7 +920,14 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       }
       const token = randomUUID(), controller = new AbortController()
       postingFetches.set(token, { controller, state: { status: 'fetching' }, revision: 0 })
-      void fetchLeverPosting(input, { ...safePostingFetchOptions, signal: controller.signal }).then(preview => {
+      const request = lever
+        ? fetchLeverPosting(input, { ...safePostingFetchOptions, signal: controller.signal })
+        : fetchDirectJobResearch(input, { ...safePostingFetchOptions?.research, signal: controller.signal }).then(run => {
+          const preview = completeDirectPreview(input, run)
+          if (!preview) throw new DirectResearchNotice(run.unknowns[0] ?? 'No complete exact-role posting with a named employer was found. Nothing can be saved from this source.')
+          return preview
+        })
+      void request.then(preview => {
         const current = postingFetches.get(token)
         if (!current || current.controller.signal.aborted) return
         const incomplete = preview.conflicts.length > 0 || preview.notices.some(notice => notice.includes('preview is incomplete') || notice.startsWith('Unresolved source conflict:')) || !preview.title || !preview.company || !preview.description
@@ -907,7 +936,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       }).catch(error => {
         const current = postingFetches.get(token)
         if (!current) return
-        current.state = controller.signal.aborted ? { status: 'cancelled' } : { status: 'failed', message: error instanceof Error ? error.message : 'The posting could not be fetched. Open it or paste posting text instead.' }
+        current.state = controller.signal.aborted ? { status: 'cancelled' } : error instanceof DirectResearchNotice ? { status: 'research-notice', message: `${error.message} Direct research is incomplete; nothing was saved. Open the original source or paste complete posting text instead.` } : { status: 'failed', message: error instanceof Error ? error.message : 'The posting could not be fetched. Open it or paste posting text instead.' }
       })
       return { token }
     },
@@ -992,7 +1021,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       }
       if (Object.keys(review.conflictResolutions).some(id => !source.conflicts.some(conflict => conflict.id === id))) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'A conflict resolution does not belong to this posting preview.' } })
       if (companyOnlyIncomplete && (parsed.title !== source.title || parsed.description !== source.description)) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'This source only allows a reviewed employer-name correction; its incomplete posting content cannot be replaced here.' } })
-      const sourceIdentity = leverSourceIdentity(source.submittedUrl)
+      const sourceIdentity = postingSourceIdentity(source.submittedUrl)
       if (!sourceIdentity) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'The posting source identity could not be verified.' } })
       const known = (db.prepare('SELECT data FROM jobs').all() as { data: string }[]).map(row => jobRecordSchema.parse(JSON.parse(row.data)))
       if (known.some(job => job.sourceSnapshot && samePostingSource(job.sourceSnapshot, source))) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'This exact source is already saved. Open the existing posting instead; no duplicate was created.' } })
@@ -1033,7 +1062,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       const prior = jobRecordSchema.parse(JSON.parse(row.data)), source = pending.state.preview, reviewed = pending.reviewed.input
       if (prior.updatedAt !== expectedUpdatedAt || (prior.revisions.at(-1)?.revision ?? 0) !== expectedBaseRevision) return invalid('The saved posting changed while this refresh was being reviewed. Nothing was replaced; compare again.')
       if (!prior.sourceSnapshot || !samePostingSource(prior.sourceSnapshot, source)) return invalid('This refresh does not match the saved posting’s exact source identity.')
-      const sourceIdentity = leverSourceIdentity(source.submittedUrl)
+      const sourceIdentity = postingSourceIdentity(source.submittedUrl)
       if (!sourceIdentity) return invalid('The refreshed source identity could not be verified.')
       const choose = (field: 'title' | 'company' | 'description') => checkedChoices.data[field] === 'source' ? reviewed[field] : prior[field]
       const optionalDetails = Object.fromEntries(postingOptionalFieldNames.map(field => [field, checkedChoices.data.optionalDetails[field] === 'source' ? reviewed.optionalDetails?.[field] ?? source.optionalDetails[field] : prior.optionalDetails[field]])) as typeof prior.optionalDetails
