@@ -36,6 +36,12 @@ function App() {
   const [activeJob, setActiveJob] = useState<JobRecord | null>(null)
   const [workspaceRevision, setWorkspaceRevision] = useState(0)
   const [reviewedResearch, setReviewedResearch] = useState<{ token: string; reviewed: ReviewedJobResearch } | null>(null)
+  const pageRef = useRef<Page>('Tailor CV')
+  function navigate(next: Page) {
+    pageRef.current = next
+    if (next !== 'Saved jobs') setReviewedResearch(null)
+    setPage(next)
+  }
   const contentRef = useRef<HTMLElement>(null)
   const jobOpenSequence = useRef(0)
   useEffect(() => {
@@ -92,8 +98,8 @@ function App() {
     <a className="skip" href="#content">Skip to content</a>
     <aside id="workspace-sidebar" className="sidebar" aria-label="Workspace navigation">
       <div className="sidebar-top"><div className="brand"><span className="brand-icon"><LayoutPanelLeft aria-hidden="true" size={20} /></span><div className="brand-name"><strong>CV Tailor</strong><small>Your experience, supported.</small></div></div><button type="button" className="sidebar-toggle" aria-controls="workspace-sidebar" aria-expanded={!sidebarCollapsed} aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'} title={sidebarCollapsed ? 'Expand sidebar' : undefined} onClick={() => setSidebarCollapsed(value => !value)}>{sidebarCollapsed ? <PanelLeftOpen size={18} aria-hidden="true" /> : <PanelLeftClose size={18} aria-hidden="true" />}<span className="sidebar-toggle-label">Collapse sidebar</span></button><AppearanceControls className="sidebar-appearance" appearance={appearance} change={value => void changeAppearance(value)} /></div>
-      <nav aria-label="Main navigation">{pages.map(({ label, icon: Icon }) => <button type="button" key={label} aria-label={label} title={sidebarCollapsed ? label : undefined} aria-current={page === label ? 'page' : undefined} onClick={() => setPage(label)}><Icon size={18} aria-hidden="true" /><span className="sidebar-nav-label">{label}</span></button>)}</nav>
-      <div className="sidebar-jobs"><div className="section-label">Saved jobs <span>{jobs.length}</span></div>{jobs.length > 0 && <div className="sidebar-job-items">{jobs.map(job => <button type="button" key={job.id} aria-current={activeJob?.id === job.id ? 'true' : undefined} onClick={() => { setPage('Tailor CV'); void activateJob(job.id) }}>{job.title}<small>{job.company}</small></button>)}</div>}<button type="button" className="sidebar-new-job" onClick={() => setPage('Saved jobs')}><Plus size={16} aria-hidden="true" /> New job</button></div>
+      <nav aria-label="Main navigation">{pages.map(({ label, icon: Icon }) => <button type="button" key={label} aria-label={label} title={sidebarCollapsed ? label : undefined} aria-current={page === label ? 'page' : undefined} onClick={() => navigate(label)}><Icon size={18} aria-hidden="true" /><span className="sidebar-nav-label">{label}</span></button>)}</nav>
+      <div className="sidebar-jobs"><div className="section-label">Saved jobs <span>{jobs.length}</span></div>{jobs.length > 0 && <div className="sidebar-job-items">{jobs.map(job => <button type="button" key={job.id} aria-current={activeJob?.id === job.id ? 'true' : undefined} onClick={() => { navigate('Tailor CV'); void activateJob(job.id) }}>{job.title}<small>{job.company}</small></button>)}</div>}<button type="button" className="sidebar-new-job" onClick={() => navigate('Saved jobs')}><Plus size={16} aria-hidden="true" /> New job</button></div>
       <div className="sidebar-bottom"><div className="storage-note">Personal workspace<br /><span>Saved on this device</span></div></div>
     </aside>
     <div className="workspace-main">
@@ -101,11 +107,11 @@ function App() {
       {error && <p role="alert" className="error">{error}</p>}
       {backupStatus && !backupStatus.backupable && <aside className="backup-capacity-warning" role="status" aria-label="Workspace backup limits">
         <AlertTriangle size={20} aria-hidden="true" /><div><p><strong>This workspace is above its backup safety limits.</strong></p><p>Saved data remains intact. Backups and changes that increase stored size are blocked; no history is deleted. A shorter working posting helps only if the complete saved record becomes smaller.</p></div>
-        <button type="button" className="secondary-button" onClick={() => setPage('Saved jobs')}>Review saved postings</button>
+        <button type="button" className="secondary-button" onClick={() => navigate('Saved jobs')}>Review saved postings</button>
       </aside>}
       <main id="content" ref={contentRef} tabIndex={-1}>
         {(page === 'My profile' || page === 'Settings') && <div className="title"><span className="context">Personal workspace</span><h1>{page}</h1><p>{page === 'My profile' ? 'Keep the career facts that support your CV in one place.' : 'Choose a Pi model and manage your review preferences.'}</p></div>}
-        {page === 'Tailor CV' ? <WorkbenchStart key={workspaceRevision} activeJob={activeJob} onNavigate={setPage} /> : page === 'My profile' ? <ProfileEditor key={workspaceRevision} /> : page === 'Saved jobs' ? <SavedJobs key={workspaceRevision} jobs={jobs} activeJob={activeJob} onSaved={keepJob} onOpened={keepJob} onDeleted={afterJobsDeleted} onNavigate={setPage} reviewedResearch={reviewedResearch} onReviewedResearch={(token, reviewed) => setReviewedResearch({ token, reviewed })} onDiscardReviewedResearch={() => setReviewedResearch(null)} /> : <div className="settings-page"><PiSettingsPanel key={workspaceRevision} /><WorkspaceBackup onRestored={afterWorkspaceRestore} /></div>}
+        {page === 'Tailor CV' ? <WorkbenchStart key={workspaceRevision} activeJob={activeJob} onNavigate={navigate} /> : page === 'My profile' ? <ProfileEditor key={workspaceRevision} /> : page === 'Saved jobs' ? <SavedJobs key={workspaceRevision} jobs={jobs} activeJob={activeJob} onSaved={keepJob} onOpened={keepJob} onDeleted={afterJobsDeleted} onNavigate={navigate} reviewedResearch={reviewedResearch} onReviewedResearch={(token, reviewed) => { if (pageRef.current === 'Saved jobs') setReviewedResearch({ token, reviewed }) }} onDiscardReviewedResearch={() => setReviewedResearch(null)} /> : <div className="settings-page"><PiSettingsPanel key={workspaceRevision} /><WorkspaceBackup onRestored={afterWorkspaceRestore} /></div>}
       </main>
     </div>
   </div>

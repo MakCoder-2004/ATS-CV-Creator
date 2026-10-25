@@ -988,7 +988,10 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
     async readPostingPreview(token: string) {
       const checked = uuidSchema.safeParse(token)
       if (!checked.success) return postingFetchStateSchema.parse({ status: 'failed', message: 'This temporary preview is no longer available.' })
-      return postingFetchStateSchema.parse(livePostingFetch(checked.data)?.state ?? { status: 'failed', message: 'This temporary preview is no longer available.' })
+      const fetch = livePostingFetch(checked.data)
+      const state = fetch?.state ?? { status: 'failed', message: 'This temporary preview is no longer available.' }
+      return postingFetchStateSchema.parse(fetch?.selected && (state.status === 'ready' || state.status === 'incomplete' || state.status === 'research-notice')
+        ? { ...state, expiresAt: fetch.expiresAt } : state)
     },
     // Main-only, one-time transfer of an app-captured run; the renderer never supplies evidence.
     takePostingResearchRun(token: string) {

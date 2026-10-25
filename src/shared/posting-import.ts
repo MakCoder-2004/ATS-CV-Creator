@@ -14,11 +14,13 @@ export const postingRefreshComparisonSchema = z.discriminatedUnion('ok', [
   z.object({ ok: z.literal(false), message: z.string() }).strict()
 ])
 export type PostingRefreshComparison = z.infer<typeof postingRefreshComparisonSchema>
+// The original main-process fetch deadline, not the time the renderer received its result.
+const postingExpiresAtSchema = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional()
 export const postingFetchStateSchema = z.discriminatedUnion('status', [
   z.object({ status: z.literal('fetching') }).strict(),
-  z.object({ status: z.literal('ready'), preview: postingPreviewSchema }).strict(),
-  z.object({ status: z.literal('incomplete'), preview: postingPreviewSchema }).strict(),
-  z.object({ status: z.literal('research-notice'), message: z.string() }).strict(),
+  z.object({ status: z.literal('ready'), preview: postingPreviewSchema, expiresAt: postingExpiresAtSchema }).strict(),
+  z.object({ status: z.literal('incomplete'), preview: postingPreviewSchema, expiresAt: postingExpiresAtSchema }).strict(),
+  z.object({ status: z.literal('research-notice'), message: z.string(), expiresAt: postingExpiresAtSchema }).strict(),
   z.object({ status: z.literal('failed'), message: z.string() }).strict(),
   z.object({ status: z.literal('cancelled') }).strict()
 ])

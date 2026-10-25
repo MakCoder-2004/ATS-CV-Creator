@@ -6,6 +6,39 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 // Development-only, synthetic public source and Pi; the installed app never enables this seam.
+test('delayed full source preview clears at the original fetch deadline, not 15 minutes after receipt', async () => {
+  test.setTimeout(90_000)
+  const root = mkdtempSync(join(tmpdir(), 'cv-research-expiry-'))
+  const userData = join(root, 'workspace'), appData = join(root, 'appdata')
+  mkdirSync(userData); mkdirSync(appData)
+  let app: Awaited<ReturnType<typeof electron.launch>> | undefined
+  try {
+    app = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], timeout: 45_000, env: {
+      ...process.env, APPDATA: appData, CV_TAILOR_TEST_STORAGE_ROOT: root, CV_TAILOR_TEST_APP_DATA_DIR: appData,
+      CV_TAILOR_TEST_USER_DATA_DIR: userData, CV_TAILOR_TEST_RESEARCH: 'full-delayed'
+    } })
+    const page = await app.firstWindow({ timeout: 20_000 })
+    await expect(page.locator('[data-ui-ready="true"]')).toBeVisible()
+    await page.getByRole('button', { name: 'Saved jobs', exact: true }).click()
+    await page.getByRole('button', { name: 'Import from link' }).click()
+    await page.getByLabel('Public job posting link').fill('https://www.linkedin.com/jobs/view/4464025097/')
+    await page.clock.install() // Before the first public read, not after the response.
+    await page.getByRole('button', { name: 'Fetch posting' }).click()
+    await expect(page.getByRole('button', { name: 'Fetching…' })).toBeVisible()
+    await page.clock.fastForward(2 * 60_000) // Backend test fixture has not replied yet.
+    await expect(page.getByRole('button', { name: 'Fetching…' })).toBeVisible()
+    const temporary = page.getByRole('region', { name: 'Temporary direct posting preview' })
+    await expect(temporary).toContainText('Synthetic Research Engineer')
+    await page.clock.fastForward(13 * 60_000 + 5_000)
+    await expect(temporary).toHaveCount(0)
+    await expect(page.getByRole('alert').filter({ hasText: 'Temporary posting and research expired' })).toBeVisible()
+    expect(readFileSync(join(userData, 'research-direct-requests.log'), 'utf8').trim().split('\n')).toHaveLength(1)
+  } finally {
+    await app?.close().catch(() => {})
+    await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 })
+  }
+})
+
 test('selected LinkedIn search URL → full temporary review → outgoing consent → source-linked analysis without persistence', async () => {
   test.setTimeout(150_000)
   const root = mkdtempSync(join(tmpdir(), 'cv-research-full-'))

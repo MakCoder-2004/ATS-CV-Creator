@@ -130,6 +130,32 @@ test('full public preview expires and discards captured text without another API
   } finally { wb.close(); vi.useRealTimers() }
 })
 
+test('a delayed full public read carries its fetch-start deadline, and a past-deadline read refuses the source', async () => {
+  vi.useFakeTimers()
+  const folder = mkdtempSync(join(tmpdir(), 'cv-direct-deadline-')); folders.push(folder)
+  let release!: (value: { status: number; headers: Record<string, string>; body: Buffer }) => void
+  const pending = new Promise<{ status: number; headers: Record<string, string>; body: Buffer }>(resolve => { release = resolve })
+  const wb = createWorkbench(folder, undefined, undefined, undefined, { research: {
+    lookup: async () => [{ address: '8.8.8.8', family: 4 }], request: async () => pending,
+    extract: async () => ({ outcome: 'full', title: 'Synthetic Engineer', employer: 'Fictional Employer', description: body }),
+  } })
+  try {
+    const startedAt = Date.now()
+    const token = (await wb.api.startPostingFetch(selected)).token
+    expect(await wb.api.readPostingPreview(token)).toEqual({ status: 'fetching' })
+    // Change wall time without firing the bounded request timeout: the source arrives late.
+    vi.setSystemTime(startedAt + 2 * 60_000)
+    release({ status: 200, headers: { 'content-type': 'text/html' }, body: Buffer.from('<html>synthetic</html>') })
+    let state = await wb.api.readPostingPreview(token)
+    for (let i = 0; i < 30 && state.status === 'fetching'; i++) { await Promise.resolve(); state = await wb.api.readPostingPreview(token) }
+    expect(state).toMatchObject({ status: 'ready', expiresAt: startedAt + 15 * 60_000 })
+    expect((await wb.api.readPostingPreview(token))).toMatchObject({ expiresAt: startedAt + 15 * 60_000 })
+    vi.setSystemTime(startedAt + 15 * 60_000)
+    expect(await wb.api.readPostingPreview(token)).toMatchObject({ status: 'failed' })
+    expect(() => wb.api.takePostingResearchRun(token)).toThrow(/unavailable/)
+  } finally { wb.close(); vi.useRealTimers() }
+})
+
 test('handoff clears the posting expiry timer and removes the public preview immediately', async () => {
   vi.useFakeTimers()
   const { wb } = open(() => ({ status: 200, headers: { 'content-type': 'text/html' }, body: Buffer.from('<html>synthetic</html>') }))

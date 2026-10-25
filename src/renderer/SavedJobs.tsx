@@ -55,6 +55,7 @@ export function SavedJobs({ jobs, activeJob, onSaved, onOpened, onDeleted, onNav
   const [preview, setPreview] = useState<import('../shared/posting-import').PostingPreview | null>(null)
   const [capturedPreview, setCapturedPreview] = useState<import('../shared/posting-import').PostingPreview | null>(null)
   const [previewCapturedAt, setPreviewCapturedAt] = useState<string>()
+  const [previewExpiresAt, setPreviewExpiresAt] = useState<number>()
   const [completenessConfirmed, setCompletenessConfirmed] = useState(false)
   const [conflictResolutions, setConflictResolutions] = useState<Record<string, string>>({})
   const [refreshComparison, setRefreshComparison] = useState<{ ok: boolean; unchanged?: boolean; previousSource?: JobRecord['sourceSnapshot']; working?: JobInput; newSource?: PostingPreview; message?: string } | null>(null)
@@ -249,7 +250,7 @@ export function SavedJobs({ jobs, activeJob, onSaved, onOpened, onDeleted, onNav
       setCompletenessConfirmed(true); setMessageError(false)
     } catch { setCompletenessConfirmed(false); setMessage('The preview edit was not accepted. Fetch it again before saving.'); setMessageError(true) }
   }
-  function discardFetchPreview() { onDiscardReviewedResearch?.(); setResearchUrl(undefined); fetchOperationRef.current++; refreshComparisonKeyRef.current = ''; cancelPostingCaptureForManual(window.workbench, fetchToken); setRefreshChoices(defaultRefreshChoices()); setFetching(false); setFetchToken(undefined); setPreview(null); setCapturedPreview(null); setPreviewCapturedAt(undefined); setCompletenessConfirmed(false); setConflictResolutions({}); editRevisionRef.current = 0; editQueueRef.current = Promise.resolve() }
+  function discardFetchPreview() { onDiscardReviewedResearch?.(); setResearchUrl(undefined); fetchOperationRef.current++; refreshComparisonKeyRef.current = ''; cancelPostingCaptureForManual(window.workbench, fetchTokenRef.current); fetchTokenRef.current = undefined; setRefreshChoices(defaultRefreshChoices()); setFetching(false); setFetchToken(undefined); setPreview(null); setCapturedPreview(null); setPreviewCapturedAt(undefined); setPreviewExpiresAt(undefined); setCompletenessConfirmed(false); setConflictResolutions({}); editRevisionRef.current = 0; editQueueRef.current = Promise.resolve() }
   function finishResearchHandoff() { /* Keep the fetch token as the mounted child identity; the child marks it consumed. */ }
   function requestResearchFetchAgain() { discardFetchPreview(); void fetchPosting() }
   function expireTemporaryFetch() {
@@ -258,13 +259,13 @@ export function SavedJobs({ jobs, activeJob, onSaved, onOpened, onDeleted, onNav
     setMessageError(true)
   }
   useEffect(() => {
-    if (!preview || !previewCapturedAt || (preview.extractionMethod !== 'linkedin-public-html-v1' && preview.extractionMethod !== 'public-jsonld-v1')) return
-    const expiresAt = Date.parse(previewCapturedAt) + 15 * 60_000
-    const expire = () => { if (Date.now() >= expiresAt) expireTemporaryFetch() }
-    const timer = window.setTimeout(expire, Math.max(0, expiresAt - Date.now()))
+    if (previewExpiresAt === undefined) return
+    const expire = () => { if (Date.now() >= previewExpiresAt) expireTemporaryFetch() }
+    if (Date.now() >= previewExpiresAt) { expire(); return }
+    const timer = window.setTimeout(expire, Math.max(0, previewExpiresAt - Date.now()))
     document.addEventListener('visibilitychange', expire)
     return () => { window.clearTimeout(timer); document.removeEventListener('visibilitychange', expire) }
-  }, [previewCapturedAt, preview?.extractionMethod])
+  }, [previewExpiresAt])
   function cancelDiscard() { setDiscardIntent(null); setDiscardTargetJobId(undefined) }
   function completeDiscard(intent: 'close' | 'manual' | 'discard' | 'new' | 'open-existing') {
     const targetJobId = intent === 'open-existing' ? discardTargetJobId : undefined
@@ -281,18 +282,22 @@ export function SavedJobs({ jobs, activeJob, onSaved, onOpened, onDeleted, onNav
   function closeIntake() { requestDiscard('close') }
   async function fetchPosting() {
     const operation = ++fetchOperationRef.current
-    onDiscardReviewedResearch?.(); cancelPostingCaptureForManual(window.workbench, fetchToken); setResearchUrl(undefined); setCapturedPreview(null); setPreviewCapturedAt(undefined); setRefreshChoices(defaultRefreshChoices()); setFetching(true); setPreview(null); setFetchToken(undefined); setMessage('Reading the public posting…'); setMessageError(false)
+    onDiscardReviewedResearch?.(); cancelPostingCaptureForManual(window.workbench, fetchTokenRef.current); fetchTokenRef.current = undefined; setResearchUrl(undefined); setCapturedPreview(null); setPreviewCapturedAt(undefined); setPreviewExpiresAt(undefined); setRefreshChoices(defaultRefreshChoices()); setFetching(true); setPreview(null); setFetchToken(undefined); setMessage('Reading the public posting…'); setMessageError(false)
     try {
       const { token } = await window.workbench.startPostingFetch(sourceUrl)
       if (operation !== fetchOperationRef.current) { void window.workbench.cancelPostingFetch(token); return }
+      fetchTokenRef.current = token
       setFetchToken(token)
       while (operation === fetchOperationRef.current) {
         const state = await window.workbench.readPostingPreview(token)
         if (operation !== fetchOperationRef.current) return
         if (state.status === 'fetching') { await new Promise(resolve => window.setTimeout(resolve, 150)); continue }
-        if (state.status === 'ready' || state.status === 'incomplete') { setPreview(state.preview); setCapturedPreview(state.preview); setPreviewCapturedAt(new Date().toISOString()); setCompletenessConfirmed(false); setConflictResolutions({}); editRevisionRef.current = 0; editQueueRef.current = Promise.resolve(); setMessage(state.status === 'incomplete' ? 'The source is incomplete and needs review. Nothing has been saved.' : 'Temporary preview loaded; extraction cannot guarantee completeness. Nothing has been saved.'); setMessageError(state.status === 'incomplete'); break }
+        if ((state.status === 'ready' || state.status === 'incomplete' || state.status === 'research-notice') &&
+          (state.status === 'research-notice' || state.preview.extractionMethod === 'linkedin-public-html-v1' || state.preview.extractionMethod === 'public-jsonld-v1') &&
+          (state.expiresAt === undefined || state.expiresAt <= Date.now())) { expireTemporaryFetch(); break }
+        if (state.status === 'ready' || state.status === 'incomplete') { setPreview(state.preview); setCapturedPreview(state.preview); setPreviewCapturedAt(new Date().toISOString()); setPreviewExpiresAt(state.preview.extractionMethod === 'linkedin-public-html-v1' || state.preview.extractionMethod === 'public-jsonld-v1' ? state.expiresAt : undefined); setCompletenessConfirmed(false); setConflictResolutions({}); editRevisionRef.current = 0; editQueueRef.current = Promise.resolve(); setMessage(state.status === 'incomplete' ? 'The source is incomplete and needs review. Nothing has been saved.' : 'Temporary preview loaded; extraction cannot guarantee completeness. Nothing has been saved.'); setMessageError(state.status === 'incomplete'); break }
         if (state.status === 'cancelled') { setMessage('Fetch cancelled.'); setMessageError(false); break }
-        if (state.status === 'research-notice') { setResearchUrl(sourceUrl); setMessage(`${state.message} Inspect the captured public findings below, or paste complete posting text.`); setMessageError(false); break }
+        if (state.status === 'research-notice') { setPreviewExpiresAt(state.expiresAt); setResearchUrl(sourceUrl); setMessage(`${state.message} Inspect the captured public findings below, or paste complete posting text.`); setMessageError(false); break }
         setMessage(state.message); setMessageError(true); break
       }
     } catch (error) { if (operation === fetchOperationRef.current) { setMessage(error instanceof Error ? error.message : 'Fetch failed. Open the source or paste posting text instead.'); setMessageError(true) } }
