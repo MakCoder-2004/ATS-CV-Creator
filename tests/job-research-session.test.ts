@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { randomUUID } from 'node:crypto'
 import { createJobResearchSessions } from '../src/main/job-research-session'
 import { fetchDirectJobResearch } from '../src/main/job-research-fetch'
@@ -41,6 +41,39 @@ function fixture(url = URL, title = 'Synthetic Engineer — Invented Corp') {
 const tick = () => new Promise(resolve => setTimeout(resolve, 0))
 
 describe('volatile public research session', () => {
+  it('aborts and eagerly evicts reviewed source findings at the deadline without an API read', async () => {
+    vi.useFakeTimers()
+    try {
+      const t = fixture(), run = synthetic('full'), sessions = createJobResearchSessions({ credentials: t.credentials, direct: async () => run })
+      const token = sessions.acceptInitialDirectRun(run).token
+      sessions.reviewJobResearch(token, [run.findings[0].id], false)
+      await vi.advanceTimersByTimeAsync(15 * 60_000)
+      expect(() => sessions.getReviewedRun(token)).toThrow(/expired/)
+      expect(() => sessions.getReviewedRunById(run.id)).toThrow(/No current app-held/)
+      sessions.close()
+    } finally { vi.useRealTimers() }
+  })
+  it('does not extend a fetched capture when it transfers to research', () => {
+    const t = fixture(), run = synthetic('full'), started = Date.parse(run.startedAt)
+    let clock = started + 14 * 60_000
+    const sessions = createJobResearchSessions({ credentials: t.credentials, now: () => clock })
+    const token = sessions.acceptInitialDirectRun(run).token
+    clock = started + 15 * 60_000
+    expect(() => sessions.getJobResearch(token)).toThrow(/expired/)
+    expect(() => sessions.acceptInitialDirectRun(run)).toThrow(/expired/)
+    sessions.close()
+  })
+  it('clears expiry timers when cancelled or closed', async () => {
+    vi.useFakeTimers()
+    try {
+      const t = fixture(), sessions = createJobResearchSessions({ credentials: t.credentials, direct: async () => synthetic('full') })
+      const first = sessions.acceptInitialDirectRun(synthetic('full')).token
+      expect(sessions.cancelJobResearch(first).ok).toBe(true)
+      sessions.acceptInitialDirectRun(synthetic('full'))
+      sessions.close()
+      expect(vi.getTimerCount()).toBe(0)
+    } finally { vi.useRealTimers() }
+  })
   it('never searches on paste/start/read/review; issues only an app-held review and no stored job', async () => {
     const t = fixture(), direct = async () => synthetic('full')
     const sessions = createJobResearchSessions({ credentials: t.credentials, createSearch: t.createSearch, direct })

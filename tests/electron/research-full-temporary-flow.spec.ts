@@ -65,6 +65,14 @@ test('selected LinkedIn search URL → full temporary review → outgoing consen
     expect(await page.evaluate(() => window.workbench.listJobs())).toHaveLength(0)
     await expect(page.getByRole('button', { name: 'Export PDF' })).toHaveCount(0)
     expect(await page.evaluate(() => window.workbench.getWorkspaceBackupStatus())).toEqual(backupStatus)
+    // Advance only the visible renderer clock: backend eager eviction has separate fake-timer unit tests.
+    await page.clock.install()
+    await page.clock.fastForward(15 * 60_000 + 1)
+    await expect(temporary).toHaveCount(0)
+    await expect(outgoing).toHaveCount(0)
+    await expect(page.getByRole('alert').filter({ hasText: 'Temporary posting and research expired' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Fetch posting', exact: true })).toBeVisible()
+    expect(count('research-direct-requests.log')).toBe(1)
     await app.close(); app = undefined
     // Query the actual native database with Electron's ABI, not Node's incompatible SQLite binding.
     const sqlite = join(userData, 'workbench.sqlite')

@@ -43,7 +43,7 @@ export function JobResearchFindings({ run, selected, disabled, onToggle }: { run
 }
 
 /** Source links are text, never untrusted navigation targets. Only the selected canonical role can be opened via the trusted shell method. */
-export function JobResearchReview({ url, postingFetchToken, onPostingHandoff, onFetchAgain, onReviewedResearch, onDiscardReviewedResearch, temporaryFullPosting = false }: { url: string; postingFetchToken?: string; onPostingHandoff?: () => void; onFetchAgain?: () => void; onReviewedResearch?: (token: string, reviewed: ReviewedJobResearch) => void; onDiscardReviewedResearch?: () => void; temporaryFullPosting?: boolean }) {
+export function JobResearchReview({ url, postingFetchToken, onPostingHandoff, onFetchAgain, onReviewedResearch, onDiscardReviewedResearch, onExpired, temporaryFullPosting = false }: { url: string; postingFetchToken?: string; onPostingHandoff?: () => void; onFetchAgain?: () => void; onReviewedResearch?: (token: string, reviewed: ReviewedJobResearch) => void; onDiscardReviewedResearch?: () => void; onExpired?: () => void; temporaryFullPosting?: boolean }) {
   const [token, setToken] = useState<string>()
   const tokenRef = useRef<string | undefined>(undefined)
   const sequence = useRef(0)
@@ -67,6 +67,20 @@ export function JobResearchReview({ url, postingFetchToken, onPostingHandoff, on
     mounted.current = true
     return () => { mounted.current = false; sequence.current++; if (tokenRef.current) void window.workbench.cancelJobResearch(tokenRef.current).catch(() => {}) }
   }, [])
+  useEffect(() => {
+    if (!run) return
+    const expiresAt = Date.parse(run.startedAt) + 15 * 60_000
+    const expire = () => {
+      if (Date.now() < expiresAt) return
+      cancel()
+      onExpired?.()
+      setNotice('Temporary findings expired. Fetch posting again to continue.')
+      setHandoffUnavailable(true)
+    }
+    const timer = window.setTimeout(expire, Math.max(0, expiresAt - Date.now()))
+    document.addEventListener('visibilitychange', expire)
+    return () => { window.clearTimeout(timer); document.removeEventListener('visibilitychange', expire) }
+  }, [run])
   function show(state: ResearchState) {
     if (state.status === 'ready') {
       setRun(state.run); setSelected([]); setAcknowledged(false); setReviewed(undefined)

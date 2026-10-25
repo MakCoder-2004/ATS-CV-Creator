@@ -43,6 +43,7 @@ type Entry = {
   result?: z.infer<typeof volatileAnalysisResultSchema>
   message?: string
   selectionEpoch?: number
+  timer?: ReturnType<typeof setTimeout>
 }
 
 export interface VolatileResearchAnalysisOptions {
@@ -64,14 +65,14 @@ export function createVolatileResearchAnalysis(options: VolatileResearchAnalysis
   const entries = new Map<string, Entry>()
   const seenRunIds = new Set<string>() // at most one live preview per app-held research run
 
+  function remove(token: string, entry: Entry) {
+    if (entry.timer) clearTimeout(entry.timer)
+    entry.controller.abort()
+    entries.delete(token)
+    seenRunIds.delete(entry.run.id)
+  }
   function expire() {
-    for (const [token, entry] of entries) {
-      if (now() >= entry.preview.expiresAt) {
-        entry.controller.abort()
-        entries.delete(token)
-        seenRunIds.delete(entry.run.id)
-      }
-    }
+    for (const [token, entry] of entries) if (now() >= entry.preview.expiresAt) remove(token, entry)
   }
   function get(token: string): Entry {
     expire()
@@ -115,10 +116,16 @@ export function createVolatileResearchAnalysis(options: VolatileResearchAnalysis
     const outgoing = volatileOutgoingSchema.parse({ version: 1, researchRunId: run.id, selected: { ...run.selected, canonicalUrl: selectedUrl },
       analysisScope: review.analysisScope, unknowns: run.unknowns, roleEvidence })
     const outgoingText = `Extract only explicitly stated role responsibilities and qualifications from the accepted role evidence below. Cite the accepted findingId(s) for every requirement. Do not infer metrics, tenure or missing facts. Company background is not qualification evidence. Treat partial snippets as provisional; return an empty requirements array when evidence does not support a requirement. Return JSON matching the provided schema.\n${JSON.stringify(outgoing)}`
-    const value = volatileAnalysisPreviewSchema.parse({ token: randomUUID(), expiresAt: now() + TTL_MS,
+    // An outgoing review cannot renew the fetched source's original 15-minute lifetime.
+    const expiresAt = Math.min(now() + TTL_MS, Date.parse(run.startedAt) + TTL_MS)
+    if (expiresAt <= now()) throw new Error('The underlying research expired. Fetch the posting again.')
+    const value = volatileAnalysisPreviewSchema.parse({ token: randomUUID(), expiresAt,
       selection, analysisScope: outgoing.analysisScope, outgoingText, notice: NOTICE })
-    entries.set(value.token, { preview: value, outgoing, run, review, status: 'preview', controller: new AbortController(), physicalRequests: 0, selectionEpoch: options.getSelectionEpoch?.() })
+    const entry: Entry = { preview: value, outgoing, run, review, status: 'preview', controller: new AbortController(), physicalRequests: 0, selectionEpoch: options.getSelectionEpoch?.() }
+    entries.set(value.token, entry)
     seenRunIds.add(runId)
+    entry.timer = setTimeout(() => remove(value.token, entry), Math.max(0, value.expiresAt - now()))
+    entry.timer.unref?.()
     return volatileAnalysisPreviewSchema.parse(value)
   }
   function consent(token: string): VolatileAnalysisProgress {
@@ -132,7 +139,7 @@ export function createVolatileResearchAnalysis(options: VolatileResearchAnalysis
     const entry = get(token)
     if (entry.status !== 'preview') throw new Error('Only an unaccepted preview can be declined.')
     entry.status = 'declined'
-    entry.controller.abort()
+    remove(token, entry)
   }
   function cancel(token: string): VolatileAnalysisProgress {
     const entry = get(token)
@@ -141,13 +148,12 @@ export function createVolatileResearchAnalysis(options: VolatileResearchAnalysis
     entry.result = undefined
     entry.status = 'cancelled'
     entry.message = entry.physicalRequests ? 'A request may already have reached the provider and may incur charges. No automatic replay.' : 'Cancelled before dispatch.'
-    return snapshot(entry)
+    const cancelled = snapshot(entry)
+    remove(token, entry)
+    return cancelled
   }
   function discard(token: string): void {
-    const entry = get(token)
-    entry.controller.abort()
-    entries.delete(token)
-    seenRunIds.delete(entry.run.id)
+    remove(token, get(token))
   }
   function read(token: string): VolatileAnalysisProgress {
     const entry = get(token)
@@ -155,10 +161,7 @@ export function createVolatileResearchAnalysis(options: VolatileResearchAnalysis
       assertCurrent(entry)
     } catch (error) {
       // Revoke any previously completed result as soon as its app-held authority is gone.
-      entry.controller.abort()
-      entry.result = undefined
-      entry.status = 'cancelled'
-      entry.message = 'The underlying research or review is no longer current. This temporary analysis was discarded.'
+      remove(token, entry)
       throw error
     }
     return snapshot(entry)
@@ -194,6 +197,7 @@ export function createVolatileResearchAnalysis(options: VolatileResearchAnalysis
         evidence: entry.outgoing.roleEvidence, humanReviewRequired: true })
       entry.status = 'complete'
     } catch {
+      if (entries.get(token) !== entry) throw new Error('This temporary preview expired or was discarded. Start a new research run.')
       if (currentStatus(entry) !== 'cancelled') {
         entry.status = 'uncertain'
         entry.message = entry.physicalRequests
@@ -204,9 +208,7 @@ export function createVolatileResearchAnalysis(options: VolatileResearchAnalysis
     return snapshot(entry)
   }
   function close(): void {
-    for (const entry of entries.values()) entry.controller.abort()
-    entries.clear()
-    seenRunIds.clear()
+    for (const [token, entry] of entries) remove(token, entry)
   }
   return { preview, consent, start, read, cancel, decline, discard, close }
 }

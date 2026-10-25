@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
@@ -6,8 +6,23 @@ import { cancelPostingCaptureForManual, JobResearchFindings, JobResearchReview, 
 import type { JobResearchRun } from '../src/shared/job-research-schema'
 import { buildJobResearchQuery } from '../src/shared/job-research-search-query'
 import { SavedJobs, temporaryDirectNotice } from '../src/renderer/SavedJobs'
+import { createProvisionalReviewSession } from '../src/renderer/ProvisionalResearchAnalysis'
 
 describe('universal research intake', () => {
+  it('discards outgoing text from the session store on close and cancels the named preview token', async () => {
+    const token = '00000000-0000-4000-8000-000000000001'
+    const outgoing = { version: 1, researchRunId: token, selected: { canonicalUrl: 'https://jobs.example.org/role/1', host: 'jobs.example.org', provider: 'generic', roleId: null }, analysisScope: 'provisional', unknowns: [], roleEvidence: [{ findingId: token, sourceId: token, url: 'https://jobs.example.org/role/1', capturedAt: '2026-10-25T10:00:00Z', kind: 'direct-role-text', completeness: 'partial', text: 'Sensitive synthetic role wording' }] }
+    const discardResearchAnalysis = vi.fn(async () => {})
+    const api = { previewResearchAnalysis: async () => ({ token, expiresAt: Date.now() + 900_000, selection: { providerId: 'fake', modelId: 'fake', thinkingLevel: 'low' }, analysisScope: 'provisional', outgoingText: `Prompt\n${JSON.stringify(outgoing)}`, notice: 'Temporary' }), discardResearchAnalysis,
+      consentResearchAnalysis: vi.fn(), startResearchAnalysis: vi.fn(), cancelResearchAnalysis: vi.fn() } as unknown as Parameters<typeof createProvisionalReviewSession>[0]
+    const session = createProvisionalReviewSession(api, token)
+    await session.inspect()
+    expect(session.getSnapshot().outgoing?.roleEvidence[0].text).toBe('Sensitive synthetic role wording')
+    session.close()
+    expect(session.getSnapshot().outgoing).toBeUndefined()
+    expect(session.getSnapshot().preview).toBeUndefined()
+    expect(discardResearchAnalysis).toHaveBeenCalledWith(token)
+  })
   it('offers an explicit research action and a separate manual posting route, without beginning research during render', () => {
     const html = renderToStaticMarkup(React.createElement(SavedJobs, { jobs: [], activeJob: null, onSaved: () => {}, onOpened: () => {}, onDeleted: async () => {}, onNavigate: () => {} }))
     expect(html).toContain('Import from link')

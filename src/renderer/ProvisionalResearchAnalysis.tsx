@@ -23,7 +23,7 @@ export function createSourceOpenHandler(api: SourceAPI, url: string, finding: st
   }
 }
 
-export type ProvisionalResearchAnalysisProps = { researchToken: string; onClose(): void; onStatus?: (status: Phase) => void; api?: AnalysisAPI }
+export type ProvisionalResearchAnalysisProps = { researchToken: string; onClose(reason?: 'expired'): void; onStatus?: (status: Phase) => void; api?: AnalysisAPI }
 
 /** Deliberate, one-use outgoing consent. No network call is made by construction or subscription. */
 export function createProvisionalReviewSession(api: AnalysisAPI, researchToken: string, onStatus?: (status: Phase) => void) {
@@ -112,7 +112,7 @@ export function createProvisionalReviewSession(api: AnalysisAPI, researchToken: 
       if (closed || !['preview', 'authorizing', 'authorized', 'running'].includes(state.phase)) return
       const token = state.preview?.token
       ++generation
-      set({ phase: 'cancelled', reviewed: false, result: undefined, message: token ? 'Cancelling. A dispatched request may still incur charges.' : 'Closing outgoing review.' })
+      set({ phase: 'cancelled', reviewed: false, preview: undefined, outgoing: undefined, result: undefined, message: token ? 'Cancelling. A dispatched request may still incur charges.' : 'Closing outgoing review.' })
       if (!token) return
       try {
         const progress = await api.cancelResearchAnalysis(token)
@@ -130,7 +130,10 @@ export function createProvisionalReviewSession(api: AnalysisAPI, researchToken: 
         if (shouldCancel && value === token) void api.cancelResearchAnalysis(value).catch(() => {}).finally(() => discard(value))
         else discard(value)
       }
+      state = { phase: 'cancelled', reviewed: false, message: 'Temporary research discarded.' }
+      listeners.forEach(listener => listener())
       listeners.clear()
+      tokens.clear()
     },
   }
 }
@@ -145,6 +148,14 @@ export function ProvisionalResearchAnalysis({ researchToken, onClose, onStatus, 
   const [sourceStatuses, setSourceStatuses] = useState<Record<string, { message: string; failed: boolean }>>({})
   const [openingSources, setOpeningSources] = useState<Set<string>>(() => new Set())
   useEffect(() => { if (state.phase === 'cancelled') statusElement.current?.focus() }, [state.phase])
+  useEffect(() => {
+    if (!state.preview) return
+    const expiresAt = state.preview.expiresAt
+    const expire = () => { if (Date.now() >= expiresAt) { session.close(); onClose('expired') } }
+    const timer = window.setTimeout(expire, Math.max(0, expiresAt - Date.now()))
+    document.addEventListener('visibilitychange', expire)
+    return () => { window.clearTimeout(timer); document.removeEventListener('visibilitychange', expire) }
+  }, [session, state.preview, onClose])
   useEffect(() => {
     returnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
     return () => session.close()

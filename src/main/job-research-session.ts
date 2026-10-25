@@ -17,7 +17,7 @@ function freeze<T>(value: T): T {
   return value
 }
 const safeState = (state: ResearchState): ResearchState => researchStateSchema.parse(state)
-type Session = { state: ResearchState; controller: AbortController; expiresAt: number; generation: number; searched: boolean; reviewed?: ReviewedJobResearch }
+type Session = { state: ResearchState; controller: AbortController; expiresAt: number; generation: number; searched: boolean; reviewed?: ReviewedJobResearch; timer?: ReturnType<typeof setTimeout> }
 export type ResearchSessionOptions = {
   credentials: Pick<ResearchSearchCredentials, 'status' | 'withKey'>
   direct?: (url: string, options: JobResearchFetchOptions) => Promise<JobResearchRun>
@@ -35,8 +35,14 @@ export function createJobResearchSessions(options: ResearchSessionOptions) {
     const session = sessions.get(token)
     if (!session) return
     session.generation++
+    if (session.timer) clearTimeout(session.timer)
     session.controller.abort()
     sessions.delete(token)
+  }
+  function retain(token: string, session: Session): void {
+    sessions.set(token, session)
+    session.timer = setTimeout(() => cancelEntry(token), Math.max(0, session.expiresAt - clock()))
+    session.timer.unref?.()
   }
   function prune(): void {
     for (const [token, session] of sessions) if (session.expiresAt <= clock()) cancelEntry(token)
@@ -66,8 +72,10 @@ export function createJobResearchSessions(options: ResearchSessionOptions) {
     const run = jobResearchRunSchema.parse(input)
     assertCanAcceptInitialDirectRun()
     makeRoom()
+    const expiresAt = Math.min(clock() + EXPIRY_MS, Date.parse(run.startedAt) + EXPIRY_MS)
+    if (expiresAt <= clock()) throw new Error(missing)
     const token = randomUUID()
-    sessions.set(token, { state: safeState({ status: 'ready', run: freeze(clone(run)) }), controller: new AbortController(), generation: 0, searched: false, expiresAt: clock() + EXPIRY_MS })
+    retain(token, { state: safeState({ status: 'ready', run: freeze(clone(run)) }), controller: new AbortController(), generation: 0, searched: false, expiresAt })
     return { token }
   }
   function startJobResearch(input: string): { token: string } {
@@ -75,7 +83,7 @@ export function createJobResearchSessions(options: ResearchSessionOptions) {
     makeRoom()
     const token = randomUUID()
     const session: Session = { state: { status: 'loading' }, controller: new AbortController(), generation: 0, searched: false, expiresAt: clock() + EXPIRY_MS }
-    sessions.set(token, session)
+    retain(token, session)
     const generation = session.generation
     void direct(selected.canonicalUrl, { signal: session.controller.signal }).then(run => {
       if (live(token, session, generation)) session.state = safeState({ status: 'ready', run: freeze(jobResearchRunSchema.parse(run)) })
