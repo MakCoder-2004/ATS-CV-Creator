@@ -160,6 +160,10 @@ nav button:hover, nav button[aria-current=page] { background: var(--raised); col
 .settings-block-icon { flex: none; display: grid; place-items: center; width: 38px; height: 38px; border-radius: 9px; background: var(--raised); color: var(--link); }
 .settings-helper { margin-top: auto; color: var(--muted); font-size: 12px; }
 .pi-settings-helper { margin-top: 0; line-height: 1.65; }
+.research-key-removal { display: grid; gap: 12px; }
+.research-key-removal .settings-helper { margin: 0; line-height: 1.65; }
+.research-key-removal .form-actions { flex-wrap: wrap; gap: 12px; }
+.settings-block[aria-labelledby="research-key-heading"] button { min-height: 48px; }
 .settings-block .field-control-label, .credential-panel .form-field { font-size: 13px; font-weight: 650; }
 .settings-block .field-select-trigger, .settings-block .form-field input { min-height: 48px; border-radius: 8px; }
 .credential-panel .form-actions { gap: 12px; }

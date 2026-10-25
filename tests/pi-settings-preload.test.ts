@@ -24,6 +24,23 @@ test('preload sends a typed Pi selection only through the Settings IPC channel',
   expect(bridge.invoke).toHaveBeenCalledWith('settings:pi-model', input)
 })
 
+test('preload exposes only named search key status, save and remove methods', async () => {
+  const key = 'tvly-secret-example-key-12345'
+  const status = { configured: true, storageAvailable: true, message: 'Search is available only after a key is stored on this device.' }
+  bridge.invoke.mockResolvedValue(status)
+  await expect(bridge.api!.getResearchSearchKeyStatus()).resolves.toEqual(status)
+  await expect(bridge.api!.saveResearchSearchKey(key)).resolves.toEqual(status)
+  await expect(bridge.api!.removeResearchSearchKey()).resolves.toEqual(status)
+  expect(bridge.invoke.mock.calls).toEqual([
+    ['research-search:key:status'], ['research-search:key:save', key], ['research-search:key:remove']
+  ])
+  bridge.invoke.mockClear()
+  await expect(bridge.api!.saveResearchSearchKey('short')).rejects.toThrow()
+  expect(bridge.invoke).not.toHaveBeenCalled()
+  bridge.invoke.mockResolvedValue({ ...status, key })
+  await expect(bridge.api!.getResearchSearchKeyStatus()).rejects.toThrow()
+})
+
 test('preload rejects malformed Pi selections before invoking IPC', async () => {
   await expect(bridge.api!.setPiModel({ reference: 'provider/model', thinkingLevel: 'invalid' } as never)).rejects.toThrow()
   expect(bridge.invoke).not.toHaveBeenCalled()

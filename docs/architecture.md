@@ -34,7 +34,7 @@ The browser window has context isolation and sandboxing, with Node integration d
 
 | Group | Tables and purpose |
 | --- | --- |
-| Configuration | `settings` holds the exact Pi provider, model, and thinking level. `schema_migrations` tracks upgrades. The upgrade deletes the former CV Tailor OpenRouter ciphertext from `encrypted_credentials`; Pi owns its credentials outside this database. |
+| Configuration | `settings` holds the exact Pi provider, model, and thinking level. `schema_migrations` tracks upgrades. The upgrade deletes the former CV Tailor OpenRouter ciphertext from `encrypted_credentials`; Pi owns its credentials outside this database. The separately user-provided Tavily search key uses Electron device encryption in a private sibling of `userData`, not workspace SQLite or backups. Named trusted Settings IPC exposes status, save and remove, never key retrieval or search. |
 | Profile | `profile_contact`, `profile_skills`, `profile_entries`, `profile_experience`, `profile_projects`, `evidence_revisions`, and `profile_import_provenance` hold career facts and source history. Upload proposals remain temporary until an atomic reviewed apply. AI results are checked against application-issued source passages and supported local facts before replacing the local proposal set; stale merges keep the review token for explicit rebase until discard or expiry. |
 | Jobs | `jobs` holds saved job records, including source snapshots and accepted posting revisions. |
 | Model work | `outbound_consents`, `posting_analysis_cache`, `analysis_run_state`, `analysis_attempts`, `provider_attempt_outcomes`, `generation_recovery`, `generation_recovery_extensions`, and the SQLite graph checkpointer track authorization, work, and recovery. |

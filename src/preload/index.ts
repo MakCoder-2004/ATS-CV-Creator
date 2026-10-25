@@ -19,6 +19,7 @@ import { postingFetchStateSchema, postingPreviewEditSchema, postingRefreshCompar
 import { workspaceBackupStatusSchema } from '../shared/workspace-backup'
 import { researchCancelSchema, researchReviewInputSchema, researchReviewStateSchema, researchStartSchema, researchStateSchema } from '../shared/job-research-ipc'
 import { normalizeJobResearchUrl } from '../shared/job-research-url'
+import { researchSearchKeyInputSchema, researchSearchKeyStatusSchema } from '../shared/research-search-settings'
 
 const workspaceResult = z.object({ ok: z.boolean(), cancelled: z.boolean(), message: z.string() }).strict()
 const restoreSelection = z.discriminatedUnion('ok', [
@@ -44,6 +45,9 @@ const api: WorkbenchAPI = Object.freeze({
     if (typeof value !== 'boolean') throw new Error('Faithfulness setting must be boolean.')
     return settingsSchema.parse(await ipcRenderer.invoke('settings:faithfulness', value))
   },
+  async getResearchSearchKeyStatus() { return researchSearchKeyStatusSchema.parse(await ipcRenderer.invoke('research-search:key:status')) },
+  async saveResearchSearchKey(key: string) { return researchSearchKeyStatusSchema.parse(await ipcRenderer.invoke('research-search:key:save', researchSearchKeyInputSchema.parse(key))) },
+  async removeResearchSearchKey() { return researchSearchKeyStatusSchema.parse(await ipcRenderer.invoke('research-search:key:remove')) },
   async exportWorkspaceBackup() { return workspaceResult.parse(await ipcRenderer.invoke('workspace:backup')) },
   async previewWorkspaceRestore() { return restoreSelection.parse(await ipcRenderer.invoke('workspace:restore:preview')) },
   async applyWorkspaceRestore(token: string) { return restoreDecision.parse(await ipcRenderer.invoke('workspace:restore:apply', uuidSchema.parse(token))) },

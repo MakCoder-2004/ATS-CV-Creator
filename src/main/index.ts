@@ -22,6 +22,8 @@ import { registerProfileExchangeIpc } from './profile-exchange-ipc'
 import { registerProfilePdfImportIpc } from './profile-pdf-import-ipc'
 import { registerProfileDocxImportIpc } from './profile-docx-import-ipc'
 import { registerWorkspaceBackupIpc } from './workspace-backup-ipc'
+import { registerResearchSearchSettingsIpc } from './research-search-settings-ipc'
+import { createResearchSearchCredentials, defaultResearchCredentialDirectory } from './research-search-credentials'
 import { outboundConsentActionSchema, outboundConsentPreviewSchema } from '../shared/outbound-consent-contract'
 import { analysisIdSchema, analysisResultSchema, analysisStartInputSchema, generationRecoverySchema, recoveryChoiceSchema } from '../shared/posting-analysis'
 import { addDraftItemInputSchema, draftCorrectionInputSchema, draftGenerationSchema, draftRevisionSchema, suggestedSkillDecisionSchema, draftTailoringCorrectionSchema } from '../shared/draft'
@@ -31,7 +33,6 @@ import { mutateDraftRecordInputSchema } from '../shared/draft-records'
 import { validateLeverPostingUrl, type SafePostingFetchOptions } from './safe-posting-fetch'
 import { normalizeJobResearchUrl } from '../shared/job-research'
 import { researchCancelSchema, researchReviewInputSchema, researchReviewStateSchema, researchStartSchema, researchStateSchema } from '../shared/job-research-ipc'
-import { createResearchSearchCredentials, defaultResearchCredentialDirectory } from './research-search-credentials'
 import { createJobResearchSessions } from './job-research-session'
 import { postingPreviewEditSchema, postingReviewSchema } from '../shared/posting-import'
 
@@ -212,6 +213,7 @@ app.whenReady().then(() => {
     workspaceDirectory: app.getPath('userData'), encryption: safeStorage
   })
   research = createJobResearchSessions({ credentials: researchCredentials })
+  registerResearchSearchSettingsIpc(ipcMain, researchCredentials, trusted)
   registerWorkspaceBackupIpc(() => window!, () => workspace!, () => {
     const reopened = createWorkbench(app.getPath('userData'), undefined, useScriptedPi ? undefined : scriptedAnalysis, undefined, postingFetchOptions, piRuntime)
     const previous = workspace!

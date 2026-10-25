@@ -1,7 +1,59 @@
 import React, { FormEvent, useEffect, useState } from 'react'
-import { ShieldCheck, Sparkles } from 'lucide-react'
+import { KeyRound, ShieldCheck, Sparkles } from 'lucide-react'
+import type { ResearchSearchKeyStatus } from '../shared/research-search-settings'
 import { PI_THINKING_LEVELS, type PiModelSelection } from '../shared/pi-model'
 import { FieldSelect } from './controls/FieldSelect'
+
+function ResearchSearchKeySettings() {
+  const [status, setStatus] = useState<ResearchSearchKeyStatus | null>(null)
+  const [loadFailed, setLoadFailed] = useState(false)
+  const [key, setKey] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [confirmRemove, setConfirmRemove] = useState(false)
+  const [error, setError] = useState('')
+  const [message, setMessage] = useState('')
+
+  useEffect(() => {
+    let active = true
+    window.workbench.getResearchSearchKeyStatus().then(value => { if (active) setStatus(value) })
+      .catch(() => { if (active) { setLoadFailed(true); setError('Search key status could not be loaded. Reopen Settings to retry.') } })
+    return () => { active = false }
+  }, [])
+
+  async function save(event: FormEvent) {
+    event.preventDefault()
+    setBusy(true); setError(''); setMessage('')
+    try {
+      const saved = await window.workbench.saveResearchSearchKey(key)
+      setStatus(saved); setKey(''); setConfirmRemove(false)
+      setMessage('Tavily key saved on this device. No search was started.')
+    } catch { setError('Tavily key was not saved. Check the key and device encryption, then try again.') }
+    finally { setBusy(false) }
+  }
+
+  async function remove() {
+    setBusy(true); setError(''); setMessage('')
+    try {
+      const removed = await window.workbench.removeResearchSearchKey()
+      setStatus(removed); setKey(''); setConfirmRemove(false)
+      setMessage('Local Tavily key removed. Revoke it in your Tavily account if needed.')
+    } catch { setError('Local Tavily key could not be removed. Try again.') }
+    finally { setBusy(false) }
+  }
+
+  return <section className="settings-block" aria-labelledby="research-key-heading">
+    <div className="settings-block-heading"><span className="settings-block-icon"><KeyRound size={18} aria-hidden="true" /></span><div><h2 id="research-key-heading">Tavily search key</h2><p>Separate from your Pi model sign-in.</p></div></div>
+    <p className="settings-helper pi-settings-helper" role="status">{status ? status.storageAvailable ? status.configured ? 'A Tavily key is saved on this device.' : 'No Tavily key is saved on this device.' : 'Secure local key storage is unavailable. A Tavily key cannot be saved here.' : loadFailed ? 'Local key status is unavailable.' : 'Checking local key storage…'}</p>
+    <form className="profile-form" onSubmit={event => void save(event)}>
+      <label className="form-field">Tavily API key<input type="password" value={key} onChange={event => setKey(event.target.value)} autoComplete="new-password" autoCapitalize="off" spellCheck={false} minLength={12} maxLength={512} required disabled={busy || !status?.storageAvailable} aria-describedby="research-key-help" /></label>
+      <p className="settings-helper pi-settings-helper" id="research-key-help">Create and manage your own free Researcher account with Tavily. Saving a key makes no search request and does not enable a paid plan. The encrypted key stays outside workspace backups.</p>
+      <div className="form-actions"><button className="primary-button" type="submit" disabled={busy || !status?.storageAvailable || !key}>Save Tavily key</button></div>
+    </form>
+    {status?.configured && <div className="research-key-removal">{confirmRemove ? <><p className="settings-helper">Remove the local key? This will not revoke the key in your Tavily account.</p><div className="form-actions"><button className="secondary-button" type="button" disabled={busy} onClick={() => setConfirmRemove(false)}>Cancel</button><button className="secondary-button" type="button" disabled={busy} onClick={() => void remove()}>Remove local key</button></div></> : <button className="secondary-button" type="button" disabled={busy} onClick={() => setConfirmRemove(true)}>Remove local key</button>}</div>}
+    <p className="settings-helper pi-settings-helper">A later search may send the public role title, posting host and job ID, or a verified employer domain, to Tavily. Tavily may share queries with other search-index providers. No profile data goes into search queries. Search requires a separate action and is not started here.</p>
+    {error && <p className="profile-message error" role="alert">{error}</p>}{message && <p className="profile-message success" role="status">{message}</p>}
+  </section>
+}
 
 export function PiSettingsPanel() {
   const [selection, setSelection] = useState<PiModelSelection | null>(null)
@@ -63,6 +115,7 @@ export function PiSettingsPanel() {
         <div className="settings-block-heading"><span className="settings-block-icon"><ShieldCheck size={18} aria-hidden="true" /></span><div><h2 id="pi-auth-heading">Provider sign-in</h2><p>Authentication is managed by Pi, not in CV Tailor.</p></div></div>
         <p className="settings-helper pi-settings-helper">Sign in through Pi outside CV Tailor, then choose an available model here. CV Tailor never asks for or stores Pi credentials.</p>
       </section>
+      <ResearchSearchKeySettings />
       <section className="settings-block faithfulness-panel" aria-labelledby="faithfulness-heading"><div className="settings-block-heading"><span className="settings-block-icon"><ShieldCheck size={18} aria-hidden="true" /></span><div><h2 id="faithfulness-heading">Optional faithfulness review</h2><p>One structured, batched second opinion compares rewritten wording with its cited minimized evidence.</p></div></div><div className="faithfulness-options"><label className="faithfulness-toggle"><input role="switch" aria-label="Enable optional faithfulness review for newly authorized runs" aria-describedby="faithfulness-helper" type="checkbox" checked={faithfulnessCheck} onChange={event => void saveFaithfulness(event.target.checked)} /><span>Enable for newly authorized runs</span></label><p className="settings-helper" id="faithfulness-helper">Findings remain blocking even if you later disable this option. A model check is not proof and does not replace your review. Provider charges may apply.</p></div></section>
     </div>
     {error && <p className="profile-message error" role="alert">{error}</p>}{message && <p className="profile-message success" role="status">{message}</p>}
