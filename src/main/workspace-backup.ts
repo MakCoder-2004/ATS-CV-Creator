@@ -251,7 +251,7 @@ export function createWorkspaceBackupEngine(db: Database.Database, maxBackupByte
     for (const row of rows.document_fit_reports?.rows ?? []) assertValid(documentFitReportSchema, parseJson('document_fit_reports', row.data as string), 'document_fit_reports')
     for (const table of ['outbound_consents','analysis_attempts','provider_attempt_outcomes','generation_recovery_extensions'] as const) for (const row of rows[table]?.rows ?? []) {
       const runId = row.run_id
-      const profileImportRun = table !== 'generation_recovery_extensions' && typeof runId === 'string' && runId.startsWith('profile-import:') && uuidSchema.safeParse(runId.slice('profile-import:'.length)).success
+      const profileImportRun = (table === 'analysis_attempts' || table === 'provider_attempt_outcomes') && typeof runId === 'string' && runId.startsWith('profile-import:') && uuidSchema.safeParse(runId.slice('profile-import:'.length)).success
       if (runId !== undefined && !uuidSchema.safeParse(runId).success && !profileImportRun) fail(table)
       for (const key of ['created_at','attempted_at','dispatched_at','settled_at','checkpointed_at','recorded_at','updated_at']) if (row[key] !== null && row[key] !== undefined && typeof row[key] === 'string' && !Number.isFinite(Date.parse(row[key] as string))) fail(table)
     }

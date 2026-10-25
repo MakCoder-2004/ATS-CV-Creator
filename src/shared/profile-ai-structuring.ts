@@ -4,6 +4,10 @@ import { PI_THINKING_LEVELS } from './pi-model'
 import type { ProfileSourceEvidenceDocument } from './profile-source-evidence'
 
 const uuid = z.string().uuid()
+const explicitSkillCategory = (passage: string) => {
+  const label = passage.match(/^\s*(skills|technical skills|programming languages|languages|tools|concepts)\s*:/i)?.[1]?.toLowerCase()
+  return label === 'programming languages' || label === 'languages' ? 'Languages' : label === 'tools' ? 'Tools' : label === 'concepts' ? 'Domain' : label ? 'Technical' : undefined
+}
 const sourceCitationSchema = z.object({ proposalRef: z.string().min(1).max(160), unitId: z.string().regex(/^page-\d+-passage-\d+$/) }).strict()
 export const profileAiResultSchema = z.object({
   contact: profilePdfProposalSchema.shape.contact.unwrap().extend({ email: z.string().max(320).optional(), phone: z.string().max(80).optional() }).optional(),
@@ -125,9 +129,11 @@ export function validateProfileAiDraft(current: ProfilePdfProposal, draft: Profi
   }
   for (const role of draft.experience) {
     const root = parentFor(role.proposalRef), original = current.experience.find(item => item.proposalRef === root)
-    const explicitKind = role.kind === 'employment' ? /^\s*(?:employment|work experience|professional experience)\s*:/i : /^\s*(?:training|internship|apprenticeship)\s*:/i
-    const kindSupported = citedSources(role.proposalRef).some(source => explicitKind.test(source.passage) && (normalized(source.passage).includes(normalized(role.organization)) || normalized(source.passage).includes(normalized(role.title))))
-    if (original ? role.kind !== original.kind && !(original.kind === 'unresolved' && kindSupported) : role.kind !== 'unresolved' && !kindSupported) throw new Error('The AI could not establish this role type from exact cited role text.')
+    const labeledKind = (passage: string) => /^\s*(?:employment|work experience|professional experience)\s*:/i.test(passage) ? 'employment' : /^\s*(?:training|internship|apprenticeship)\s*:/i.test(passage) || /^\s*internship\s+[—–-]\s+/i.test(passage) ? 'training' : undefined
+    const labeled = citedSources(role.proposalRef).filter(source => labeledKind(source.passage))
+    const ownRole = (passage: string) => normalized(passage).includes(normalized(role.title)) && normalized(passage).includes(normalized(role.organization))
+    const kindSupported = labeled.some(source => labeledKind(source.passage) === role.kind && ownRole(source.passage))
+    if (labeled.some(source => !ownRole(source.passage) || labeledKind(source.passage) !== role.kind && role.kind !== 'unresolved') || (original ? role.kind !== original.kind && !kindSupported : role.kind !== 'unresolved' && !kindSupported)) throw new Error('The AI could not establish this role type from exact cited role text.')
     assertSupported(role.proposalRef, role.organization, 'experience organization'); assertSupported(role.proposalRef, role.title, 'experience title'); assertSupported(role.proposalRef, role.description, 'experience description'); assertSupported(role.proposalRef, role.startDate, 'experience start date'); assertSupported(role.proposalRef, role.endDate, 'experience end date')
     for (const fact of role.factualItems) assertSupported(fact.proposalRef, fact.text, 'experience fact')
   }
@@ -227,7 +233,12 @@ export function materializeProfileAiResult(current: ProfilePdfProposal, result: 
     for (const field of ['fullName', 'email', 'phone', 'headline', 'location'] as const) requirePreserved(current.contact.proposalRef, current.contact[field], `contact.${field}`, same(current.contact[field], next?.[field]))
     for (const link of current.contact.links ?? []) requirePreserved(current.contact.proposalRef, link.url, 'contact.links', Boolean(next?.links?.some(item => same(item.url, link.url))), true)
   }
-  for (const skill of current.skills) requirePreserved(skill.proposalRef, skill.name, 'skills.', proposed.skills.some(item => same(item.name, skill.name)))
+  for (const skill of current.skills) {
+    const ownSources = current.sources.filter(source => source.proposalRef === skill.proposalRef && source.field.startsWith('skills.'))
+    const matches = proposed.skills.filter(item => same(item.name, skill.name) && proposed.sources.some(source => source.proposalRef === item.proposalRef && ownSources.some(original => original.page === source.page && original.passage === source.passage)))
+    requirePreserved(skill.proposalRef, skill.name, 'skills.', matches.length > 0)
+    if (supported(skill.proposalRef, skill.name, 'skills.') && matches.some(item => item.category !== skill.category && !proposed.sources.some(source => source.proposalRef === item.proposalRef && ownSources.some(original => original.page === source.page && original.passage === source.passage) && explicitSkillCategory(source.passage) === item.category && source.passage.includes(skill.name)))) throw new Error('The AI changed a source-backed skill category without an explicit category in its own cited CV passage. Keep the local proposals and review the source manually.')
+  }
   for (const role of current.experience) {
     const next = proposed.experience.find(item => same(item.organization, role.organization) && same(item.title, role.title))
     requirePreserved(role.proposalRef, role.organization, 'experience.role', Boolean(next))

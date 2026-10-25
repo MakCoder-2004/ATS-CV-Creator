@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { getProfileAiImport, materializeProfileAiResult, minimizeProfileText, profileAiResultSchema, PROFILE_AI_RESIDUAL_NOTICE, registerProfileAiImport, unregisterProfileAiImport, validateProfileAiDraft } from '../src/shared/profile-ai-structuring'
-import { profilePdfProposalSchema } from '../src/shared/profile-pdf-import'
+import { mapProfilePdfPages, profilePdfProposalSchema } from '../src/shared/profile-pdf-import'
 import { buildPdfSourceEvidence } from '../src/shared/profile-source-evidence'
 
 const proposal = profilePdfProposalSchema.parse({
@@ -113,6 +113,51 @@ describe('profile AI outgoing projection', () => {
     expect(materializeProfileAiResult(local, output, evidence, ids).experience.map(item => item.kind)).toEqual(['employment', 'training', 'unresolved'])
     expect(() => materializeProfileAiResult(local, { ...output, experience: [role('Harbor Cooperative', 'Engineer', 'training', 'employment'), ...output.experience.slice(1)] }, evidence, ids)).toThrow(/role type/)
     expect(() => materializeProfileAiResult(local, { ...output, experience: [...output.experience.slice(0, 2), role('Other Institute', 'Analyst', 'employment', 'ambiguous')] }, evidence, ids)).toThrow(/role type/)
+  })
+
+  it('does not borrow an employment label from another unmapped role at the same employer', () => {
+    const ids = () => '00000000-0000-4000-8000-000000000019'
+    const evidence = buildPdfSourceEvidence('d'.repeat(64), [{ page: 1, text: 'EMPLOYMENT: Engineer at Harbor Cooperative\nTRAINING: Analyst at Harbor Cooperative' }], ids)
+    const local = profilePdfProposalSchema.parse({ skills: [], experience: [], projects: [], entries: [], unmapped: evidence.units.map(unit => ({ page: unit.page, text: unit.text })), sources: [], proposalIds: {} })
+    const analyst = { kind: 'employment' as const, organization: 'Harbor Cooperative', title: 'Analyst', description: 'Analyst at Harbor Cooperative', factualItems: [], proposalRef: 'analyst' }
+    const result = { skills: [], experience: [analyst], projects: [], entries: [], citations: evidence.units.map(unit => ({ proposalRef: 'analyst', unitId: unit.unitId })), unmappedUnitIds: [] }
+    expect(() => materializeProfileAiResult(local, result, evidence, ids)).toThrow(/role type/)
+    const correct = { ...result, experience: [{ ...analyst, kind: 'training' as const }], citations: [{ proposalRef: 'analyst', unitId: evidence.units[1]!.unitId }], unmappedUnitIds: [evidence.units[0]!.unitId] }
+    expect(materializeProfileAiResult(local, correct, evidence, ids).experience[0]?.kind).toBe('training')
+    const engineer = { ...analyst, title: 'Engineer', description: 'Engineer at Harbor Cooperative', proposalRef: 'engineer' }
+    expect(materializeProfileAiResult(local, { ...result, experience: [engineer], citations: [{ proposalRef: 'engineer', unitId: evidence.units[0]!.unitId }], unmappedUnitIds: [evidence.units[1]!.unitId] }, evidence, ids).experience[0]?.kind).toBe('employment')
+  })
+
+  it('corrects only a clearly labeled heuristic role kind on its own parent passage', () => {
+    let serial = 20
+    const ids = () => `00000000-0000-4000-8000-${String(serial++).padStart(12, '0')}`
+    const lines = 'WORK EXPERIENCE\nInternship — Example Institute | 2021'
+    const mapped = mapProfilePdfPages([{ page: 1, text: lines }])
+    const roleId = ids()
+    const local = profilePdfProposalSchema.parse({ ...mapped, proposalIds: { 'experience:0': roleId }, sources: mapped.sources.map(source => ({ ...source, proposalId: roleId })) })
+    expect(local.experience).toMatchObject([{ kind: 'employment', title: 'Internship', organization: 'Example Institute' }])
+    const evidence = buildPdfSourceEvidence('d'.repeat(64), [{ page: 1, text: lines }], ids)
+    const role = { ...local.experience[0]!, kind: 'training' as const }
+    const result = { skills: [], experience: [role], projects: [], entries: [], citations: [{ proposalRef: role.proposalRef, unitId: evidence.units[1]!.unitId }], unmappedUnitIds: [evidence.units[0]!.unitId] }
+    expect(materializeProfileAiResult(local, result, evidence, ids).experience[0]?.kind).toBe('training')
+    const ambiguous = 'WORK EXPERIENCE\nEngineer — Example Institute | 2021\nAssisted with internship scheduling.'
+    const unclear = mapProfilePdfPages([{ page: 1, text: ambiguous }])
+    const unclearRoleId = ids(), unclearFactId = ids()
+    const unclearLocal = profilePdfProposalSchema.parse({ ...unclear, proposalIds: { 'experience:0': unclearRoleId, 'experience:0:fact:0': unclearFactId }, sources: unclear.sources.map(source => ({ ...source, proposalId: source.proposalRef === 'experience:0' ? unclearRoleId : unclearFactId })) })
+    const unclearEvidence = buildPdfSourceEvidence('e'.repeat(64), [{ page: 1, text: ambiguous }], ids)
+    const unclearRole = { ...unclearLocal.experience[0]!, kind: 'training' as const, factualItems: [] }
+    expect(() => materializeProfileAiResult(unclearLocal, { ...result, experience: [unclearRole], citations: [{ proposalRef: unclearRole.proposalRef, unitId: unclearEvidence.units[1]!.unitId }], unmappedUnitIds: [unclearEvidence.units[0]!.unitId, unclearEvidence.units[2]!.unitId] }, unclearEvidence, ids)).toThrow(/role type/)
+    const foreign = buildPdfSourceEvidence('f'.repeat(64), [{ page: 1, text: 'WORK EXPERIENCE\nEngineer — Example Institute | 2021\nTRAINING: Analyst at Example Institute' }], ids)
+    expect(() => materializeProfileAiResult(unclearLocal, { ...result, experience: [unclearRole], citations: [{ proposalRef: unclearRole.proposalRef, unitId: foreign.units[1]!.unitId }, { proposalRef: unclearRole.proposalRef, unitId: foreign.units[2]!.unitId }], unmappedUnitIds: [foreign.units[0]!.unitId] }, foreign, ids)).toThrow(/role type|more than one source parent/)
+  })
+
+  it('permits a skill category correction only from its own explicit category label', () => {
+    const ids = () => '00000000-0000-4000-8000-000000000021'
+    const evidence = buildPdfSourceEvidence('d'.repeat(64), [{ page: 1, text: 'TOOLS: TypeScript' }], ids)
+    const local = profilePdfProposalSchema.parse({ skills: [{ name: 'TypeScript', category: 'Technical', proposalRef: 'skill:0' }], experience: [], projects: [], entries: [], unmapped: [], sources: [{ proposalRef: 'skill:0', proposalId: ids(), page: 1, passage: 'TOOLS: TypeScript', field: 'skills.TypeScript' }], proposalIds: { 'skill:0': ids() } })
+    const result = { skills: [{ name: 'TypeScript', category: 'Tools', proposalRef: 'skill:0' }], experience: [], projects: [], entries: [], citations: [{ proposalRef: 'skill:0', unitId: evidence.units[0]!.unitId }], unmappedUnitIds: [] }
+    expect(materializeProfileAiResult(local, result, evidence, ids).skills[0]?.category).toBe('Tools')
+    expect(() => materializeProfileAiResult(local, { ...result, skills: [{ ...result.skills[0], category: 'Leadership' }] }, evidence, ids)).toThrow(/source-backed skill category/)
   })
 
   it('leaves hyperlinks without a source passage unresolved', () => {

@@ -105,15 +105,28 @@ test('merges updated experience and project records while preserving unrelated n
   expect(afterProvenance).toHaveLength(beforeProvenance.length)
 })
 
-test('backs up only well-formed profile import attempt identities', () => {
+test('accepts profile import IDs only for dispatched attempt history, not posting consent or recovery', () => {
   const directory = mkdtempSync(join(tmpdir(), 'cv-tailor-profile-attempt-backup-')); directories.push(directory)
   const workbench = createWorkbench(directory); instances.push(workbench)
   const valid = JSON.parse(workbench.backup.createBackup())
-  valid.tables.analysis_attempts.rows.push({ id: 1, run_id: `profile-import:${randomUUID()}`, attempted_at: new Date().toISOString() })
+  const profileRun = `profile-import:${randomUUID()}`
+  const now = new Date().toISOString()
+  valid.tables.analysis_attempts.rows.push({ id: 1, run_id: profileRun, attempted_at: now })
+  valid.tables.provider_attempt_outcomes.rows.push({ id: 1, run_id: profileRun, dispatched_at: now, outcome: 'response', settled_at: now, checkpointed_at: null })
   expect(() => workbench.backup.previewRestore(JSON.stringify(valid))).not.toThrow()
-  const forged = structuredClone(valid)
-  forged.tables.analysis_attempts.rows[0].run_id = 'profile-import:not-a-uuid'
-  expect(() => workbench.backup.previewRestore(JSON.stringify(forged))).toThrow('analysis_attempts')
+  for (const table of ['analysis_attempts', 'provider_attempt_outcomes'] as const) {
+    const forged = structuredClone(valid)
+    forged.tables[table].rows[0].run_id = 'profile-import:not-a-uuid'
+    expect(() => workbench.backup.previewRestore(JSON.stringify(forged))).toThrow(table)
+  }
+  const consent = structuredClone(valid)
+  consent.tables.outbound_consents.rows.push({ id: randomUUID(), run_id: randomUUID(), scope_hash: 'a'.repeat(64), created_at: now, revoked: 0 })
+  expect(() => workbench.backup.previewRestore(JSON.stringify(consent))).not.toThrow()
+  consent.tables.outbound_consents.rows[0].run_id = profileRun
+  expect(() => workbench.backup.previewRestore(JSON.stringify(consent))).toThrow('outbound_consents')
+  const recovery = structuredClone(valid)
+  recovery.tables.generation_recovery_extensions.rows.push({ id: 1, run_id: profileRun, prior_run_limit: 1, new_run_limit: 2, prior_time_limit_ms: 1000, new_time_limit_ms: 2000, recorded_at: now })
+  expect(() => workbench.backup.previewRestore(JSON.stringify(recovery))).toThrow('generation_recovery_extensions')
 })
 
 test('rejects provenance attached to another owner type or field before workspace restore', async () => {
@@ -134,6 +147,39 @@ test('rejects provenance attached to another owner type or field before workspac
     support.field = forgedField
     expect(() => workbench.backup.previewRestore(JSON.stringify(forged))).toThrow('profile_import_provenance')
     expect(await workbench.api.getProfile()).toEqual(before)
+  }
+})
+
+test('retains entry field provenance only on the matching section with a present property', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'cv-tailor-entry-provenance-')); directories.push(directory)
+  const workbench = createWorkbench(directory); instances.push(workbench)
+  const mapped = mapProfilePdfPages([{ page: 1, text: 'EDUCATION: BSc | Example Institute | GPA 3.8\nCERTIFICATE: Cloud Basics | Example Academy | 2021' }])
+  const certificate = mapped.entries.find(entry => entry.section === 'certificates')!
+  const proposals = {
+    ...mapped,
+    entries: mapped.entries.map(entry => entry === certificate ? { ...entry, link: 'https://example.test/certificate' } : entry),
+    sources: [...mapped.sources, ...(['entries.education.institution', 'entries.education.description'].map(field => ({ proposalRef: mapped.entries[0]!.proposalRef, page: 1, passage: 'EDUCATION: BSc | Example Institute | GPA 3.8', field }))), { proposalRef: certificate.proposalRef, page: 1, passage: 'Certificate — https://example.test/certificate', field: 'entries.certificates.link' }]
+  }
+  const proposalIds = Object.fromEntries(proposals.entries.map(entry => [entry.proposalRef, randomUUID()]))
+  const imported = await workbench.api.importEmptyProfilePdf('f'.repeat(64), await workbench.api.getProfileImportBaseline(), { ...proposals, proposalIds, sources: proposals.sources.map(source => ({ ...source, proposalId: proposalIds[source.proposalRef] })) })
+  expect(imported.ok).toBe(true)
+  const valid = JSON.parse(workbench.backup.createBackup())
+  const support = valid.tables.profile_import_provenance.rows as Array<{ owner_id: string; owner_revision: number; field: string }>
+  for (const field of ['entries.education.institution', 'entries.education.description', 'entries.certificates.link']) expect(support.some(row => row.field === field)).toBe(true)
+  expect(() => workbench.backup.previewRestore(JSON.stringify(valid))).not.toThrow()
+  for (const [field, wrong] of [['entries.education.institution', 'entries.certificates.link'], ['entries.certificates.link', 'entries.education.institution']] as const) {
+    const forged = structuredClone(valid)
+    forged.tables.profile_import_provenance.rows.find((row: { field: string }) => row.field === field).field = wrong
+    expect(() => workbench.backup.previewRestore(JSON.stringify(forged))).toThrow('profile_import_provenance')
+  }
+  for (const [field, property] of [['entries.education.institution', 'institution'], ['entries.education.description', 'description'], ['entries.certificates.link', 'link']] as const) {
+    const forged = structuredClone(valid)
+    const row = forged.tables.profile_import_provenance.rows.find((item: { field: string }) => item.field === field)
+    const revision = forged.tables.evidence_revisions.rows.find((item: { id: string; revision: number }) => item.id === row.owner_id && item.revision === row.owner_revision)
+    const snapshot = JSON.parse(revision.snapshot)
+    delete snapshot[property]
+    revision.snapshot = JSON.stringify(snapshot)
+    expect(() => workbench.backup.previewRestore(JSON.stringify(forged))).toThrow('profile_import_provenance')
   }
 })
 
