@@ -67,6 +67,7 @@ These reports record tests, artifacts, and claims at the stated version or issue
 | [Installed Pi SDK proof](validation/pi-sdk-proof.md) | Tool-free request, local auth failures, and cancellation from installed Electron for issue #65. |
 | [Installed Pi migration 0.4.0](validation/pi-sdk-installed-0.4.0.md) | Real provider CV, regeneration, faithfulness, old-PDF/DOCX proposals, login gates, backup/reopen, and Settings screenshots. |
 | [Job deletion D1, D2, and D3](validation/spec-72-implementation.md) | Synthetic backend and visible UI checks pass. Installed acceptance remains pending user executable approval. |
+| [Version 0.5.0 integration and build](validation/specs-integration-0.5.0.md) | Reviewed spec integration, 345 passing tests, four integrated development Electron cases and a statically checked installer. Installed and real-provider gates remain open. |
 
 ## Prototype design evidence
 
