@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { JobResearchFindings, JobResearchReview, startJobResearchFromIntake } from '../src/renderer/JobResearchReview'
+import { cancelPostingCaptureForManual, JobResearchFindings, JobResearchReview, startJobResearchFromIntake, startResearchWithCaptureLifecycle, transitionCapturedRead } from '../src/renderer/JobResearchReview'
 import type { JobResearchRun } from '../src/shared/job-research-schema'
 import { buildJobResearchQuery } from '../src/shared/job-research-search-query'
 import { SavedJobs } from '../src/renderer/SavedJobs'
@@ -49,6 +49,27 @@ describe('universal research intake', () => {
     }
     await expect(startJobResearchFromIntake(api, 'https://jobs.example.org/role/1', 'first-fetch-token')).resolves.toEqual({ token: 'research-token' })
     expect(calls).toEqual(['posting:first-fetch-token'])
+  })
+  it('consumes a captured read once, requires explicit refetch after cancel, and cancels the token on manual switch', async () => {
+    const calls: string[] = []
+    const api = {
+      startJobResearch: async (url: string) => { calls.push(`url:${url}`); return { token: 'fresh-token' } },
+      startJobResearchFromPosting: async (token: string) => { calls.push(`posting:${token}`); return { token: 'research-token' } },
+      cancelPostingFetch: async (token: string) => { calls.push(`cancel:${token}`); return { ok: true } }
+    }
+    let lifecycle: 'available' | 'consumed' | 'restart-required' = 'available'
+    await expect(startResearchWithCaptureLifecycle(api, 'https://jobs.example.org/role/1', 'first-fetch-token', lifecycle)).resolves.toEqual({ token: 'research-token' })
+    lifecycle = transitionCapturedRead(lifecycle, 'transferred')
+    lifecycle = transitionCapturedRead(lifecycle, 'cancelled')
+    expect(lifecycle).toBe('restart-required')
+    await expect(startResearchWithCaptureLifecycle(api, 'https://jobs.example.org/role/1', undefined, lifecycle)).rejects.toThrow('Fetch posting again')
+    expect(calls).toEqual(['posting:first-fetch-token'])
+
+    lifecycle = transitionCapturedRead(lifecycle, 'refetched')
+    await expect(startResearchWithCaptureLifecycle(api, 'https://jobs.example.org/role/1', 'second-fetch-token', lifecycle)).resolves.toEqual({ token: 'research-token' })
+    cancelPostingCaptureForManual(api, 'manual-switch-token')
+    await Promise.resolve()
+    expect(calls).toEqual(['posting:first-fetch-token', 'posting:second-fetch-token', 'cancel:manual-switch-token'])
   })
   it('does not search on mount, identifies the optional separate search, and does not claim analysis ran', () => {
     const html = renderToStaticMarkup(React.createElement(JobResearchReview, { url: 'https://www.linkedin.com/jobs/view/1234567890/' }))

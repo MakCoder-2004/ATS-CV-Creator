@@ -8,6 +8,23 @@ export function startJobResearchFromIntake(api: Pick<Window['workbench'], 'start
   return postingFetchToken ? api.startJobResearchFromPosting(postingFetchToken) : api.startJobResearch(url)
 }
 
+export type CapturedReadLifecycle = 'available' | 'consumed' | 'restart-required'
+export function transitionCapturedRead(state: CapturedReadLifecycle, event: 'transferred' | 'cancelled' | 'refetched'): CapturedReadLifecycle {
+  if (event === 'refetched') return 'available'
+  if (event === 'transferred' && state === 'available') return 'consumed'
+  if (event === 'cancelled' && state === 'consumed') return 'restart-required'
+  return state
+}
+
+export function startResearchWithCaptureLifecycle(api: Pick<Window['workbench'], 'startJobResearch' | 'startJobResearchFromPosting'>, url: string, postingFetchToken: string | undefined, lifecycle: CapturedReadLifecycle) {
+  if (lifecycle !== 'available') return Promise.reject(new Error('Fetch posting again before restarting captured research.'))
+  return startJobResearchFromIntake(api, url, postingFetchToken)
+}
+
+export function cancelPostingCaptureForManual(api: Pick<Window['workbench'], 'cancelPostingFetch'>, token?: string) {
+  if (token) void api.cancelPostingFetch(token)
+}
+
 export function JobResearchFindings({ run, selected, disabled, onToggle }: { run: JobResearchRun; selected: string[]; disabled: boolean; onToggle: (id: string, checked: boolean) => void }) {
   const group = (kind: 'direct-role-text' | 'indexed-role-claim' | 'verified-company-context', heading: string) => {
     const findings = run.findings.filter(finding => finding.kind === kind)
@@ -40,6 +57,8 @@ export function JobResearchReview({ url, postingFetchToken, onPostingHandoff, on
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [handoffUnavailable, setHandoffUnavailable] = useState(false)
+  const [capturedReadLifecycle, setCapturedReadLifecycle] = useState<CapturedReadLifecycle>('available')
+  const fetchAgainButtonRef = useRef<HTMLButtonElement>(null)
   const [notice, setNotice] = useState('')
   const [reviewed, setReviewed] = useState<ReviewedJobResearch>()
 
@@ -58,12 +77,13 @@ export function JobResearchReview({ url, postingFetchToken, onPostingHandoff, on
     }
   }
   async function start() {
+    if (capturedReadLifecycle !== 'available') return
     const current = ++sequence.current
     setBusy(true); setError(''); setNotice(postingFetchToken ? 'Inspecting captured findings…' : 'Reading the public posting…')
     try {
-      const { token: issued } = await startJobResearchFromIntake(window.workbench, url, postingFetchToken)
+      const { token: issued } = await startResearchWithCaptureLifecycle(window.workbench, url, postingFetchToken, capturedReadLifecycle)
       if (current !== sequence.current) { void window.workbench.cancelJobResearch(issued); return }
-      if (postingFetchToken) onPostingHandoff?.()
+      if (postingFetchToken) { onPostingHandoff?.(); setCapturedReadLifecycle(state => transitionCapturedRead(state, 'transferred')) }
       tokenRef.current = issued; setToken(issued)
       requestAnimationFrame(() => { if (mounted.current && current === sequence.current) cancelButtonRef.current?.focus() })
       while (current === sequence.current && mounted.current) {
@@ -103,18 +123,26 @@ export function JobResearchReview({ url, postingFetchToken, onPostingHandoff, on
   function cancel() {
     sequence.current++
     if (tokenRef.current) void window.workbench.cancelJobResearch(tokenRef.current).catch(() => {})
-    tokenRef.current = undefined; setToken(undefined); setRun(undefined); setSelected([]); setAcknowledged(false); setSearched(false); setReviewed(undefined); setBusy(false); setError(''); setNotice('Research cancelled. No findings were saved.')
-    requestAnimationFrame(() => { if (mounted.current) researchButtonRef.current?.focus() })
+    tokenRef.current = undefined; setToken(undefined); setRun(undefined); setSelected([]); setAcknowledged(false); setSearched(false); setReviewed(undefined); setBusy(false); setError('')
+    if (capturedReadLifecycle === 'consumed') {
+      setCapturedReadLifecycle(state => transitionCapturedRead(state, 'cancelled'))
+      setHandoffUnavailable(true)
+      setNotice('Captured read was used. Fetch posting again to restart.')
+      requestAnimationFrame(() => { if (mounted.current) fetchAgainButtonRef.current?.focus() })
+    } else {
+      setNotice('Research cancelled. No findings were saved.')
+      requestAnimationFrame(() => { if (mounted.current) researchButtonRef.current?.focus() })
+    }
   }
   const role = run?.findings.filter(finding => finding.kind !== 'verified-company-context') ?? []
   const partial = !!run && !selected.some(id => role.some(finding => finding.id === id && finding.kind === 'direct-role-text' && finding.completeness === 'full'))
   return <section className="job-research-review" aria-label="Temporary job research">
-    <header><h3>Research this exact role</h3><p>{postingFetchToken ? 'Inspect the direct public findings captured during Fetch posting. Indexed search is a separate, optional decision and may make another public check only if an exact indexed candidate matches. Nothing is saved or analyzed here.' : 'Starting this action makes a fresh public read of the selected job. First inspect the direct public role. Indexed search is a separate, optional decision. Nothing is saved or analyzed here.'}</p></header>
+    <header><h3>Research this exact role</h3><p>{capturedReadLifecycle !== 'available' ? 'The captured read was used. Fetch posting again to restart. Nothing is saved or analyzed here.' : postingFetchToken ? 'Inspect the direct public findings captured during Fetch posting. Indexed search is a separate, optional decision and may make another public check only if an exact indexed candidate matches. Nothing is saved or analyzed here.' : 'Starting this action makes a fresh public read of the selected job. First inspect the direct public role. Indexed search is a separate, optional decision. Nothing is saved or analyzed here.'}</p></header>
     {!token && !handoffUnavailable && <button ref={researchButtonRef} type="button" className="secondary-button" disabled={busy || !postingFetchToken && !url} onClick={() => void start()}>{busy ? 'Reading…' : postingFetchToken ? 'Inspect captured findings' : 'Research indexed details'}</button>}
     {token && <button ref={cancelButtonRef} type="button" className="secondary-button" onClick={cancel}>Cancel and discard research</button>}
     {notice && <p ref={statusRef} tabIndex={-1} role="status" className="research-status">{notice}</p>}
     {error && <p role="alert" className="research-error">{error}</p>}
-    {handoffUnavailable && <button type="button" className="secondary-button" onClick={() => onFetchAgain?.()}>Fetch posting again</button>}
+    {handoffUnavailable && <button ref={fetchAgainButtonRef} type="button" className="secondary-button" onClick={() => { setCapturedReadLifecycle(state => transitionCapturedRead(state, 'refetched')); onFetchAgain?.() }}>Fetch posting again</button>}
     {run && <><div className="research-identity"><strong>Selected role</strong><p>{run.selected.canonicalUrl}</p><p>Host: {run.selected.host}{run.selected.roleId ? ` · Role ID: ${run.selected.roleId}` : ''} · {run.status === 'full' ? 'Full direct posting' : run.status === 'provisional' ? 'Provisional, incomplete' : run.status === 'blocked' ? 'Blocked' : 'No role evidence'}</p><button type="button" className="secondary-button" onClick={() => void window.workbench.openPostingSource(run.selected.canonicalUrl).then(result => { if (!result.ok) setError(result.message) }).catch(() => setError('The original source could not be opened.'))}>Open selected original posting</button></div>
       <JobResearchFindings run={run} selected={selected} disabled={busy || !!reviewed} onToggle={(id, checked) => { setSelected(ids => checked ? [...ids, id] : ids.filter(item => item !== id)); setAcknowledged(false) }} />
       <section className="research-unknowns" aria-label="Still unknown"><h4>Still unknown</h4>{run.unknowns.length ? <ul>{run.unknowns.map((item, index) => <li key={index}>{item}</li>)}</ul> : <p>No additional unknowns were reported; completeness still cannot be guaranteed.</p>}</section>
