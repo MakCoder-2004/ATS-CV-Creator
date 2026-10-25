@@ -25,6 +25,13 @@ export function createSourceOpenHandler(api: SourceAPI, url: string, finding: st
 
 export type ProvisionalResearchAnalysisProps = { researchToken: string; onClose(reason?: 'expired'): void; onStatus?: (status: Phase) => void; api?: AnalysisAPI }
 
+export function ProvisionalReviewedSources({ evidence, onOpen, openingSources, sourceStatuses }: { evidence: Outgoing['roleEvidence']; onOpen(item: Outgoing['roleEvidence'][number], index: number): void; openingSources: Set<string>; sourceStatuses: Record<string, { message: string; failed: boolean }> }) {
+  return <ol className="provisional-analysis-evidence">{evidence.map((item, index) => <li key={item.findingId} id={`research-finding-${index + 1}`}>
+    <strong>Finding {index + 1}: {item.kind === 'indexed-role-claim' ? 'Indexed role claim (partial)' : `Direct role text (${item.completeness})`}</strong>
+    <span>Source URL: {item.url}</span><button type="button" className="secondary-button" aria-label={`Open source for finding ${index + 1}`} disabled={openingSources.has(item.findingId)} onClick={() => onOpen(item, index)}>{openingSources.has(item.findingId) ? 'Opening source…' : `Open source for finding ${index + 1}`}</button>{sourceStatuses[item.findingId] && <span role={sourceStatuses[item.findingId].failed ? 'alert' : 'status'}>{sourceStatuses[item.findingId].message}</span>}<blockquote>{item.text}</blockquote>
+  </li>)}</ol>
+}
+
 /** Deliberate, one-use outgoing consent. No network call is made by construction or subscription. */
 export function createProvisionalReviewSession(api: AnalysisAPI, researchToken: string, onStatus?: (status: Phase) => void) {
   let state: ProvisionalReviewState = { phase: 'idle', reviewed: false, message: '' }
@@ -182,16 +189,13 @@ export function ProvisionalResearchAnalysis({ researchToken, onClose, onStatus, 
       <h3>Exact outgoing data</h3>
       <pre aria-label="Exact outgoing analysis data" tabIndex={0} className="provisional-analysis-outgoing">{preview.outgoingText}</pre>
       <h3>Reviewed role sources</h3>
-      <ol className="provisional-analysis-evidence">{outgoing.roleEvidence.map((item, index) => <li key={item.findingId} id={`research-finding-${index + 1}`}>
-        <strong>Finding {index + 1}: {item.kind === 'indexed-role-claim' ? 'Indexed role claim (partial)' : `Direct role text (${item.completeness})`}</strong>
-        <span>Source URL: {item.url}</span><span>Finding ID: {item.findingId}</span><button type="button" className="secondary-button" aria-label={`Open source for finding ${index + 1}`} disabled={openingSources.has(item.findingId)} onClick={() => {
-          setOpeningSources(current => new Set(current).add(item.findingId))
-          const handler = createSourceOpenHandler(window.workbench, item.url, `finding ${index + 1}`, (message, failed) => {
-            setSourceStatuses(current => ({ ...current, [item.findingId]: { message, failed } }))
-          })
-          void handler().finally(() => setOpeningSources(current => { const next = new Set(current); next.delete(item.findingId); return next }))
-        }}>{openingSources.has(item.findingId) ? 'Opening source…' : `Open source for finding ${index + 1}`}</button>{sourceStatuses[item.findingId] && <span role={sourceStatuses[item.findingId].failed ? 'alert' : 'status'}>{sourceStatuses[item.findingId].message}</span>}<blockquote>{item.text}</blockquote>
-      </li>)}</ol>
+      <ProvisionalReviewedSources evidence={outgoing.roleEvidence} openingSources={openingSources} sourceStatuses={sourceStatuses} onOpen={(item, index) => {
+        setOpeningSources(current => new Set(current).add(item.findingId))
+        const handler = createSourceOpenHandler(window.workbench, item.url, `finding ${index + 1}`, (message, failed) => {
+          setSourceStatuses(current => ({ ...current, [item.findingId]: { message, failed } }))
+        })
+        void handler().finally(() => setOpeningSources(current => { const next = new Set(current); next.delete(item.findingId); return next }))
+      }} />
       {outgoing.unknowns.length > 0 && <section aria-label="Unknowns"><h3>Still unknown</h3><ul>{outgoing.unknowns.map((text, index) => <li key={index}>{text}</li>)}</ul></section>}
       {state.phase === 'preview' && <div className="provisional-analysis-actions"><label className="provisional-analysis-check"><input type="checkbox" checked={state.reviewed} onChange={event => session.setReviewed(event.target.checked)} />{PROVISIONAL_REVIEW_ACKNOWLEDGEMENT}</label><button className="primary-button" type="button" disabled={!state.reviewed} onClick={() => void session.authorize()}>Authorize analysis</button><button className="secondary-button" type="button" onClick={() => void session.cancel()}>Cancel review</button></div>}
       {state.phase === 'authorized' && <div className="provisional-analysis-actions"><button type="button" className="primary-button" onClick={() => void session.start()}>Start analysis</button><button type="button" className="secondary-button" onClick={() => void session.cancel()}>Cancel analysis</button></div>}

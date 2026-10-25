@@ -1,7 +1,7 @@
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, test, vi } from 'vitest'
-import { PROVISIONAL_REVIEW_ACKNOWLEDGEMENT, ProvisionalResearchAnalysis, createProvisionalReviewSession, createSourceOpenHandler } from '../src/renderer/ProvisionalResearchAnalysis'
+import { PROVISIONAL_REVIEW_ACKNOWLEDGEMENT, ProvisionalResearchAnalysis, ProvisionalReviewedSources, createProvisionalReviewSession, createSourceOpenHandler } from '../src/renderer/ProvisionalResearchAnalysis'
 import type { WorkbenchAPI } from '../src/shared/appearance'
 import type { VolatileAnalysisPreview, VolatileAnalysisProgress } from '../src/shared/research-volatile-analysis'
 
@@ -39,6 +39,18 @@ describe('temporary research review', () => {
     expect(report).toHaveBeenNthCalledWith(2, 'Could not open source for finding 1. Check the source address and try again; unsupported or unavailable sources cannot be opened.', true)
     expect(report.mock.calls.flat().join(' ')).not.toContain('private internal detail')
   })
+  test('reviewed source cards hide finding IDs while exact outgoing data retains source attribution', () => {
+    const sourcePanel = renderToStaticMarkup(React.createElement(ProvisionalReviewedSources, { evidence: outgoing.roleEvidence, openingSources: new Set<string>(), sourceStatuses: {}, onOpen() {} }))
+    expect(sourcePanel).not.toContain('Finding ID:')
+    expect(sourcePanel).toContain(`id="research-finding-1"`)
+    expect(sourcePanel).toContain('Open source for finding 1')
+    expect(sourcePanel).toContain(evidence.url)
+    expect(sourcePanel).toContain(evidence.text)
+    expect(preview.outgoingText).toContain(findingId)
+    expect(preview.outgoingText).toContain(evidence.url)
+    expect(preview.outgoingText).toContain('"findingId"')
+  })
+
   test('no preview or provider dispatch on render; inspection, checkbox and consent never dispatch', async () => {
     const api = fixture()
     const html = renderToStaticMarkup(React.createElement(ProvisionalResearchAnalysis, { researchToken: runId, onClose() {}, api }))
