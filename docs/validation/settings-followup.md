@@ -1,6 +1,6 @@
 # Settings controls integration — development follow-up
 
-Issue [#90](https://github.com/Makrious/cv-tailor/issues/90). This report covers the combined faithfulness retirement and Tavily key controls in the development worktree, not an installed build or real provider/account acceptance. The user's running unpacked 0.6 app and workspace were not touched. No installer or packaged executable was launched.
+Issue [#90](https://github.com/MakCoder-2004/ATS-CV-Creator/issues/90). This report covers the combined faithfulness retirement and Tavily key controls in the development worktree, not an installed build or real provider/account acceptance. The user's running unpacked 0.6 app and workspace were not touched. No installer or packaged executable was launched.
 
 ## Integrated behavior
 
