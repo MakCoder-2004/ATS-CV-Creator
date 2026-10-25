@@ -3,6 +3,7 @@ import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { JobResearchFindings, JobResearchReview } from '../src/renderer/JobResearchReview'
 import type { JobResearchRun } from '../src/shared/job-research-schema'
+import { buildJobResearchQuery } from '../src/shared/job-research-search-query'
 import { SavedJobs } from '../src/renderer/SavedJobs'
 
 describe('universal research intake', () => {
@@ -34,10 +35,18 @@ describe('universal research intake', () => {
     expect(html).not.toContain('<a ')
     expect((html.match(/type="checkbox"/g) ?? [])).toHaveLength(1)
   })
+  it('discloses the exact metadata query and blocks unusable host or role identifiers', () => {
+    expect(buildJobResearchQuery({ host: 'jobs.example.org', roleId: '4464025097' })).toBe('job 4464025097 site:jobs.example.org')
+    expect(buildJobResearchQuery({ host: 'jobs.example.org', roleId: null })).toBe('job site:jobs.example.org')
+    expect(buildJobResearchQuery({ host: '', roleId: null })).toBeUndefined()
+    expect(buildJobResearchQuery({ host: 'jobs.example.org', roleId: '' })).toBeUndefined()
+  })
   it('does not search on mount, identifies the optional separate search, and does not claim analysis ran', () => {
     const html = renderToStaticMarkup(React.createElement(JobResearchReview, { url: 'https://www.linkedin.com/jobs/view/1234567890/' }))
     expect(html).toContain('Research indexed details')
     expect(html).toContain('Indexed search is a separate, optional decision')
+    expect(html).not.toContain('Configure a free Tavily Researcher key in Settings')
+    expect(html).not.toContain('Search query:')
     expect(html).not.toContain('Search indexed details')
     expect(html).not.toContain('Job saved')
     expect(html).not.toContain('Analysis complete')
