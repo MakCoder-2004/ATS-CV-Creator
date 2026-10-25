@@ -39,6 +39,7 @@ export function TavilyKeyCard({ client, modelContext = '' }: Props) {
   const replaceRef = useRef<HTMLButtonElement>(null)
   const cancelRef = useRef<HTMLButtonElement>(null)
   const revokeRef = useRef<HTMLButtonElement>(null)
+  const focusIntent = useRef<'key' | 'replace' | 'revoke' | null>(null)
   const generation = useRef(0)
   const revealedRef = useRef('')
 
@@ -55,22 +56,25 @@ export function TavilyKeyCard({ client, modelContext = '' }: Props) {
     return () => { active = false; generation.current++; revealedRef.current = '' }
   }, [api])
   useEffect(() => { if (confirm) cancelRef.current?.focus() }, [confirm])
+  useLayoutEffect(() => {
+    const intent = focusIntent.current
+    if (!intent) return
+    const target = intent === 'key' ? keyRef.current : intent === 'replace' ? replaceRef.current : revokeRef.current
+    if (target) { target.focus(); focusIntent.current = null }
+  }, [replacing, status, confirm])
 
   function startReplacing() {
-    clearReveal(); setRevealPending(false); setConfirm(false); setReplacing(true); setTypedVisible(false); setKeyInput(''); setError(''); setNotice('')
-    requestAnimationFrame(() => keyRef.current?.focus())
+    clearReveal(); setRevealPending(false); setConfirm(false); focusIntent.current = 'key'; setReplacing(true); setTypedVisible(false); setKeyInput(''); setError(''); setNotice('')
   }
   function cancelReplacing() {
-    setKeyInput(''); setTypedVisible(false); setReplacing(false); setError(''); setNotice('')
-    requestAnimationFrame(() => replaceRef.current?.focus())
+    focusIntent.current = 'replace'; setKeyInput(''); setTypedVisible(false); setReplacing(false); setError(''); setNotice('')
   }
   async function save(event: FormEvent) {
     event.preventDefault(); clearReveal(); setBusy(true); setError(''); setNotice('')
     try {
       const saved = await api.saveResearchSearchKey(keyInput)
-      setStatus(saved); setKeyInput(''); setTypedVisible(false); setReplacing(false); setConfirm(false)
+      focusIntent.current = 'replace'; setStatus(saved); setKeyInput(''); setTypedVisible(false); setReplacing(false); setConfirm(false)
       setNotice('Tavily key saved on this device. No search was started.')
-      requestAnimationFrame(() => replaceRef.current?.focus())
     } catch { setError('Tavily key was not saved. Check the key and device encryption, then try again.') }
     finally { setBusy(false) }
   }
@@ -92,9 +96,8 @@ export function TavilyKeyCard({ client, modelContext = '' }: Props) {
     clearReveal(); setBusy(true); setError(''); setNotice('')
     try {
       const removed = await api.removeResearchSearchKey()
-      setStatus(removed); setKeyInput(''); setTypedVisible(false); setConfirm(false)
+      focusIntent.current = 'key'; setStatus(removed); setKeyInput(''); setTypedVisible(false); setConfirm(false)
       setNotice('Local Tavily key removed. Revoke it in your Tavily account if needed.')
-      requestAnimationFrame(() => keyRef.current?.focus())
     } catch { setError('Local Tavily key could not be removed. Try again.') }
     finally { setBusy(false) }
   }
@@ -125,7 +128,7 @@ export function TavilyKeyCard({ client, modelContext = '' }: Props) {
         {confirm && <div className="tavily-confirm" role="group" aria-labelledby="tavily-confirm-title" aria-describedby="tavily-confirm-description">
           <h3 id="tavily-confirm-title">Remove the local key?</h3>
           <p id="tavily-confirm-description">This removes the key from this device only. It does not revoke it in your Tavily account.</p>
-          <div className="tavily-actions"><button ref={cancelRef} className="secondary-button" type="button" disabled={busy} onClick={() => { setConfirm(false); requestAnimationFrame(() => revokeRef.current?.focus()) }}>Cancel</button><button className="secondary-button tavily-danger" type="button" disabled={busy} onClick={() => void revokeLocally()}>{busy ? 'Removing…' : 'Remove local key'}</button></div>
+          <div className="tavily-actions"><button ref={cancelRef} className="secondary-button" type="button" disabled={busy} onClick={() => { focusIntent.current = 'revoke'; setConfirm(false) }}>Cancel</button><button className="secondary-button tavily-danger" type="button" disabled={busy} onClick={() => void revokeLocally()}>{busy ? 'Removing…' : 'Remove local key'}</button></div>
         </div>}
       </> : <div className="tavily-actions">
         <button className="primary-button" type="submit" disabled={busy || !storageAvailable || keyInput.length < 12}>{busy ? 'Saving…' : replacing ? 'Save replacement key' : 'Save Tavily key'}</button>
