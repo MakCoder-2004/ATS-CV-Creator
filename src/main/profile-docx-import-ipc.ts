@@ -35,10 +35,12 @@ export function registerProfileDocxImportIpc(getWindow: () => BrowserWindow, get
       if (bytes.length !== info.size || !afterRead.isFile() || afterRead.isSymbolicLink() || afterRead.dev !== info.dev || afterRead.ino !== info.ino || afterRead.size !== info.size || afterRead.mtimeMs !== info.mtimeMs || afterRead.ctimeMs !== info.ctimeMs) return profilePdfPreviewSchema.parse({ ok: false, cancelled: false, message: 'The selected file changed while it was being read. Choose it again.' })
       const extracted = await extractProfileDocx(bytes)
       const proposals = bindIds(profilePdfProposalDraftSchema.parse(mapProfileDocxPages(extracted.pages)))
-      const evidence = buildDocxSourceEvidence(extracted.sha256, extracted.pages, randomUUID)
+      let evidence: ReturnType<typeof buildDocxSourceEvidence> | undefined, evidenceError: string | undefined
+      try { evidence = buildDocxSourceEvidence(extracted.sha256, extracted.pages, randomUUID) }
+      catch (error) { evidenceError = error instanceof Error && /source-unit limit/.test(error.message) ? error.message : 'Complete source text could not be prepared for AI. Continue locally or choose a smaller document.' }
       const token = randomUUID(), timer = setTimeout(() => discard(token), 15 * 60_000); timer.unref()
       pending.set(token, { hash: extracted.sha256, baseline, proposals, timer })
-      registerProfileAiImport(token, { get: () => pending.get(token)?.proposals ?? proposals, set: value => { const active = pending.get(token); if (active) active.proposals = value }, evidence })
+      registerProfileAiImport(token, { get: () => pending.get(token)?.proposals ?? proposals, set: value => { const active = pending.get(token); if (active) active.proposals = value }, evidence, evidenceError })
       return profilePdfPreviewSchema.parse({ ok: true, token, sourceHash: extracted.sha256, proposals })
     } catch (error) { return profilePdfPreviewSchema.parse({ ok: false, cancelled: false, message: error instanceof Error ? error.message : 'The selected DOCX could not be read.' }) }
   })

@@ -39,11 +39,13 @@ export function registerProfilePdfImportIpc(getWindow: () => BrowserWindow, getS
       const extracted = await extractProfilePdf(capturedBytes)
       const draft = profilePdfProposalDraftSchema.parse(mapProfilePdfPages(extracted.pages))
       const proposals = bindProposalIds(draft)
-      const evidence = buildPdfSourceEvidence(extracted.sha256, extracted.pages, randomUUID)
+      let evidence: ReturnType<typeof buildPdfSourceEvidence> | undefined, evidenceError: string | undefined
+      try { evidence = buildPdfSourceEvidence(extracted.sha256, extracted.pages, randomUUID) }
+      catch (error) { evidenceError = error instanceof Error && /source-unit limit/.test(error.message) ? error.message : 'Complete source text could not be prepared for AI. Continue locally or choose a smaller document.' }
       const token = randomUUID()
       const timer = setTimeout(() => discard(token), 15 * 60_000); timer.unref()
       pending.set(token, { sourceHash: extracted.sha256, baseline, proposals, timer })
-      registerProfileAiImport(token, { get: () => pending.get(token)?.proposals ?? proposals, set: value => { const active = pending.get(token); if (active) active.proposals = value }, evidence })
+      registerProfileAiImport(token, { get: () => pending.get(token)?.proposals ?? proposals, set: value => { const active = pending.get(token); if (active) active.proposals = value }, evidence, evidenceError })
       return profilePdfPreviewSchema.parse({ ok: true, token, sourceHash: extracted.sha256, proposals })
     } catch (error) {
       return profilePdfPreviewSchema.parse({ ok: false, cancelled: false, message: error instanceof Error ? error.message : 'The selected PDF could not be read.' })
@@ -52,7 +54,8 @@ export function registerProfilePdfImportIpc(getWindow: () => BrowserWindow, getS
   ipcMain.handle('profile:ai:preview', async (event, ...args: unknown[]) => {
     trusted(event); if (args.length !== 1 || typeof args[0] !== 'string') throw new Error('Expected a local CV review token')
     const access = getProfileAiImport(args[0]), source = access?.get(), evidence = access?.evidence
-    if (!source || !evidence) return profileAiConsentPreviewSchema.parse({ ok: false, message: 'This CV review expired. Select the PDF or Word document again.' })
+    if (!access || !source) return profileAiConsentPreviewSchema.parse({ ok: false, message: 'This CV review expired. Select the PDF or Word document again.' })
+    if (!evidence) return profileAiConsentPreviewSchema.parse({ ok: false, message: access.evidenceError ?? 'AI source evidence is unavailable. Continue with local review.' })
     try {
       const settings = await getStorage().getSettings()
       if (!settings.pi) return profileAiConsentPreviewSchema.parse({ ok: false, message: 'Choose a Pi model in Settings before requesting optional AI structuring. Your local review remains available.' })
