@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { cancelPostingCaptureForManual, JobResearchFindings, JobResearchReview, startJobResearchFromIntake, startResearchWithCaptureLifecycle, transitionCapturedRead } from '../src/renderer/JobResearchReview'
 import type { JobResearchRun } from '../src/shared/job-research-schema'
 import { buildJobResearchQuery } from '../src/shared/job-research-search-query'
-import { SavedJobs } from '../src/renderer/SavedJobs'
+import { SavedJobs, temporaryDirectNotice } from '../src/renderer/SavedJobs'
 
 describe('universal research intake', () => {
   it('offers an explicit research action and a separate manual posting route, without beginning research during render', () => {
@@ -70,6 +71,13 @@ describe('universal research intake', () => {
     cancelPostingCaptureForManual(api, 'manual-switch-token')
     await Promise.resolve()
     expect(calls).toEqual(['posting:first-fetch-token', 'posting:second-fetch-token', 'cancel:manual-switch-token'])
+  })
+  it('keeps the transferred child mounted while the fetch token is retained, and replaces saved-preview wording', () => {
+    const source = readFileSync(new URL('../src/renderer/SavedJobs.tsx', import.meta.url), 'utf8')
+    expect(source).toMatch(/function finishResearchHandoff\(\)\s*\{[^}]*Keep the fetch token/)
+    expect(source).toMatch(/\{fetchToken && <JobResearchReview key=\{`full-\$\{fetchToken\}`\}/)
+    expect(temporaryDirectNotice('Complete source found. Review before saving.')).toBe('Review this temporary source before analysis; nothing is saved.')
+    expect(temporaryDirectNotice('The source is temporary.')).toBe('The source is temporary.')
   })
   it('labels the captured full direct-posting handoff as temporary research without invoking it on render', () => {
     const html = renderToStaticMarkup(React.createElement(JobResearchReview, { url: 'https://jobs.example.org/role/1', postingFetchToken: 'first-fetch-token', temporaryFullPosting: true }))

@@ -17,6 +17,9 @@ type DeletionFlow =
 import './jobs.css'
 
 type DraftLabel = 'No draft' | 'Needs review' | 'Earlier target' | 'Blocked' | 'Approved'
+export function temporaryDirectNotice(notice: string) {
+  return /review before saving/i.test(notice) ? 'Review this temporary source before analysis; nothing is saved.' : notice
+}
 const defaultRefreshChoices = (): PostingRefreshChoice => ({ title: 'working', company: 'working', description: 'working', optionalDetails: {} })
 const optionalPostingFields = [
   ['location', 'Location'], ['workArrangement', 'Work arrangement'], ['employmentType', 'Employment type'], ['compensation', 'Compensation'],
@@ -241,7 +244,7 @@ export function SavedJobs({ jobs, activeJob, onSaved, onOpened, onDeleted, onNav
     } catch { setCompletenessConfirmed(false); setMessage('The preview edit was not accepted. Fetch it again before saving.'); setMessageError(true) }
   }
   function discardFetchPreview() { onDiscardReviewedResearch?.(); setResearchUrl(undefined); fetchOperationRef.current++; refreshComparisonKeyRef.current = ''; cancelPostingCaptureForManual(window.workbench, fetchToken); setRefreshChoices(defaultRefreshChoices()); setFetching(false); setFetchToken(undefined); setPreview(null); setCapturedPreview(null); setPreviewCapturedAt(undefined); setCompletenessConfirmed(false); setConflictResolutions({}); editRevisionRef.current = 0; editQueueRef.current = Promise.resolve() }
-  function finishResearchHandoff() { setFetchToken(undefined) }
+  function finishResearchHandoff() { /* Keep the fetch token as the mounted child identity; the child marks it consumed. */ }
   function requestResearchFetchAgain() { if (fetchToken) void window.workbench.cancelPostingFetch(fetchToken); setFetchToken(undefined); setResearchUrl(undefined); void fetchPosting() }
   function cancelDiscard() { setDiscardIntent(null); setDiscardTargetJobId(undefined) }
   function completeDiscard(intent: 'close' | 'manual' | 'discard' | 'new' | 'open-existing') {
