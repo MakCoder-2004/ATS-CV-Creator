@@ -47,6 +47,7 @@ test('first partial read transfers its complete app-held evidence without a seco
     expect(t.calls).toBe(1)
     const state = t.sessions.getJobResearch(token)
     expect(state).toMatchObject({ status: 'ready', run: { id: captured.id, findings: [{ id: captured.findings[0].id }] } })
+    expect(t.sessions.reviewJobResearch(token, [captured.findings[0].id], true)).toMatchObject({ analysisScope: 'provisional' })
     const searched = await t.sessions.searchJobResearch(token)
     expect(t.calls).toBe(2)
     expect(searched.status).toBe('ready')
@@ -93,6 +94,21 @@ test('cancel, replacement source and invalid token cannot transfer stale evidenc
     expect(t.calls).toBe(3)
   } finally { t.sessions.close(); t.wb.close() }
 })
+test('a completed Lever source remains saveable but cannot transfer as temporary third-party research', async () => {
+  const folder = mkdtempSync(join(tmpdir(), 'cv-lever-transfer-')); folders.push(folder)
+  const wb = createWorkbench(folder, undefined, undefined, undefined, {
+    lookup: async () => [{ address: '8.8.8.8', family: 4 }],
+    request: async () => ({ status: 200, headers: { 'content-type': 'application/json' }, body: Buffer.from(JSON.stringify({ id: 'role', text: 'Synthetic Engineer', company: 'Invented Corp', descriptionPlain: `Responsibilities\n• ${'Build dependable fictional systems with careful engineering and collaborative reviews. '.repeat(4)}\n\nRequirements\n• TypeScript and tests.` })) }),
+  })
+  try {
+    const token = (await wb.api.startPostingFetch('https://api.lever.co/v0/postings/example/role')).token
+    expect(await notice(wb, token)).toMatchObject({ status: 'ready' })
+    expect(() => wb.api.takePostingResearchRun(token)).toThrow(/unavailable/)
+    expect(await wb.api.reviewPostingPreview(token, 0, { completenessConfirmed: true, conflictResolutions: {} })).toMatchObject({ ok: true })
+    expect(await wb.api.acceptPostingImport(token, 0)).toMatchObject({ ok: true, value: { sourceSnapshot: { extractionMethod: 'lever-json-v1' } } })
+  } finally { wb.close() }
+})
+
 test('failed direct transport has no transferable result', async () => {
   const folder = mkdtempSync(join(tmpdir(), 'cv-failed-transfer-')); folders.push(folder)
   const wb = createWorkbench(folder, undefined, undefined, undefined, { research: {

@@ -132,7 +132,16 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
   registerWorkspaceBackupRowSizer(db)
   db.pragma('journal_mode = WAL')
   const graphCheckpointer = new SqliteCheckpointSaver(db, recoveryHooks?.beforeGraphCheckpoint)
-  const postingFetches = new Map<string, { controller: AbortController; state: ReturnType<typeof postingFetchStateSchema.parse>; expiresAt: number; directRun?: JobResearchRun; revision: number; working?: PostingPreviewEdit; reviewed?: { revision: number; input: ReturnType<typeof jobInputSchema.parse>; review: import('../shared/posting-import').PostingReview } }>()
+  const postingFetches = new Map<string, { controller: AbortController; state: ReturnType<typeof postingFetchStateSchema.parse>; expiresAt: number; selected?: ReturnType<typeof normalizeJobResearchUrl>; directRun?: JobResearchRun; revision: number; working?: PostingPreviewEdit; reviewed?: { revision: number; input: ReturnType<typeof jobInputSchema.parse>; review: import('../shared/posting-import').PostingReview } }>()
+  const livePostingFetch = (token: string) => {
+    const pending = postingFetches.get(token)
+    if (pending?.selected && pending.expiresAt <= Date.now()) {
+      pending.controller.abort()
+      pending.state = { status: 'cancelled' }
+      pending.directRun = undefined; pending.working = undefined; pending.reviewed = undefined
+    }
+    return pending
+  }
   db.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY);
     CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS encrypted_credentials (key TEXT PRIMARY KEY, ciphertext TEXT NOT NULL);
@@ -923,7 +932,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
     },
     async startPostingFetch(input: string) {
       const lever = validateLeverPostingUrl(input)
-      if (!lever) normalizeJobResearchUrl(input)
+      const selected = lever ? undefined : normalizeJobResearchUrl(input)
       if ([...postingFetches.values()].some(fetch => fetch.state.status === 'fetching')) throw new Error('A posting fetch is already active. Cancel it or wait for it to finish.')
       for (const prior of postingFetches.values()) if (['ready', 'incomplete', 'research-notice'].includes(prior.state.status)) { prior.state = { status: 'cancelled' }; prior.reviewed = undefined; prior.working = undefined; prior.directRun = undefined }
       while (postingFetches.size >= 5) {
@@ -932,17 +941,22 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
         postingFetches.delete(expired[0])
       }
       const token = randomUUID(), controller = new AbortController()
-      postingFetches.set(token, { controller, state: { status: 'fetching' }, expiresAt: Date.now() + 15 * 60_000, revision: 0 })
+      postingFetches.set(token, { controller, state: { status: 'fetching' }, expiresAt: Date.now() + 15 * 60_000, selected, revision: 0 })
       const request = lever
-        ? fetchLeverPosting(input, { ...safePostingFetchOptions, signal: controller.signal })
+        ? fetchLeverPosting(input, { ...safePostingFetchOptions, signal: controller.signal }).then(preview => ({ preview, directRun: undefined as JobResearchRun | undefined }))
         : fetchDirectJobResearch(input, { ...safePostingFetchOptions?.research, signal: controller.signal }).then(run => {
           const preview = completeDirectPreview(input, run)
           if (!preview) throw new DirectResearchNotice(run)
-          return preview
+          return { preview, directRun: immutableDirectRun(run) }
         })
-      void request.then(preview => {
+      void request.then(({ preview, directRun }) => {
         const current = postingFetches.get(token)
         if (!current || current.controller.signal.aborted) return
+        if (directRun && (!current.selected || directRun.selected.canonicalUrl !== current.selected.canonicalUrl || directRun.selected.provider !== current.selected.provider)) {
+          current.state = { status: 'failed', message: 'The direct read did not match the selected posting.' }
+          return
+        }
+        current.directRun = directRun
         const incomplete = preview.conflicts.length > 0 || preview.notices.some(notice => notice.includes('preview is incomplete') || notice.startsWith('Unresolved source conflict:')) || !preview.title || !preview.company || !preview.description
         current.state = incomplete ? { status: 'incomplete', preview } : { status: 'ready', preview }
         current.working = { title: preview.title, company: preview.company ?? '', description: preview.description, optionalDetails: preview.optionalDetails }
@@ -951,8 +965,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
         if (!current) return
         if (controller.signal.aborted) { current.state = { status: 'cancelled' }; current.directRun = undefined; return }
         if (error instanceof DirectResearchNotice) {
-          const selected = normalizeJobResearchUrl(input)
-          if (error.run.selected.canonicalUrl === selected.canonicalUrl && error.run.selected.provider === selected.provider && Date.now() < current.expiresAt) {
+          if (current.selected && error.run.selected.canonicalUrl === current.selected.canonicalUrl && error.run.selected.provider === current.selected.provider && Date.now() < current.expiresAt) {
             current.directRun = immutableDirectRun(error.run)
             current.state = { status: 'research-notice', message: `${error.message} ${error.run.status === 'full' ? 'The captured text could not form a complete saveable preview.' : 'Direct research is incomplete.'} Nothing was saved. Review the available findings or open the original source.` }
             return
@@ -965,14 +978,15 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
     async readPostingPreview(token: string) {
       const checked = uuidSchema.safeParse(token)
       if (!checked.success) return postingFetchStateSchema.parse({ status: 'failed', message: 'This temporary preview is no longer available.' })
-      return postingFetchStateSchema.parse(postingFetches.get(checked.data)?.state ?? { status: 'failed', message: 'This temporary preview is no longer available.' })
+      return postingFetchStateSchema.parse(livePostingFetch(checked.data)?.state ?? { status: 'failed', message: 'This temporary preview is no longer available.' })
     },
     // Main-only, one-time transfer of an app-captured run; the renderer never supplies evidence.
     takePostingResearchRun(token: string) {
       const checked = uuidSchema.safeParse(token)
-      const pending = checked.success ? postingFetches.get(checked.data) : undefined
-      if (!pending || pending.controller.signal.aborted || pending.expiresAt <= Date.now() || pending.state.status !== 'research-notice' || !pending.directRun) throw new Error('This temporary posting research is unavailable. Fetch the source again.')
+      const pending = checked.success ? livePostingFetch(checked.data) : undefined
+      if (!pending || pending.controller.signal.aborted || pending.expiresAt <= Date.now() || !['ready', 'incomplete', 'research-notice'].includes(pending.state.status) || !pending.selected || !pending.directRun) throw new Error('This temporary posting research is unavailable. Fetch the source again.')
       const run = immutableDirectRun(pending.directRun)
+      if (run.selected.canonicalUrl !== pending.selected.canonicalUrl || run.selected.provider !== pending.selected.provider || !['full', 'provisional', 'blocked', 'none'].includes(run.status)) throw new Error('This temporary posting research does not match the selected source.')
       pending.directRun = undefined
       return run
     },
@@ -986,7 +1000,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       return { ok: true }
     },
     async updatePostingPreview(token: string, expectedRevision: number, input) {
-      const checked = uuidSchema.safeParse(token), pending = checked.success ? postingFetches.get(checked.data) : undefined
+      const checked = uuidSchema.safeParse(token), pending = checked.success ? livePostingFetch(checked.data) : undefined
       if (!pending || !Number.isSafeInteger(expectedRevision) || pending.revision !== expectedRevision || !['ready', 'incomplete'].includes(pending.state.status)) return { ok: false, message: 'This preview changed or is no longer available. Fetch it again before editing.' }
       const parsed = postingPreviewEditSchema.safeParse(input)
       if (!parsed.success) return { ok: false, message: 'The preview edit is invalid or exceeds a safe field limit.' }
@@ -1009,7 +1023,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       return { ok: true, revision: pending.revision }
     },
     async reviewPostingPreview(token: string, revision: number, review) {
-      const checked = uuidSchema.safeParse(token), pending = checked.success ? postingFetches.get(checked.data) : undefined
+      const checked = uuidSchema.safeParse(token), pending = checked.success ? livePostingFetch(checked.data) : undefined
       const checkedReview = postingReviewSchema.safeParse(review)
       if (!pending || pending.revision !== revision || !checkedReview.success || !['ready', 'incomplete'].includes(pending.state.status)) return { ok: false, message: 'This preview changed or is no longer available; review the current version.' }
       if (!checkedReview.data.completenessConfirmed) { pending.reviewed = undefined; return { ok: true } }
@@ -1032,7 +1046,8 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       return { ok: true }
     },
     async acceptPostingImport(token: string, revision: number) {
-      const checkedToken = uuidSchema.safeParse(token), pending = checkedToken.success ? postingFetches.get(checkedToken.data) : undefined
+      const checkedToken = uuidSchema.safeParse(token), pending = checkedToken.success ? livePostingFetch(checkedToken.data) : undefined
+      if (pending?.selected) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'Review temporarily or paste text manually. This fetched source cannot be saved.' } })
       if (!pending || pending.revision !== revision || pending.reviewed?.revision !== revision || !pending.reviewed.review.completenessConfirmed) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'Review the current preview after your last edit before saving.' } })
       const pendingState = pending.state
       const source = pendingState.status === 'ready' || pendingState.status === 'incomplete' ? pendingState.preview : null
@@ -1074,8 +1089,9 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       } catch { return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'The reviewed posting could not be saved. No partial job history was retained.' } }) }
     },
     async comparePostingRefresh(token: string, jobId: string, expectedUpdatedAt: string, expectedRevision: number) {
-      const pending = postingFetches.get(token), row = db.prepare('SELECT data FROM jobs WHERE id = ?').get(jobId) as { data: string } | undefined
+      const pending = livePostingFetch(token), row = db.prepare('SELECT data FROM jobs WHERE id = ?').get(jobId) as { data: string } | undefined
       const current = row ? jobRecordSchema.parse(JSON.parse(row.data)) : undefined
+      if (pending?.selected) return { ok: false, message: 'Review temporarily or paste text manually. This fetched source cannot update a saved job.' }
       if (!pending || !current || pending.state.status !== 'ready' && pending.state.status !== 'incomplete') return { ok: false, message: 'This refresh preview or saved posting is unavailable.' }
       if (current.updatedAt !== expectedUpdatedAt || (current.revisions.at(-1)?.revision ?? 0) !== expectedRevision) return { ok: false, message: 'The saved posting changed while this refresh was being reviewed. Reopen it and compare again.' }
       const source = pending.state.preview
@@ -1086,7 +1102,8 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
     },
     async acceptPostingRefresh(token: string, revision: number, jobId: string, expectedUpdatedAt: string, expectedBaseRevision: number, choices: PostingRefreshChoice) {
       const invalid = (message: string) => jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message } })
-      const checkedChoices = postingRefreshChoiceSchema.safeParse(choices), pending = postingFetches.get(token)
+      const checkedChoices = postingRefreshChoiceSchema.safeParse(choices), pending = livePostingFetch(token)
+      if (pending?.selected) return invalid('Review temporarily or paste text manually. This fetched source cannot update a saved job.')
       if (!checkedChoices.success || !pending || pending.revision !== revision || pending.reviewed?.revision !== revision || !pending.reviewed.review.completenessConfirmed || pending.state.status !== 'ready' && pending.state.status !== 'incomplete') return invalid('Review the current refresh and choose which source fields to accept before applying it.')
       const row = db.prepare('SELECT created_at, data FROM jobs WHERE id = ?').get(jobId) as { created_at: string; data: string } | undefined
       if (!row) return invalid('The saved posting no longer exists.')

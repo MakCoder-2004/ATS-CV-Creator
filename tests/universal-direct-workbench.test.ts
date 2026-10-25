@@ -1,11 +1,14 @@
-import { afterEach, expect, test } from 'vitest'
+import { afterEach, expect, test, vi } from 'vitest'
+import { randomUUID } from 'node:crypto'
 import { mkdtempSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import Database from 'better-sqlite3'
 import { createWorkbench } from '../src/main/workbench'
 import { normalizeJobResearchUrl } from '../src/shared/job-research'
 import { samePostingSource } from '../src/shared/posting-identity'
+import { createJobResearchSessions } from '../src/main/job-research-session'
 
 const folders: string[] = []
 afterEach(async () => { for (const folder of folders.splice(0)) await rm(folder, { recursive: true, force: true }) })
@@ -20,48 +23,56 @@ function open(request: (url: URL) => { status: number; headers: Record<string, s
     request: async url => { requested.push(url.href); return request(url) },
     extract: async () => ({ outcome: 'full', title: 'Synthetic Engineer', employer: 'Fictional Employer', description: body }),
   } })
-  return { wb, requested }
+  return { wb, requested, folder }
 }
 async function settled(wb: ReturnType<typeof createWorkbench>, token: string) {
   let state = await wb.api.readPostingPreview(token)
   for (let i = 0; i < 300 && state.status === 'fetching'; i++) { await new Promise(resolve => setTimeout(resolve, 10)); state = await wb.api.readPostingPreview(token) }
   return state
 }
-test('selected LinkedIn role follows direct full posting, review, durable source, explicit consent and current analysis run', async () => {
-  let modelCalls = 0
-  const { wb, requested } = open(() => ({ status: 200, headers: { 'content-type': 'text/html' }, body: Buffer.from('<html><body>synthetic posting</body></html>') }), { async generate() { modelCalls++; return JSON.stringify({ required: ['TypeScript'], preferred: [], tools: [], responsibilities: [], keywords: [] }) } })
+test('selected full LinkedIn text is inspectable and transfers exactly once to full temporary research, never a saved job', async () => {
+  let modelCalls = 0, searchCalls = 0
+  const { wb, requested, folder } = open(() => ({ status: 200, headers: { 'content-type': 'text/html' }, body: Buffer.from('<html><body>synthetic posting</body></html>') }), { async generate() { modelCalls++; throw Error('No model request before consent') } })
+  const sessions = createJobResearchSessions({
+    credentials: { status: async () => ({ configured: true, storageAvailable: true, message: '' }), withKey: async <T>(fn: (key: string) => Promise<T>) => fn('synthetic') },
+    direct: async () => { throw Error('Handoff must not reread the source') },
+    createSearch: () => ({ searchesDispatched: 0, search: async () => { searchCalls++; throw Error('Full text must not search') } }),
+  })
   try {
     const { token } = await wb.api.startPostingFetch(selected)
     const state = await settled(wb, token)
     expect(requested).toEqual([canonical])
-    expect(modelCalls).toBe(0)
-    expect(state).toMatchObject({ status: 'ready', preview: { submittedUrl: canonical, finalUrl: canonical, title: 'Synthetic Engineer', company: 'Fictional Employer', extractionMethod: 'linkedin-public-html-v1' } })
+    expect(state).toMatchObject({ status: 'ready', preview: { submittedUrl: canonical, finalUrl: canonical, title: 'Synthetic Engineer', company: 'Fictional Employer', description: body.trim(), extractionMethod: 'linkedin-public-html-v1' } })
     if (state.status !== 'ready') throw Error('Full direct source was not reviewable')
-    expect(await wb.api.acceptPostingImport(token, 0)).toMatchObject({ ok: false })
+    expect(await wb.api.acceptPostingImport(token, 0)).toMatchObject({ ok: false, error: { message: expect.stringMatching(/Review temporarily or paste text manually/) } })
+    expect(await wb.api.comparePostingRefresh(token, randomUUID(), '', 0)).toMatchObject({ ok: false, message: expect.stringMatching(/Review temporarily or paste text manually/) })
     const corrected = await wb.api.updatePostingPreview(token, 0, { title: state.preview.title, company: state.preview.company!, description: `${body.trim()}\nReviewed clarification.`, optionalDetails: state.preview.optionalDetails })
     expect(corrected).toMatchObject({ ok: true, revision: 1 })
-    expect(await wb.api.acceptPostingImport(token, 0)).toMatchObject({ ok: false })
     expect(await wb.api.reviewPostingPreview(token, 1, { completenessConfirmed: true, conflictResolutions: {} })).toMatchObject({ ok: true })
-    const saved = await wb.api.acceptPostingImport(token, 1)
-    if (!saved.ok) throw Error(saved.error.message)
-    expect(saved.value.sourceSnapshot).toMatchObject({ sourceIdentity: `linkedin:${canonical}`, submittedUrl: canonical, extractionMethod: 'linkedin-public-html-v1', description: body.trim() })
-    expect(saved.value.description).toContain('Reviewed clarification.')
-    expect(samePostingSource(saved.value.sourceSnapshot!, { submittedUrl: selected, finalUrl: canonical })).toBe(true)
-    expect(modelCalls).toBe(0)
+    expect(await wb.api.acceptPostingImport(token, 1)).toMatchObject({ ok: false, error: { message: expect.stringMatching(/Review temporarily or paste text manually/) } })
+    expect(await wb.api.listJobs()).toEqual([])
     const backup = wb.backup.createBackup()
-    expect(backup).toContain('linkedin-public-html-v1')
-    const consent = await wb.api.prepareOutboundConsent(saved.value.id)
-    if (!consent.ok) throw Error(consent.message)
-    await expect(wb.api.startAnalysis(consent.token)).rejects.toThrow(/authorize/i)
+    expect(backup).not.toContain(body.trim())
+    expect(backup).not.toContain('linkedin-public-html-v1')
+    const captured = wb.api.takePostingResearchRun(token)
+    expect(captured).toMatchObject({ status: 'full', selected: { canonicalUrl: canonical }, findings: [{ kind: 'direct-role-text', text: body.trim(), completeness: 'full' }] })
+    expect(() => wb.api.takePostingResearchRun(token)).toThrow(/unavailable/)
+    const transferred = sessions.acceptInitialDirectRun(captured).token
+    const research = sessions.getJobResearch(transferred)
+    expect(research).toMatchObject({ status: 'ready', run: { id: captured.id, findings: [{ id: captured.findings[0].id, text: body.trim() }] } })
+    expect(sessions.reviewJobResearch(transferred, [captured.findings[0].id], false)).toMatchObject({ analysisScope: 'full', selected: { canonicalUrl: canonical } })
+    expect(requested).toEqual([canonical])
+    expect(searchCalls).toBe(0)
     expect(modelCalls).toBe(0)
-    expect(await wb.api.acceptOutboundConsent(consent.token, true, true)).toMatchObject({ ok: true })
-    expect(await wb.api.startAnalysis(consent.token)).toMatchObject({ status: 'complete', jobId: saved.value.id, runId: expect.any(String), analysis: { required: ['TypeScript'] } })
-    expect(modelCalls).toBe(1)
-    const duplicate = await wb.api.startPostingFetch(canonical)
-    expect(await settled(wb, duplicate.token)).toMatchObject({ status: 'ready' })
-    expect(await wb.api.reviewPostingPreview(duplicate.token, 0, { completenessConfirmed: true, conflictResolutions: {} })).toMatchObject({ ok: true })
-    expect(await wb.api.acceptPostingImport(duplicate.token, 0)).toMatchObject({ ok: false, error: { code: 'CONFLICT' } })
-  } finally { wb.close() }
+    expect(await wb.api.listJobs()).toEqual([])
+    expect(wb.backup.createBackup()).not.toContain(body.trim())
+    const db = new Database(join(folder, 'workbench.sqlite'), { readonly: true })
+    try {
+      for (const table of ['jobs', 'posting_analysis_cache', 'analysis_run_state', 'outbound_consents', 'draft_revisions', 'generation_recovery']) {
+        expect((db.prepare(`SELECT count(*) AS count FROM ${table}`).get() as { count: number }).count, table).toBe(0)
+      }
+    } finally { db.close() }
+  } finally { sessions.close(); wb.close() }
 })
 test('incomplete and blocked public sources cannot become a saved source, with no provider dispatch', async () => {
   for (const request of [
@@ -96,6 +107,19 @@ test('full text without a source employer remains an unsaveable research notice'
   } finally { wb.close() }
 })
 
+test('expired full public preview and run discard captured text', async () => {
+  const { wb } = open(() => ({ status: 200, headers: { 'content-type': 'text/html' }, body: Buffer.from('<html>synthetic</html>') }))
+  try {
+    const token = (await wb.api.startPostingFetch(selected)).token
+    expect(await settled(wb, token)).toMatchObject({ status: 'ready' })
+    const now = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 16 * 60_000)
+    try {
+      expect(await wb.api.readPostingPreview(token)).toEqual({ status: 'cancelled' })
+      expect(() => wb.api.takePostingResearchRun(token)).toThrow(/unavailable/)
+    } finally { now.mockRestore() }
+  } finally { wb.close() }
+})
+
 test('synthetic exact-role JSON-LD is extracted by the real bounded worker', async () => {
   const folder = mkdtempSync(join(tmpdir(), 'cv-direct-worker-')); folders.push(folder)
   const url = 'https://careers.fictional.org/jobs/role-4'
@@ -108,12 +132,17 @@ test('synthetic exact-role JSON-LD is extracted by the real bounded worker', asy
   } finally { wb.close() }
 })
 
-test('generic JSON-LD direct URL saves only the same exact source and employer', async () => {
+test('generic JSON-LD direct URL stays temporary and binds the same exact source and employer', async () => {
   const url = 'https://careers.fictional.org/jobs/role-4'
   const { wb, requested } = open(() => ({ status: 200, headers: { 'content-type': 'text/html' }, body: Buffer.from('<html>synthetic</html>') }))
   try {
     const { token } = await wb.api.startPostingFetch(url + '?utm_source=email')
     expect(await settled(wb, token)).toMatchObject({ status: 'ready', preview: { submittedUrl: url, extractionMethod: 'public-jsonld-v1' } })
+    expect(await wb.api.reviewPostingPreview(token, 0, { completenessConfirmed: true, conflictResolutions: {} })).toMatchObject({ ok: true })
+    expect(await wb.api.acceptPostingImport(token, 0)).toMatchObject({ ok: false, error: { message: expect.stringMatching(/Review temporarily or paste text manually/) } })
+    expect(await wb.api.acceptPostingRefresh(token, 0, randomUUID(), '', 0, { title: 'source', company: 'source', description: 'source', optionalDetails: {} })).toMatchObject({ ok: false, error: { message: expect.stringMatching(/Review temporarily or paste text manually/) } })
+    expect(wb.api.takePostingResearchRun(token)).toMatchObject({ status: 'full', selected: { canonicalUrl: url } })
+    expect(await wb.api.listJobs()).toEqual([])
     expect(requested).toEqual([url])
     expect(samePostingSource({ submittedUrl: url, finalUrl: url }, { submittedUrl: url + '/other', finalUrl: url + '/other' })).toBe(false)
   } finally { wb.close() }
