@@ -76,7 +76,7 @@ export function createProvisionalReviewSession(api: AnalysisAPI, researchToken: 
         const progress = await api.consentResearchAnalysis(preview.token, true)
         if (!current(request)) return
         if (progress.status !== 'consented') throw new Error('Authorization was not recorded. Discard this review and start again.')
-        set({ phase: 'authorized', message: 'Authorized. Analysis has not started. Choose Start analysis to send the reviewed data.' })
+        set({ phase: 'authorized', message: 'Authorized. Analysis has not started. Choose Generate analysis to send the reviewed data.' })
       } catch (error) { if (current(request)) set({ phase: 'error', message: errorMessage(error) }) }
       finally { busy = false }
     },
@@ -159,7 +159,7 @@ export function ProvisionalResearchAnalysis({ researchToken, onClose, onStatus, 
       </li>)}</ol>
       {outgoing.unknowns.length > 0 && <section aria-label="Unknowns"><h3>Still unknown</h3><ul>{outgoing.unknowns.map((text, index) => <li key={index}>{text}</li>)}</ul></section>}
       {state.phase === 'preview' && <div className="provisional-analysis-actions"><label className="provisional-analysis-check"><input type="checkbox" checked={state.reviewed} onChange={event => session.setReviewed(event.target.checked)} />I reviewed exactly what will be sent</label><button className="primary-button" type="button" disabled={!state.reviewed} onClick={() => void session.authorize()}>Authorize analysis</button><button className="secondary-button" type="button" onClick={() => void session.cancel()}>Cancel review</button></div>}
-      {state.phase === 'authorized' && <div className="provisional-analysis-actions"><button type="button" className="primary-button" onClick={() => void session.start()}>Start analysis</button><button type="button" className="secondary-button" onClick={() => void session.cancel()}>Cancel analysis</button></div>}
+      {state.phase === 'authorized' && <div className="provisional-analysis-actions"><button type="button" className="primary-button" onClick={() => void session.start()}>Generate analysis</button><button type="button" className="secondary-button" onClick={() => void session.cancel()}>Cancel analysis</button></div>}
       {['authorizing', 'running'].includes(state.phase) && <button type="button" className="secondary-button" onClick={() => void session.cancel()}>Cancel analysis</button>}
     </>}
     {result && state.phase === 'complete' && <section aria-label="Analysis suggestions" className="provisional-analysis-result">

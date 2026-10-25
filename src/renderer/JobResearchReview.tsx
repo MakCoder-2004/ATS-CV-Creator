@@ -42,7 +42,7 @@ export function JobResearchFindings({ run, selected, disabled, onToggle }: { run
 }
 
 /** Source links are text, never untrusted navigation targets. Only the selected canonical role can be opened via the trusted shell method. */
-export function JobResearchReview({ url, postingFetchToken, onPostingHandoff, onFetchAgain, onReviewedResearch }: { url: string; postingFetchToken?: string; onPostingHandoff?: () => void; onFetchAgain?: () => void; onReviewedResearch?: (token: string, reviewed: ReviewedJobResearch) => void }) {
+export function JobResearchReview({ url, postingFetchToken, onPostingHandoff, onFetchAgain, onReviewedResearch, onDiscardReviewedResearch }: { url: string; postingFetchToken?: string; onPostingHandoff?: () => void; onFetchAgain?: () => void; onReviewedResearch?: (token: string, reviewed: ReviewedJobResearch) => void; onDiscardReviewedResearch?: () => void }) {
   const [token, setToken] = useState<string>()
   const tokenRef = useRef<string | undefined>(undefined)
   const sequence = useRef(0)
@@ -122,6 +122,7 @@ export function JobResearchReview({ url, postingFetchToken, onPostingHandoff, on
   }
   function cancel() {
     sequence.current++
+    onDiscardReviewedResearch?.()
     if (tokenRef.current) void window.workbench.cancelJobResearch(tokenRef.current).catch(() => {})
     tokenRef.current = undefined; setToken(undefined); setRun(undefined); setSelected([]); setAcknowledged(false); setSearched(false); setReviewed(undefined); setBusy(false); setError('')
     if (capturedReadLifecycle === 'consumed') {

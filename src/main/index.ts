@@ -1,7 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } from 'electron'
 import type { ZodError } from 'zod'
 import { fileURLToPath } from 'node:url'
-import { existsSync, linkSync, lstatSync, mkdirSync, realpathSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, linkSync, lstatSync, mkdirSync, realpathSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
 import { basename, dirname, extname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { pdfFilename, writePdfAtomically } from '../shared/export'
@@ -34,6 +34,7 @@ import { validateLeverPostingUrl, type SafePostingFetchOptions } from './safe-po
 import { normalizeJobResearchUrl } from '../shared/job-research'
 import { researchCancelSchema, researchReviewInputSchema, researchReviewStateSchema, researchStartSchema, researchStateSchema } from '../shared/job-research-ipc'
 import { createJobResearchSessions } from './job-research-session'
+import { fetchDirectJobResearch } from './job-research-fetch'
 import { createVolatileResearchAnalysis } from './research-volatile-analysis'
 import { researchAnalysisTokenSchema, researchAnalysisConsentSchema, researchAnalysisPreviewReplySchema, researchAnalysisProgressReplySchema, researchAnalysisDiscardReplySchema } from '../shared/research-volatile-analysis-ipc'
 import type { PiModelSelection } from '../shared/pi-model'
@@ -197,8 +198,17 @@ app.whenReady().then(() => {
     }
   } : undefined
   const singleRequestReleaseCheck = process.env.CV_TAILOR_SINGLE_POSTING_REQUEST === '1'
-  const postingFetchOptions: SafePostingFetchOptions = {
+  const scriptedResearch = !app.isPackaged && process.env.CV_TAILOR_TEST_RESEARCH === '1' ? {
+    lookup: async () => [{ address: '8.8.8.8', family: 4 }],
+    request: async (url: URL) => {
+      if (url.href !== 'https://jobs.example.org/role/123') throw new Error('The scripted research received an unexpected URL.')
+      return { status: 200, headers: { 'content-type': 'text/html' }, body: Buffer.from('<html><title>Synthetic Engineer</title></html>') }
+    },
+    extract: async () => ({ outcome: 'partial' as const, title: 'Synthetic Engineer', employer: 'Example Research', description: 'Review TypeScript systems and document operational decisions. This partial synthetic role wording omits the complete requirements.', reason: 'Full role wording was not available.' })
+  } : undefined
+  const postingFetchOptions: SafePostingFetchOptions & { research?: import('./job-research-fetch').JobResearchFetchOptions } = {
     ...scriptedPostingFetch,
+    ...(scriptedResearch ? { research: scriptedResearch } : {}),
     ...(singleRequestReleaseCheck ? {
       singleRequest: true,
       onRequestStarted: () => console.info('[LINK37_SINGLE_REQUEST] request=1 started'),
@@ -217,6 +227,12 @@ app.whenReady().then(() => {
         completeSimple: async (selected: { provider: string; id: string }, context: { messages: Array<{ role: string; content: string }> }, options: { signal?: AbortSignal }) => {
           const prompt = context.messages.find(message => message.role === 'user')?.content
           if (!prompt) throw new Error('The scripted Pi request has no prompt.')
+          if (!app.isPackaged && process.env.CV_TAILOR_TEST_RESEARCH === '1' && prompt.startsWith('Extract only explicitly stated role responsibilities')) {
+            appendFileSync(join(app.getPath('userData'), 'research-model-requests.log'), 'request\n')
+            const data = JSON.parse(prompt.slice(prompt.indexOf('\n') + 1)) as { roleEvidence: Array<{ findingId: string }> }
+            const text = JSON.stringify({ requirements: data.roleEvidence.map(item => ({ category: 'qualification', text: 'Review the synthetic role wording.', findingIds: [item.findingId] })) })
+            return { role: 'assistant', provider: selected.provider, model: selected.id, stopReason: 'stop', content: [{ type: 'text', text }], usage: { output: 50 } }
+          }
           const text = await scriptedAnalysis!.generate({ model: 'scripted/cv-tailor-fixture', prompt, signal: options.signal ?? new AbortController().signal, responseSchema: z.unknown() })
           return { role: 'assistant', provider: selected.provider, model: selected.id, stopReason: 'stop', content: [{ type: 'text', text }], usage: { output: Math.ceil(Buffer.byteLength(text, 'utf8') / 4) } }
         }
@@ -230,7 +246,8 @@ app.whenReady().then(() => {
     credentialsDirectory: defaultResearchCredentialDirectory(app.getPath('appData'), app.getPath('userData')),
     workspaceDirectory: app.getPath('userData'), encryption: safeStorage
   })
-  research = createJobResearchSessions({ credentials: researchCredentials })
+  research = createJobResearchSessions({ credentials: researchCredentials,
+    ...(scriptedResearch ? { direct: (url, options) => fetchDirectJobResearch(url, { ...scriptedResearch, signal: options.signal }) } : {}) })
   registerResearchSearchSettingsIpc(ipcMain, researchCredentials, trusted)
   let analysisSelection: PiModelSelection | null = null
   let selectionEpoch = 0

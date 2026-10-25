@@ -9,6 +9,7 @@ import { ProfileEditor } from './ProfileEditor'
 import { SavedJobs } from './SavedJobs'
 import { WorkbenchStart } from './WorkbenchStart'
 import type { JobRecord } from '../shared/jobs'
+import type { ReviewedJobResearch } from '../shared/job-research-schema'
 import './style.css'
 
 type Page = 'Tailor CV' | 'Saved jobs' | 'My profile' | 'Settings'
@@ -34,6 +35,7 @@ function App() {
   const [backupStatus, setBackupStatus] = useState<WorkspaceBackupStatus | null>(null)
   const [activeJob, setActiveJob] = useState<JobRecord | null>(null)
   const [workspaceRevision, setWorkspaceRevision] = useState(0)
+  const [reviewedResearch, setReviewedResearch] = useState<{ token: string; reviewed: ReviewedJobResearch } | null>(null)
   const contentRef = useRef<HTMLElement>(null)
   const jobOpenSequence = useRef(0)
   useEffect(() => {
@@ -42,6 +44,7 @@ function App() {
     window.workbench.listJobs().then(setJobs).catch(() => setError('Saved postings could not be loaded. Restart the app to retry.'))
   }, [])
   useEffect(() => { if (ready) contentRef.current?.focus() }, [page, ready])
+  useEffect(() => { if (page !== 'Saved jobs') setReviewedResearch(null) }, [page])
   function keepJob(job: JobRecord) {
     setJobs(current => [job, ...current.filter(item => item.id !== job.id).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))])
     setActiveJob(job)
@@ -53,6 +56,7 @@ function App() {
     setBackupStatus(nextBackupStatus)
     setJobs(savedJobs)
     setActiveJob(null)
+    setReviewedResearch(null)
     setWorkspaceRevision(value => value + 1)
   }
   async function activateJob(id: string) {
@@ -101,7 +105,7 @@ function App() {
       </aside>}
       <main id="content" ref={contentRef} tabIndex={-1}>
         {(page === 'My profile' || page === 'Settings') && <div className="title"><span className="context">Personal workspace</span><h1>{page}</h1><p>{page === 'My profile' ? 'Keep the career facts that support your CV in one place.' : 'Choose a Pi model and manage your review preferences.'}</p></div>}
-        {page === 'Tailor CV' ? <WorkbenchStart key={workspaceRevision} activeJob={activeJob} onNavigate={setPage} /> : page === 'My profile' ? <ProfileEditor key={workspaceRevision} /> : page === 'Saved jobs' ? <SavedJobs key={workspaceRevision} jobs={jobs} activeJob={activeJob} onSaved={keepJob} onOpened={keepJob} onDeleted={afterJobsDeleted} onNavigate={setPage} /> : <div className="settings-page"><PiSettingsPanel key={workspaceRevision} /><WorkspaceBackup onRestored={afterWorkspaceRestore} /></div>}
+        {page === 'Tailor CV' ? <WorkbenchStart key={workspaceRevision} activeJob={activeJob} onNavigate={setPage} /> : page === 'My profile' ? <ProfileEditor key={workspaceRevision} /> : page === 'Saved jobs' ? <SavedJobs key={workspaceRevision} jobs={jobs} activeJob={activeJob} onSaved={keepJob} onOpened={keepJob} onDeleted={afterJobsDeleted} onNavigate={setPage} reviewedResearch={reviewedResearch} onReviewedResearch={(token, reviewed) => setReviewedResearch({ token, reviewed })} onDiscardReviewedResearch={() => setReviewedResearch(null)} /> : <div className="settings-page"><PiSettingsPanel key={workspaceRevision} /><WorkspaceBackup onRestored={afterWorkspaceRestore} /></div>}
       </main>
     </div>
   </div>
