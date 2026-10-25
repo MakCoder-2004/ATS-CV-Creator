@@ -88,6 +88,12 @@ describe('immutable research and review contracts', () => {
     expect(() => promoteJobResearch(company, [findingId], true)).toThrow()
     expect(() => promoteJobResearch(base, [randomUUID()], true)).toThrow()
   })
+  it('keeps legacy runs readable but limits typed access failures to blocked/none', () => {
+    expect(jobResearchRunSchema.safeParse(base).success).toBe(true)
+    expect(jobResearchRunSchema.safeParse({ ...base, status: 'none', findings: [], sources: [], accessFailure: 'unreadable' }).success).toBe(true)
+    expect(jobResearchRunSchema.safeParse({ ...base, accessFailure: 'unsafe' }).success).toBe(false)
+    expect(jobResearchRunSchema.safeParse({ ...base, status: 'none', findings: [], sources: [], accessFailure: 'arbitrary' }).success).toBe(false)
+  })
   it('refuses selected identity mutations even when canonical URL remains unchanged', () => {
     for (const selectedMutation of [
       { ...selected, roleId: '9999999999' },
@@ -202,8 +208,24 @@ describe('bounded direct read', () => {
     expect((await fetchDirectJobResearch(canonical, { ...fixtures, request: async () => response('<h1>Sign in to view</h1>') })).status).toBe('blocked')
     let calls = 0
     const blocked = await fetchDirectJobResearch(canonical, { ...fixtures, request: async () => { calls++; return response('', 307, { location: 'https://www.linkedin.com/login' }) } })
-    expect(blocked.status).toBe('blocked')
+    expect(blocked).toMatchObject({ status: 'blocked', accessFailure: 'unreadable' })
     expect(calls).toBe(1)
+    const denied = await fetchDirectJobResearch(canonical, { ...fixtures, request: async () => response('', 403) })
+    expect(denied).toMatchObject({ status: 'blocked', accessFailure: 'unreadable' })
+    const generic = 'https://jobs.example.org/positions/engineer'
+    const genericLogin = await fetchDirectJobResearch(generic, { ...fixtures, request: async () => response('', 302, { location: 'https://jobs.example.org/login' }) })
+    expect(genericLogin).toMatchObject({ status: 'blocked', accessFailure: 'unreadable' })
+  })
+  it.each([
+    ['different host', 'https://other.example.org/jobs/view/4464025097/'],
+    ['HTTP login', 'http://www.linkedin.com/login'],
+    ['different role', 'https://www.linkedin.com/jobs/view/9999999999/'],
+    ['unsafe query', `${canonical}?trackingId=untrusted`],
+    ['invalid redirect', 'https://%'],
+    ['loop', canonical],
+  ])('tags %s redirects unsafe, never as a login fallback', async (_, location) => {
+    const run = await fetchDirectJobResearch(canonical, { ...fixtures, request: async () => response('', 302, { location }) })
+    expect(run).toMatchObject({ status: 'blocked', accessFailure: 'unsafe' })
   })
   it('rejects non-public DNS and compression bombs before parsing', async () => {
     await expect(fetchDirectJobResearch(canonical, { ...fixtures, lookup: async () => [{ address: '8.8.8.8', family: 4 }, { address: '127.0.0.1', family: 4 }] })).rejects.toThrow(/private/)

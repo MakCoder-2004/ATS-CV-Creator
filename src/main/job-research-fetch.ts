@@ -79,9 +79,9 @@ export async function fetchDirectJobResearch(input: string, options: JobResearch
   options.signal?.addEventListener('abort', cancel, { once: true })
   if (options.signal?.aborted) cancel()
   const deadline = setTimeout(() => controller.abort(new Error('Research exceeded 20 seconds.')), 20_000)
-  const finish = (status: JobResearchRun['status'], unknowns: string[], extraction?: Extract<Extraction, { outcome: 'full' }> | Extract<Extraction, { outcome: 'partial' }>, url = selected.canonicalUrl): JobResearchRun => {
+  const finish = (status: JobResearchRun['status'], unknowns: string[], extraction?: Extract<Extraction, { outcome: 'full' }> | Extract<Extraction, { outcome: 'partial' }>, accessFailure?: JobResearchRun['accessFailure'], url = selected.canonicalUrl): JobResearchRun => {
     const sourceId = randomUUID()
-    return jobResearchRunSchema.parse({ version: 1, id: runId, selected, startedAt, completedAt: (options.now ?? (() => new Date()))().toISOString(), status,
+    return jobResearchRunSchema.parse({ version: 1, id: runId, selected, startedAt, completedAt: (options.now ?? (() => new Date()))().toISOString(), status, ...(accessFailure ? { accessFailure } : {}),
       sources: extraction ? [{ version: 1, id: sourceId, url, capturedAt: startedAt, method: 'direct-html', identity: 'exact-role', title: extraction.title, employer: extraction.employer, employerIdentityUrl: null }] : [],
       findings: extraction ? [{ version: 1, id: randomUUID(), sourceId, kind: 'direct-role-text', text: extraction.description, completeness: extraction.outcome === 'full' ? 'full' : 'partial' }] : [], unknowns })
   }
@@ -97,11 +97,17 @@ export async function fetchDirectJobResearch(input: string, options: JobResearch
     const visited = new Set<string>()
     for (let hop = 0; hop <= 2; hop++) {
       if (controller.signal.aborted) throw new Error('Fetch cancelled.')
+      if (visited.has(current)) return finish('blocked', ['The source returned a redirect loop.'], undefined, 'unsafe')
+      // Identify only a same-host HTTPS login gate before generic URLs can parse as a new role.
+      if (hop > 0) {
+        const redirect = new URL(current)
+        if (redirect.protocol === 'https:' && redirect.host === selected.host && !redirect.username && !redirect.password && !redirect.search && !redirect.hash && /^\/(?:login|signin|authwall|uas\/login|account\/login|checkpoint\/challenge)\/?$/i.test(redirect.pathname))
+          return finish('blocked', ['The selected posting requires sign-in.'], undefined, 'unreadable')
+      }
       let destination: JobResearchIdentity
-      try { destination = normalizeJobResearchUrl(current) } catch { return finish('blocked', ['The source redirected to an unsafe or ambiguous URL.']) }
-      if (destination.canonicalUrl !== current) return finish('blocked', ['The source redirected with tracking or unsafe query parameters.'])
-      if (destination.host !== selected.host || destination.roleId !== selected.roleId || selected.provider !== destination.provider) return finish('blocked', ['The source redirected away from the selected role.'])
-      if (visited.has(current)) return finish('blocked', ['The source returned a redirect loop.'])
+      try { destination = normalizeJobResearchUrl(current) } catch { return finish('blocked', ['The source redirected to an unsafe or ambiguous URL.'], undefined, 'unsafe') }
+      if (destination.canonicalUrl !== current) return finish('blocked', ['The source redirected with tracking or unsafe query parameters.'], undefined, 'unsafe')
+      if (destination.host !== selected.host || destination.roleId !== selected.roleId || selected.provider !== destination.provider) return finish('blocked', ['The source redirected away from the selected role.'], undefined, 'unsafe')
       visited.add(current)
       const addresses = await bounded((options.lookup ?? lookupPublic)(destination.host), 5_000)
       if (!addresses.length || addresses.some(item => !isPublicAddress(item.address, item.family))) throw new Error('The source resolved to a private or non-public address.')
@@ -109,24 +115,26 @@ export async function fetchDirectJobResearch(input: string, options: JobResearch
       if (response.body.length > MAX_COMPRESSED) throw new Error('Response exceeds compressed byte limit.')
       if ([301,302,303,307,308].includes(response.status)) {
         const location = response.headers.location
-        if (typeof location !== 'string' || hop === 2) return finish('blocked', ['The source redirect could not be safely followed.'])
-        try { current = new URL(location, current).href } catch { return finish('blocked', ['The source returned an invalid redirect.']) }
+        if (typeof location !== 'string' || hop === 2) return finish('blocked', ['The source redirect could not be safely followed.'], undefined, 'unsafe')
+        try { current = new URL(location, current).href } catch { return finish('blocked', ['The source returned an invalid redirect.'], undefined, 'unsafe') }
         continue
       }
-      if ([401,403,404,410,429,451].includes(response.status)) return finish('blocked', [`The selected posting was unavailable (HTTP ${response.status}). This does not prove the role was removed.`])
-      if (response.status !== 200) return finish('none', [`The source returned HTTP ${response.status}; no role evidence was collected.`])
+      if ([401,403,404,410,429,451].includes(response.status)) return finish('blocked', [`The selected posting was unavailable (HTTP ${response.status}). This does not prove the role was removed.`], undefined, 'unreadable')
+      if (response.status !== 200) return finish('none', [`The source returned HTTP ${response.status}; no role evidence was collected.`], undefined, 'unreadable')
       const contentType = String(response.headers['content-type'] ?? '').toLowerCase()
-      if (!/^text\/html\b|^application\/xhtml\+xml\b/.test(contentType)) return finish('none', ['The response was not an HTML posting page.'])
+      if (!/^text\/html\b|^application\/xhtml\+xml\b/.test(contentType)) return finish('none', ['The response was not an HTML posting page.'], undefined, 'unreadable')
       const encoding = String(response.headers['content-encoding'] ?? 'identity').toLowerCase()
       const decoded = await bounded(expand(response.body, encoding, controller.signal), 5_000)
       let html: string
-      try { html = new TextDecoder('utf-8', { fatal: true }).decode(decoded) } catch { return finish('none', ['The response was not valid UTF-8.']) }
+      try { html = new TextDecoder('utf-8', { fatal: true }).decode(decoded) } catch { return finish('none', ['The response was not valid UTF-8.'], undefined, 'unreadable') }
       const extracted = await bounded((options.extract ?? extractInWorker)(html, selected, controller.signal), 2_500)
       if (controller.signal.aborted) throw new Error('Fetch cancelled.')
-      if (extracted.outcome === 'full') return finish('full', [], extracted, current)
-      if (extracted.outcome === 'partial') return finish('provisional', [extracted.reason ?? 'The selected role description may be incomplete.'], extracted, current)
-      return finish(extracted.outcome, [extracted.reason])
+      if (extracted.outcome === 'full') return finish('full', [], extracted, undefined, current)
+      if (extracted.outcome === 'partial') return finish('provisional', [extracted.reason ?? 'The selected role description may be incomplete.'], extracted, undefined, current)
+      // Only an explicitly recognized unreadable page is eligible for indexed fallback.
+      const unreadable = extracted.reason === 'The page requires sign-in, verification or blocks public access.' || extracted.reason === 'The selected page lacks a substantive readable job posting.'
+      return finish(extracted.outcome, [extracted.reason], undefined, unreadable ? 'unreadable' : 'unsafe')
     }
-    return finish('blocked', ['Too many redirects.'])
+    return finish('blocked', ['Too many redirects.'], undefined, 'unsafe')
   } finally { clearTimeout(deadline); options.signal?.removeEventListener('abort', cancel); controller.abort() }
 }

@@ -51,10 +51,13 @@ export const jobResearchRunSchema = z.object({
   startedAt: timestamp,
   completedAt: timestamp,
   status: z.enum(['full', 'provisional', 'none', 'blocked']),
+  // Optional for older ephemeral runs; absence never authorizes an indexed fallback.
+  accessFailure: z.enum(['unreadable', 'unsafe']).optional(),
   sources: z.array(jobResearchSourceSchema).max(24),
   findings: z.array(jobResearchFindingSchema).max(48),
   unknowns: z.array(z.string().trim().min(1).max(500)).max(32),
 }).strict().superRefine((run, ctx) => {
+  if (run.accessFailure && run.status !== 'blocked' && run.status !== 'none') ctx.addIssue({ code: 'custom', message: 'Access failure requires a blocked or empty read' })
   const sourceIds = new Set<string>(), findingIds = new Set<string>()
   for (const source of run.sources) {
     if (sourceIds.has(source.id)) ctx.addIssue({ code: 'custom', message: 'Duplicate source ID' })

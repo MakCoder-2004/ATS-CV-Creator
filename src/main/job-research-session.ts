@@ -126,21 +126,22 @@ export function createJobResearchSessions(options: ResearchSessionOptions) {
         session.state = { status: 'ready', run: freeze(run) }
         return getJobResearch(token)
       }
-      // The only follow-up GET is to the already selected canonical URL. A failed or blocked
-      // re-read does not erase a URL-matched index lead; it cannot verify its title/employer.
+      // The only follow-up GET is to the already selected canonical URL. Only typed,
+      // explicitly unreadable outcomes can authorize a URL-only indexed fallback.
       let verified: JobResearchRun | undefined
       let readFailed = false
-      let unsafeDestination = false
       try { verified = jobResearchRunSchema.parse(await direct(selected.canonicalUrl, { signal: session.controller.signal })) }
-      catch (error) {
+      catch {
+        // DNS, TLS, request and unknown errors have no proven-safe destination.
         readFailed = true
-        // Do not display transport errors or accept a source whose network identity is unsafe.
-        unsafeDestination = error instanceof Error && /private or non-public address|certificate|self.signed|TLS|ssl|hostname.*(?:mismatch|match certificate)/i.test(error.message)
       }
       if (!live(token, session, generation)) throw new Error(missing)
-      if (verified?.selected.canonicalUrl !== selected.canonicalUrl) verified = undefined
+      const identityMismatch = !!verified && verified.selected.canonicalUrl !== selected.canonicalUrl
+      if (identityMismatch) verified = undefined
       const preserved = (next?: JobResearchRun): JobResearchRun => jobResearchRunSchema.parse({ ...original,
         completedAt: new Date().toISOString(),
+        // A failed earlier read cannot label a run once direct evidence exists.
+        accessFailure: original.status === 'provisional' || next?.status === 'provisional' ? undefined : original.accessFailure,
         status: next?.status === 'full' ? 'full' : original.status === 'provisional' || next?.status === 'provisional' ? 'provisional' : original.status,
         sources: [...original.sources, ...(next?.sources ?? []).filter(source => !original.sources.some(item => item.id === source.id))],
         findings: [...original.findings, ...(next?.findings ?? []).filter(finding => !original.findings.some(item => item.id === finding.id))],
@@ -151,16 +152,23 @@ export function createJobResearchSessions(options: ResearchSessionOptions) {
         return getJobResearch(token)
       }
       const base = preserved(verified?.status === 'provisional' ? verified : undefined)
-      // Login redirects are ordinary blocked reads; unsafe/ambiguous redirects are not.
-      unsafeDestination ||= verified?.status === 'blocked' && verified.unknowns.some(reason => /unsafe|ambiguous|tracking/i.test(reason))
-      if (unsafeDestination) {
+      // Untagged historical blocked/none runs remain readable but cannot grant fallback.
+      const cannotFallback = original.accessFailure === 'unsafe' || readFailed || identityMismatch ||
+        (verified?.status !== 'provisional' && verified?.accessFailure !== 'unreadable')
+      if (cannotFallback) {
         session.state = { status: 'ready', run: freeze(jobResearchRunSchema.parse({ ...base, unknowns: [...base.unknowns, 'The selected source could not be safely reached; the indexed excerpt was not accepted.'] })) }
         return getJobResearch(token)
       }
       const directRoles = base.sources.filter(source => source.method === 'direct-html' && source.identity === 'exact-role' && source.title)
-      const matchesDirect = (candidate: TavilySearchResult['links'][number]) => directRoles.every(role =>
-        normalized(candidate.title).includes(normalized(role.title!)) &&
-        (!role.employer || normalized(candidate.title).includes(normalized(role.employer))))
+      const matchesDirect = (candidate: TavilySearchResult['links'][number]) => directRoles.every(role => {
+        const title = normalized(role.title!)
+        const indexed = normalized(candidate.title)
+        if (!role.employer) return indexed === title
+        // Strip only an exact, directly verified employer suffix, never an extra title word.
+        const employer = normalized(role.employer)
+        const suffix = candidate.title.match(/^(.*?)\s+(?:[—–|\-]|at)\s+(.+)$/i)
+        return !!suffix && normalized(suffix[1]) === title && normalized(suffix[2]) === employer
+      })
       const match = candidates.find(matchesDirect)
       if (!match) {
         session.state = { status: 'ready', run: freeze(jobResearchRunSchema.parse({ ...base, unknowns: [...base.unknowns, 'Indexed title or employer did not match the directly read role; the snippet was discarded.'] })) }
@@ -168,14 +176,14 @@ export function createJobResearchSessions(options: ResearchSessionOptions) {
       }
       const sourceId = randomUUID()
       const directlyVerifiedEmployer = directRoles.find(role => role.employer)?.employer ?? null
-      const run = jobResearchRunSchema.parse({ ...base, status: 'provisional', sources: [...base.sources, {
+      const { accessFailure: _accessFailure, ...evidenceBase } = base
+      const run = jobResearchRunSchema.parse({ ...evidenceBase, status: 'provisional', sources: [...base.sources, {
         version: 1, id: sourceId, url: selected.canonicalUrl, capturedAt: new Date().toISOString(),
         method: 'indexed-snippet', identity: 'exact-role', title: match.title.trim(), employer: directlyVerifiedEmployer, employerIdentityUrl: null,
       }], findings: [...base.findings, { version: 1, id: randomUUID(), sourceId, kind: 'indexed-role-claim', text: match.snippet.trim(), completeness: 'partial' }],
       unknowns: [...base.unknowns, directRoles.length
         ? 'The indexed title and excerpt match directly read role metadata, but the excerpt is partial and not independently confirmed on source; verify on original.'
-        : 'Identity matched by selected URL only; job title/employer and excerpt are indexed, not independently confirmed on source; verify on original.',
-        ...(readFailed ? ['The follow-up public read failed; no new direct corroboration was added.'] : [])] })
+        : 'Identity matched by selected URL only; job title/employer and excerpt are indexed, not independently confirmed on source; verify on original.'] })
       session.state = { status: 'ready', run: freeze(run) }
       return getJobResearch(token)
     } catch (error) {

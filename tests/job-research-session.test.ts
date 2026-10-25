@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { randomUUID } from 'node:crypto'
 import { createJobResearchSessions } from '../src/main/job-research-session'
+import { fetchDirectJobResearch } from '../src/main/job-research-fetch'
 import { createTavilyResearchSession, TavilySearchError, type TavilyTransport } from '../src/main/tavily-search'
 import { normalizeJobResearchUrl, verifyReviewedJobResearch, type JobResearchRun } from '../src/shared/job-research'
 
@@ -9,7 +10,7 @@ function synthetic(status: JobResearchRun['status'] = 'provisional'): JobResearc
   const selected = normalizeJobResearchUrl(URL), id = randomUUID(), sourceId = randomUUID()
   const role = status === 'full' || status === 'provisional'
   return { version: 1, id, selected, startedAt: new Date().toISOString(), completedAt: new Date().toISOString(), status,
-    sources: role ? [{ version: 1, id: sourceId, url: URL, capturedAt: new Date().toISOString(), method: 'direct-html', identity: 'exact-role', title: 'Synthetic Engineer', employer: 'Invented Corp', employerIdentityUrl: null }] : [],
+    ...(role ? {} : { accessFailure: 'unreadable' as const }), sources: role ? [{ version: 1, id: sourceId, url: URL, capturedAt: new Date().toISOString(), method: 'direct-html', identity: 'exact-role', title: 'Synthetic Engineer', employer: 'Invented Corp', employerIdentityUrl: null }] : [],
     findings: role ? [{ version: 1, id: randomUUID(), sourceId, kind: 'direct-role-text', text: status === 'full' ? 'Build reliable software systems with TypeScript and carefully document operational changes for this entirely synthetic engineering team.' : 'TypeScript experience preferred.', completeness: status === 'full' ? 'full' : 'partial' }] : [], unknowns: role && status !== 'full' ? ['Full description unknown.'] : status === 'none' ? ['No public content found.'] : [] }
 }
 function fixture(url = URL, title = 'Synthetic Engineer — Invented Corp') {
@@ -125,7 +126,7 @@ describe('volatile public research session', () => {
     sessions.close()
   })
 
-  it('keeps original partial evidence and an indexed lead when re-read throws, without leaking the error', async () => {
+  it('keeps original partial evidence but rejects an unclassified thrown re-read without leaking the error', async () => {
     const t = fixture(); let reads = 0
     const sessions = createJobResearchSessions({ credentials: t.credentials, createSearch: t.createSearch, direct: async () => {
       if (++reads === 1) return synthetic()
@@ -138,8 +139,8 @@ describe('volatile public research session', () => {
     if (state.status === 'ready' && initial.status === 'ready') {
       expect(state.run.id).toBe(initial.run.id)
       expect(state.run.findings).toEqual(expect.arrayContaining(initial.run.findings))
-      expect(state.run.findings.some(finding => finding.kind === 'indexed-role-claim')).toBe(true)
-      expect(state.run.unknowns.join(' ')).toMatch(/follow-up public read failed/)
+      expect(state.run.findings.some(finding => finding.kind === 'indexed-role-claim')).toBe(false)
+      expect(state.run.unknowns.join(' ')).toMatch(/could not be safely reached/)
       expect(JSON.stringify(state)).not.toContain('sensitive source transport details')
     }
     expect(reads).toBe(2)
@@ -227,7 +228,7 @@ describe('volatile public research session', () => {
     const sessions = createJobResearchSessions({ credentials: t.credentials, createSearch: t.createSearch, direct: async () => {
       if (++reads === 1) return synthetic('none')
       if (failure === 'private DNS') throw new Error('The source resolved to a private or non-public address.')
-      return { ...synthetic('blocked'), unknowns: ['The source redirected to an unsafe or ambiguous URL.'] }
+      return { ...synthetic('blocked'), accessFailure: 'unsafe' as const, unknowns: ['The source redirected away from the selected role.'] }
     } })
     const token = sessions.startJobResearch(URL).token; await tick()
     const state = await sessions.searchJobResearch(token)
@@ -237,6 +238,70 @@ describe('volatile public research session', () => {
       expect(state.run.findings).toHaveLength(0)
       expect(state.run.unknowns.join(' ')).toMatch(/could not be safely reached/)
     }
+    sessions.close()
+  })
+
+  it.each(['cross-origin', 'role redirect', 'loop', 'private DNS', 'TLS', 'login', 'HTTP 403'] as const)('uses typed direct access outcome for %s fallback', async scenario => {
+    const t = fixture(); let reads = 0
+    const safeResponse = (status: number, location?: string) => ({ status, headers: location ? { location } : {}, body: Buffer.alloc(0) })
+    const direct = async () => {
+      if (++reads === 1) return synthetic('none')
+      return fetchDirectJobResearch(URL, {
+        lookup: async () => scenario === 'private DNS' ? [{ address: '127.0.0.1', family: 4 }] : [{ address: '8.8.8.8', family: 4 }],
+        request: async () => {
+          if (scenario === 'TLS') throw new Error('synthetic TLS certificate failure')
+          if (scenario === 'HTTP 403') return safeResponse(403)
+          const location = scenario === 'cross-origin' ? 'https://other.example.org/jobs/view/4464025097/'
+            : scenario === 'role redirect' ? 'https://www.linkedin.com/jobs/view/4464025098/'
+            : scenario === 'loop' ? URL : 'https://www.linkedin.com/login'
+          return safeResponse(302, location)
+        },
+      })
+    }
+    const sessions = createJobResearchSessions({ credentials: t.credentials, createSearch: t.createSearch, direct })
+    const token = sessions.startJobResearch(URL).token; await tick()
+    const state = await sessions.searchJobResearch(token)
+    expect(state.status).toBe('ready')
+    if (state.status === 'ready') {
+      const allowed = scenario === 'login' || scenario === 'HTTP 403'
+      expect(state.run.findings.some(finding => finding.kind === 'indexed-role-claim')).toBe(allowed)
+      expect(state.run.status).toBe(allowed ? 'provisional' : 'none')
+      if (!allowed) expect(state.run.unknowns.join(' ')).toMatch(/could not be safely reached/)
+    }
+    expect(reads).toBe(2)
+    sessions.close()
+  })
+
+  it.each([
+    ['Senior Synthetic Engineer — Invented Corp', false],
+    ['Synthetic Engineer — Different Corp', false],
+    ['Synthetic Engineer', false],
+    ['SYNTHETIC ENGINEER at INVENTED CORP', true],
+    ['Synthetic Engineer | Invented Corp', true],
+  ] as const)('checks directly verified title against %s without substrings', async (indexedTitle, accepted) => {
+    const t = fixture(URL, indexedTitle)
+    const sessions = createJobResearchSessions({ credentials: t.credentials, createSearch: t.createSearch, direct: async () => synthetic() })
+    const token = sessions.startJobResearch(URL).token; await tick()
+    const state = await sessions.searchJobResearch(token)
+    expect(state.status).toBe('ready')
+    if (state.status === 'ready') {
+      expect(state.run.findings.some(finding => finding.kind === 'indexed-role-claim')).toBe(accepted)
+      expect(state.run.status).toBe('provisional')
+    }
+    sessions.close()
+  })
+
+  it('does not infer a safe fallback from legacy untagged blocked runs', async () => {
+    const t = fixture(); let reads = 0
+    const sessions = createJobResearchSessions({ credentials: t.credentials, createSearch: t.createSearch, direct: async () => {
+      if (++reads === 1) return synthetic('none')
+      const { accessFailure: _legacy, ...legacy } = synthetic('blocked')
+      return { ...legacy, unknowns: ['Sign in to view this job.'] }
+    } })
+    const token = sessions.startJobResearch(URL).token; await tick()
+    const state = await sessions.searchJobResearch(token)
+    expect(state.status).toBe('ready')
+    if (state.status === 'ready') expect(state.run.findings).toHaveLength(0)
     sessions.close()
   })
 
