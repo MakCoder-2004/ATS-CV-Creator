@@ -59,6 +59,19 @@ test('encrypted private sibling is outside workspace and backups; unavailable en
   expect(await unavailable.status()).toMatchObject({ configured: false, storageAvailable: false })
   x.encryption.isEncryptionAvailable.mockReturnValue(true)
   await x.invoke('research-search:key:save', x.allowed, key)
+  x.encryption.isEncryptionAvailable.mockReturnValue(false)
+  const storedButUnavailable = await x.invoke('research-search:key:status', x.allowed)
+  expect(researchSearchKeyStatusSchema.parse(storedButUnavailable)).toEqual({
+    configured: true,
+    storageAvailable: false,
+    message: 'A search key is stored but device encryption is unavailable; it cannot be used until encryption returns. You can remove it locally.'
+  })
+  expect(JSON.stringify(storedButUnavailable)).not.toContain(key)
+  const removedUnavailable = await x.invoke('research-search:key:remove', x.allowed)
+  expect(researchSearchKeyStatusSchema.parse(removedUnavailable)).toMatchObject({ configured: false, storageAvailable: false })
+  expect(readdirSync(x.directory)).not.toContain('tavily-key.dpapi')
+  x.encryption.isEncryptionAvailable.mockReturnValue(true)
+  await x.invoke('research-search:key:save', x.allowed, key)
   const files = readdirSync(x.directory)
   expect(files).toEqual(['tavily-key.dpapi'])
   expect(readFileSync(join(x.directory, files[0]), 'utf8')).toBe(`encrypted:${key}`)

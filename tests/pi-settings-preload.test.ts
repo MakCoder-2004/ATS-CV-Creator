@@ -41,6 +41,17 @@ test('preload exposes only named search key status, save and remove methods', as
   await expect(bridge.api!.getResearchSearchKeyStatus()).rejects.toThrow()
 })
 
+test('preload accepts a configured key status while device encryption is unavailable', async () => {
+  const status = {
+    configured: true,
+    storageAvailable: false,
+    message: 'A search key is stored but device encryption is unavailable; it cannot be used until encryption returns. You can remove it locally.'
+  }
+  bridge.invoke.mockResolvedValue(status)
+  await expect(bridge.api!.getResearchSearchKeyStatus()).resolves.toEqual(status)
+  expect(bridge.invoke).toHaveBeenCalledWith('research-search:key:status')
+})
+
 test('preload rejects malformed Pi selections before invoking IPC', async () => {
   await expect(bridge.api!.setPiModel({ reference: 'provider/model', thinkingLevel: 'invalid' } as never)).rejects.toThrow()
   expect(bridge.invoke).not.toHaveBeenCalled()

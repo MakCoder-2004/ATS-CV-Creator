@@ -8,6 +8,7 @@ export const researchSearchKeyStatusSchema = z.object({
   message: z.enum([
     'Search is available only after a key is stored on this device.',
     'Device encryption is unavailable. No search key was saved.',
+    'A search key is stored but device encryption is unavailable; it cannot be used until encryption returns. You can remove it locally.',
     'Search key storage failed. The existing key was not replaced.',
     'The local search key was removed. This does not revoke the provider key.'
   ])
