@@ -25,13 +25,16 @@ function content(node) {
   }
   return parts.join('').replace(/[ \t]+/g, ' ').replace(/\n\s+/g, '\n').replace(/\n{3,}/g, '\n\n').trim()
 }
-function roles(value, depth = 0) {
-  if (depth > 40) throw new Error('Structured data is too deeply nested.')
-  if (Array.isArray(value)) return value.flatMap(item => roles(item, depth + 1))
+function roles(value, depth = 0, state = { visited: 0, count: 0 }) {
+  if (depth > 40 || ++state.visited > 10_000) throw new Error('Structured data exceeds safe traversal limits.')
+  if (Array.isArray(value)) return value.flatMap(item => roles(item, depth + 1, state))
   if (!value || typeof value !== 'object') return []
   const types = Array.isArray(value['@type']) ? value['@type'] : [value['@type']]
-  if (types.includes('JobPosting')) return [value]
-  return value['@graph'] ? roles(value['@graph'], depth + 1) : []
+  const isPosting = types.includes('JobPosting')
+  if (isPosting && ++state.count > 32) throw new Error('Too many structured roles.')
+  // A posting can itself contain a graph with other postings; never stop at the outer role.
+  const nested = value['@graph'] == null ? [] : roles(value['@graph'], depth + 1, state)
+  return isPosting ? [value, ...nested] : nested
 }
 function sourceMatches(value, selected) {
   if (typeof value !== 'string') return false
@@ -76,6 +79,14 @@ function selectedRole(posting, selected) {
   const urls = []
   const ids = []
   if ('url' in posting) urls.push(posting.url)
+  if ('@id' in posting) {
+    const reference = posting['@id']
+    if (typeof reference === 'string') urls.push(reference)
+    else if (reference && typeof reference === 'object' && !Array.isArray(reference) && ('@id' in reference || 'url' in reference)) {
+      if ('@id' in reference) urls.push(reference['@id'])
+      if ('url' in reference) urls.push(reference.url)
+    } else return false
+  }
   if ('mainEntityOfPage' in posting) {
     const page = posting.mainEntityOfPage
     if (typeof page === 'string') urls.push(page)
@@ -115,7 +126,9 @@ function extract() {
   if (/captcha|verify you are human|unusual traffic|sign in to view|log in to view|access denied/i.test(visible)) return { outcome: 'blocked', reason: 'The page requires sign-in, verification or blocks public access.' }
   if (/this job (?:is no longer available|has expired|has closed)|this position has been filled|job posting has expired/i.test(visible)) return { outcome: 'blocked', reason: 'The source says the posting has expired or closed.' }
   const structured = elements.filter(node => node.tagName === 'script' && attrs(node, 'type').toLowerCase() === 'application/ld+json').flatMap(node => {
-    try { return roles(JSON.parse((node.childNodes || []).map(child => child.value || '').join(''))) } catch { return [] }
+    let value
+    try { value = JSON.parse((node.childNodes || []).map(child => child.value || '').join('')) } catch { return [] }
+    return roles(value)
   })
   const exact = structured.filter(item => selectedRole(item, selected))
   if (structured.length > 1) return { outcome: 'none', reason: 'Multiple roles were found without one unambiguous match.' }
@@ -124,8 +137,19 @@ function extract() {
   const candidates = elements.filter(node => (attrs(node, 'class').split(/\s+/).includes('show-more-less-html__markup') || attrs(node, 'class').split(/\s+/).includes('description__text--rich')))
   const decoratedNodes = elements.filter(node => node.tagName === 'code' && attrs(node, 'id') === 'decoratedJobPostingId')
   const embeddedIds = decoratedNodes.map(node => (node.childNodes || []).map(child => child.value || child.data || '').join('').trim().replace(/^"|"$/g, ''))
-  const scriptedIds = [...html.matchAll(/"decoratedJobPostingId"\s*:\s*("(?:\\.|[^"\\])*"|[^,}\s]+)/g)].map(match => {
-    try { return JSON.parse(match[1]) } catch { return null }
+  // Only recognize literal numeric IDs on a narrow JS/JSON property syntax; unknown uses
+  // of this identity key cannot safely prove that the page describes the selected role.
+  const scriptedIds = elements.filter(node => node.tagName === 'script').flatMap(node => {
+    const text = (node.childNodes || []).map(child => child.value || '').join('')
+    return [...text.matchAll(/\bdecoratedJobPostingId\b/g)].map(match => {
+      const before = text[match.index - 1]
+      const after = text[match.index + match[0].length]
+      const quoted = before === '"' || before === "'"
+      if (quoted && after !== before || !quoted && (after === '"' || after === "'")) return null
+      const suffix = text.slice(match.index + match[0].length + (quoted ? 1 : 0))
+      const literal = /^\s*:\s*(?:"(\d{5,20})"|'(\d{5,20})'|(\d{5,20}))(?=\s*[,;}\]\n]|$)/.exec(suffix)
+      return literal ? literal[1] || literal[2] || literal[3] : null
+    })
   })
   if (decoratedNodes.length > 1 || [...embeddedIds, ...scriptedIds].some(id => typeof id !== 'string' || !/^\d{5,20}$/.test(id) || selected.provider !== 'linkedin' || id !== selected.roleId))
     return { outcome: 'none', reason: 'A posting ID differs from the selected role.' }

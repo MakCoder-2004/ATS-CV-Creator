@@ -169,6 +169,13 @@ describe('bounded direct read', () => {
     expect(namesake.status).toBe('none')
   })
   it.each([
+    ['wrong JobPosting @id with correct URL and identifier', structuredRole({ '@id': 'https://www.linkedin.com/jobs/view/9999999999/' }), ''],
+    ['wrong JobPosting reference URL with correct URL and identifier', structuredRole({ '@id': { url: 'https://www.linkedin.com/jobs/view/9999999999/' } }), ''],
+    ['matching posting with nested wrong-role graph', { ...structuredRole(), '@graph': [{ '@type': 'Organization', name: 'Example Ltd' }, structuredRole({ url: 'https://www.linkedin.com/jobs/view/9999999999/' })] }, ''],
+    ['wrong unquoted scripted ID with correct structured role', structuredRole(), '<script>window.data={decoratedJobPostingId:"9999999999"}</script>'],
+    ['conflicting repeated scripted IDs', structuredRole(), `<script>window.data={decoratedJobPostingId:"${roleId}",decoratedJobPostingId:9999999999}</script>`],
+    ['unreadable scripted ID', structuredRole(), '<script>window.data={decoratedJobPostingId:otherJobId}</script>'],
+    ['malformed scripted identity syntax', structuredRole(), '<script>window.data={decoratedJobPostingId="9999999999"}</script>'],
     ['wrong URL with correct identifier', structuredRole({ url: 'https://www.linkedin.com/jobs/view/9999999999/' }), ''],
     ['wrong mainEntityOfPage @id with correct URL', structuredRole({ mainEntityOfPage: { '@id': 'https://www.linkedin.com/jobs/view/9999999999/', url: canonical } }), ''],
     ['wrong mainEntityOfPage URL with correct @id', structuredRole({ mainEntityOfPage: { '@id': canonical, url: 'https://www.linkedin.com/jobs/view/9999999999/' } }), ''],
@@ -188,6 +195,19 @@ describe('bounded direct read', () => {
     expect(run.status).toBe('none')
     expect(run.sources).toEqual([])
     expect(run.findings).toEqual([])
+  })
+  it('does not turn a metadata-free selected page into a full posting', async () => {
+    const page = `<html><body><h1>Synthetic engineer</h1><div class="show-more-less-html__markup">${completeDescription}</div></body></html>`
+    expect((await extractWorker(page)).outcome).toBe('none')
+    const run = await fetchDirectJobResearch(canonical, { ...fixtures, request: async () => response(page) })
+    expect(run).toMatchObject({ status: 'none', sources: [], findings: [] })
+  })
+  it('accepts a single role with nested non-job data and repeated consistent scripted IDs', async () => {
+    const page = structuredPage({ ...structuredRole({ '@id': canonical }), '@graph': [{ '@type': 'Organization', name: 'Example Ltd' }] }, '',
+      `<script>window.data={decoratedJobPostingId:"${roleId}"};window.backup={'decoratedJobPostingId':${roleId},"decoratedJobPostingId":"${roleId}"}</script>`)
+    expect((await extractWorker(page)).outcome).toBe('full')
+    const run = await fetchDirectJobResearch(canonical, { ...fixtures, request: async () => response(page) })
+    expect(run.status).toBe('full')
   })
   it('accepts mutually consistent structured, page, canonical and decorated identity signals', async () => {
     const page = structuredPage(structuredRole({ mainEntityOfPage: { '@id': canonical, url: canonical }, identifier: { value: roleId, url: canonical } }),
