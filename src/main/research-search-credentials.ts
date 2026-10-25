@@ -13,6 +13,7 @@ export type SearchCredentialStatus = { configured: boolean; storageAvailable: bo
 const FILE = 'tavily-key.dpapi'
 const MESSAGE = 'Search is available only after a key is stored on this device.'
 const UNAVAILABLE = 'Device encryption is unavailable. No search key was saved.'
+const STORED_UNAVAILABLE = 'A search key is stored but device encryption is unavailable; it cannot be used until encryption returns. You can remove it locally.'
 const FAILED = 'Search key storage failed. The existing key was not replaced.'
 
 const inside = (target: string, parent: string) => {
@@ -75,7 +76,8 @@ export function createResearchSearchCredentials(options: {
           if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
           throw error
         })
-        return { configured: Boolean(stat), storageAvailable: available(), message: available() ? MESSAGE : UNAVAILABLE }
+        const storageAvailable = available()
+        return { configured: Boolean(stat), storageAvailable, message: storageAvailable ? MESSAGE : stat ? STORED_UNAVAILABLE : UNAVAILABLE }
       } catch { return { configured: false, storageAvailable: false, message: FAILED } }
     },
     async save(key: string): Promise<SearchCredentialStatus> {

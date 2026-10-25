@@ -85,7 +85,7 @@ export function registerWorkspaceBackupIpc(getWindow: () => BrowserWindow, getWo
         return writeVerified(safetyPath, content)
       })
       reopenWorkspace() // discard in-memory consent, usage counters and pending work after replacement
-      return { ok: true, message: `Workspace restored. Safety backup saved to ${safetyPath}. Older Pi and OpenRouter API keys are not restored; your separately stored encrypted Tavily key remains on this device. No cloud work was resumed.` }
+      return { ok: true, message: `Workspace restored. Safety backup saved to ${safetyPath}. Older Pi and OpenRouter API keys are not restored. Workspace restore does not change separately stored Tavily search credentials; check Settings to see whether a key is configured. No cloud work was resumed.` }
     } catch (cause) { return { ok: false, message: cause instanceof Error ? cause.message : 'Restore failed. Your previous workspace remains available.' } }
   })
 }

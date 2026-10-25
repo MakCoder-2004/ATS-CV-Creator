@@ -46,7 +46,11 @@ test('unavailable encryption and failed encryption never write plaintext or repl
   expect(await readFile(file)).toEqual(before)
   const offline = createResearchSearchCredentials({ ...f, encryption: { ...f.encryption, isEncryptionAvailable: () => false } })
   const offlineStatus = await offline.status()
-  expect(offlineStatus).toMatchObject({ configured: true, storageAvailable: false })
+  expect(offlineStatus).toMatchObject({
+    configured: true,
+    storageAvailable: false,
+    message: 'A search key is stored but device encryption is unavailable; it cannot be used until encryption returns. You can remove it locally.'
+  })
   expect(JSON.stringify(offlineStatus)).not.toContain('tvly-')
   await expect(offline.save('tvly-NEW-SECRET')).rejects.toThrow(/unavailable/)
   await expect(offline.withKey(async () => undefined)).rejects.toThrow(/unavailable/)
