@@ -207,7 +207,21 @@ export function createJobResearchSessions(options: ResearchSessionOptions) {
     if (checked.evidenceHash !== session.reviewed.evidenceHash) throw new Error('Research review has changed. Review the current run again.')
     return checked
   }
-  return { startJobResearch, assertCanAcceptInitialDirectRun, acceptInitialDirectRun, getJobResearch, searchJobResearch, reviewJobResearch, verifyAppHeldReview,
+  function getReviewedRunById(runId: string): { run: JobResearchRun; review: ReviewedJobResearch } {
+    prune()
+    for (const session of sessions.values()) {
+      if (session.state.status !== 'ready' || session.state.run.id !== runId || !session.reviewed || session.controller.signal.aborted) continue
+      const review = verifyReviewedJobResearch(session.state.run, session.reviewed)
+      return { run: clone(session.state.run), review: clone(review) }
+    }
+    throw new Error('No current app-held reviewed research is available. Review the public read again.')
+  }
+  function getReviewedRun(token: string): { run: JobResearchRun; review: ReviewedJobResearch } {
+    const session = get(token)
+    if (session.state.status !== 'ready' || !session.reviewed || session.controller.signal.aborted) throw new Error('Review the public read before preparing outgoing analysis.')
+    return getReviewedRunById(session.state.run.id)
+  }
+  return { startJobResearch, assertCanAcceptInitialDirectRun, acceptInitialDirectRun, getJobResearch, searchJobResearch, reviewJobResearch, verifyAppHeldReview, getReviewedRun, getReviewedRunById,
     cancelJobResearch(token: string): { ok: boolean } { const found = sessions.has(token); cancelEntry(token); return { ok: found } },
     close(): void { for (const token of sessions.keys()) cancelEntry(token) } }
 }

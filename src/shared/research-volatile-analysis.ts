@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { jobResearchIdentitySchema } from './job-research'
+import { jobResearchIdentitySchema } from './job-research-schema'
 import { piModelSelectionSchema } from './pi-model'
 
 const id = z.string().uuid()

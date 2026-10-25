@@ -34,11 +34,15 @@ import { validateLeverPostingUrl, type SafePostingFetchOptions } from './safe-po
 import { normalizeJobResearchUrl } from '../shared/job-research'
 import { researchCancelSchema, researchReviewInputSchema, researchReviewStateSchema, researchStartSchema, researchStateSchema } from '../shared/job-research-ipc'
 import { createJobResearchSessions } from './job-research-session'
+import { createVolatileResearchAnalysis } from './research-volatile-analysis'
+import { researchAnalysisTokenSchema, researchAnalysisConsentSchema, researchAnalysisPreviewReplySchema, researchAnalysisProgressReplySchema, researchAnalysisDiscardReplySchema } from '../shared/research-volatile-analysis-ipc'
+import type { PiModelSelection } from '../shared/pi-model'
 import { postingPreviewEditSchema, postingReviewSchema } from '../shared/posting-import'
 
 let window: BrowserWindow | undefined
 let workspace: ReturnType<typeof createWorkbench> | undefined
 let research: ReturnType<typeof createJobResearchSessions> | undefined
+let researchAnalysis: ReturnType<typeof createVolatileResearchAnalysis> | undefined
 
 function invalidProfileInput(error: ZodError, kind: string) {
   const fieldErrors: Record<string, string> = {}
@@ -228,10 +232,40 @@ app.whenReady().then(() => {
   })
   research = createJobResearchSessions({ credentials: researchCredentials })
   registerResearchSearchSettingsIpc(ipcMain, researchCredentials, trusted)
+  let analysisSelection: PiModelSelection | null = null
+  let selectionEpoch = 0
+  let modelUpdatePending = false
+  const currentSelection = async () => {
+    if (modelUpdatePending) throw new Error('Wait for Pi model selection to finish before reviewing outgoing data.')
+    const epoch = selectionEpoch
+    const selection = (await workspace!.api.getSettings()).pi
+    if (modelUpdatePending || epoch !== selectionEpoch) throw new Error('Pi settings changed. Review outgoing data again.')
+    if (!selection) throw new Error('Select a Pi model in Settings before reviewing outgoing data.')
+    analysisSelection = selection
+    return selection
+  }
+  async function volatileController() {
+    if (researchAnalysis) return researchAnalysis
+    // Never await ModelRuntime while creating the window; surface no SDK/provider internals to the renderer.
+    const runtime = await piRuntime
+    if (!runtime) throw new Error('Pi analysis is unavailable. Check your local Pi installation and try again.')
+    return researchAnalysis ??= createVolatileResearchAnalysis({
+      getAppHeldRun: runId => research!.getReviewedRunById(runId).run,
+      getAppHeldReview: runId => research!.getReviewedRunById(runId).review,
+      getPiSelection: () => analysisSelection,
+      getSelectionEpoch: () => modelUpdatePending ? -1 : selectionEpoch,
+      piRuntime: runtime,
+    })
+  }
   registerWorkspaceBackupIpc(() => window!, () => workspace!, () => {
     const reopened = createWorkbench(app.getPath('userData'), undefined, useScriptedPi ? undefined : scriptedAnalysis, undefined, postingFetchOptions, piRuntime)
     const previous = workspace!
     workspace = reopened
+    selectionEpoch++
+    analysisSelection = null
+    researchAnalysis?.close()
+    researchAnalysis = undefined
+    research?.close()
     previous.close()
   }, trusted)
   ipcMain.handle('settings:get', (event, ...args: unknown[]) => {
@@ -247,7 +281,16 @@ app.whenReady().then(() => {
   ipcMain.handle('settings:pi-model', (event, ...args: unknown[]) => {
     trusted(event)
     if (args.length !== 1) throw new Error('Expected Pi model selection')
-    return workspace!.api.setPiModel(piModelPreferenceInputSchema.parse(args[0]))
+    const input = piModelPreferenceInputSchema.parse(args[0])
+    if (modelUpdatePending) throw new Error('Wait for the current Pi model selection to finish.')
+    modelUpdatePending = true
+    selectionEpoch++ // invalidate consent immediately, even while model authentication is pending
+    analysisSelection = null
+    return workspace!.api.setPiModel(input).finally(() => {
+      modelUpdatePending = false
+      selectionEpoch++ // also invalidate any preview attempted while validation was pending
+      analysisSelection = null
+    })
   })
   ipcMain.handle('settings:faithfulness', (event, ...args: unknown[]) => {
     trusted(event)
@@ -409,6 +452,43 @@ app.whenReady().then(() => {
   ipcMain.handle('job-research:cancel', (event, ...args: unknown[]) => {
     trusted(event); if (args.length !== 1) throw new Error('Expected one research token.')
     return researchCancelSchema.parse(research!.cancelJobResearch(uuidSchema.parse(args[0])))
+  })
+  ipcMain.handle('research-analysis:preview', async (event, ...args: unknown[]) => {
+    trusted(event); if (args.length !== 1) throw new Error('Expected one app-held research token.')
+    const { run } = research!.getReviewedRun(researchAnalysisTokenSchema.parse(args[0]))
+    await currentSelection()
+    return researchAnalysisPreviewReplySchema.parse((await volatileController()).preview(run.id))
+  })
+  ipcMain.handle('research-analysis:consent', async (event, ...args: unknown[]) => {
+    trusted(event); if (args.length !== 2) throw new Error('Expected review token and consent decision.')
+    const token = researchAnalysisTokenSchema.parse(args[0]), accepted = researchAnalysisConsentSchema.parse(args[1])
+    if (!researchAnalysis) throw new Error('Review an app-held research run before consenting.')
+    const controller = researchAnalysis
+    if (!accepted) { controller.decline(token); return researchAnalysisProgressReplySchema.parse(controller.read(token)) }
+    return researchAnalysisProgressReplySchema.parse(controller.consent(token))
+  })
+  ipcMain.handle('research-analysis:start', async (event, ...args: unknown[]) => {
+    trusted(event); if (args.length !== 1) throw new Error('Expected one consent token.')
+    const token = researchAnalysisTokenSchema.parse(args[0])
+    if (!researchAnalysis) throw new Error('Review an app-held research run before starting analysis.')
+    await currentSelection()
+    return researchAnalysisProgressReplySchema.parse(await researchAnalysis.start(token))
+  })
+  ipcMain.handle('research-analysis:read', (event, ...args: unknown[]) => {
+    trusted(event); if (args.length !== 1) throw new Error('Expected one analysis token.')
+    if (!researchAnalysis) throw new Error('No temporary analysis is available.')
+    return researchAnalysisProgressReplySchema.parse(researchAnalysis.read(researchAnalysisTokenSchema.parse(args[0])))
+  })
+  ipcMain.handle('research-analysis:cancel', (event, ...args: unknown[]) => {
+    trusted(event); if (args.length !== 1) throw new Error('Expected one analysis token.')
+    if (!researchAnalysis) throw new Error('No temporary analysis is available.')
+    return researchAnalysisProgressReplySchema.parse(researchAnalysis.cancel(researchAnalysisTokenSchema.parse(args[0])))
+  })
+  ipcMain.handle('research-analysis:discard', (event, ...args: unknown[]) => {
+    trusted(event); if (args.length !== 1) throw new Error('Expected one analysis token.')
+    if (!researchAnalysis) throw new Error('No temporary analysis is available.')
+    researchAnalysis.discard(researchAnalysisTokenSchema.parse(args[0]))
+    return researchAnalysisDiscardReplySchema.parse({ ok: true })
   })
   ipcMain.handle('posting-import:start', async (event, ...args: unknown[]) => {
     trusted(event); if (args.length !== 1 || typeof args[0] !== 'string') throw new Error('Expected a posting link')
@@ -607,4 +687,4 @@ app.whenReady().then(() => {
 })
 
 app.on('window-all-closed', () => app.quit())
-app.on('before-quit', () => { research?.close(); workspace?.close() })
+app.on('before-quit', () => { researchAnalysis?.close(); research?.close(); workspace?.close() })

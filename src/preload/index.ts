@@ -20,6 +20,7 @@ import { workspaceBackupStatusSchema } from '../shared/workspace-backup'
 import { researchCancelSchema, researchReviewInputSchema, researchReviewStateSchema, researchStartSchema, researchStateSchema } from '../shared/job-research-ipc'
 import { normalizeJobResearchUrl } from '../shared/job-research-url'
 import { researchSearchKeyInputSchema, researchSearchKeyStatusSchema } from '../shared/research-search-settings'
+import { researchAnalysisTokenSchema, researchAnalysisConsentSchema, researchAnalysisPreviewReplySchema, researchAnalysisProgressReplySchema, researchAnalysisDiscardReplySchema } from '../shared/research-volatile-analysis-ipc'
 
 const workspaceResult = z.object({ ok: z.boolean(), cancelled: z.boolean(), message: z.string() }).strict()
 const restoreSelection = z.discriminatedUnion('ok', [
@@ -136,6 +137,12 @@ const api: WorkbenchAPI = Object.freeze({
     return researchReviewStateSchema.parse(await ipcRenderer.invoke('job-research:review', uuidSchema.parse(token), review))
   },
   async cancelJobResearch(token: string) { return researchCancelSchema.parse(await ipcRenderer.invoke('job-research:cancel', uuidSchema.parse(token))) },
+  async previewResearchAnalysis(researchToken: string) { return researchAnalysisPreviewReplySchema.parse(await ipcRenderer.invoke('research-analysis:preview', researchAnalysisTokenSchema.parse(researchToken))) },
+  async consentResearchAnalysis(token: string, accepted: boolean) { return researchAnalysisProgressReplySchema.parse(await ipcRenderer.invoke('research-analysis:consent', researchAnalysisTokenSchema.parse(token), researchAnalysisConsentSchema.parse(accepted))) },
+  async startResearchAnalysis(token: string) { return researchAnalysisProgressReplySchema.parse(await ipcRenderer.invoke('research-analysis:start', researchAnalysisTokenSchema.parse(token))) },
+  async readResearchAnalysis(token: string) { return researchAnalysisProgressReplySchema.parse(await ipcRenderer.invoke('research-analysis:read', researchAnalysisTokenSchema.parse(token))) },
+  async cancelResearchAnalysis(token: string) { return researchAnalysisProgressReplySchema.parse(await ipcRenderer.invoke('research-analysis:cancel', researchAnalysisTokenSchema.parse(token))) },
+  async discardResearchAnalysis(token: string) { return researchAnalysisDiscardReplySchema.parse(await ipcRenderer.invoke('research-analysis:discard', researchAnalysisTokenSchema.parse(token))) },
   async startPostingFetch(url: string) {
     if (typeof url !== 'string' || new TextEncoder().encode(url).length > 2048) throw new Error('The posting link is invalid or too long.')
     return z.object({ token: uuidSchema }).strict().parse(await ipcRenderer.invoke('posting-import:start', url))

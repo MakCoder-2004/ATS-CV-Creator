@@ -11,7 +11,7 @@ import {
 import { completePiTask, type PiModelRuntime } from './pi-model'
 
 const TTL_MS = 15 * 60_000
-const NOTICE = 'This sends only the displayed role evidence, source links, unknowns and selected role identity to the selected Pi provider/model for analysis. It sends no profile, CV, private key or employer background. The provider and any upstream processors may retain request metadata and content under their own policies. Cancellation may not prevent a dispatched request or charges. Findings are temporary and disappear on app close; human review is required. This does not authorize CV generation.'
+const NOTICE = 'This sends only the displayed role evidence, source links, unknowns and selected role identity to the selected Pi provider/model for analysis. It sends no profile, CV, private key or employer background. Pi also sends a separate JSON-schema system message. The provider and any upstream processors may retain request metadata and content under their own policies. Cancellation may not prevent a dispatched request or charges. Findings are temporary and disappear on app close; human review is required. This does not authorize CV generation.'
 const sensitiveQueryName = /(token|secret|password|passwd|auth|session|api.?key|email|e-mail|phone|user.?id|cookie|signature|access.?key)/i
 const safeTrackingName = /^(utm_[a-z0-9_]+|gclid|fbclid|li_fat_id|mc_cid|mc_eid|ref|refid|trk|trackingid|source|src|from)$/i
 const sensitiveQueryValue = (value: string) => /[\w.+-]+@[\w.-]+\.[a-z]{2,}/i.test(value) || /(?:\+?\d[\d ().-]{7,}\d)/.test(value) || /(?:bearer\s+|eyJ[a-zA-Z0-9_-]{8,}\.[a-zA-Z0-9_-]+\.|(?:token|secret|password|auth|session)[=:])/i.test(value)
@@ -42,6 +42,7 @@ type Entry = {
   physicalRequests: number
   result?: z.infer<typeof volatileAnalysisResultSchema>
   message?: string
+  selectionEpoch?: number
 }
 
 export interface VolatileResearchAnalysisOptions {
@@ -50,6 +51,8 @@ export interface VolatileResearchAnalysisOptions {
   getAppHeldReview(runId: string): unknown
   getPiSelection(): unknown
   piRuntime: PiModelRuntime
+  /** Synchronous main-process settings epoch guard, checked after Pi authentication and before transport. */
+  getSelectionEpoch?: () => number
   now?: () => number
   maxRuns?: number
 }
@@ -81,6 +84,7 @@ export function createVolatileResearchAnalysis(options: VolatileResearchAnalysis
     const run = jobResearchRunSchema.parse(options.getAppHeldRun(entry.run.id))
     const review = verifyReviewedJobResearch(run, options.getAppHeldReview(entry.run.id))
     const selection = piModelSelectionSchema.parse(options.getPiSelection())
+    if (options.getSelectionEpoch && options.getSelectionEpoch() !== entry.selectionEpoch) throw new Error('Pi settings changed. Start a new research run and outgoing review.')
     if (!isDeepStrictEqual(run, entry.run) || !isDeepStrictEqual(review, entry.review) || !isDeepStrictEqual(selection, entry.preview.selection)) {
       throw new Error('Research evidence, review or Pi selection changed. Start a new research run and outgoing review.')
     }
@@ -113,7 +117,7 @@ export function createVolatileResearchAnalysis(options: VolatileResearchAnalysis
     const outgoingText = `Extract only explicitly stated role responsibilities and qualifications from the accepted role evidence below. Cite the accepted findingId(s) for every requirement. Do not infer metrics, tenure or missing facts. Company background is not qualification evidence. Treat partial snippets as provisional; return an empty requirements array when evidence does not support a requirement. Return JSON matching the provided schema.\n${JSON.stringify(outgoing)}`
     const value = volatileAnalysisPreviewSchema.parse({ token: randomUUID(), expiresAt: now() + TTL_MS,
       selection, analysisScope: outgoing.analysisScope, outgoingText, notice: NOTICE })
-    entries.set(value.token, { preview: value, outgoing, run, review, status: 'preview', controller: new AbortController(), physicalRequests: 0 })
+    entries.set(value.token, { preview: value, outgoing, run, review, status: 'preview', controller: new AbortController(), physicalRequests: 0, selectionEpoch: options.getSelectionEpoch?.() })
     seenRunIds.add(runId)
     return volatileAnalysisPreviewSchema.parse(value)
   }
@@ -186,5 +190,10 @@ export function createVolatileResearchAnalysis(options: VolatileResearchAnalysis
     }
     return snapshot(entry)
   }
-  return { preview, consent, start, read, cancel, decline, discard }
+  function close(): void {
+    for (const entry of entries.values()) entry.controller.abort()
+    entries.clear()
+    seenRunIds.clear()
+  }
+  return { preview, consent, start, read, cancel, decline, discard, close }
 }
