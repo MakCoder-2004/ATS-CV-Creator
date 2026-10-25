@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "tavily": {
+      "url": "https://mcp.tavily.com/mcp/"
+    }
+  }
+}
