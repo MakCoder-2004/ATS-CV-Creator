@@ -247,6 +247,7 @@ export function createWorkspaceBackupEngine(db: Database.Database, maxBackupByte
       for (const key of ['created_at','attempted_at','dispatched_at','settled_at','checkpointed_at','recorded_at','updated_at']) if (row[key] !== null && row[key] !== undefined && typeof row[key] === 'string' && !Number.isFinite(Date.parse(row[key] as string))) fail(table)
     }
     const jobs = new Set((rows.jobs?.rows ?? []).map(row => row.id))
+    for (const row of rows.outbound_consents?.rows ?? []) if (row.job_id !== null && row.job_id !== undefined && !jobs.has(row.job_id)) fail('outbound_consents')
     for (const table of ['draft_revisions','regeneration_proposals','document_fit_reports','posting_analysis_cache','analysis_run_state','generation_recovery'] as const) for (const row of rows[table]?.rows ?? []) if (!jobs.has(row.job_id)) fail(table)
   }
   const workspaceFingerprint = () => JSON.stringify({
@@ -337,6 +338,17 @@ export function createWorkspaceBackupEngine(db: Database.Database, maxBackupByte
       upgraded.tables.schema_migrations!.rows = upgraded.tables.schema_migrations!.rows.filter(row => row.version !== 9)
       upgraded.tables.schema_migrations!.rows.push({ version: 9 })
       if (upgraded.tables.settings) upgraded.tables.settings.rows = upgraded.tables.settings.rows.filter(row => row.key !== 'openrouter-model' && row.key !== 'analysis-budgets')
+      backup = upgraded
+    }
+    if (backup.tables.outbound_consents && backup.tables.schema_migrations && !backup.tables.schema_migrations.rows.some(row => row.version === 10)) {
+      const upgraded = structuredClone(backup) as typeof backup
+      const owners = new Map<string, string>()
+      for (const name of ['generation_recovery', 'analysis_run_state', 'posting_analysis_cache'] as const) {
+        for (const row of upgraded.tables[name]?.rows ?? []) owners.set(String(row.run_id), String(row.job_id))
+      }
+      upgraded.tables.outbound_consents!.schema = tableSchema('outbound_consents')
+      for (const row of upgraded.tables.outbound_consents!.rows) row.job_id = owners.get(String(row.run_id)) ?? null
+      upgraded.tables.schema_migrations!.rows.push({ version: 10 })
       backup = upgraded
     }
     const expected = actualTables().sort()

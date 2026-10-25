@@ -4,7 +4,7 @@ import { appearanceSchema, settingsSchema, type Appearance, type WorkbenchAPI } 
 import { piModelPreferenceInputSchema, type PiModelPreferenceInput } from '../shared/pi-model'
 import { evidenceRevisionSchema, profileEntryInputSchema, profileMutationResultSchema, profileSnapshotSchema, uuidSchema, type ContactInput, type ProfileEntryInput, type SkillInput } from '../shared/profile'
 import { experienceSnapshotSchema, experienceMutationResultSchema, type ExperienceInput, type ProjectInput } from '../shared/experience'
-import { jobInputSchema, jobRecordSchema, jobSaveResultSchema, postingRefreshChoiceSchema, type JobInput } from '../shared/jobs'
+import { jobInputSchema, jobRecordSchema, jobSaveResultSchema, jobDeletionSelectionSchema, jobDeletionExecuteSchema, jobDeletionPreviewSchema, jobDeletionResultSchema, postingRefreshChoiceSchema, type JobInput } from '../shared/jobs'
 import { profileExchangeResultSchema } from '../shared/profile-exchange'
 import { outboundConsentActionSchema, outboundConsentPreviewSchema } from '../shared/outbound-consent-contract'
 import { analysisIdSchema, analysisResultSchema, generationRecoverySchema, recoveryChoiceSchema, type AnalysisResult, type RecoveryChoice } from '../shared/posting-analysis'
@@ -105,6 +105,12 @@ const api: WorkbenchAPI = Object.freeze({
   },
   async listJobs() {
     return jobRecordSchema.array().parse(await ipcRenderer.invoke('jobs:list'))
+  },
+  async previewJobDeletion(jobIds: string[]) {
+    return jobDeletionPreviewSchema.parse(await ipcRenderer.invoke('jobs:delete:preview', jobDeletionSelectionSchema.parse(jobIds)))
+  },
+  async executeJobDeletion(token: string, jobIds: string[]) {
+    return jobDeletionResultSchema.parse(await ipcRenderer.invoke('jobs:delete:execute', jobDeletionExecuteSchema.parse({ token, jobIds })))
   },
   async openJob(id: string) {
     const job = await ipcRenderer.invoke('jobs:open', uuidSchema.parse(id))

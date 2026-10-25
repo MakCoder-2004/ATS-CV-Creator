@@ -85,4 +85,10 @@ export function legacyDraftTargetBaseline(job: Pick<JobRecord, 'createdAt' | 'up
   if (job.revisions.length) return job.revisions[0].acceptedAt
   return job.createdAt === job.updatedAt ? job.updatedAt : undefined
 }
+export const jobDeletionSelectionSchema = z.array(z.string().uuid()).min(1).max(500).refine(ids => new Set(ids).size === ids.length, 'Choose each saved job only once.')
+export const jobDeletionPreviewSchema = z.object({ ok: z.boolean(), message: z.string(), token: z.string().uuid().optional(), jobs: z.array(z.object({ id: z.string().uuid(), title: z.string(), company: z.string(), draftCount: z.number().int().nonnegative() }).strict()).optional(), draftCount: z.number().int().nonnegative().optional() }).strict()
+export const jobDeletionResultSchema = z.object({ ok: z.boolean(), message: z.string(), deletedCount: z.number().int().nonnegative() }).strict()
+export const jobDeletionExecuteSchema = z.object({ token: z.string().uuid(), jobIds: jobDeletionSelectionSchema }).strict()
+export type JobDeletionPreview = z.infer<typeof jobDeletionPreviewSchema>
+export type JobDeletionResult = z.infer<typeof jobDeletionResultSchema>
 export type JobSaveResult = z.infer<typeof jobSaveResultSchema>

@@ -17,7 +17,7 @@ import type { AnalysisTransport } from './posting-analysis'
 import { appearanceSchema } from '../shared/appearance'
 import { contactSaveInputSchema, evidenceRevisionSchema, profileEntrySaveSchema, profileMutationResultSchema, profileSnapshotSchema, skillSaveInputSchema, uuidSchema } from '../shared/profile'
 import { experienceSaveInputSchema, experienceSnapshotSchema, experienceMutationResultSchema, projectSaveInputSchema } from '../shared/experience'
-import { jobInputSchema, jobRecordSchema, jobSaveInputSchema, jobSaveResultSchema, postingRefreshChoiceSchema } from '../shared/jobs'
+import { jobInputSchema, jobRecordSchema, jobSaveInputSchema, jobSaveResultSchema, jobDeletionSelectionSchema, jobDeletionExecuteSchema, jobDeletionPreviewSchema, jobDeletionResultSchema, postingRefreshChoiceSchema } from '../shared/jobs'
 import { registerProfileExchangeIpc } from './profile-exchange-ipc'
 import { registerProfilePdfImportIpc } from './profile-pdf-import-ipc'
 import { registerProfileDocxImportIpc } from './profile-docx-import-ipc'
@@ -283,6 +283,15 @@ app.whenReady().then(() => {
     }
     return jobSaveResultSchema.parse(await workspace!.api.saveJob(input.data))
   })
+  ipcMain.handle('jobs:delete:preview', async (event, ...args: unknown[]) => {
+    trusted(event); if (args.length !== 1) throw new Error('Expected saved job selection')
+    return jobDeletionPreviewSchema.parse(await workspace!.api.previewJobDeletion(jobDeletionSelectionSchema.parse(args[0])))
+  })
+  ipcMain.handle('jobs:delete:execute', async (event, ...args: unknown[]) => {
+    trusted(event); if (args.length !== 1) throw new Error('Expected deletion confirmation')
+    const input = jobDeletionExecuteSchema.parse(args[0])
+    return jobDeletionResultSchema.parse(await workspace!.api.executeJobDeletion(input.token, input.jobIds))
+  })
   ipcMain.handle('jobs:list', async (event, ...args: unknown[]) => {
     trusted(event)
     if (args.length) throw new Error('Unexpected arguments')
@@ -350,7 +359,9 @@ app.whenReady().then(() => {
   ipcMain.handle('draft:regeneration:get', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected job ID'); const proposal = await workspace!.api.getRegenerationProposal(analysisIdSchema.parse(args[0])); return proposal === null ? null : regenerationProposalSchema.parse(proposal) })
   ipcMain.handle('document:export-docx', async (event, ...args: unknown[]) => {
     trusted(event); if (args.length !== 1) throw new Error('Expected job ID')
-    const jobId = analysisIdSchema.parse(args[0]), guarded = await workspace!.api.assertDraftExportable(jobId)
+    const jobId = analysisIdSchema.parse(args[0]), release = workspace!.beginJobOperation(jobId, 'DOCX export')
+    try {
+    const guarded = await workspace!.api.assertDraftExportable(jobId)
     if (!guarded.ok || !guarded.document) return { ok: false, cancelled: false, message: guarded.message }
     const document = guarded.document
     const job = await workspace!.api.openJob(jobId)
@@ -390,15 +401,19 @@ app.whenReady().then(() => {
       try { rmSync(temporary, { force: true }) } catch { /* Preserve the original export error. */ }
       return { ok: false, cancelled: false, message: `Could not save the DOCX: ${error instanceof Error ? error.message : 'unknown file error'}` }
     }
+    } finally { release() }
   })
   const measureDocumentForJob = async (jobId: string) => {
+    const release = workspace!.beginJobOperation(jobId, 'page-fit measurement')
+    try {
     const document = await workspace!.api.getCanonicalDocument(jobId)
     if (!document) throw new Error('Generate a draft before measuring page fit.')
     const compiled = await compiler.compile(document)
     const inspected = await inspectCompiledPdf(compiled.pdf)
     assertCompiledContent(document, inspected)
     const entries = document.sections.flatMap(section => section.entries.map(entry => ({ entryId: entry.id, label: entry.heading, section: section.name })))
-    return workspace!.api.saveDocumentFitReport(jobId, { documentHash: compiled.documentHash, targetPages: document.targetPages, ...inspected, overflow: inspected.actualPages > document.targetPages, proposedCuts: inspected.actualPages > document.targetPages ? entries.slice(1).reverse() : [], measuredAt: new Date().toISOString() })
+    return await workspace!.api.saveDocumentFitReport(jobId, { documentHash: compiled.documentHash, targetPages: document.targetPages, ...inspected, overflow: inspected.actualPages > document.targetPages, proposedCuts: inspected.actualPages > document.targetPages ? entries.slice(1).reverse() : [], measuredAt: new Date().toISOString() })
+    } finally { release() }
   }
   ipcMain.handle('draft:regeneration:resolve', async (event, ...args: unknown[]) => {
     trusted(event); if (args.length !== 3 || !['accept','reject'].includes(args[2] as string)) throw new Error('Expected job ID, proposal ID and decision')
@@ -424,7 +439,8 @@ app.whenReady().then(() => {
   ipcMain.handle('document:preview', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected job ID'); return workspace!.api.getCanonicalDocument(analysisIdSchema.parse(args[0])) })
   ipcMain.handle('document:pdf', async (event, ...args: unknown[]) => {
     trusted(event); if (args.length !== 1) throw new Error('Expected job ID')
-    const jobId = analysisIdSchema.parse(args[0])
+    const jobId = analysisIdSchema.parse(args[0]), release = workspace!.beginJobOperation(jobId, 'PDF preview')
+    try {
     const canonical = await workspace!.api.getCanonicalDocument(jobId)
     if (!canonical) throw new Error('Create a CV before opening its PDF preview.')
     const compiled = await compiler.compile(canonical)
@@ -432,6 +448,7 @@ app.whenReady().then(() => {
     const current = await workspace!.api.getCanonicalDocument(jobId)
     if (!current || hashDocument(current) !== compiled.documentHash) throw new Error('The CV changed while its PDF was prepared. Open the preview again.')
     return { documentHash: compiled.documentHash, pdfBase64: compiled.pdf.toString('base64') }
+    } finally { release() }
   })
   ipcMain.handle('document:measure', async (event, ...args: unknown[]) => {
     trusted(event); if (args.length !== 1) throw new Error('Expected job ID')
@@ -440,7 +457,8 @@ app.whenReady().then(() => {
   ipcMain.handle('document:export-pdf', async (event, ...args: unknown[]) => {
     trusted(event)
     if (args.length !== 1) throw new Error('Expected job ID')
-    const jobId = analysisIdSchema.parse(args[0])
+    const jobId = analysisIdSchema.parse(args[0]), release = workspace!.beginJobOperation(jobId, 'PDF export')
+    try {
     const guarded = await workspace!.api.assertDraftExportable(jobId)
     if (!guarded.ok || !guarded.document) return { ok: false, cancelled: false, message: guarded.message }
     const canonical = guarded.document, job = await workspace!.api.openJob(jobId)
@@ -465,6 +483,7 @@ app.whenReady().then(() => {
     } catch (error) {
       return { ok: false, cancelled: false, message: error instanceof Error ? error.message : 'PDF export failed; no success was reported.' }
     }
+    } finally { release() }
   })
   ipcMain.handle('document:fit:get', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected job ID'); return workspace!.api.getDocumentFitReport(analysisIdSchema.parse(args[0])) })
   ipcMain.handle('document:cuts:accept', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 3 || typeof args[1] !== 'string' || !Array.isArray(args[2]) || !args[2].every(id => typeof id === 'string')) throw new Error('Expected job ID, document hash and accepted cut IDs'); return workspace!.api.acceptDocumentCuts(analysisIdSchema.parse(args[0]), args[1], args[2]) })

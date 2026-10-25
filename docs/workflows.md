@@ -18,6 +18,8 @@ The PDF uses Letter paper and Lato, with Education, Experience, Projects, and gr
 
 [`SavedJobs.tsx`](../src/renderer/SavedJobs.tsx) supports manual entry and a link flow for named Lever detail pages. Link intake runs a bounded fetch, presents extracted fields and conflicts for correction, and saves only after the person accepts the preview. A refresh compares new source wording against the accepted working posting. The user decides whether to keep each correction or take updated source details. Source snapshots and accepted posting revisions remain separate in [`jobs.ts`](../src/shared/jobs.ts). Unsupported sites use manual entry; fetching a page is not consent to send its text through Pi.
 
+The backend exposes a named deletion preview and execute operation for one or more saved jobs. It refuses a changed, missing, malformed or busy selection, then removes the selected jobs and related local CV work atomically while keeping profile facts, other jobs and exported files. The Saved jobs deletion UI is not shipped yet; see the [D1 implementation record](validation/spec-72-implementation.md). An older backup can restore deleted jobs.
+
 A saved draft can still target an earlier posting revision. The review workspace labels it as earlier wording. The user can inspect a new outbound preview and either generate a new draft or renew review of existing wording against the current posting. Approval for an earlier posting does not automatically cover the new revision.
 
 ## Maintain a profile

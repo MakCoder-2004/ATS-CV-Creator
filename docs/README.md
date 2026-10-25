@@ -56,6 +56,7 @@ These reports record tests, artifacts, and claims at the stated version or issue
 | [Pi migration baseline](validation/pi-sdk-baseline.md) | Pre-change Settings screenshots, offline model-work checks, and installed SQLite reopen for issue #64. |
 | [Installed Pi SDK proof](validation/pi-sdk-proof.md) | Tool-free request, local auth failures, and cancellation from installed Electron for issue #65. |
 | [Installed Pi migration 0.4.0](validation/pi-sdk-installed-0.4.0.md) | Real provider CV, regeneration, faithfulness, old-PDF/DOCX proposals, login gates, backup/reopen, and Settings screenshots. |
+| [Job deletion D1](validation/spec-72-implementation.md) | Synthetic backend ownership, transactional deletion and focused checks. Saved jobs controls and installed checks remain pending. |
 
 ## Prototype design evidence
 

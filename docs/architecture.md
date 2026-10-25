@@ -40,6 +40,8 @@ The browser window has context isolation and sandboxing, with Node integration d
 | Model work | `outbound_consents`, `posting_analysis_cache`, `analysis_run_state`, `analysis_attempts`, `provider_attempt_outcomes`, `generation_recovery`, `generation_recovery_extensions`, and the SQLite graph checkpointer track authorization, work, and recovery. |
 | CV review | `draft_revisions`, `regeneration_proposals`, and `document_fit_reports` hold the draft, replacement proposals, and page-fit results. |
 
+The backend job-deletion contract is available through named preview and execute IPC methods. It fingerprints selected jobs and their related rows, refuses stale or busy selections, and deletes job-owned work in one SQLite transaction. `outbound_consents.job_id` binds even unstarted consent to its job; older linked consent rows are backfilled during migration. Run-linked attempts and graph checkpoints use the run ID collected before their ownership links are removed. In-memory authorization is revoked after commit. Profile evidence, other jobs, older backups and exported files are not deletion targets. Saved jobs deletion controls and installed-app acceptance remain pending under [spec 72](validation/spec-72-implementation.md).
+
 A **profile** contains source facts. A **saved job** holds the target posting. A **draft** is a version of the tailored CV with evidence citations; it is not the profile. An imported **posting source snapshot** remains distinct from the person's accepted **working posting**. `src/shared/profile.ts`, `experience.ts`, `jobs.ts`, `posting-import.ts`, `draft.ts`, and `document.ts` define these record shapes. A profile edit records an evidence revision, so a draft can detect changed cited facts.
 
 ## External input and model requests

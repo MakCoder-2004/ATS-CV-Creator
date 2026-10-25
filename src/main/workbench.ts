@@ -12,7 +12,7 @@ import { migrateLegacyOpenRouterWorkspace } from './pi-settings-migration'
 import { defaultOpenRouterModel, openRouterModelSchema } from '../shared/openrouter-settings'
 import { contactInputSchema, contactRecordSchema, evidenceRevisionSchema, profileEntryInputSchema, profileEntrySchema, profileMutationResultSchema, profileSnapshotSchema, skillInputSchema, skillRecordSchema, uuidSchema, type ContactRecord, type EvidenceRevision, type ProfileEntry, type ProfileSnapshot, type SkillRecord } from '../shared/profile'
 import { experienceInputSchema, experienceRecordSchema, experienceSnapshotSchema, experienceMutationResultSchema, projectInputSchema, projectRecordSchema, type ExperienceRecord, type ProjectRecord, type FactualItemRecord, type ExperienceSnapshot } from '../shared/experience'
-import { jobInputSchema, jobRecordSchema, jobSaveResultSchema, MAX_JOB_RECORD_UTF8_BYTES, MAX_POSTING_REVISIONS, legacyDraftTargetBaseline, postingOptionalFieldNames, postingRefreshChoiceSchema, type PostingRefreshChoice } from '../shared/jobs'
+import { jobInputSchema, jobRecordSchema, jobSaveResultSchema, jobDeletionSelectionSchema, jobDeletionPreviewSchema, jobDeletionResultSchema, MAX_JOB_RECORD_UTF8_BYTES, MAX_POSTING_REVISIONS, legacyDraftTargetBaseline, postingOptionalFieldNames, postingRefreshChoiceSchema, type PostingRefreshChoice } from '../shared/jobs'
 import { normalizePostingUrl, samePostingSource } from '../shared/posting-identity'
 import type { JobRecord } from '../shared/jobs'
 import { profileExchangeSchema, type ProfileExchange } from '../shared/profile-exchange'
@@ -92,7 +92,7 @@ function preserveKnownFindings(checked: ReturnType<typeof checkDraftFacts>, prio
   return factualCheckReportSchema.parse({ ...checked, passed: checked.passed && known.length === 0, findings })
 }
 
-export function createWorkbench(userData: string, _legacySecureStorage?: unknown, scriptedTransport?: AnalysisTransport, recoveryHooks?: { beforeGraphCheckpoint?: (metadata: import('@langchain/langgraph').CheckpointMetadata) => void; workspaceBackupMaxBytes?: number }, safePostingFetchOptions?: SafePostingFetchOptions, piRuntime?: PiModelRuntime | Promise<PiModelRuntime | null>): { api: WorkbenchStorageAPI; authorizeOutboundPayload<T>(runId: string, payload: T): T; backup: WorkspaceBackupEngine; hasActiveWork(): boolean; close(): void } {
+export function createWorkbench(userData: string, _legacySecureStorage?: unknown, scriptedTransport?: AnalysisTransport, recoveryHooks?: { beforeGraphCheckpoint?: (metadata: import('@langchain/langgraph').CheckpointMetadata) => void; workspaceBackupMaxBytes?: number }, safePostingFetchOptions?: SafePostingFetchOptions, piRuntime?: PiModelRuntime | Promise<PiModelRuntime | null>): { api: WorkbenchStorageAPI; authorizeOutboundPayload<T>(runId: string, payload: T): T; backup: WorkspaceBackupEngine; beginJobOperation(jobId: string, action: string): () => void; hasActiveWork(): boolean; close(): void } {
   mkdirSync(userData, { recursive: true })
   const db = new Database(join(userData, 'workbench.sqlite'))
   registerWorkspaceBackupRowSizer(db)
@@ -111,7 +111,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
     CREATE TABLE IF NOT EXISTS profile_experience (id TEXT PRIMARY KEY, revision INTEGER NOT NULL, data TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS profile_projects (id TEXT PRIMARY KEY, revision INTEGER NOT NULL, data TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, data TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS outbound_consents (id TEXT PRIMARY KEY, run_id TEXT NOT NULL UNIQUE, scope_hash TEXT NOT NULL, created_at TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0);
+    CREATE TABLE IF NOT EXISTS outbound_consents (id TEXT PRIMARY KEY, run_id TEXT NOT NULL UNIQUE, scope_hash TEXT NOT NULL, created_at TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0, job_id TEXT);
     CREATE TABLE IF NOT EXISTS posting_analysis_cache (cache_key TEXT PRIMARY KEY, job_id TEXT NOT NULL, run_id TEXT NOT NULL, data TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS analysis_run_state (job_id TEXT PRIMARY KEY, run_id TEXT NOT NULL, data TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS analysis_attempts (id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, attempted_at TEXT NOT NULL);
@@ -121,6 +121,14 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
     CREATE TABLE IF NOT EXISTS draft_revisions (id TEXT PRIMARY KEY, job_id TEXT NOT NULL, revision INTEGER NOT NULL, data TEXT NOT NULL, UNIQUE(job_id, revision));
     CREATE TABLE IF NOT EXISTS regeneration_proposals (id TEXT PRIMARY KEY, job_id TEXT NOT NULL, status TEXT NOT NULL, data TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS document_fit_reports (job_id TEXT PRIMARY KEY, data TEXT NOT NULL);`)
+  if (!(db.pragma('table_info(outbound_consents)') as Array<{ name: string }>).some(column => column.name === 'job_id')) {
+    db.exec('ALTER TABLE outbound_consents ADD COLUMN job_id TEXT')
+  }
+  db.prepare(`UPDATE outbound_consents SET job_id = COALESCE(
+    (SELECT job_id FROM generation_recovery WHERE run_id=outbound_consents.run_id LIMIT 1),
+    (SELECT job_id FROM analysis_run_state WHERE run_id=outbound_consents.run_id LIMIT 1),
+    (SELECT job_id FROM posting_analysis_cache WHERE run_id=outbound_consents.run_id LIMIT 1)) WHERE job_id IS NULL`).run()
+  db.prepare('INSERT OR IGNORE INTO schema_migrations (version) VALUES (10)').run()
   const providerOutcomeColumns = db.pragma('table_info(provider_attempt_outcomes)') as Array<{ name: string }>
   if (!providerOutcomeColumns.some(column => column.name === 'checkpointed_at')) db.exec('ALTER TABLE provider_attempt_outcomes ADD COLUMN checkpointed_at TEXT')
   db.prepare('INSERT OR IGNORE INTO schema_migrations (version) VALUES (1), (2), (4), (5), (6), (7)').run()
@@ -237,6 +245,15 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
   const analysisCacheKey = (source: ConsentSource) => createHash('sha256').update(JSON.stringify({ job: { title: source.job.title, company: source.job.company, description: source.job.description }, minimizedPosting: prepareOutboundBundle(source).outgoing.job, model: source.model, prompt: 'posting-analysis-v3', schema: JSON.stringify(z.toJSONSchema(postingAnalysisSchema)) })).digest('hex')
   const activeAnalysisByJob = new Map<string, string>()
   const recoveredRunIds = new Set<string>()
+  const deletionPreviews = new Map<string, { ids: string[]; fingerprint: string }>()
+  const externalJobOperations = new Map<string, string>()
+  const beginJobOperation = (jobId: string, action: string) => {
+    if (!uuidSchema.safeParse(jobId).success || !db.prepare('SELECT 1 FROM jobs WHERE id=?').get(jobId)) throw new Error('This saved job is no longer available.')
+    if (activeAnalysisByJob.has(jobId)) throw new Error('Stop the active model request before starting this job operation.')
+    if (externalJobOperations.has(jobId)) throw new Error(`Finish ${externalJobOperations.get(jobId)} before starting ${action}.`)
+    externalJobOperations.set(jobId, action)
+    return () => { if (externalJobOperations.get(jobId) === action) externalJobOperations.delete(jobId) }
+  }
   const activeProfileAiRuns = new Set<string>()
   const profileAiSelections = new Map<string, PiModelSelection>()
   const readPiSelection = (): PiModelSelection | null => {
@@ -353,6 +370,24 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
     else { if (plan.prior && 'factualItems' in plan.prior && 'factualItems' in record) recordItemChanges(plan.prior.factualItems, record.factualItems); else if (!plan.prior && !deleting && 'factualItems' in record) recordItemChanges([], record.factualItems); if (plan.prior && 'technologies' in plan.prior && 'technologies' in record) recordItemChanges(plan.prior.technologies, record.technologies); else if (!plan.prior && !deleting && 'technologies' in record) recordItemChanges([], record.technologies); recordRevision(record as never, plan.prior ? 'updated' : 'created') }
   }
   const profileImportBaseline = () => createHash('sha256').update(JSON.stringify({ profile: readProfile(), experience: readExperience(), history: db.prepare('SELECT id,revision,action,snapshot,created_at FROM evidence_revisions ORDER BY id,revision').all() })).digest('hex')
+  const deletionOwnership = (ids: string[]) => {
+    const selected = ids.map(id => db.prepare('SELECT * FROM jobs WHERE id=?').get(id))
+    if (selected.some(row => !row)) return null
+    const values = (table: string, column: string, keys: string[]) => keys.length
+      ? db.prepare(`SELECT * FROM ${table} WHERE ${column} IN (${keys.map(() => '?').join(',')}) ORDER BY rowid`).all(...keys)
+      : []
+    const jobTables = ['posting_analysis_cache', 'analysis_run_state', 'generation_recovery', 'draft_revisions', 'regeneration_proposals', 'document_fit_reports'] as const
+    const owned = Object.fromEntries(jobTables.map(table => [table, values(table, 'job_id', ids)])) as Record<string, Array<Record<string, unknown>>>
+    const ownedConsents = values('outbound_consents', 'job_id', ids) as Array<{ run_id: string }>
+    const runIds = [...new Set([...owned.posting_analysis_cache, ...owned.analysis_run_state, ...owned.generation_recovery, ...ownedConsents].map(row => row.run_id as string).concat([...pendingOutbound.values()].filter(item => ids.includes(item.jobId)).map(item => item.runId)))]
+    const runTables = ['outbound_consents', 'analysis_attempts', 'provider_attempt_outcomes', 'generation_recovery_extensions'] as const
+    for (const table of runTables) owned[table] = values(table, 'run_id', runIds) as Array<Record<string, unknown>>
+    owned.langgraph_checkpoints = values('langgraph_checkpoints', 'thread_id', runIds) as Array<Record<string, unknown>>
+    owned.langgraph_checkpoint_writes = values('langgraph_checkpoint_writes', 'thread_id', runIds) as Array<Record<string, unknown>>
+    const pending = [...pendingOutbound.entries()].filter(([, item]) => ids.includes(item.jobId)).map(([token, item]) => [token, item.jobId, item.runId, item.consentId]).sort((a, b) => String(a[0]).localeCompare(String(b[0])))
+    return { jobs: selected as Array<{ id: string; data: string }>, owned, runIds, fingerprint: createHash('sha256').update(JSON.stringify({ selected, owned, pending })).digest('hex') }
+  }
+  const deletionBusy = (ids: string[]) => ids.find(id => activeAnalysisByJob.has(id) || externalJobOperations.has(id))
   const api: WorkbenchStorageAPI = {
     async getWorkspaceBackupStatus() { return backupEngine.readBackupStatus() },
     async getSettings() {
@@ -1054,7 +1089,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
         const acceptedRevision = changed ? { ...parsed.data, optionalDetails: acceptedOptionalDetails, revision: (priorRevisions.at(-1)?.revision ?? 0) + 1, acceptedAt: now, provenance: 'manual' as const } : undefined
         const revisions = acceptedRevision ? [...priorRevisions, acceptedRevision] : priorRevisions
         if (changed && revisions.length > MAX_POSTING_REVISIONS && !backupStatus.legacyOverCap) return jobSaveResultSchema.parse({ ok: false, error: { code: 'REVISION_LIMIT', message: `This saved job reached the ${MAX_POSTING_REVISIONS}-revision history limit. Nothing was changed and no history was deleted.`, fieldErrors: { description: 'The revision limit was reached. Existing posting history remains intact.' } } })
-        if (changed && input.id && activeAnalysisByJob.has(input.id)) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'A provider operation is active for this saved job. Cancel it before changing the posting.' } })
+        if (changed && input.id && (activeAnalysisByJob.has(input.id) || externalJobOperations.has(input.id))) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'A provider operation is active for this saved job. Cancel it before changing the posting.' } })
         const record = jobRecordSchema.parse({ ...parsed.data, optionalDetails: acceptedOptionalDetails, id: input.id ?? randomUUID(), createdAt: existingRow?.created_at ?? now, updatedAt: changed ? now : prior!.updatedAt, provenance: changed ? 'manual' : prior?.provenance ?? 'manual', sourceSnapshot: prior?.sourceSnapshot ?? null, sourceHistory: prior?.sourceHistory ?? [], revisions })
         const serializedRecord = JSON.stringify(record)
         if (Buffer.byteLength(serializedRecord, 'utf8') > MAX_JOB_RECORD_UTF8_BYTES && (!backupStatus.legacyOverCap || !existingRow || Buffer.byteLength(serializedRecord, 'utf8') >= Buffer.byteLength(existingRow.data, 'utf8'))) return jobSaveResultSchema.parse({ ok: false, error: { code: 'HISTORY_SIZE_LIMIT', message: 'This saved job and its complete revision history exceed the 4 MiB per-job backup limit. Nothing was changed and no history was deleted.', fieldErrors: { description: 'Review the posting revision history limit; existing versions remain intact.' } } })
@@ -1080,6 +1115,64 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       try { return tx() } catch (error) {
         if (error instanceof WorkspaceBackupCapacityError) return jobSaveResultSchema.parse({ ok: false, error: { code: 'BACKUP_LIMIT', message: error.message, fieldErrors: { description: 'Workspace backup capacity would be exceeded. No saved posting or history was changed.' } } })
         return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'The job could not be saved.' } })
+      }
+    },
+    async previewJobDeletion(jobIds: string[]) {
+      const parsed = jobDeletionSelectionSchema.safeParse(jobIds)
+      if (!parsed.success) return jobDeletionPreviewSchema.parse({ ok: false, message: 'Choose distinct, valid saved jobs before deleting.' })
+      const ids = [...parsed.data].sort()
+      const busy = deletionBusy(ids)
+      if (busy) return jobDeletionPreviewSchema.parse({ ok: false, message: `Stop ${externalJobOperations.get(busy) ?? 'the active analysis or generation'} for saved job ${busy} before deleting any selected jobs.` })
+      const state = deletionOwnership(ids)
+      if (!state) return jobDeletionPreviewSchema.parse({ ok: false, message: 'A selected saved job is no longer available. Refresh the list and choose again.' })
+      const token = randomUUID()
+      while (deletionPreviews.size >= 20) deletionPreviews.delete(deletionPreviews.keys().next().value!)
+      deletionPreviews.set(token, { ids, fingerprint: state.fingerprint })
+      const jobs = state.jobs.map(row => {
+        const job = jobRecordSchema.parse(JSON.parse(row.data))
+        return { id: job.id, title: job.title, company: job.company, draftCount: state.owned.draft_revisions.filter(draft => draft.job_id === job.id).length }
+      })
+      return jobDeletionPreviewSchema.parse({ ok: true, message: 'Review the saved jobs and related drafts before confirming deletion.', token, jobs, draftCount: jobs.reduce((sum, job) => sum + job.draftCount, 0) })
+    },
+    async executeJobDeletion(token: string, jobIds: string[]) {
+      const parsed = jobDeletionSelectionSchema.safeParse(jobIds)
+      const preview = uuidSchema.safeParse(token).success ? deletionPreviews.get(token) : undefined
+      const refused = (message: string) => jobDeletionResultSchema.parse({ ok: false, message, deletedCount: 0 })
+      if (!parsed.success || !preview || !isDeepStrictEqual([...parsed.data].sort(), preview.ids)) return refused('This confirmation is no longer current. Preview the selection again.')
+      const busy = deletionBusy(preview.ids)
+      if (busy) return refused(`Stop ${externalJobOperations.get(busy) ?? 'the active analysis or generation'} for saved job ${busy} before deleting any selected jobs.`)
+      try {
+        const deleted = db.transaction(() => {
+          const state = deletionOwnership(preview.ids)
+          if (!state || state.fingerprint !== preview.fingerprint) throw new Error('STALE_DELETION')
+          for (const table of ['outbound_consents', 'posting_analysis_cache', 'analysis_run_state', 'generation_recovery'] as const) {
+            if (state.runIds.length && db.prepare(`SELECT 1 FROM ${table} WHERE run_id IN (${state.runIds.map(() => '?').join(',')}) AND job_id IS NOT NULL AND job_id NOT IN (${preview.ids.map(() => '?').join(',')}) LIMIT 1`).get(...state.runIds, ...preview.ids)) throw new Error('STALE_DELETION')
+          }
+          const remove = (table: string, column: string, keys: string[]) => {
+            if (keys.length) db.prepare(`DELETE FROM ${table} WHERE ${column} IN (${keys.map(() => '?').join(',')})`).run(...keys)
+          }
+          for (const table of ['langgraph_checkpoint_writes', 'langgraph_checkpoints']) remove(table, 'thread_id', state.runIds)
+          for (const table of ['generation_recovery_extensions', 'provider_attempt_outcomes', 'analysis_attempts', 'outbound_consents']) remove(table, 'run_id', state.runIds)
+          remove('outbound_consents', 'job_id', preview.ids)
+          for (const table of ['document_fit_reports', 'regeneration_proposals', 'draft_revisions', 'generation_recovery', 'analysis_run_state', 'posting_analysis_cache']) remove(table, 'job_id', preview.ids)
+          remove('jobs', 'id', preview.ids)
+          return state
+        })()
+        deletionPreviews.delete(token)
+        for (const [key, pending] of pendingOutbound) if (preview.ids.includes(pending.jobId)) {
+          if (pending.consentId) outboundEngine.revoke(pending.consentId)
+          dispatcher.cancel(pending.runId)
+          pendingOutbound.delete(key)
+          startedAnalysisTokens.delete(key)
+          startedRegenerationTokens.delete(key)
+        }
+        for (const row of deleted.owned.outbound_consents) outboundEngine.revoke(row.id as string)
+        for (const id of preview.ids) currentAnalysis.delete(id)
+        for (const runId of deleted.runIds) recoveredRunIds.delete(runId)
+        for (const [key, value] of deletionPreviews) if (value.ids.some(id => preview.ids.includes(id))) deletionPreviews.delete(key)
+        return jobDeletionResultSchema.parse({ ok: true, message: 'Selected saved jobs and their local CV work were deleted.', deletedCount: preview.ids.length })
+      } catch (error) {
+        return refused(error instanceof Error && error.message === 'STALE_DELETION' ? 'The saved jobs or related work changed. Preview the selection again.' : 'Storage could not delete the selection. Nothing was removed; retry after checking workspace storage.')
       }
     },
     async listJobs() {
@@ -1115,7 +1208,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       try {
         const record = outboundEngine.grantConsent(pending.runId, pending.bundle, { accepted, privacyAcknowledged })
         try {
-          db.prepare('INSERT INTO outbound_consents (id, run_id, scope_hash, created_at, revoked) VALUES (?, ?, ?, ?, 0)').run(record.id, pending.runId, pending.bundle.scopeHash, record.createdAt)
+          db.prepare('INSERT INTO outbound_consents (id, run_id, scope_hash, created_at, revoked, job_id) VALUES (?, ?, ?, ?, 0, ?)').run(record.id, pending.runId, pending.bundle.scopeHash, record.createdAt, pending.jobId)
         } catch {
           outboundEngine.revoke(record.id)
           return outboundConsentActionSchema.parse({ ok: false, message: 'Consent could not be saved. No request was sent.' })
@@ -1127,6 +1220,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
     async startAnalysis(token: string) {
       const pending = pendingOutbound.get(token)
       if (!pending?.consentId) throw new Error('Review and authorize this exact outgoing bundle before analysis.')
+      if (externalJobOperations.has(pending.jobId)) throw new Error(`Finish ${externalJobOperations.get(pending.jobId)} before starting analysis.`)
       const latestSource = currentConsentSource(pending.jobId)
       if (!latestSource || prepareOutboundBundle(latestSource).scopeHash !== pending.bundle.scopeHash) throw new Error('The job, profile, Pi model, or thinking level changed after consent. Review outgoing data and authorize a new run.')
       // Human-readable local copy only; generation and provider requests continue to use minimized analysis.
@@ -1173,6 +1267,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       if (pageTarget !== 1 && pageTarget !== 2) return { ok: false, message: 'Choose a one- or two-page target.' }
       const pending = pendingOutbound.get(token)
       if (!pending?.consentId) return { ok: false, message: 'Review and authorize this exact outgoing bundle before generation.' }
+      if (externalJobOperations.has(pending.jobId)) return { ok: false, message: `Finish ${externalJobOperations.get(pending.jobId)} before generating.` }
       const recoveryRow = resumeRunId ? db.prepare('SELECT snapshot, status FROM generation_recovery WHERE run_id=? AND job_id=?').get(resumeRunId, pending.jobId) as { snapshot: string; status: string } | undefined : undefined
       if (resumeRunId && (!recoveryRow || !['running','paused'].includes(recoveryRow.status) || pending.runId !== resumeRunId)) return { ok: false, message: 'This saved run is no longer resumable.' }
       let frozen: ReturnType<typeof generationRecoverySnapshotSchema.parse> | undefined
@@ -1435,7 +1530,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       if (!pending?.consentId) return { ok: false, message: 'Inspect and authorize a fresh outgoing-data preview before regeneration.' }
       const latestScope = currentConsentSource(pending.jobId)
       if (!latestScope || prepareOutboundBundle(latestScope).scopeHash !== pending.bundle.scopeHash) return { ok: false, message: 'Your job, profile, or model settings changed after consent. Review the outgoing data again.' }
-      if (activeAnalysisByJob.has(pending.jobId)) return { ok: false, message: 'Another provider operation is active for this saved job. Cancel it before regenerating.' }
+      if (activeAnalysisByJob.has(pending.jobId) || externalJobOperations.has(pending.jobId)) return { ok: false, message: 'Finish the active job operation before regenerating.' }
       const row = db.prepare('SELECT data FROM draft_revisions WHERE job_id = ? ORDER BY revision DESC LIMIT 1').get(pending.jobId) as { data: string } | undefined
       if (!row) return { ok: false, message: 'Create a draft before requesting a replacement proposal.' }
       const base = draftRevisionSchema.parse(JSON.parse(row.data))
@@ -1882,7 +1977,6 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       if (!activeRunId && previous) return analysisResultSchema.parse(previous)
       if (activeRunId) {
         dispatcher.cancel(activeRunId)
-        if (activeAnalysisByJob.get(jobId) === activeRunId) activeAnalysisByJob.delete(jobId)
       }
       const value = analysisResultSchema.parse({ jobId, ...(activeRunId ? { runId: activeRunId } : {}), status: 'cancelled', analysis: null, progress: 'Analysis cancelled. No further requests will be sent.', attempts: previous?.attempts ?? 0, cacheHit: false })
       saveAnalysisState(value)
@@ -1908,7 +2002,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
     },
     async resumeGeneration(runId: string, choice?: RecoveryChoice) {
       const row = db.prepare("SELECT job_id,consent_id,scope_hash,status,snapshot FROM generation_recovery WHERE run_id=? AND status IN ('running','paused')").get(runId) as { job_id: string; consent_id: string; scope_hash: string; status: string; snapshot: string } | undefined
-      if (!row) return { ok: false, message: 'This generation has no recoverable saved checkpoint.' }
+      if (!row || !db.prepare('SELECT 1 FROM jobs WHERE id=?').get(row.job_id)) return { ok: false, message: 'This generation has no recoverable saved checkpoint.' }
       let frozen: ReturnType<typeof generationRecoverySnapshotSchema.parse>
       try { frozen = generationRecoverySnapshotSchema.parse(JSON.parse(row.snapshot)) }
       catch { return { ok: false, message: 'The saved recovery snapshot is corrupt or incompatible. No requests were sent; cancel this run and inspect the source data.' } }
@@ -1968,7 +2062,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
     return outboundEngine.authorizePayload(runId, consent.bundle, payload)
   }
   const backupEngine = createWorkspaceBackupEngine(db, recoveryHooks?.workspaceBackupMaxBytes)
-  const assertIdle = () => { if (activeAnalysisByJob.size) throw new Error('A cloud operation is active. Cancel or finish it before backing up or restoring.') }
+  const assertIdle = () => { if (activeAnalysisByJob.size || externalJobOperations.size) throw new Error('A cloud operation is active. Cancel or finish it before backing up or restoring.') }
   const backup: WorkspaceBackupEngine = {
     readBackupStatus() { return backupEngine.readBackupStatus() },
     assertBackupCapacity(previousBytes) { return backupEngine.assertBackupCapacity(previousBytes) },
@@ -2058,5 +2152,5 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
     const statement = nativePrepare(source)
     return wrapStatement(statement, !statement.readonly)
   }
-  return { api, authorizeOutboundPayload, backup, hasActiveWork: () => activeAnalysisByJob.size > 0 || activeProfileAiRuns.size > 0 || [...postingFetches.values()].some(fetch => fetch.state.status === 'fetching'), close: () => { for (const fetch of postingFetches.values()) fetch.controller.abort(); postingFetches.clear(); db.close() } }
+  return { api, authorizeOutboundPayload, backup, beginJobOperation, hasActiveWork: () => activeAnalysisByJob.size > 0 || externalJobOperations.size > 0 || activeProfileAiRuns.size > 0 || [...postingFetches.values()].some(fetch => fetch.state.status === 'fetching'), close: () => { for (const fetch of postingFetches.values()) fetch.controller.abort(); postingFetches.clear(); db.close() } }
 }
