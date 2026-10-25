@@ -78,10 +78,6 @@ test('Pi wording keeps evidence citations and saved career facts in a reviewable
       const { sourcesByItem } = JSON.parse(prompt.slice(prompt.indexOf('{')))
       return JSON.stringify({ items: sourcesByItem.map(() => ({ text: 'Built reliable services with TypeScript.', rationale: 'Supported by the selected source.' })) })
     }
-    if (prompt.startsWith('Compare all rewritten/source pairs')) {
-      const { pairs } = JSON.parse(prompt.slice(prompt.indexOf('{')))
-      return JSON.stringify({ results: pairs.map((pair: { itemPath: string }) => ({ itemPath: pair.itemPath, supported: true, explanation: 'Grounded in saved evidence.' })) })
-    }
     const { selected } = JSON.parse(prompt.slice(prompt.indexOf('{')))
     const paragraphs = (category: string) => selected.filter((item: { category: string }) => item.category === category).map((item: { index: number; text: string }) => ({ text: item.text, evidence: [item.index], rationale: 'Saved evidence.' }))
     return JSON.stringify({ education: paragraphs('education'), experience: paragraphs('experience'), projects: paragraphs('projects'), skills: selected.filter((item: { category: string }) => item.category === 'skills').map((item: { index: number; text: string }) => ({ name: JSON.parse(item.text).name, evidence: [item.index], rationale: 'Saved skill.' })) })
@@ -94,7 +90,6 @@ test('Pi wording keeps evidence citations and saved career facts in a reviewable
   if (!savedSkill.ok || !savedRole.ok) throw new Error('Could not create the synthetic profile.')
   const job = await workbench.api.saveJob({ title: 'Engineer', company: 'Example', description: 'TypeScript services required.' })
   if (!job.ok) throw new Error('Could not create the synthetic job.')
-  await workbench.api.setFaithfulnessCheck(true)
   const preview = await workbench.api.prepareOutboundConsent(job.value.id)
   if (!preview.ok) throw new Error(preview.message)
   expect(await workbench.api.acceptOutboundConsent(preview.token, true, true)).toMatchObject({ ok: true })
@@ -102,7 +97,7 @@ test('Pi wording keeps evidence citations and saved career facts in a reviewable
   const result = await workbench.api.generateDraft(preview.token)
   expect(result).toMatchObject({ ok: true, draft: { approved: false, lockedFields: { fullName: 'Synthetic Candidate', experience: [expect.objectContaining({ title: 'Developer', organization: 'Synthetic Company' })] } } })
   expect(result.draft?.content.experience[0].citations[0].evidenceId).toBe(savedRole.value.experience[0].id)
-  expect(completeSimple).toHaveBeenCalledTimes(4)
+  expect(completeSimple).toHaveBeenCalledTimes(3)
   const next = await workbench.api.prepareOutboundConsent(job.value.id)
   if (!next.ok) throw new Error(next.message)
   const acceptedNext = await workbench.api.acceptOutboundConsent(next.token, true, true)
@@ -110,7 +105,7 @@ test('Pi wording keeps evidence citations and saved career facts in a reviewable
   const proposed = await workbench.api.regenerateDraft(next.token, { kind: 'section', section: 'experience' })
   expect(proposed).toMatchObject({ ok: true, proposal: { status: 'pending' } })
   expect(await workbench.api.getAnalysis(job.value.id)).toMatchObject({ status: 'complete', cacheHit: true, runId: acceptedNext.runId })
-  expect(completeSimple).toHaveBeenCalledTimes(5)
+  expect(completeSimple).toHaveBeenCalledTimes(4)
 })
 
 test('a missing local Pi login never dispatches posting text', async () => {

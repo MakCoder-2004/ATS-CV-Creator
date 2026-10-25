@@ -203,6 +203,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
   })
   migrateDraftTargetBaselines()
   if (!scriptedTransport) migrateLegacyOpenRouterWorkspace(db)
+  db.prepare("DELETE FROM settings WHERE key='faithfulness-check'").run()
 
   const readProfile = (): ProfileSnapshot => {
     const contactRow = db.prepare('SELECT data FROM profile_contact WHERE singleton = 1').get() as { data: string } | undefined
@@ -280,7 +281,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
     return { ok: true, data }
   }
   const outboundEngine = createOutboundConsentEngine()
-  const pendingOutbound = new Map<string, { jobId: string; source: ConsentSource; bundle: OutboundBundle; runId: string; faithfulnessCheck: boolean; consentId?: string }>()
+  const pendingOutbound = new Map<string, { jobId: string; source: ConsentSource; bundle: OutboundBundle; runId: string; consentId?: string }>()
   const currentAnalysis = new Map<string, ReturnType<typeof analysisResultSchema.parse>>()
   const saveAnalysisState = (input: unknown) => {
     const parsed = analysisResultSchema.parse(input)
@@ -453,11 +454,11 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
   const api: WorkbenchStorageAPI = {
     async getWorkspaceBackupStatus() { return backupEngine.readBackupStatus() },
     async getSettings() {
-      const rows = db.prepare('SELECT key, value FROM settings WHERE key IN (?, ?, ?)').all('appearance', 'faithfulness-check', 'pi-model') as { key: string; value: string }[]
+      const rows = db.prepare('SELECT key, value FROM settings WHERE key IN (?, ?)').all('appearance', 'pi-model') as { key: string; value: string }[]
       const stored = Object.fromEntries(rows.map(row => [row.key, row.value]))
       let piModel: PiModelSelection | null = null
       try { if (stored['pi-model']) piModel = piModelSelectionSchema.parse(JSON.parse(stored['pi-model'])) } catch { piModel = null }
-      return settingsSchema.parse({ appearance: stored.appearance ?? 'light', pi: piModel, faithfulnessCheck: stored['faithfulness-check'] === 'true' })
+      return settingsSchema.parse({ appearance: stored.appearance ?? 'light', pi: piModel })
     },
     async setAppearance(value) {
       saveSetting('appearance', appearanceSchema.parse(value))
@@ -497,11 +498,6 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
         for (const pending of pendingOutbound.values()) if (pending.consentId) outboundEngine.revoke(pending.consentId)
         pendingOutbound.clear(); startedAnalysisTokens.clear(); startedRegenerationTokens.clear(); currentAnalysis.clear()
       }
-      return this.getSettings()
-    },
-    async setFaithfulnessCheck(value: boolean) {
-      if (typeof value !== 'boolean') throw new Error('Faithfulness setting must be boolean.')
-      saveSetting('faithfulness-check', String(value))
       return this.getSettings()
     },
     async getProfile() { return readProfile() },
@@ -1296,8 +1292,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       try {
         const bundle = prepareOutboundBundle(source)
         const token = randomUUID(), runId = randomUUID()
-        const faithfulnessRow = db.prepare('SELECT value FROM settings WHERE key = ?').get('faithfulness-check') as { value: string } | undefined
-        pendingOutbound.set(token, { jobId, source, bundle, runId, faithfulnessCheck: faithfulnessRow?.value === 'true' })
+        pendingOutbound.set(token, { jobId, source, bundle, runId })
         return outboundConsentPreviewSchema.parse({ ok: true, token, jobTitle: source.job.title, jobCompany: source.job.company, outgoing: bundle.outgoing, warning: bundle.preview.residualSensitivityNotice, termsNotice: scriptedTransport ? 'This scripted request uses only the reviewed outgoing data. Redaction cannot guarantee anonymity.' : 'After you authorize this run, Pi sends the reviewed data to the selected model provider. Provider data-use policies and charges vary. Do not submit confidential information. Redaction cannot guarantee anonymity.' })
       } catch { return outboundConsentPreviewSchema.parse({ ok: false, message: 'Outgoing data could not be prepared safely. Review your profile and model settings, then try again.' }) }
     },
@@ -1384,7 +1379,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       if (recoveryRow) {
         try { frozen = generationRecoverySnapshotSchema.parse(JSON.parse(recoveryRow.snapshot)) }
         catch { return { ok: false, message: 'The saved recovery snapshot is corrupt or incompatible. No requests were sent; cancel this run and inspect the source data.' } }
-        if (frozen.version !== 3 || (!scriptedTransport && !isDeepStrictEqual(frozen.model, readPiSelection()))) return { ok: false, message: 'This saved run predates paragraph generation or its Pi model changed. Review outgoing data, authorize a fresh run, analyze the posting, then generate again. No previous request was replayed.' }
+        if (frozen.version !== 4 || (!scriptedTransport && !isDeepStrictEqual(frozen.model, readPiSelection()))) return { ok: false, message: 'This saved run uses an earlier generation contract or its Pi model changed. Review outgoing data, authorize a fresh run, analyze the posting, then generate again. No previous request was replayed.' }
         if (frozen.runId !== resumeRunId || frozen.jobId !== pending.jobId || frozen.consentId !== pending.consentId || frozen.scopeHash !== pending.bundle.scopeHash) return { ok: false, message: 'Saved run identity or consent no longer matches this recovery request. No requests were sent.' }
       }
       const latestScope = resumeRunId ? null : currentConsentSource(pending.jobId)
@@ -1415,26 +1410,13 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       profile.skills.forEach((item, i) => { const safe = approvedPayload.profile.skills[i]; if (safe) scrubbed.set(item.id, JSON.stringify(safe)) })
       profile.certificates.forEach((item, i) => { const safe = approvedPayload.profile.certificates[i]; if (safe) scrubbed.set(item.id, JSON.stringify(safe)) })
       const safeItems = frozen?.safeItems ?? items.map(item => ({ ...item, text: scrubbed.get(item.id) ?? '' })).filter(item => item.text)
-      const minimizedStringPairs: Array<[string, string]> = []
-      const collectStringPairs = (original: unknown, minimized: unknown) => {
-        if (typeof original === 'string' && typeof minimized === 'string' && original !== minimized) minimizedStringPairs.push([original, minimized])
-        else if (Array.isArray(original) && Array.isArray(minimized)) original.forEach((value, index) => collectStringPairs(value, minimized[index]))
-        else if (original && minimized && typeof original === 'object' && typeof minimized === 'object') for (const [key, value] of Object.entries(original)) collectStringPairs(value, (minimized as Record<string, unknown>)[key])
-      }
-      for (const item of items) {
-        const safe = scrubbed.get(item.id)
-        if (safe) try { collectStringPairs(item.snapshot, JSON.parse(safe)) } catch { /* non-JSON source text is already minimized independently */ }
-      }
-      const exactLocalDates = [...draftInputs.lockedFields.experience, ...draftInputs.lockedFields.education].flatMap(item => [item.startDate, item.endDate]).filter((value): value is string => Boolean(value))
-      for (const date of exactLocalDates) minimizedStringPairs.push([date, ''])
-      const minimizeRestoredText = (text: string) => minimizedStringPairs.reduce((value, [restored, minimized]) => value.replaceAll(restored, minimized), text)
       const failedDraftIdentity = frozen?.identity ?? { id: randomUUID(), jobId: pending.jobId, revision: ((db.prepare('SELECT MAX(revision) AS revision FROM draft_revisions WHERE job_id = ?').get(pending.jobId) as { revision: number | null }).revision ?? 0) + 1, targetPostingUpdatedAt: pending.source.job.revision, createdAt: new Date().toISOString(), lockedFields: draftInputs.lockedFields }
       if (!resumeRunId) {
-        const data = { runId: pending.runId, jobId: pending.jobId, consentId: pending.consentId, scopeHash: pending.bundle.scopeHash, analysis, job, profile, experience, draftInputs, safeItems, identity: failedDraftIdentity, pageTarget, source: pending.source, faithfulnessCheck: pending.faithfulnessCheck }
+        const data = { runId: pending.runId, jobId: pending.jobId, consentId: pending.consentId, scopeHash: pending.bundle.scopeHash, analysis, job, profile, experience, draftInputs, safeItems, identity: failedDraftIdentity, pageTarget, source: pending.source }
         const sourceModel = pending.source.model
         const snapshot = generationRecoverySnapshotSchema.parse(scriptedTransport
-          ? { ...data, version: 3 }
-          : { ...data, version: 3, model: piModelSelectionSchema.parse({ providerId: sourceModel.providerId, modelId: sourceModel.name, thinkingLevel: sourceModel.thinkingLevel }) })
+          ? { ...data, version: 4 }
+          : { ...data, version: 4, model: piModelSelectionSchema.parse({ providerId: sourceModel.providerId, modelId: sourceModel.name, thinkingLevel: sourceModel.thinkingLevel }) })
         db.prepare('INSERT OR REPLACE INTO generation_recovery (run_id,job_id,consent_id,scope_hash,status,snapshot,updated_at) VALUES (?,?,?,?,?,?,?)').run(pending.runId,pending.jobId,pending.consentId,pending.bundle.scopeHash,'running',JSON.stringify(snapshot),new Date().toISOString())
       }
       else db.prepare("UPDATE generation_recovery SET status='running',updated_at=? WHERE run_id=?").run(new Date().toISOString(), resumeRunId)
@@ -1509,52 +1491,11 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
           }
         }
         const coverage = { ...qualificationCoverage(analysis.runId ?? analysis.jobId, analysis.displayAnalysis ?? analysis.analysis, result.draft, draftInputs.items.map(item => ({ evidenceId: item.id, revision: item.revision, snapshot: item.snapshot }))), repairAttempts: coverageRepairAttempts }
-        const finalSemanticPairs: Array<{ section: keyof DraftRevision['content']; itemPath: string; rewritten: string; evidence: string[] }> = (['education', 'experience', 'projects', 'skills', 'certificates'] as const).flatMap(section => result.draft.content[section].map((item, index) => {
-          const citations = item.citations
-          const citedSources = citations.flatMap(citation => {
-            const frozen = result.draft.evidence.find(evidence => evidence.evidenceId === citation.evidenceId && evidence.revision === citation.revision)
-            const source = safeItems.find(candidate => candidate.id === citation.evidenceId && candidate.revision === citation.revision)
-            return frozen && source ? [source.text] : []
-          })
-          return { section, itemPath: `${section}[${index}]`, rewritten: minimizeRestoredText('text' in item ? item.text : item.name), evidence: citedSources }
-        }))
-        const findingOrigin = { originDraftId: result.draft.id, originDraftRevision: result.draft.revision, originEvidenceRevisionHash: report.evidenceRevisionHash, historical: false }
-        const semanticFindings: ReturnType<typeof factualCheckReportSchema.parse>['findings'] = []
-        let semanticAttempts = 0
-        if (pending.faithfulnessCheck) {
-          const semanticSchema = z.object({ results: z.array(z.object({ itemPath: z.string().min(1), supported: z.boolean(), explanation: z.string().trim().min(1).max(500) }).strict()).max(200) }).strict()
-          if (pending.bundle.containsRestoredIdentifier(finalSemanticPairs)) {
-            semanticFindings.push({ code: 'semantic-unsupported', itemPath: 'faithfulness', ...findingOrigin, message: 'The optional comparison was withheld because a rewritten pair contained a restored identifier or contact detail.', correction: 'Remove the sensitive text and start a fresh authorized review. No semantic request was sent.' })
-          } else {
-            const attemptsBeforeReview = (db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id = ?').get(pending.runId) as { count: number }).count
-            try {
-              authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
-              const review = await dispatcher.generate({ runId: pending.runId, jobId: pending.jobId, model: transportModel(pending.source.model.name), consentId: pending.consentId!, responseSchema: semanticSchema, prompt: `Compare all rewritten/source pairs in this single structured batch. Report each exact itemPath once. Mark unsupported only when the rewrite adds or strengthens factual meaning beyond its cited source. This is a second opinion, not proof. Do not rewrite content or request more data.\n${JSON.stringify({ pairs: finalSemanticPairs })}` })
-              authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
-              semanticAttempts += review.attempts
-              const parsed = semanticSchema.parse(JSON.parse(review.text))
-              const expectedPaths = finalSemanticPairs.map(pair => pair.itemPath)
-              if (parsed.results.length !== expectedPaths.length || new Set(parsed.results.map(item => item.itemPath)).size !== expectedPaths.length || expectedPaths.some(path => !parsed.results.some(item => item.itemPath === path))) throw new Error('Faithfulness review returned incomplete or duplicate item paths.')
-              for (const finding of parsed.results.filter(item => !item.supported)) {
-                const pair = finalSemanticPairs.find(item => item.itemPath === finding.itemPath)!
-                const index = Number(/\[(\d+)\]/.exec(finding.itemPath)?.[1] ?? -1)
-                const contentCitation = result.draft.content[pair.section][index]?.citations[0]
-                semanticFindings.push({ code: 'semantic-unsupported', itemPath: finding.itemPath, evidenceId: contentCitation?.evidenceId, ...findingOrigin, message: `Second-opinion faithfulness check: ${finding.explanation}`, correction: 'Correct or remove this wording, then obtain a new authorized faithfulness check. This result is not proof and does not replace human review.' })
-              }
-            } catch (error) {
-              if (error instanceof AnalysisError && error.code === 'CANCELLED') throw error
-              const attemptsAfterReview = (db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id = ?').get(pending.runId) as { count: number }).count
-              semanticAttempts = attemptsAfterReview - attemptsBeforeReview
-              const reason = error instanceof AnalysisError ? error.code.toLowerCase() : 'malformed structured output'
-              semanticFindings.push({ code: 'semantic-unsupported', itemPath: 'faithfulness', ...findingOrigin, message: `Optional faithfulness review did not complete (${reason}); generated wording was retained but remains blocked.`, correction: 'Review the cited sources and authorize a fresh run if you want another model check. This check is a second opinion, not proof.' })
-            }
-          }
-        }
         if ((['experience', 'projects'] as const).some(section => result.draft.content[section].some(item => item.descriptionFormat === 'paragraph' && !isGeneratedDescriptionParagraph(item.text)))) throw new Error('Final generated paragraphs failed their format contract.')
         saveGenerationStep('check-document', 'Checking draft structure and document readiness.', ['parse-posting', 'score-evidence', 'select-content', 'tailor-paragraphs', 'verify-claims'])
         report = checkDraftFacts(result.draft)
-        const findings = [...report.findings, ...semanticFindings]
-        const totalAttempts = result.attempts + repairAttempts + coverageRepairAttempts + semanticAttempts
+        const findings = report.findings
+        const totalAttempts = result.attempts + repairAttempts + coverageRepairAttempts
         const mergedReport = factualCheckReportSchema.parse({ ...report, passed: findings.length === 0, findings })
         if (dispatcher.isCancelled(pending.runId) || activeAnalysisByJob.get(pending.jobId) !== pending.runId) {
           const stillCurrent = activeAnalysisByJob.get(pending.jobId) === pending.runId
@@ -1564,7 +1505,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
           return { ok: false, message: 'Generation was cancelled. Its late response was discarded; no draft changes were saved.' }
         }
         const scopeNotice = workingTextScopeNotice(pending.jobId)
-        const checkedDraft = draftRevisionSchema.parse({ ...result.draft, status: findings.length ? 'blocked' : 'unverified', checkReport: mergedReport, coverage, attempts: totalAttempts, progress: `${findings.length ? `Draft saved for its ${result.draft.pageTarget}-page target; blocked by ${findings.length} unresolved finding(s). The optional semantic review is a second opinion, not proof.` : `${result.draft.progress} Automated checks passed; semantic comparison is a second opinion, not proof. Human review remains required.`}${scopeNotice}` })
+        const checkedDraft = draftRevisionSchema.parse({ ...result.draft, status: findings.length ? 'blocked' : 'unverified', checkReport: mergedReport, coverage, attempts: totalAttempts, progress: `${findings.length ? `Draft saved for its ${result.draft.pageTarget}-page target; blocked by ${findings.length} unresolved finding(s).` : `${result.draft.progress} Automated checks passed. Human review remains required.`}${scopeNotice}` })
         result.draft = checkedDraft
         const tx = db.transaction(() => { db.prepare('INSERT INTO draft_revisions (id,job_id,revision,data) VALUES (?,?,?,?)').run(result.draft.id, result.draft.jobId, result.draft.revision, JSON.stringify(result.draft)); db.prepare('UPDATE provider_attempt_outcomes SET checkpointed_at=? WHERE run_id=? AND checkpointed_at IS NULL').run(new Date().toISOString(), pending.runId); db.prepare("UPDATE generation_recovery SET status='complete',updated_at=? WHERE run_id=?").run(new Date().toISOString(), pending.runId) })
         tx()
@@ -2126,9 +2067,9 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       const attempts = (db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id=?').get(row.run_id) as { count: number }).count
       const uncertainAttempts = (db.prepare('SELECT COUNT(*) AS count FROM provider_attempt_outcomes WHERE run_id=? AND checkpointed_at IS NULL').get(row.run_id) as { count: number }).count
       let compatible = false
-      try { const snapshot = generationRecoverySnapshotSchema.parse(JSON.parse(row.snapshot)); compatible = snapshot.version === 3 && (Boolean(scriptedTransport) || isDeepStrictEqual(snapshot.model, readPiSelection())) } catch { compatible = false }
+      try { const snapshot = generationRecoverySnapshotSchema.parse(JSON.parse(row.snapshot)); compatible = snapshot.version === 4 && (Boolean(scriptedTransport) || isDeepStrictEqual(snapshot.model, readPiSelection())) } catch { compatible = false }
       const progress = !compatible
-        ? `This saved run predates paragraph generation or its model/format is incompatible. ${uncertainAttempts ? 'A prior model request may have completed and may have incurred a charge. ' : ''}No request will be replayed. Review outgoing data and authorize fresh analysis and generation.`
+        ? `This saved run uses an earlier generation contract or its model/format is incompatible. ${uncertainAttempts ? 'A prior model request may have completed and may have incurred a charge. ' : ''}No request will be replayed. Review outgoing data and authorize fresh analysis and generation.`
         : uncertainAttempts
           ? 'A model request may have completed before the app closed. No new request will be sent until you choose to retry. Retrying could incur another charge.'
           : 'Generation stopped before completion. Your saved draft and source facts remain available. No request will be sent until you choose to resume.'
@@ -2141,7 +2082,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       let frozen: ReturnType<typeof generationRecoverySnapshotSchema.parse>
       try { frozen = generationRecoverySnapshotSchema.parse(JSON.parse(row.snapshot)) }
       catch { return { ok: false, message: 'The saved recovery snapshot is corrupt or incompatible. No requests were sent; cancel this run and inspect the source data.' } }
-      if (frozen.version !== 3 || (!scriptedTransport && !isDeepStrictEqual(frozen.model, readPiSelection()))) return { ok: false, message: 'This saved run predates paragraph generation or its Pi model changed. Review outgoing data, authorize a fresh run, analyze the posting, then generate again. No previous request was replayed.' }
+      if (frozen.version !== 4 || (!scriptedTransport && !isDeepStrictEqual(frozen.model, readPiSelection()))) return { ok: false, message: 'This saved run uses an earlier generation contract or its Pi model changed. Review outgoing data, authorize a fresh run, analyze the posting, then generate again. No previous request was replayed.' }
       if (frozen.runId !== runId || frozen.jobId !== row.job_id || frozen.consentId !== row.consent_id || frozen.scopeHash !== row.scope_hash) return { ok: false, message: 'Saved run identity or consent does not match its recovery record. No requests were sent.' }
       const uncertain = (db.prepare('SELECT COUNT(*) AS count FROM provider_attempt_outcomes WHERE run_id=? AND checkpointed_at IS NULL').get(runId) as { count: number }).count
       if (uncertain && choice !== 'retry-uncertain') return { ok: false, message: 'A provider request may have completed before interruption. Choose explicitly to retry that uncertain step, or cancel this saved run.' }
@@ -2152,7 +2093,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       if (bundle.scopeHash !== row.scope_hash) return { ok: false, message: 'The frozen outgoing bundle failed its integrity check. This run cannot resume.' }
       try { outboundEngine.restoreConsent({ id: consent.id, runId: consent.run_id, scopeHash: consent.scope_hash, createdAt: consent.created_at, revoked: false }) } catch { return { ok: false, message: 'Saved consent could not be restored safely.' } }
       const token = randomUUID()
-      pendingOutbound.set(token, { jobId: row.job_id, source: frozen.source, bundle, runId, faithfulnessCheck: frozen.faithfulnessCheck, consentId: consent.id })
+      pendingOutbound.set(token, { jobId: row.job_id, source: frozen.source, bundle, runId, consentId: consent.id })
       dispatcher.authorize(runId, consent.id)
       recoveredRunIds.add(runId)
       const resume = api.generateDraft as (token: string, pageTarget: 1 | 2, runId: string) => Promise<{ ok: boolean; message: string }>

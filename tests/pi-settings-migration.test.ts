@@ -123,7 +123,7 @@ test('a real paused legacy run stays visible but cannot resume after Pi upgrade'
     analysis: current.analysis, job: current.job, profile: current.profile, experience: current.experience,
     draftInputs: current.draftInputs, safeItems: current.safeItems, identity: current.identity,
     pageTarget: current.pageTarget, source: { job: current.source.job, profile: current.source.profile, model: { name: current.source.model.name } },
-    faithfulnessCheck: current.faithfulnessCheck,
+    faithfulnessCheck: true,
     budgets: { minimumSpacingMs: 0, rateLimitAttempts: 100, rateLimitWindowMs: 86400000, configuredDailyLimit: 10000, runLimit: 12, runTimeLimitMs: 300000 }
   })
   expect(legacy).toMatchObject({ version: 1, budgets: { runLimit: 12 }, source: { model: { name: expect.any(String) } } })

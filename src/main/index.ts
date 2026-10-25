@@ -100,7 +100,7 @@ app.whenReady().then(() => {
   })
   let scriptedAttempts = 0
   let recoveryFailureSent = false
-  const scriptedAnalysis: AnalysisTransport | undefined = !app.isPackaged && ['1', 'retry', 'generation', 'factual', 'invalid', 'foreign-citation', 'faithfulness', 'recovery', 'delayed', 'tailored-flow', 'profile-ai', 'profile-ai-delayed', 'profile-ai-wrong-fact', 'profile-ai-late', 'profile-ai-malformed', 'profile-ai-provider-failure'].includes(process.env.CV_TAILOR_SCRIPTED_ANALYSIS ?? '') ? { generate: async ({ prompt, signal }) => {
+  const scriptedAnalysis: AnalysisTransport | undefined = !app.isPackaged && ['1', 'retry', 'generation', 'factual', 'invalid', 'foreign-citation', 'recovery', 'delayed', 'tailored-flow', 'profile-ai', 'profile-ai-delayed', 'profile-ai-wrong-fact', 'profile-ai-late', 'profile-ai-malformed', 'profile-ai-provider-failure'].includes(process.env.CV_TAILOR_SCRIPTED_ANALYSIS ?? '') ? { generate: async ({ prompt, signal }) => {
     scriptedAttempts++
     const isTailoring = /^Write (?:conservative|concise)/.test(prompt)
     if (process.env.CV_TAILOR_SCRIPTED_ANALYSIS === 'profile-ai-delayed' && prompt.startsWith('Organize only facts')) return await new Promise<string>((_resolve, reject) => signal.addEventListener('abort', () => reject(Object.assign(new Error('scripted request cancelled'), { code: 'ECONNRESET' })), { once: true }))
@@ -152,12 +152,8 @@ app.whenReady().then(() => {
     if (process.env.CV_TAILOR_SCRIPTED_ANALYSIS === 'recovery' && isTailoring && !recoveryFailureSent) { recoveryFailureSent = true; throw Object.assign(new Error('scripted offline interruption'), { code: 'ECONNRESET' }) }
     if (prompt.startsWith('Factual repair cycle')) return JSON.stringify({ corrections: [] })
     if (prompt.startsWith('Propose conservative replacement wording')) { const { sourcesByItem } = JSON.parse(prompt.slice(prompt.indexOf('{'))); return JSON.stringify({ items: sourcesByItem.map(() => ({ text: 'Rephrased within the authorized evidence.', rationale: 'Rephrased only within the currently cited evidence.' })) }) }
-    if (process.env.CV_TAILOR_SCRIPTED_ANALYSIS === 'faithfulness' && prompt.startsWith('Compare all rewritten/source pairs')) {
-      const { pairs } = JSON.parse(prompt.slice(prompt.indexOf('{')))
-      return JSON.stringify({ results: pairs.map((pair: { itemPath: string }) => ({ itemPath: pair.itemPath, supported: false, explanation: 'Scripted smoke finding: wording needs human comparison with its source.' })) })
-    }
     if (process.env.CV_TAILOR_SCRIPTED_ANALYSIS === 'retry' && scriptedAttempts === 1) throw { status: 429, retryAfter: 3 }
-    if (['generation', 'factual', 'invalid', 'foreign-citation', 'faithfulness', 'recovery', 'delayed', 'tailored-flow'].includes(process.env.CV_TAILOR_SCRIPTED_ANALYSIS ?? '') && prompt.startsWith('Score these numbered')) {
+    if (['generation', 'factual', 'invalid', 'foreign-citation', 'recovery', 'delayed', 'tailored-flow'].includes(process.env.CV_TAILOR_SCRIPTED_ANALYSIS ?? '') && prompt.startsWith('Score these numbered')) {
       const { items } = JSON.parse(prompt.slice(prompt.indexOf('{')))
       return JSON.stringify({ relevance: items.map((item: { index: number }) => ({ index: item.index, score: 0.9, rationale: 'Directly supports the posting.' })) })
     }
@@ -166,7 +162,7 @@ app.whenReady().then(() => {
       const { selected } = JSON.parse(prompt.slice(prompt.indexOf('{'), prompt.lastIndexOf('}') + 1)) as { selected: Array<{ category: string }> }
       return JSON.stringify({ education: [], experience: selected.some(item => item.category === 'experience') ? [{ text: 'Unsupported suggestion.', evidence: [selected.length + 7], rationale: 'Foreign source.' }] : [], projects: [], skills: [] })
     }
-    if (['generation', 'factual', 'invalid', 'faithfulness', 'recovery', 'delayed', 'tailored-flow'].includes(process.env.CV_TAILOR_SCRIPTED_ANALYSIS ?? '') && isTailoring) {
+    if (['generation', 'factual', 'invalid', 'recovery', 'delayed', 'tailored-flow'].includes(process.env.CV_TAILOR_SCRIPTED_ANALYSIS ?? '') && isTailoring) {
       const { selected, experienceGroups, projectGroups } = JSON.parse(prompt.slice(prompt.indexOf('{')))
       const sourceWording = (text: string) => { try { const item = JSON.parse(text); return removeRepeatedEntryHeading(item.description || item.text || item.field || item.title || item.name || text, item.title ?? item.name ?? '', item.organization) || item.title || item.name || text } catch { return text } }
       const paragraphs = (category: string) => {
@@ -313,11 +309,6 @@ app.whenReady().then(() => {
       selectionEpoch++ // also invalidate any preview attempted while validation was pending
       analysisSelection = null
     })
-  })
-  ipcMain.handle('settings:faithfulness', (event, ...args: unknown[]) => {
-    trusted(event)
-    if (args.length !== 1 || typeof args[0] !== 'boolean') throw new Error('Expected faithfulness setting')
-    return workspace!.api.setFaithfulnessCheck(args[0])
   })
   registerProfileExchangeIpc(() => window!, () => workspace!.api, trusted)
   const profilePdfImport = registerProfilePdfImportIpc(() => window!, () => workspace!.api, trusted)

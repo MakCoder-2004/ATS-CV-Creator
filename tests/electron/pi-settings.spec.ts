@@ -49,11 +49,10 @@ test('Settings exposes Pi model preferences without in-app credentials or analys
     const tavilyKey = page.getByLabel('Tavily API key', { exact: true })
     await expect(tavilyKey).toBeVisible()
     await expect(page.getByRole('heading', { name: 'Analysis request budgets' })).toHaveCount(0)
-    await expect(page.getByText(/never asks for or stores Pi credentials/i)).toBeVisible()
-
-    const faithfulness = page.getByRole('switch', { name: 'Enable optional faithfulness review for newly authorized runs' })
-    await expect(faithfulness).toBeVisible()
-    await expect(page.getByText(/A model check is not proof/i)).toBeVisible()
+    await expect(modelCard.getByText('Sign in through Pi outside CV Tailor. There is no Pi key here.')).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Provider sign-in' })).toHaveCount(0)
+    await expect(page.getByRole('heading', { name: 'Optional faithfulness review' })).toHaveCount(0)
+    await expect(page.getByRole('switch')).toHaveCount(0)
 
     await tavilyKey.fill('tvly-settings-focus-test-key')
     await page.getByRole('button', { name: 'Save Tavily key' }).click()

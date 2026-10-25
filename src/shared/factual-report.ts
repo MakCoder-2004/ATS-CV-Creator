@@ -14,7 +14,10 @@ export const factualFindingSchema = z.object({
 export const factualCheckReportSchema = z.object({
   draftId: z.string().uuid(), draftRevision: z.number().int().positive(), evidenceRevisionHash: z.string().min(1),
   passed: z.boolean(), findings: z.array(factualFindingSchema), checkedAt: z.string().datetime(),
-  limitation: z.literal('Automated checks and optional LLM comparison are second opinions, not proof of semantic truth; human review remains required.')
+  limitation: z.union([
+    z.literal('Automated checks do not prove semantic truth; human review remains required.'),
+    z.literal('Automated checks and optional LLM comparison are second opinions, not proof of semantic truth; human review remains required.')
+  ])
 }).strict()
 export type FactualFinding = z.infer<typeof factualFindingSchema>
 export type FactualCheckReport = z.infer<typeof factualCheckReportSchema>

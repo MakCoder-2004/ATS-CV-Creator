@@ -23,7 +23,7 @@ import type { VolatileAnalysisPreview, VolatileAnalysisProgress } from './resear
 
 export const appearanceSchema = z.enum(['light', 'dark'])
 export type Appearance = z.infer<typeof appearanceSchema>
-export const settingsSchema = z.object({ appearance: appearanceSchema, pi: piModelSelectionSchema.nullable(), faithfulnessCheck: z.boolean() }).strict()
+export const settingsSchema = z.object({ appearance: appearanceSchema, pi: piModelSelectionSchema.nullable() }).strict()
 export type Settings = z.infer<typeof settingsSchema>
 
 export type WorkspaceRestorePreview = { token: string; effects: Array<{ label: string; current: number; replacement: number }> }
@@ -36,7 +36,6 @@ export interface WorkbenchAPI {
   getWorkspaceBackupStatus(): Promise<WorkspaceBackupStatus>
   setAppearance(value: Appearance): Promise<Settings>
   setPiModel(input: PiModelPreferenceInput): Promise<Settings>
-  setFaithfulnessCheck(value: boolean): Promise<Settings>
   getResearchSearchKeyStatus(): Promise<ResearchSearchKeyStatus>
   saveResearchSearchKey(key: string): Promise<ResearchSearchKeyStatus>
   removeResearchSearchKey(): Promise<ResearchSearchKeyStatus>

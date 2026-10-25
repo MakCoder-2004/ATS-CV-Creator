@@ -222,7 +222,7 @@ test('corrupt recovery snapshots fail closed without dispatch', async () => {
   expect(calls).toBe(0)
 }, 20000)
 
-test.each([1, 2])('pre-paragraph recovery v%s remains readable but cannot dispatch under old consent', async version => {
+test.each([1, 2, 3])('legacy recovery v%s remains readable but cannot dispatch under old consent', async version => {
   const directory = mkdtempSync(join(tmpdir(), 'cv-tailor-old-prompt-recovery-')); dirs.push(directory)
   const initial = createWorkbench(directory, undefined, recoveryTransport(async () => { throw Object.assign(new Error('interrupted'), { code: 'ECONNRESET' }) })); opened.push(initial)
   const { jobId, token } = await seed(initial)
@@ -234,6 +234,7 @@ test.each([1, 2])('pre-paragraph recovery v%s remains readable but cannot dispat
   const row = sqlite.prepare('SELECT snapshot FROM generation_recovery WHERE run_id=?').get(recovery!.runId) as { snapshot: string }
   const snapshot = JSON.parse(row.snapshot)
   snapshot.version = version
+  snapshot.faithfulnessCheck = true
   if (version === 1) snapshot.budgets = { minimumSpacingMs: 0, rateLimitAttempts: 100, rateLimitWindowMs: 86400000, configuredDailyLimit: 10000, runLimit: 12, runTimeLimitMs: 300000 }
   else { snapshot.source.model = { name: 'test/model', providerId: 'test', thinkingLevel: 'medium' }; snapshot.model = { providerId: 'test', modelId: 'test/model', thinkingLevel: 'medium' } }
   sqlite.prepare('UPDATE generation_recovery SET snapshot=? WHERE run_id=?').run(JSON.stringify(snapshot), recovery!.runId)
@@ -241,7 +242,7 @@ test.each([1, 2])('pre-paragraph recovery v%s remains readable but cannot dispat
   let calls = 0
   const reopened = createWorkbench(directory, undefined, { async generate() { calls++; throw new Error('old consent must never dispatch') } }); opened.push(reopened)
   expect(await reopened.api.getGenerationRecovery(jobId)).toMatchObject({ status: 'uncertain', uncertainAttempts: 1, canResume: false, progress: expect.stringMatching(/may have completed.*authorize fresh/i) })
-  expect(await reopened.api.resumeGeneration(recovery!.runId, 'retry-uncertain')).toMatchObject({ ok: false, message: expect.stringMatching(/predates paragraph generation.*fresh run/i) })
+  expect(await reopened.api.resumeGeneration(recovery!.runId, 'retry-uncertain')).toMatchObject({ ok: false, message: expect.stringMatching(/earlier generation contract.*fresh run/i) })
   expect(calls).toBe(0)
   const backup = reopened.backup.createBackup()
   expect(JSON.parse(backup).tables.generation_recovery.rows).toHaveLength(1)
@@ -263,6 +264,7 @@ test('a completed paragraph-generation run supersedes cancelled version-1 recove
   const oldSnapshot = JSON.parse(completed.snapshot)
   oldSnapshot.runId = oldRunId
   oldSnapshot.version = 1
+  oldSnapshot.faithfulnessCheck = true
   oldSnapshot.budgets = { minimumSpacingMs: 0, rateLimitAttempts: 100, rateLimitWindowMs: 86400000, configuredDailyLimit: 10000, runLimit: 12, runTimeLimitMs: 300000 }
   sqlite.prepare('INSERT INTO generation_recovery (run_id,job_id,consent_id,scope_hash,status,snapshot,updated_at) VALUES (?,?,?,?,?,?,?)').run(oldRunId, jobId, completed.consent_id, completed.scope_hash, 'cancelled', JSON.stringify(oldSnapshot), '2020-01-01T00:00:00.000Z')
   sqlite.prepare("UPDATE generation_recovery SET updated_at='2021-01-01T00:00:00.000Z' WHERE run_id=?").run(completed.run_id)

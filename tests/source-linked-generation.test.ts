@@ -3,6 +3,8 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import Database from 'better-sqlite3'
+import { registerWorkspaceBackupRowSizer } from '../src/main/workspace-backup'
 import { runSourceLinkedGraph, CitationValidationError } from '../src/main/source-linked-generation'
 import { createWorkbench } from '../src/main/workbench'
 import type { AnalysisTransport } from '../src/main/posting-analysis'
@@ -330,14 +332,8 @@ test('accepted frozen consent generates a batched source-linked draft that reope
   let unsupportedClaim: 'responsibility' | 'number' | null = null
   let repairWording = false
   let repairCitation: { evidenceId: string; revision: number } | undefined
-  let semanticMode: 'supported' | 'malformed' = 'supported'
   const transport: AnalysisTransport = { async generate({ prompt }) {
     requests.push(prompt)
-    if (prompt.startsWith('Compare all rewritten/source pairs')) {
-      if (semanticMode === 'malformed') return '{ malformed faithfulness response'
-      const { pairs } = JSON.parse(prompt.slice(prompt.indexOf('{')))
-      return JSON.stringify({ results: pairs.map((pair: { itemPath: string; rewritten: string }) => ({ itemPath: pair.itemPath, supported: !(unsupportedClaim === 'responsibility' && pair.rewritten.includes('Led a global team')), explanation: 'The wording matches the cited evidence.' })) })
-    }
     if (prompt.includes('Extract only explicit qualifications')) return JSON.stringify({ required: ['TypeScript'], preferred: [], tools: ['TypeScript'], responsibilities: ['Build reliable services'], keywords: ['TypeScript'] })
     if (prompt.startsWith('Factual repair cycle')) return JSON.stringify({ corrections: repairWording ? [{ section: 'experience', index: 0, text: 'Built reliable services with TypeScript in 2021.', citations: repairCitation ? [repairCitation] : [] }] : [] })
     if (prompt.startsWith('Score these numbered')) {
@@ -369,25 +365,26 @@ test('accepted frozen consent generates a batched source-linked draft that reope
   }
   const job = await wb.api.saveJob({ title: 'Engineer', company: 'Private Company', description: 'TypeScript and reliable services required.' })
   if (!job.ok) throw Error('job fixture')
-  await wb.api.setFaithfulnessCheck(true)
+  wb.close(); opened.pop()
+  const priorDb = new Database(join(dir, 'workbench.sqlite'))
+  registerWorkspaceBackupRowSizer(priorDb)
+  priorDb.prepare('INSERT INTO settings (key,value) VALUES (?,?)').run('faithfulness-check', 'true')
+  priorDb.close()
+  wb = createWorkbench(dir, undefined, transport); opened.push(wb)
+  expect(await wb.api.getSettings()).not.toHaveProperty('faithfulnessCheck')
   const consent = await wb.api.prepareOutboundConsent(job.value.id)
   if (!consent.ok) throw Error('consent fixture')
   await wb.api.acceptOutboundConsent(consent.token, true, true)
-  await wb.api.setFaithfulnessCheck(false)
   expect(await wb.api.startAnalysis(consent.token)).toMatchObject({ status: 'complete' })
   const generated = await wb.api.generateDraft(consent.token)
-  expect(generated).toMatchObject({ ok: true, draft: { jobId: job.value.id, pageTarget: 1, progress: expect.stringContaining('1-page target'), status: 'unverified', approved: false, checkReport: { passed: true, limitation: expect.stringContaining('second opinions, not proof') }, lockedFields: { fullName: 'Private Candidate', experience: [{ evidenceId: role.value.experience[0].id, title: 'Developer', organization: 'Secret Employer', startDate: '2021', endDate: '2023' }, { evidenceId: tiedRole.value.experience[1].id, title: 'Consultant', organization: 'Other Employer', startDate: '2022', endDate: '2023' }, { evidenceId: olderRole.value.experience[2].id, title: 'Junior Developer', organization: 'Old Employer', startDate: '2018', endDate: '2020' }] } } })
-  expect(generated.draft!.attempts).toBe(3)
+  expect(generated).toMatchObject({ ok: true, draft: { jobId: job.value.id, pageTarget: 1, progress: expect.stringContaining('1-page target'), status: 'unverified', approved: false, checkReport: { passed: true, limitation: 'Automated checks do not prove semantic truth; human review remains required.' }, lockedFields: { fullName: 'Private Candidate', experience: [{ evidenceId: role.value.experience[0].id, title: 'Developer', organization: 'Secret Employer', startDate: '2021', endDate: '2023' }, { evidenceId: tiedRole.value.experience[1].id, title: 'Consultant', organization: 'Other Employer', startDate: '2022', endDate: '2023' }, { evidenceId: olderRole.value.experience[2].id, title: 'Junior Developer', organization: 'Old Employer', startDate: '2018', endDate: '2020' }] } } })
+  expect(generated.draft!.attempts).toBe(2)
   expect(generated.draft!.content.experience.map(paragraph => paragraph.citations[0].evidenceId)).toEqual([role.value.experience[0].id, tiedRole.value.experience[1].id, olderRole.value.experience[2].id])
   expect(generated.draft!.content.projects.map(paragraph => paragraph.citations[0].evidenceId)).toEqual([projectA.value.projects[0].id, projectB.value.projects[1].id])
   expect(generated.draft!.content.skills.length).toBeGreaterThan(24)
   expect(generated.draft!.content.skills.every(entry => entry.citations.length > 0)).toBe(true)
-  expect(requests).toHaveLength(4)
-  const faithfulnessRequest = requests.find(prompt => prompt.startsWith('Compare all rewritten/source pairs'))
-  expect(faithfulnessRequest).toBeDefined()
-  expect(faithfulnessRequest).not.toContain('Private Candidate')
-  expect(faithfulnessRequest).not.toContain('Secret Employer')
-  expect(faithfulnessRequest).not.toContain('2021')
+  expect(requests).toHaveLength(3)
+  expect(requests.some(prompt => prompt.startsWith('Compare all rewritten/source pairs'))).toBe(false)
   expect(requests.join('\n')).not.toContain('Private Candidate')
   expect(requests.join('\n')).not.toContain('private@example.test')
   expect(requests.join('\n')).not.toContain('Secret Employer')
@@ -395,17 +392,14 @@ test('accepted frozen consent generates a batched source-linked draft that reope
   const originalDraft = generated.draft!
   const malformedJob = await wb.api.saveJob({ title: 'Malformed review case', company: 'Another Private Company', description: 'TypeScript service engineering.' })
   if (!malformedJob.ok) throw Error('malformed review job fixture')
-  await wb.api.setFaithfulnessCheck(true)
   const malformedConsent = await wb.api.prepareOutboundConsent(malformedJob.value.id)
   if (!malformedConsent.ok) throw Error('malformed review consent fixture')
   await wb.api.acceptOutboundConsent(malformedConsent.token, true, true)
   expect(await wb.api.startAnalysis(malformedConsent.token)).toMatchObject({ status: 'complete' })
-  semanticMode = 'malformed'
   const malformedReview = await wb.api.generateDraft(malformedConsent.token)
-  expect(malformedReview).toMatchObject({ ok: true, draft: { status: 'blocked', checkReport: { findings: expect.arrayContaining([expect.objectContaining({ code: 'semantic-unsupported', itemPath: 'faithfulness', message: expect.stringMatching(/malformed/i) })]) } } })
+  expect(malformedReview).toMatchObject({ ok: true, draft: { status: 'unverified', checkReport: { passed: true } } })
+  expect(requests.some(prompt => prompt.startsWith('Compare all rewritten/source pairs'))).toBe(false)
   expect((await wb.api.getDraft(malformedJob.value.id))?.content.experience.length).toBeGreaterThan(0)
-  semanticMode = 'supported'
-  await wb.api.setFaithfulnessCheck(false)
   const secondJob = await wb.api.saveJob({ title: 'Analyst', company: 'Different Company', description: 'TypeScript analysis.' })
   if (!secondJob.ok) throw Error('second job fixture')
   const secondConsent = await wb.api.prepareOutboundConsent(secondJob.value.id)
@@ -433,17 +427,22 @@ test('accepted frozen consent generates a batched source-linked draft that reope
   expect(originalDraft.evidence.map(e => e.evidenceId)).toContain(role.value.experience[0].id)
   const staleJob = await wb.api.saveJob({ title: 'Stale scope role', company: 'Scope Company', description: 'TypeScript engineering.' })
   if (!staleJob.ok) throw Error('stale-scope job fixture')
-  await wb.api.setFaithfulnessCheck(true)
   const staleConsent = await wb.api.prepareOutboundConsent(staleJob.value.id)
   if (!staleConsent.ok) throw Error('stale-scope consent fixture')
   await wb.api.acceptOutboundConsent(staleConsent.token, true, true)
-  await wb.api.setFaithfulnessCheck(false)
   expect(await wb.api.startAnalysis(staleConsent.token)).toMatchObject({ status: 'complete' })
   unsupportedClaim = 'responsibility'
-  const semanticallyUnverified = await wb.api.generateDraft(staleConsent.token)
-  expect(semanticallyUnverified).toMatchObject({ ok: true, draft: { status: 'blocked', checkReport: { limitation: expect.stringContaining('second opinions, not proof'), findings: expect.arrayContaining([expect.objectContaining({ code: 'semantic-unsupported', itemPath: 'experience[0]' })]) } } })
-  const semanticDraft = semanticallyUnverified.draft!
-  expect(semanticDraft.checkReport?.findings.find(finding => finding.code === 'semantic-unsupported')).toMatchObject({ originDraftId: semanticDraft.id, originDraftRevision: semanticDraft.revision, originEvidenceRevisionHash: semanticDraft.checkReport?.evidenceRevisionHash, historical: false })
+  const generatedStale = await wb.api.generateDraft(staleConsent.token)
+  expect(generatedStale.ok).toBe(true)
+  const semanticDraft = generatedStale.draft!
+  wb.close(); opened.pop()
+  const legacyDb = new Database(join(dir, 'workbench.sqlite'))
+  registerWorkspaceBackupRowSizer(legacyDb)
+  const historical = { code: 'semantic-unsupported', itemPath: 'experience[0]', originDraftId: semanticDraft.id, originDraftRevision: semanticDraft.revision, originEvidenceRevisionHash: semanticDraft.checkReport!.evidenceRevisionHash, historical: false, message: 'Historical semantic review found unsupported wording.', correction: 'Review cited sources.' }
+  legacyDb.prepare('UPDATE draft_revisions SET data=? WHERE id=?').run(JSON.stringify({ ...semanticDraft, status: 'blocked', checkReport: { ...semanticDraft.checkReport, limitation: 'Automated checks and optional LLM comparison are second opinions, not proof of semantic truth; human review remains required.', passed: false, findings: [...semanticDraft.checkReport!.findings, historical] } }), semanticDraft.id)
+  legacyDb.close()
+  wb = createWorkbench(dir, undefined, transport); opened.push(wb)
+  expect((await wb.api.getDraft(staleJob.value.id))?.checkReport?.findings).toContainEqual(historical)
   const editedAfterFinding = await wb.api.correctDraft({ jobId: staleJob.value.id, section: 'experience', index: 0, text: 'Built services with TypeScript.' })
   expect(editedAfterFinding?.revision).toBe(semanticDraft.revision + 1)
   expect(await wb.api.checkDraft(staleJob.value.id)).toMatchObject({ passed: false, findings: expect.arrayContaining([expect.objectContaining({ code: 'semantic-unsupported', originDraftId: semanticDraft.id, originDraftRevision: semanticDraft.revision, originEvidenceRevisionHash: semanticDraft.checkReport?.evidenceRevisionHash, historical: true })]) })
@@ -466,7 +465,6 @@ test('accepted frozen consent generates a batched source-linked draft that reope
   expect(requests).toHaveLength(requestCountBeforeStaleGeneration)
   const repairJob = await wb.api.saveJob({ title: 'Repair verification', company: 'Repair Company', description: 'TypeScript service engineering.' })
   if (!repairJob.ok) throw Error('repair job fixture')
-  await wb.api.setFaithfulnessCheck(true)
   const repairConsent = await wb.api.prepareOutboundConsent(repairJob.value.id)
   if (!repairConsent.ok) throw Error('repair consent fixture')
   await wb.api.acceptOutboundConsent(repairConsent.token, true, true)
@@ -476,12 +474,7 @@ test('accepted frozen consent generates a batched source-linked draft that reope
   const requestStart = requests.length
   const repaired = await wb.api.generateDraft(repairConsent.token)
   expect(repaired).toMatchObject({ ok: true, draft: { status: expect.any(String) } })
-  const postRepairReview = requests.slice(requestStart).find(prompt => prompt.startsWith('Compare all rewritten/source pairs'))
-  expect(postRepairReview).toBeDefined()
-  const repairedPairs = JSON.parse(postRepairReview!.slice(postRepairReview!.indexOf('{'))).pairs as Array<{ itemPath: string; rewritten: string; evidence: string[] }>
-  expect(repairedPairs.find(pair => pair.itemPath === 'experience[0]')?.rewritten).toBe('Built reliable services with TypeScript in .')
-  expect(postRepairReview).not.toContain('Secret Employer')
-  expect(postRepairReview).not.toContain('2021')
+  expect(requests.slice(requestStart).some(prompt => prompt.startsWith('Compare all rewritten/source pairs'))).toBe(false)
 
   wb.close(); opened.pop()
   wb = createWorkbench(dir, undefined, { async generate() { throw Error('offline') } }); opened.push(wb)
@@ -491,28 +484,25 @@ test('accepted frozen consent generates a batched source-linked draft that reope
   const frozen = (value: typeof originalDraft) => { const copy = structuredClone(value); if (copy.coverage) { delete copy.coverage.assessments; delete copy.coverage.stale }; return copy }
   expect(frozen(reopened)).toEqual(frozen(originalDraft))
   expect(frozen((await wb.api.getDraft(secondJob.value.id))!)).toEqual(frozen(secondDraft.draft!))
-  expect(await wb.api.getAnalysis(job.value.id)).toMatchObject({ status: 'complete', progress: expect.stringContaining('Draft generated'), attempts: 4, runId: expect.any(String), generationStep: 'check-document', completedSteps: ['parse-posting', 'score-evidence', 'select-content', 'tailor-paragraphs', 'verify-claims', 'check-document'] })
+  expect(await wb.api.getAnalysis(job.value.id)).toMatchObject({ status: 'complete', progress: expect.stringContaining('Draft generated'), attempts: 3, runId: expect.any(String), generationStep: 'check-document', completedSteps: ['parse-posting', 'score-evidence', 'select-content', 'tailor-paragraphs', 'verify-claims', 'check-document'] })
   const obsoleteNarrative = await wb.api.correctDraftTailoring({ jobId: job.value.id, draftId: reopened.id, field: 'summary', text: 'Revenue grew 500 percent.' })
   expect(obsoleteNarrative).toMatchObject({ ok: false })
 }, 20000)
 
-test('cancellation during the shared semantic batch suppresses its late response and draft persistence', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'cancel-semantic-batch-')); dirs.push(dir)
-  let resolveSemantic!: (value: string) => void
-  let semanticStarted!: () => void
-  const started = new Promise<void>(resolve => { semanticStarted = resolve })
+test('cancellation during generation suppresses its late response and draft persistence', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cancel-generation-')); dirs.push(dir)
+  let resolveGeneration!: (value: string) => void
+  let generationStarted!: () => void
+  const started = new Promise<void>(resolve => { generationStarted = resolve })
   const transport: AnalysisTransport = { async generate({ prompt }) {
-    if (prompt.startsWith('Compare all rewritten/source pairs')) {
-      semanticStarted()
-      return new Promise<string>(resolve => { resolveSemantic = resolve })
-    }
     if (prompt.includes('Extract only explicit qualifications')) return JSON.stringify({ required: [], preferred: [], tools: [], responsibilities: [], keywords: [] })
     if (prompt.startsWith('Score these numbered')) {
       const { items } = JSON.parse(prompt.slice(prompt.indexOf('{')))
       return JSON.stringify({ relevance: items.map((item: { index: number }) => ({ index: item.index, score: 1, rationale: 'Relevant.' })) })
     }
     const { selected } = JSON.parse(prompt.slice(prompt.indexOf('{')))
-    return JSON.stringify({ headline: 'Engineer', summary: { text: 'Experienced engineer.', evidence: selected.filter((item: { category: string }) => item.category === 'experience').slice(0, 1).map((item: { index: number }) => item.index), rationale: 'Based on saved role evidence.' }, education: [], experience: selected.filter((item: { category: string }) => item.category === 'experience').map((item: { index: number; text: string }) => ({ text: item.text, evidence: [item.index], rationale: 'Relevant.' })), projects: [], skills: [], certificates: [] })
+    generationStarted()
+    return new Promise<string>(resolve => { resolveGeneration = resolve }).then(() => JSON.stringify({ headline: 'Engineer', summary: { text: 'Experienced engineer.', evidence: selected.filter((item: { category: string }) => item.category === 'experience').slice(0, 1).map((item: { index: number }) => item.index), rationale: 'Based on saved role evidence.' }, education: [], experience: selected.filter((item: { category: string }) => item.category === 'experience').map((item: { index: number; text: string }) => ({ text: item.text, evidence: [item.index], rationale: 'Relevant.' })), projects: [], skills: [], certificates: [] }))
   } }
   const wb = createWorkbench(dir, undefined, transport); opened.push(wb)
 
@@ -520,7 +510,6 @@ test('cancellation during the shared semantic batch suppresses its late response
   if (!role.ok) throw Error('cancel role fixture')
   const job = await wb.api.saveJob({ title: 'Engineer', company: 'Example Co', description: 'Build reliable systems.' })
   if (!job.ok) throw Error('cancel job fixture')
-  await wb.api.setFaithfulnessCheck(true)
   const consent = await wb.api.prepareOutboundConsent(job.value.id)
   if (!consent.ok) throw Error('cancel consent fixture')
   await wb.api.acceptOutboundConsent(consent.token, true, true)
@@ -528,7 +517,7 @@ test('cancellation during the shared semantic batch suppresses its late response
   const generation = wb.api.generateDraft(consent.token)
   await started
   await wb.api.cancelAnalysis(job.value.id)
-  resolveSemantic(JSON.stringify({ results: [{ itemPath: 'experience[0]', supported: true, explanation: 'Supported.' }] }))
+  resolveGeneration('continue')
   expect(await generation).toMatchObject({ ok: false, message: expect.stringMatching(/cancel/i) })
   expect(await wb.api.getDraft(job.value.id)).toBeNull()
 }, 20000)
