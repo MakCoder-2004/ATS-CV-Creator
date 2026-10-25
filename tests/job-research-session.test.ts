@@ -106,14 +106,137 @@ describe('volatile public research session', () => {
     sessions.close()
   })
 
-  it('does not turn a matched search snippet into evidence when the fresh direct read fails', async () => {
+  it.each(['blocked', 'none'] as const)('keeps an exact-ID indexed lead as provisional when fresh direct is %s', async outcome => {
     const t = fixture(); let reads = 0
-    const sessions = createJobResearchSessions({ credentials: t.credentials, createSearch: t.createSearch, direct: async () => ++reads === 1 ? synthetic('none') : synthetic('blocked') })
+    const sessions = createJobResearchSessions({ credentials: t.credentials, createSearch: t.createSearch, direct: async () => ++reads === 1 ? synthetic('none') : synthetic(outcome) })
     const token = sessions.startJobResearch(URL).token; await tick()
     const state = await sessions.searchJobResearch(token)
     expect(state.status).toBe('ready')
-    if (state.status === 'ready') { expect(state.run.findings).toHaveLength(0); expect(state.run.status).toBe('none') }
+    if (state.status === 'ready') {
+      expect(state.run.status).toBe('provisional')
+      expect(state.run.unknowns.join(' ')).toMatch(/Identity matched by selected URL only.*not independently confirmed on source/)
+      const finding = state.run.findings[0]
+      expect(finding).toMatchObject({ kind: 'indexed-role-claim', completeness: 'partial' })
+      expect(state.run.sources.find(source => source.id === finding.sourceId)).toMatchObject({ url: URL, title: 'Synthetic Engineer — Invented Corp', employer: null, employerIdentityUrl: null, method: 'indexed-snippet' })
+      expect(() => sessions.reviewJobResearch(token, [finding.id], false)).toThrow(/Acknowledge/)
+      expect(sessions.reviewJobResearch(token, [finding.id], true).analysisScope).toBe('provisional')
+    }
     expect(reads).toBe(2)
+    sessions.close()
+  })
+
+  it('keeps original partial evidence and an indexed lead when re-read throws, without leaking the error', async () => {
+    const t = fixture(); let reads = 0
+    const sessions = createJobResearchSessions({ credentials: t.credentials, createSearch: t.createSearch, direct: async () => {
+      if (++reads === 1) return synthetic()
+      throw new Error('sensitive source transport details')
+    } })
+    const token = sessions.startJobResearch(URL).token; await tick()
+    const initial = sessions.getJobResearch(token)
+    const state = await sessions.searchJobResearch(token)
+    expect(state.status).toBe('ready')
+    if (state.status === 'ready' && initial.status === 'ready') {
+      expect(state.run.id).toBe(initial.run.id)
+      expect(state.run.findings).toEqual(expect.arrayContaining(initial.run.findings))
+      expect(state.run.findings.some(finding => finding.kind === 'indexed-role-claim')).toBe(true)
+      expect(state.run.unknowns.join(' ')).toMatch(/follow-up public read failed/)
+      expect(JSON.stringify(state)).not.toContain('sensitive source transport details')
+    }
+    expect(reads).toBe(2)
+    sessions.close()
+  })
+
+  it('never adds a snippet over a fresh complete direct posting', async () => {
+    const t = fixture(); let reads = 0
+    const sessions = createJobResearchSessions({ credentials: t.credentials, createSearch: t.createSearch, direct: async () => synthetic(++reads === 1 ? 'none' : 'full') })
+    const token = sessions.startJobResearch(URL).token; await tick()
+    const state = await sessions.searchJobResearch(token)
+    expect(state.status).toBe('ready')
+    if (state.status === 'ready') {
+      expect(state.run.status).toBe('full')
+      expect(state.run.findings).toHaveLength(1)
+      expect(state.run.findings[0]).toMatchObject({ kind: 'direct-role-text', completeness: 'full' })
+    }
+    expect(reads).toBe(2)
+    sessions.close()
+  })
+
+  it('rejects a different LinkedIn role ID even with the same title and employer', async () => {
+    const t = fixture('https://www.linkedin.com/jobs/view/4464025098/')
+    let reads = 0
+    const sessions = createJobResearchSessions({ credentials: t.credentials, createSearch: t.createSearch, direct: async () => synthetic(++reads === 1 ? 'none' : 'blocked') })
+    const token = sessions.startJobResearch(URL).token; await tick()
+    const state = await sessions.searchJobResearch(token)
+    expect(state.status).toBe('ready')
+    if (state.status === 'ready') { expect(state.run.status).toBe('none'); expect(state.run.findings).toHaveLength(0) }
+    expect(reads).toBe(1)
+    sessions.close()
+  })
+
+  it('requires exact generic canonical URL, meaningful title and nonempty excerpt, not a namesake', async () => {
+    const selected = 'https://careers.example.org/positions/engineer-42'
+    for (const [lead, title, snippet, accepted] of [
+      ['https://careers.example.org/positions/engineer-43', 'Engineer — Invented Corp', 'Maintain services.', false],
+      [selected, 'Job', 'Maintain services.', false],
+      [selected, 'Engineer — Invented Corp', ' ', false],
+      [selected, 'Engineer — Invented Corp', 'Maintain services.', true],
+    ] as const) {
+      let reads = 0
+      const credentials = fixture().credentials
+      const sessions = createJobResearchSessions({ credentials, direct: async () => {
+        reads++
+        const original = synthetic('none')
+        return { ...original, selected: normalizeJobResearchUrl(selected) }
+      }, createSearch: () => ({ searchesDispatched: 1, search: async () => ({ links: [{ url: lead, title, snippet }], credits: 1 as const, requestId: 'synthetic' }) }) })
+      const token = sessions.startJobResearch(selected).token; await tick()
+      const state = await sessions.searchJobResearch(token)
+      expect(state.status).toBe('ready')
+      if (state.status === 'ready') {
+        expect(state.run.status).toBe(accepted ? 'provisional' : 'none')
+        expect(state.run.findings).toHaveLength(accepted ? 1 : 0)
+        if (accepted) {
+          const id = state.run.findings[0].id
+          expect(() => sessions.reviewJobResearch(token, [id], false)).toThrow(/Acknowledge/)
+          expect(sessions.reviewJobResearch(token, [id], true).analysisScope).toBe('provisional')
+        }
+      }
+      expect(reads).toBe(accepted ? 2 : 1)
+      sessions.close()
+    }
+  })
+
+  it('retains both partial direct reads but rejects a conflicting indexed title', async () => {
+    const t = fixture(URL, 'Unrelated Engineer — Another Employer'); let reads = 0
+    const sessions = createJobResearchSessions({ credentials: t.credentials, createSearch: t.createSearch, direct: async () => synthetic(++reads === 1 ? 'provisional' : 'provisional') })
+    const token = sessions.startJobResearch(URL).token; await tick()
+    const original = sessions.getJobResearch(token)
+    const state = await sessions.searchJobResearch(token)
+    expect(state.status).toBe('ready')
+    if (state.status === 'ready' && original.status === 'ready') {
+      expect(state.run.status).toBe('provisional')
+      expect(state.run.findings).toHaveLength(2)
+      expect(state.run.findings).toEqual(expect.arrayContaining(original.run.findings))
+      expect(state.run.findings.every(finding => finding.kind === 'direct-role-text')).toBe(true)
+    }
+    expect(reads).toBe(2)
+    sessions.close()
+  })
+
+  it.each(['private DNS', 'unsafe redirect'] as const)('does not accept an indexed lead after %s', async failure => {
+    const t = fixture(); let reads = 0
+    const sessions = createJobResearchSessions({ credentials: t.credentials, createSearch: t.createSearch, direct: async () => {
+      if (++reads === 1) return synthetic('none')
+      if (failure === 'private DNS') throw new Error('The source resolved to a private or non-public address.')
+      return { ...synthetic('blocked'), unknowns: ['The source redirected to an unsafe or ambiguous URL.'] }
+    } })
+    const token = sessions.startJobResearch(URL).token; await tick()
+    const state = await sessions.searchJobResearch(token)
+    expect(state.status).toBe('ready')
+    if (state.status === 'ready') {
+      expect(state.run.status).toBe('none')
+      expect(state.run.findings).toHaveLength(0)
+      expect(state.run.unknowns.join(' ')).toMatch(/could not be safely reached/)
+    }
     sessions.close()
   })
 

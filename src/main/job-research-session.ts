@@ -110,43 +110,73 @@ export function createJobResearchSessions(options: ResearchSessionOptions) {
       if (!live(token, session, generation)) throw new Error(missing)
       // Search links are leads, not full role evidence. Never navigate to a search-provided
       // destination: only the canonical selected URL may be re-read by the pinned direct adapter.
+      const normalized = (value: string) => value.normalize('NFKC').toLocaleLowerCase('en').replace(/[^a-z0-9]+/g, ' ').trim()
       const candidates = result.links.filter(link => {
-        try { return normalizeJobResearchUrl(link.url).canonicalUrl === selected.canonicalUrl } catch { return false }
+        try {
+          // An indexed URL is an identity lead, not proof that the snippet describes the posting.
+          // Generic links have no role ID: their *entire* canonical URL must still match.
+          return normalizeJobResearchUrl(link.url).canonicalUrl === selected.canonicalUrl &&
+            typeof link.title === 'string' && link.title.trim().length <= 240 &&
+            /[a-z]{3}/i.test(link.title) && !/^(?:job|jobs|apply|sign in|log in)$/i.test(link.title.trim()) &&
+            typeof link.snippet === 'string' && !!link.snippet.trim() && link.snippet.length <= 2000
+        } catch { return false }
       })
       if (!candidates.length) {
-        const run = jobResearchRunSchema.parse({ ...original, completedAt: new Date().toISOString(), unknowns: [...original.unknowns, 'No indexed result matched this exact selected role; similarly named employers and jobs were ignored.'] })
+        const run = jobResearchRunSchema.parse({ ...original, completedAt: new Date().toISOString(), unknowns: [...original.unknowns, 'No usable indexed result matched this exact selected role; similarly named employers and jobs were ignored.'] })
         session.state = { status: 'ready', run: freeze(run) }
         return getJobResearch(token)
       }
-      const verified = jobResearchRunSchema.parse(await direct(selected.canonicalUrl, { signal: session.controller.signal }))
+      // The only follow-up GET is to the already selected canonical URL. A failed or blocked
+      // re-read does not erase a URL-matched index lead; it cannot verify its title/employer.
+      let verified: JobResearchRun | undefined
+      let readFailed = false
+      let unsafeDestination = false
+      try { verified = jobResearchRunSchema.parse(await direct(selected.canonicalUrl, { signal: session.controller.signal })) }
+      catch (error) {
+        readFailed = true
+        // Do not display transport errors or accept a source whose network identity is unsafe.
+        unsafeDestination = error instanceof Error && /private or non-public address|certificate|self.signed|TLS|ssl|hostname.*(?:mismatch|match certificate)/i.test(error.message)
+      }
       if (!live(token, session, generation)) throw new Error(missing)
-      if (verified.selected.canonicalUrl !== selected.canonicalUrl || verified.status === 'none' || verified.status === 'blocked') {
-        session.state = { status: 'ready', run: freeze(jobResearchRunSchema.parse({ ...original, completedAt: new Date().toISOString(), unknowns: [...original.unknowns, 'An indexed link was found but the public source could not verify this role. No indexed claim was accepted.'] })) }
-        return getJobResearch(token)
-      }
-      // Verified direct contents take precedence. A snippet alone never establishes a role
-      // requirement; require both a fresh direct partial read and matching exact-role metadata.
-      // Retain the original direct capture even if the verification read improves it.
-      // Run IDs remain app-issued and the selected canonical identity stays unchanged.
-      const preserved = (next: JobResearchRun): JobResearchRun => jobResearchRunSchema.parse({ ...next,
-        sources: [...original.sources.filter(source => !next.sources.some(item => item.id === source.id)), ...next.sources],
-        findings: [...original.findings.filter(finding => !next.findings.some(item => item.id === finding.id)), ...next.findings],
-        unknowns: [...new Set([...original.unknowns, ...next.unknowns])],
+      if (verified?.selected.canonicalUrl !== selected.canonicalUrl) verified = undefined
+      const preserved = (next?: JobResearchRun): JobResearchRun => jobResearchRunSchema.parse({ ...original,
+        completedAt: new Date().toISOString(),
+        status: next?.status === 'full' ? 'full' : original.status === 'provisional' || next?.status === 'provisional' ? 'provisional' : original.status,
+        sources: [...original.sources, ...(next?.sources ?? []).filter(source => !original.sources.some(item => item.id === source.id))],
+        findings: [...original.findings, ...(next?.findings ?? []).filter(finding => !original.findings.some(item => item.id === finding.id))],
+        unknowns: [...new Set([...original.unknowns, ...(next?.unknowns ?? [])])],
       })
-      if (verified.status === 'full') {
-        session.state = { status: 'ready', run: freeze(preserved(verified)) }
+      if (verified?.status === 'full') {
+        session.state = { status: 'ready', run: freeze(jobResearchRunSchema.parse({ ...verified, id: original.id, startedAt: original.startedAt })) }
         return getJobResearch(token)
       }
-      const role = verified.sources.find(source => source.identity === 'exact-role' && source.title && source.employer)
-      const normalized = (value: string) => value.normalize('NFKC').toLocaleLowerCase('en').replace(/[^a-z0-9]+/g, ' ').trim()
-      const match = role && candidates.find(candidate => normalized(candidate.title).includes(normalized(role.title!)) && normalized(candidate.title).includes(normalized(role.employer!)))
-      if (!match || !role) {
-        session.state = { status: 'ready', run: freeze(preserved(jobResearchRunSchema.parse({ ...verified, unknowns: [...verified.unknowns, 'Indexed title or employer did not match the directly verified role; the snippet was discarded.'] }))) }
+      const base = preserved(verified?.status === 'provisional' ? verified : undefined)
+      // Login redirects are ordinary blocked reads; unsafe/ambiguous redirects are not.
+      unsafeDestination ||= verified?.status === 'blocked' && verified.unknowns.some(reason => /unsafe|ambiguous|tracking/i.test(reason))
+      if (unsafeDestination) {
+        session.state = { status: 'ready', run: freeze(jobResearchRunSchema.parse({ ...base, unknowns: [...base.unknowns, 'The selected source could not be safely reached; the indexed excerpt was not accepted.'] })) }
+        return getJobResearch(token)
+      }
+      const directRoles = base.sources.filter(source => source.method === 'direct-html' && source.identity === 'exact-role' && source.title)
+      const matchesDirect = (candidate: TavilySearchResult['links'][number]) => directRoles.every(role =>
+        normalized(candidate.title).includes(normalized(role.title!)) &&
+        (!role.employer || normalized(candidate.title).includes(normalized(role.employer))))
+      const match = candidates.find(matchesDirect)
+      if (!match) {
+        session.state = { status: 'ready', run: freeze(jobResearchRunSchema.parse({ ...base, unknowns: [...base.unknowns, 'Indexed title or employer did not match the directly read role; the snippet was discarded.'] })) }
         return getJobResearch(token)
       }
       const sourceId = randomUUID()
-      const run = jobResearchRunSchema.parse({ ...verified, sources: [...verified.sources, { version: 1, id: sourceId, url: selected.canonicalUrl, capturedAt: new Date().toISOString(), method: 'indexed-snippet', identity: 'exact-role', title: role.title, employer: role.employer, employerIdentityUrl: null }], findings: [...verified.findings, { version: 1, id: randomUUID(), sourceId, kind: 'indexed-role-claim', text: match.snippet, completeness: 'partial' }], unknowns: [...verified.unknowns, 'Indexed excerpt is partial and not an independently verified full posting.'] })
-      session.state = { status: 'ready', run: freeze(preserved(run)) }
+      const directlyVerifiedEmployer = directRoles.find(role => role.employer)?.employer ?? null
+      const run = jobResearchRunSchema.parse({ ...base, status: 'provisional', sources: [...base.sources, {
+        version: 1, id: sourceId, url: selected.canonicalUrl, capturedAt: new Date().toISOString(),
+        method: 'indexed-snippet', identity: 'exact-role', title: match.title.trim(), employer: directlyVerifiedEmployer, employerIdentityUrl: null,
+      }], findings: [...base.findings, { version: 1, id: randomUUID(), sourceId, kind: 'indexed-role-claim', text: match.snippet.trim(), completeness: 'partial' }],
+      unknowns: [...base.unknowns, directRoles.length
+        ? 'The indexed title and excerpt match directly read role metadata, but the excerpt is partial and not independently confirmed on source; verify on original.'
+        : 'Identity matched by selected URL only; job title/employer and excerpt are indexed, not independently confirmed on source; verify on original.',
+        ...(readFailed ? ['The follow-up public read failed; no new direct corroboration was added.'] : [])] })
+      session.state = { status: 'ready', run: freeze(run) }
       return getJobResearch(token)
     } catch (error) {
       if (!live(token, session, generation)) throw new Error(missing)
