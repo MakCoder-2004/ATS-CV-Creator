@@ -42,7 +42,8 @@ test('selected full LinkedIn text is inspectable and transfers exactly once to f
     const { token } = await wb.api.startPostingFetch(selected)
     const state = await settled(wb, token)
     expect(requested).toEqual([canonical])
-    expect(state).toMatchObject({ status: 'ready', preview: { submittedUrl: canonical, finalUrl: canonical, title: 'Synthetic Engineer', company: 'Fictional Employer', description: body.trim(), extractionMethod: 'linkedin-public-html-v1' } })
+    expect(state).toMatchObject({ status: 'ready', preview: { submittedUrl: canonical, finalUrl: canonical, title: 'Synthetic Engineer', company: 'Fictional Employer', description: body.trim(), extractionMethod: 'linkedin-public-html-v1', notices: [expect.stringContaining('Nothing was saved to jobs or backups.')] } })
+    expect(state.status === 'ready' && state.preview.notices[0]).toContain('Review temporary role source before analysis.')
     if (state.status !== 'ready') throw Error('Full direct source was not reviewable')
     expect(await wb.api.acceptPostingImport(token, 0)).toMatchObject({ ok: false, error: { message: expect.stringMatching(/Review temporarily or paste text manually/) } })
     expect(await wb.api.comparePostingRefresh(token, randomUUID(), '', 0)).toMatchObject({ ok: false, message: expect.stringMatching(/Review temporarily or paste text manually/) })
@@ -100,24 +101,25 @@ test('full text without a source employer remains an unsaveable research notice'
   } })
   try {
     const { token } = await wb.api.startPostingFetch(selected)
-    expect(await settled(wb, token)).toMatchObject({ status: 'research-notice', message: expect.stringMatching(/saveable preview/i) })
+    expect(await settled(wb, token)).toMatchObject({ status: 'research-notice', message: expect.stringMatching(/reviewable temporary capture/i) })
     expect(wb.api.takePostingResearchRun(token)).toMatchObject({ status: 'full', findings: [{ completeness: 'full' }] })
     expect(await wb.api.reviewPostingPreview(token, 0, { completenessConfirmed: true, conflictResolutions: {} })).toMatchObject({ ok: false })
     expect(await wb.api.listJobs()).toEqual([])
   } finally { wb.close() }
 })
 
-test('expired full public preview and run discard captured text', async () => {
+test('full public preview expires and discards captured text without another API call', async () => {
+  vi.useFakeTimers()
   const { wb } = open(() => ({ status: 200, headers: { 'content-type': 'text/html' }, body: Buffer.from('<html>synthetic</html>') }))
   try {
     const token = (await wb.api.startPostingFetch(selected)).token
-    expect(await settled(wb, token)).toMatchObject({ status: 'ready' })
-    const now = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 16 * 60_000)
-    try {
-      expect(await wb.api.readPostingPreview(token)).toEqual({ status: 'cancelled' })
-      expect(() => wb.api.takePostingResearchRun(token)).toThrow(/unavailable/)
-    } finally { now.mockRestore() }
-  } finally { wb.close() }
+    let state = await wb.api.readPostingPreview(token)
+    for (let i = 0; i < 20 && state.status === 'fetching'; i++) { await Promise.resolve(); state = await wb.api.readPostingPreview(token) }
+    expect(state).toMatchObject({ status: 'ready' })
+    await vi.advanceTimersByTimeAsync(15 * 60_000)
+    expect(() => wb.api.takePostingResearchRun(token)).toThrow(/unavailable/)
+    expect(await wb.api.readPostingPreview(token)).toMatchObject({ status: 'failed' })
+  } finally { wb.close(); vi.useRealTimers() }
 })
 
 test('synthetic exact-role JSON-LD is extracted by the real bounded worker', async () => {
