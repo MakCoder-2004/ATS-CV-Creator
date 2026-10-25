@@ -3,6 +3,8 @@ import { mkdtempSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import Database from 'better-sqlite3'
+import { registerWorkspaceBackupRowSizer } from '../src/main/workspace-backup'
 import { createWorkbench } from '../src/main/workbench'
 import { createJobResearchSessions } from '../src/main/job-research-session'
 import { fetchDirectJobResearch } from '../src/main/job-research-fetch'
@@ -27,7 +29,7 @@ function fixture() {
   return { wb, sessions, get calls() { return calls } }
 }
 async function notice(wb: ReturnType<typeof createWorkbench>, token: string) {
-  for (let i = 0; i < 100; i++) {
+  for (let i = 0; i < 300; i++) {
     const state = await wb.api.readPostingPreview(token)
     if (state.status !== 'fetching') return state
     await new Promise(resolve => setTimeout(resolve, 10))
@@ -43,6 +45,8 @@ test('first partial read transfers its complete app-held evidence without a seco
     const captured = t.wb.api.takePostingResearchRun(original)
     expect(captured).toMatchObject({ status: 'provisional', findings: [{ text: 'Original direct partial requirement.' }], unknowns: ['Description truncated.'] })
     expect(() => t.wb.api.takePostingResearchRun(original)).toThrow(/unavailable/)
+    expect(await t.wb.api.readPostingPreview(original)).toMatchObject({ status: 'failed' })
+    expect(await t.wb.api.cancelPostingFetch(original)).toEqual({ ok: false })
     const token = t.sessions.acceptInitialDirectRun(captured).token
     expect(t.calls).toBe(1)
     const state = t.sessions.getJobResearch(token)
@@ -106,6 +110,41 @@ test('a completed Lever source remains saveable but cannot transfer as temporary
     expect(() => wb.api.takePostingResearchRun(token)).toThrow(/unavailable/)
     expect(await wb.api.reviewPostingPreview(token, 0, { completenessConfirmed: true, conflictResolutions: {} })).toMatchObject({ ok: true })
     expect(await wb.api.acceptPostingImport(token, 0)).toMatchObject({ ok: true, value: { sourceSnapshot: { extractionMethod: 'lever-json-v1' } } })
+  } finally { wb.close() }
+})
+
+test('historical non-Lever snapshots remain readable and backed up but cannot refresh through a Lever token', async () => {
+  const folder = mkdtempSync(join(tmpdir(), 'cv-historical-public-')); folders.push(folder)
+  const sourceUrl = 'https://api.lever.co/v0/postings/example/role'
+  const wb = createWorkbench(folder, undefined, undefined, undefined, {
+    lookup: async () => [{ address: '8.8.8.8', family: 4 }],
+    request: async () => ({ status: 200, headers: { 'content-type': 'application/json' }, body: Buffer.from(JSON.stringify({ id: 'role', text: 'Synthetic Engineer', company: 'Invented Corp', descriptionPlain: `Responsibilities\n• ${'Build dependable fictional systems with careful engineering and collaborative reviews. '.repeat(4)}\n\nRequirements\n• TypeScript and tests.` })) }),
+  })
+  try {
+    const first = (await wb.api.startPostingFetch(sourceUrl)).token
+    expect(await notice(wb, first)).toMatchObject({ status: 'ready' })
+    expect(await wb.api.reviewPostingPreview(first, 0, { completenessConfirmed: true, conflictResolutions: {} })).toMatchObject({ ok: true })
+    const saved = await wb.api.acceptPostingImport(first, 0)
+    if (!saved.ok) throw Error('Lever setup did not save')
+    // Represent a previously persisted public snapshot without granting it new save rights.
+    const db = new Database(join(folder, 'workbench.sqlite'))
+    registerWorkspaceBackupRowSizer(db)
+    try {
+      const row = db.prepare('SELECT data FROM jobs WHERE id = ?').get(saved.value.id) as { data: string }
+      const historical = JSON.parse(row.data)
+      historical.sourceSnapshot.extractionMethod = 'public-jsonld-v1'
+      db.prepare('UPDATE jobs SET data = ? WHERE id = ?').run(JSON.stringify(historical), saved.value.id)
+    } finally { db.close() }
+    expect((await wb.api.listJobs())[0].sourceSnapshot?.extractionMethod).toBe('public-jsonld-v1')
+    const before = wb.backup.createBackup()
+    expect(before).toContain('public-jsonld-v1')
+    const refresh = (await wb.api.startPostingFetch(sourceUrl)).token
+    expect(await notice(wb, refresh)).toMatchObject({ status: 'ready' })
+    expect(await wb.api.reviewPostingPreview(refresh, 0, { completenessConfirmed: true, conflictResolutions: {} })).toMatchObject({ ok: true })
+    expect(await wb.api.comparePostingRefresh(refresh, saved.value.id, saved.value.updatedAt, 1)).toMatchObject({ ok: false, message: expect.stringMatching(/cannot update/) })
+    expect(await wb.api.acceptPostingRefresh(refresh, 0, saved.value.id, saved.value.updatedAt, 1, { title: 'source', company: 'source', description: 'source', optionalDetails: {} })).toMatchObject({ ok: false, error: { message: expect.stringMatching(/cannot be refreshed/) } })
+    expect(JSON.parse(wb.backup.createBackup()).tables).toEqual(JSON.parse(before).tables)
+    expect((await wb.api.listJobs())[0].revisions).toHaveLength(1)
   } finally { wb.close() }
 })
 

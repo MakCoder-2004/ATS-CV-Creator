@@ -58,6 +58,14 @@ test('selected full LinkedIn text is inspectable and transfers exactly once to f
     const captured = wb.api.takePostingResearchRun(token)
     expect(captured).toMatchObject({ status: 'full', selected: { canonicalUrl: canonical }, findings: [{ kind: 'direct-role-text', text: body.trim(), completeness: 'full' }] })
     expect(() => wb.api.takePostingResearchRun(token)).toThrow(/unavailable/)
+    expect(await wb.api.readPostingPreview(token)).toMatchObject({ status: 'failed' })
+    expect(await wb.api.cancelPostingFetch(token)).toEqual({ ok: false })
+    expect(await wb.api.updatePostingPreview(token, 1, { title: state.preview.title, company: state.preview.company!, description: body, optionalDetails: state.preview.optionalDetails })).toMatchObject({ ok: false })
+    expect(await wb.api.reviewPostingPreview(token, 1, { completenessConfirmed: true, conflictResolutions: {} })).toMatchObject({ ok: false })
+    expect(await wb.api.acceptPostingImport(token, 1)).toMatchObject({ ok: false })
+    expect(await wb.api.comparePostingRefresh(token, randomUUID(), '', 0)).toMatchObject({ ok: false })
+    expect(await wb.api.acceptPostingRefresh(token, 1, randomUUID(), '', 0, { title: 'source', company: 'source', description: 'source', optionalDetails: {} })).toMatchObject({ ok: false })
+    expect(JSON.parse(wb.backup.createBackup()).tables).toEqual(JSON.parse(backup).tables)
     const transferred = sessions.acceptInitialDirectRun(captured).token
     const research = sessions.getJobResearch(transferred)
     expect(research).toMatchObject({ status: 'ready', run: { id: captured.id, findings: [{ id: captured.findings[0].id, text: body.trim() }] } })
@@ -122,6 +130,22 @@ test('full public preview expires and discards captured text without another API
   } finally { wb.close(); vi.useRealTimers() }
 })
 
+test('handoff clears the posting expiry timer and removes the public preview immediately', async () => {
+  vi.useFakeTimers()
+  const { wb } = open(() => ({ status: 200, headers: { 'content-type': 'text/html' }, body: Buffer.from('<html>synthetic</html>') }))
+  try {
+    const token = (await wb.api.startPostingFetch(selected)).token
+    let state = await wb.api.readPostingPreview(token)
+    for (let i = 0; i < 20 && state.status === 'fetching'; i++) { await Promise.resolve(); state = await wb.api.readPostingPreview(token) }
+    expect(state).toMatchObject({ status: 'ready' })
+    expect(vi.getTimerCount()).toBe(1)
+    expect(wb.api.takePostingResearchRun(token)).toMatchObject({ status: 'full', findings: [{ text: body.trim() }] })
+    expect(vi.getTimerCount()).toBe(0)
+    expect(await wb.api.readPostingPreview(token)).toMatchObject({ status: 'failed' })
+    expect(await wb.api.cancelPostingFetch(token)).toEqual({ ok: false })
+  } finally { wb.close(); vi.useRealTimers() }
+})
+
 test('synthetic exact-role JSON-LD is extracted by the real bounded worker', async () => {
   const folder = mkdtempSync(join(tmpdir(), 'cv-direct-worker-')); folders.push(folder)
   const url = 'https://careers.fictional.org/jobs/role-4'
@@ -144,6 +168,9 @@ test('generic JSON-LD direct URL stays temporary and binds the same exact source
     expect(await wb.api.acceptPostingImport(token, 0)).toMatchObject({ ok: false, error: { message: expect.stringMatching(/Review temporarily or paste text manually/) } })
     expect(await wb.api.acceptPostingRefresh(token, 0, randomUUID(), '', 0, { title: 'source', company: 'source', description: 'source', optionalDetails: {} })).toMatchObject({ ok: false, error: { message: expect.stringMatching(/Review temporarily or paste text manually/) } })
     expect(wb.api.takePostingResearchRun(token)).toMatchObject({ status: 'full', selected: { canonicalUrl: url } })
+    expect(await wb.api.readPostingPreview(token)).toMatchObject({ status: 'failed' })
+    expect(await wb.api.acceptPostingImport(token, 0)).toMatchObject({ ok: false })
+    expect(await wb.api.acceptPostingRefresh(token, 0, randomUUID(), '', 0, { title: 'source', company: 'source', description: 'source', optionalDetails: {} })).toMatchObject({ ok: false })
     expect(await wb.api.listJobs()).toEqual([])
     expect(requested).toEqual([url])
     expect(samePostingSource({ submittedUrl: url, finalUrl: url }, { submittedUrl: url + '/other', finalUrl: url + '/other' })).toBe(false)

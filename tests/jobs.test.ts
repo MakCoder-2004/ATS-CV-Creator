@@ -454,7 +454,7 @@ test('superseding a reviewed preview invalidates its revision-bound acceptance',
     const staged = await stageImportReview(wb.api, first.token, { title: state.preview.title, company: state.preview.company!, description: state.preview.description }, { completenessConfirmed: true, conflictResolutions: {} })
     expect(staged.reviewed).toMatchObject({ ok: true })
     const second = await wb.api.startPostingFetch('https://api.lever.co/v0/postings/example-board/supersede-review')
-    expect(await wb.api.readPostingPreview(first.token)).toEqual({ status: 'cancelled' })
+    expect(await wb.api.readPostingPreview(first.token)).toMatchObject({ status: 'failed', message: expect.stringMatching(/no longer available/) })
     expect(await wb.api.acceptPostingImport(first.token, staged.revision)).toMatchObject({ ok: false, error: { code: 'CONFLICT' } })
     expect(await wb.api.listJobs()).toEqual([])
     await wb.api.cancelPostingFetch(second.token)
