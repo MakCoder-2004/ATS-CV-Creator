@@ -110,7 +110,7 @@ export function createJobResearchSessions(options: ResearchSessionOptions) {
       if (!live(token, session, generation)) throw new Error(missing)
       // Search links are leads, not full role evidence. Never navigate to a search-provided
       // destination: only the canonical selected URL may be re-read by the pinned direct adapter.
-      const normalized = (value: string) => value.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim()
+      const normalized = (value: string) => value.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{M}\p{N}]+/gu, ' ').trim()
       const candidates = result.links.filter(link => {
         try {
           // An indexed URL is an identity lead, not proof that the snippet describes the posting.

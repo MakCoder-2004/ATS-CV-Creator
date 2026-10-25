@@ -316,6 +316,9 @@ describe('volatile public research session', () => {
     ['مهندس Senior', 'شركة 北京', 'مهندس Senior — شركة 上海', false],
     ['مهندس Senior', 'شركة 北京', 'مهندس Senior — شركة 北京', true],
     ['高级 Engineer', '北京 Ltd', '高级 Ｅｎｇｉｎｅｅｒ — 北京 Ltd', true],
+    ['आचार्य', 'भारत Ltd', 'आचार्या — भारत Ltd', false],
+    ['आचार्य', 'भारत Ltd', 'आचार्य — भारती Ltd', false],
+    ['आचार्य', 'भारत Ltd', 'आचार्य — भारत Ltd', true],
   ] as const)('preserves Unicode title/employer identity for %s at %s vs %s', async (title, employer, indexedTitle, accepted) => {
     const t = fixture(URL, indexedTitle)
     const sessions = createJobResearchSessions({ credentials: t.credentials, createSearch: t.createSearch, direct: async () => {
