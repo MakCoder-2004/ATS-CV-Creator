@@ -1,0 +1,11 @@
+# Saved jobs row alignment follow-up
+
+The user identified uneven status/action alignment and inconsistent Edit, Open posting and Delete controls in the installed 0.5.0 Saved jobs table. This change keeps the approved Variant A three-column page and existing saved-job/deletion behavior. It does not change link intake, source history, persistence or model work.
+
+The Posting column remains flexible for long titles. Draft status and Next action reserve stable widths. Each row action has one 44px height and consistent button styling. Open posting is the primary row action, Edit is secondary and Delete is separated and destructive. Checkbox selection remains beside the title. At narrow widths the three semantic fields stack, and the action group fits within the viewport without stretched spacing.
+
+The implementation read `design system/README.md`, the Saved jobs page, visual tokens and interaction contracts, plus the user's `frontend-design` and `ui-ux-pro-max` skills. The [page contract](../../design%20system/pages.md) now records the intentional row rule. No new palette, font or page composition was introduced.
+
+The focused development Electron test at `tests/electron/saved-jobs-alignment.spec.ts` passed in an isolated synthetic three-job workspace. It measured aligned header/status/action starts, consistent row button widths and 44px heights for short and long titles, keyboard focus, desktop light/dark, 375px overflow and Delete → Cancel selection/focus restoration. It produced [desktop light](artifacts/saved-jobs-alignment/saved-jobs-desktop-light.png), [desktop dark](artifacts/saved-jobs-alignment/saved-jobs-desktop-dark.png) and [375px dark](artifacts/saved-jobs-alignment/saved-jobs-375-dark.png) captures. The initial timeout came from a stale mounted jobs list after direct test setup; the final test reloads the page through its public user-data workspace and passed in 11.7 seconds.
+
+`npm run typecheck` and `npm run build` passed in the isolated worktree. The build had non-fatal upstream Zod annotation warnings. No full suite, installer, packaged app launch or real provider request ran. The current installed 0.5.0 app was not replaced or stopped. A separate, later user-approved universal link-research change will replace the link-intake copy and flow; this row layout does not claim that feature is shipped.
