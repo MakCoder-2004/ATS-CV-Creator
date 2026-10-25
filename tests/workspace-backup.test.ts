@@ -100,6 +100,19 @@ test('complete workspace backup restores draft revisions, evidence, posting, pre
   expect(requests.length).toBe(attemptsBeforeReopen)
 }, 30_000)
 
+test('legacy enabled review setting cannot survive backup restore or reopen', async () => {
+  const { dir, workbench } = fixture()
+  const old = JSON.parse(workbench.backup.createBackup())
+  old.tables.settings.rows.push({ key: 'faithfulness-check', value: 'true' })
+  const preview = workbench.backup.previewRestore(JSON.stringify(old))
+  workbench.backup.applyRestore(preview.token, safetyBackup(dir))
+  expect(JSON.parse(workbench.backup.createBackup()).tables.settings.rows).not.toContainEqual({ key: 'faithfulness-check', value: 'true' })
+  workbench.close(); instances.pop()
+  const reopened = open(dir)
+  expect(await reopened.api.getSettings()).not.toHaveProperty('faithfulnessCheck')
+  expect(JSON.parse(reopened.backup.createBackup()).tables.settings.rows).not.toContainEqual({ key: 'faithfulness-check', value: 'true' })
+})
+
 test('released version-1 job backups without provenance upgrade to honest legacy records on restore', async () => {
   const { dir, workbench } = fixture()
   const saved = await workbench.api.saveJob({ title: 'Engineer', company: 'Example', description: 'Original wording.' })

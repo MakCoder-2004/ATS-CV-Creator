@@ -42,10 +42,6 @@ const api: WorkbenchAPI = Object.freeze({
   async setPiModel(input: PiModelPreferenceInput) {
     return settingsSchema.parse(await ipcRenderer.invoke('settings:pi-model', piModelPreferenceInputSchema.parse(input)))
   },
-  async setFaithfulnessCheck(value: boolean) {
-    if (typeof value !== 'boolean') throw new Error('Faithfulness setting must be boolean.')
-    return settingsSchema.parse(await ipcRenderer.invoke('settings:faithfulness', value))
-  },
   async getResearchSearchKeyStatus() { return researchSearchKeyStatusSchema.parse(await ipcRenderer.invoke('research-search:key:status')) },
   async saveResearchSearchKey(key: string) { return researchSearchKeyStatusSchema.parse(await ipcRenderer.invoke('research-search:key:save', researchSearchKeyInputSchema.parse(key))) },
   async removeResearchSearchKey() { return researchSearchKeyStatusSchema.parse(await ipcRenderer.invoke('research-search:key:remove')) },

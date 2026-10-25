@@ -113,23 +113,60 @@ function reconcileNestedItems(items: NestedInput[], previous: NestedRecord[], ow
 /** One workspace per userData directory. Opening a workspace applies forward-only migrations. */
 const escapeCoverageTerm = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
-function preserveKnownFindings(checked: ReturnType<typeof checkDraftFacts>, prior: DraftRevision) {
+function reconcileKnownFindings(checked: ReturnType<typeof checkDraftFacts>, prior: DraftRevision, next: DraftRevision = prior, includeGenerationFailures = true, readOrigin?: (id: string) => DraftRevision | undefined) {
   const isLegacyNarrativeFinding = (finding: { itemPath: string }) => finding.itemPath.startsWith('tailoring.') || finding.itemPath === 'summary[0]'
-  const known = prior.checkReport?.findings.filter(finding => !isLegacyNarrativeFinding(finding) && (finding.itemPath === 'generation' || finding.code === 'semantic-unsupported')).map(finding => {
-    if (finding.code !== 'semantic-unsupported') return finding
+  const known = prior.checkReport?.findings.flatMap(finding => {
+    if (isLegacyNarrativeFinding(finding) || (finding.itemPath !== 'generation' && finding.code !== 'semantic-unsupported') || (!includeGenerationFailures && finding.code !== 'semantic-unsupported')) return []
+    if (finding.code !== 'semantic-unsupported') return [finding]
     const originDraftId = finding.originDraftId ?? prior.checkReport?.draftId ?? prior.id
     const originDraftRevision = finding.originDraftRevision ?? prior.checkReport?.draftRevision ?? prior.revision
     const originEvidenceRevisionHash = finding.originEvidenceRevisionHash ?? prior.checkReport?.evidenceRevisionHash
-    return { ...finding, originDraftId, originDraftRevision, ...(originEvidenceRevisionHash ? { originEvidenceRevisionHash } : {}), historical: originDraftId !== checked.draftId || originDraftRevision !== checked.draftRevision }
+    const inherited = { ...finding, originDraftId, originDraftRevision, ...(originEvidenceRevisionHash ? { originEvidenceRevisionHash } : {}), historical: originDraftId !== checked.draftId || originDraftRevision !== checked.draftRevision }
+    // A global legacy finding has no attributable item: unrelated cuts or edits cannot waive it.
+    const path = /^(education|experience|projects|skills|certificates)\[(\d+)\]$/.exec(finding.itemPath)
+    if (!path) return [inherited]
+    // Local edits of a validation-failure draft cannot resolve wording discarded by that failure.
+    if ((includeGenerationFailures && prior.checkReport?.findings.some(item => item.itemPath === 'generation')) || checked.findings.some(item => item.itemPath === 'generation')) return [inherited]
+    const origin = originDraftId === prior.id ? prior : readOrigin?.(originDraftId)
+    // Missing origin or attribution must fail closed, never invent a waiver from a shifted index.
+    if (!origin) return [inherited]
+    const candidates = origin.id === prior.id ? [finding] : origin.checkReport?.findings.filter(item => item.code === finding.code && item.message === finding.message && item.correction === finding.correction) ?? []
+    if (!candidates.length) return [inherited]
+    // Same-message legacy findings lack a stable finding ID: require every possible origin to resolve.
+    for (const candidate of candidates) {
+      const originalPath = /^(education|experience|projects|skills|certificates)\[(\d+)\]$/.exec(candidate.itemPath)
+      if (!originalPath) return [inherited]
+      const section = originalPath[1] as keyof DraftRevision['content'], flagged = origin.content[section][Number(originalPath[2])]
+      if (!flagged) return [inherited]
+      const wording = (item: typeof flagged) => 'text' in item ? item.text : item.name
+      const entries = next.content[section].map((item, at) => ({ item, at }))
+      const matches = entries.filter(({ item }) => wording(item) === wording(flagged) && isDeepStrictEqual(item.citations, flagged.citations))
+      // A citation revision alone cannot establish that the claim was corrected.
+      const remaining = matches.length ? matches : entries.filter(({ item }) => wording(item) === wording(flagged))
+      if (remaining.length) return [{ ...inherited, itemPath: `${section}[${remaining[0].at}]` }]
+    }
+    // All possible copies of the flagged wording were removed or replaced.
+    return []
   }) ?? []
   const findings = [...known, ...checked.findings.filter(finding => !known.some(item => item.code === finding.code && item.itemPath === finding.itemPath))]
   return factualCheckReportSchema.parse({ ...checked, passed: checked.passed && known.length === 0, findings })
+}
+
+function inheritRevisionFindings(prior: DraftRevision, next: DraftRevision, readOrigin: (id: string) => DraftRevision | undefined): DraftRevision {
+  if (!prior.checkReport?.findings.some(finding => finding.itemPath === 'generation' || finding.code === 'semantic-unsupported')) return next
+  const report = reconcileKnownFindings(checkDraftFacts(next), prior, next, true, readOrigin)
+  return draftRevisionSchema.parse({ ...next, checkReport: report, status: report.passed ? 'unverified' : 'blocked' })
 }
 
 export function createWorkbench(userData: string, _legacySecureStorage?: unknown, scriptedTransport?: AnalysisTransport, recoveryHooks?: { beforeGraphCheckpoint?: (metadata: import('@langchain/langgraph').CheckpointMetadata) => void; workspaceBackupMaxBytes?: number }, safePostingFetchOptions?: SafePostingFetchOptions & { research?: JobResearchFetchOptions }, piRuntime?: PiModelRuntime | Promise<PiModelRuntime | null>): { api: WorkbenchStorageAPI; authorizeOutboundPayload<T>(runId: string, payload: T): T; backup: WorkspaceBackupEngine; beginJobOperation(jobId: string, action: string): () => void; hasActiveWork(): boolean; close(): void } {
   mkdirSync(userData, { recursive: true })
   const db = new Database(join(userData, 'workbench.sqlite'))
   registerWorkspaceBackupRowSizer(db)
+  const readOrigin = (id: string): DraftRevision | undefined => {
+    const row = db.prepare('SELECT data FROM draft_revisions WHERE id = ?').get(id) as { data: string } | undefined
+    return row ? draftRevisionSchema.parse(JSON.parse(row.data)) : undefined
+  }
+  const preserveKnownFindings = (checked: ReturnType<typeof checkDraftFacts>, prior: DraftRevision, next: DraftRevision = prior, includeGenerationFailures = true) => reconcileKnownFindings(checked, prior, next, includeGenerationFailures, readOrigin)
   db.pragma('journal_mode = WAL')
   const graphCheckpointer = new SqliteCheckpointSaver(db, recoveryHooks?.beforeGraphCheckpoint)
   const postingFetches = new Map<string, { controller: AbortController; state: ReturnType<typeof postingFetchStateSchema.parse>; expiresAt: number; selected?: ReturnType<typeof normalizeJobResearchUrl>; directRun?: JobResearchRun; expiryTimer?: ReturnType<typeof setTimeout>; revision: number; working?: PostingPreviewEdit; reviewed?: { revision: number; input: ReturnType<typeof jobInputSchema.parse>; review: import('../shared/posting-import').PostingReview } }>()
@@ -203,6 +240,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
   })
   migrateDraftTargetBaselines()
   if (!scriptedTransport) migrateLegacyOpenRouterWorkspace(db)
+  db.prepare("DELETE FROM settings WHERE key='faithfulness-check'").run()
 
   const readProfile = (): ProfileSnapshot => {
     const contactRow = db.prepare('SELECT data FROM profile_contact WHERE singleton = 1').get() as { data: string } | undefined
@@ -280,7 +318,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
     return { ok: true, data }
   }
   const outboundEngine = createOutboundConsentEngine()
-  const pendingOutbound = new Map<string, { jobId: string; source: ConsentSource; bundle: OutboundBundle; runId: string; faithfulnessCheck: boolean; consentId?: string }>()
+  const pendingOutbound = new Map<string, { jobId: string; source: ConsentSource; bundle: OutboundBundle; runId: string; consentId?: string }>()
   const currentAnalysis = new Map<string, ReturnType<typeof analysisResultSchema.parse>>()
   const saveAnalysisState = (input: unknown) => {
     const parsed = analysisResultSchema.parse(input)
@@ -453,11 +491,11 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
   const api: WorkbenchStorageAPI = {
     async getWorkspaceBackupStatus() { return backupEngine.readBackupStatus() },
     async getSettings() {
-      const rows = db.prepare('SELECT key, value FROM settings WHERE key IN (?, ?, ?)').all('appearance', 'faithfulness-check', 'pi-model') as { key: string; value: string }[]
+      const rows = db.prepare('SELECT key, value FROM settings WHERE key IN (?, ?)').all('appearance', 'pi-model') as { key: string; value: string }[]
       const stored = Object.fromEntries(rows.map(row => [row.key, row.value]))
       let piModel: PiModelSelection | null = null
       try { if (stored['pi-model']) piModel = piModelSelectionSchema.parse(JSON.parse(stored['pi-model'])) } catch { piModel = null }
-      return settingsSchema.parse({ appearance: stored.appearance ?? 'light', pi: piModel, faithfulnessCheck: stored['faithfulness-check'] === 'true' })
+      return settingsSchema.parse({ appearance: stored.appearance ?? 'light', pi: piModel })
     },
     async setAppearance(value) {
       saveSetting('appearance', appearanceSchema.parse(value))
@@ -497,11 +535,6 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
         for (const pending of pendingOutbound.values()) if (pending.consentId) outboundEngine.revoke(pending.consentId)
         pendingOutbound.clear(); startedAnalysisTokens.clear(); startedRegenerationTokens.clear(); currentAnalysis.clear()
       }
-      return this.getSettings()
-    },
-    async setFaithfulnessCheck(value: boolean) {
-      if (typeof value !== 'boolean') throw new Error('Faithfulness setting must be boolean.')
-      saveSetting('faithfulness-check', String(value))
       return this.getSettings()
     },
     async getProfile() { return readProfile() },
@@ -1296,8 +1329,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       try {
         const bundle = prepareOutboundBundle(source)
         const token = randomUUID(), runId = randomUUID()
-        const faithfulnessRow = db.prepare('SELECT value FROM settings WHERE key = ?').get('faithfulness-check') as { value: string } | undefined
-        pendingOutbound.set(token, { jobId, source, bundle, runId, faithfulnessCheck: faithfulnessRow?.value === 'true' })
+        pendingOutbound.set(token, { jobId, source, bundle, runId })
         return outboundConsentPreviewSchema.parse({ ok: true, token, jobTitle: source.job.title, jobCompany: source.job.company, outgoing: bundle.outgoing, warning: bundle.preview.residualSensitivityNotice, termsNotice: scriptedTransport ? 'This scripted request uses only the reviewed outgoing data. Redaction cannot guarantee anonymity.' : 'After you authorize this run, Pi sends the reviewed data to the selected model provider. Provider data-use policies and charges vary. Do not submit confidential information. Redaction cannot guarantee anonymity.' })
       } catch { return outboundConsentPreviewSchema.parse({ ok: false, message: 'Outgoing data could not be prepared safely. Review your profile and model settings, then try again.' }) }
     },
@@ -1384,7 +1416,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       if (recoveryRow) {
         try { frozen = generationRecoverySnapshotSchema.parse(JSON.parse(recoveryRow.snapshot)) }
         catch { return { ok: false, message: 'The saved recovery snapshot is corrupt or incompatible. No requests were sent; cancel this run and inspect the source data.' } }
-        if (frozen.version !== 3 || (!scriptedTransport && !isDeepStrictEqual(frozen.model, readPiSelection()))) return { ok: false, message: 'This saved run predates paragraph generation or its Pi model changed. Review outgoing data, authorize a fresh run, analyze the posting, then generate again. No previous request was replayed.' }
+        if (frozen.version !== 4 || (!scriptedTransport && !isDeepStrictEqual(frozen.model, readPiSelection()))) return { ok: false, message: 'This saved run uses an earlier generation contract or its Pi model changed. Review outgoing data, authorize a fresh run, analyze the posting, then generate again. No previous request was replayed.' }
         if (frozen.runId !== resumeRunId || frozen.jobId !== pending.jobId || frozen.consentId !== pending.consentId || frozen.scopeHash !== pending.bundle.scopeHash) return { ok: false, message: 'Saved run identity or consent no longer matches this recovery request. No requests were sent.' }
       }
       const latestScope = resumeRunId ? null : currentConsentSource(pending.jobId)
@@ -1415,26 +1447,13 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       profile.skills.forEach((item, i) => { const safe = approvedPayload.profile.skills[i]; if (safe) scrubbed.set(item.id, JSON.stringify(safe)) })
       profile.certificates.forEach((item, i) => { const safe = approvedPayload.profile.certificates[i]; if (safe) scrubbed.set(item.id, JSON.stringify(safe)) })
       const safeItems = frozen?.safeItems ?? items.map(item => ({ ...item, text: scrubbed.get(item.id) ?? '' })).filter(item => item.text)
-      const minimizedStringPairs: Array<[string, string]> = []
-      const collectStringPairs = (original: unknown, minimized: unknown) => {
-        if (typeof original === 'string' && typeof minimized === 'string' && original !== minimized) minimizedStringPairs.push([original, minimized])
-        else if (Array.isArray(original) && Array.isArray(minimized)) original.forEach((value, index) => collectStringPairs(value, minimized[index]))
-        else if (original && minimized && typeof original === 'object' && typeof minimized === 'object') for (const [key, value] of Object.entries(original)) collectStringPairs(value, (minimized as Record<string, unknown>)[key])
-      }
-      for (const item of items) {
-        const safe = scrubbed.get(item.id)
-        if (safe) try { collectStringPairs(item.snapshot, JSON.parse(safe)) } catch { /* non-JSON source text is already minimized independently */ }
-      }
-      const exactLocalDates = [...draftInputs.lockedFields.experience, ...draftInputs.lockedFields.education].flatMap(item => [item.startDate, item.endDate]).filter((value): value is string => Boolean(value))
-      for (const date of exactLocalDates) minimizedStringPairs.push([date, ''])
-      const minimizeRestoredText = (text: string) => minimizedStringPairs.reduce((value, [restored, minimized]) => value.replaceAll(restored, minimized), text)
       const failedDraftIdentity = frozen?.identity ?? { id: randomUUID(), jobId: pending.jobId, revision: ((db.prepare('SELECT MAX(revision) AS revision FROM draft_revisions WHERE job_id = ?').get(pending.jobId) as { revision: number | null }).revision ?? 0) + 1, targetPostingUpdatedAt: pending.source.job.revision, createdAt: new Date().toISOString(), lockedFields: draftInputs.lockedFields }
       if (!resumeRunId) {
-        const data = { runId: pending.runId, jobId: pending.jobId, consentId: pending.consentId, scopeHash: pending.bundle.scopeHash, analysis, job, profile, experience, draftInputs, safeItems, identity: failedDraftIdentity, pageTarget, source: pending.source, faithfulnessCheck: pending.faithfulnessCheck }
+        const data = { runId: pending.runId, jobId: pending.jobId, consentId: pending.consentId, scopeHash: pending.bundle.scopeHash, analysis, job, profile, experience, draftInputs, safeItems, identity: failedDraftIdentity, pageTarget, source: pending.source }
         const sourceModel = pending.source.model
         const snapshot = generationRecoverySnapshotSchema.parse(scriptedTransport
-          ? { ...data, version: 3 }
-          : { ...data, version: 3, model: piModelSelectionSchema.parse({ providerId: sourceModel.providerId, modelId: sourceModel.name, thinkingLevel: sourceModel.thinkingLevel }) })
+          ? { ...data, version: 4 }
+          : { ...data, version: 4, model: piModelSelectionSchema.parse({ providerId: sourceModel.providerId, modelId: sourceModel.name, thinkingLevel: sourceModel.thinkingLevel }) })
         db.prepare('INSERT OR REPLACE INTO generation_recovery (run_id,job_id,consent_id,scope_hash,status,snapshot,updated_at) VALUES (?,?,?,?,?,?,?)').run(pending.runId,pending.jobId,pending.consentId,pending.bundle.scopeHash,'running',JSON.stringify(snapshot),new Date().toISOString())
       }
       else db.prepare("UPDATE generation_recovery SET status='running',updated_at=? WHERE run_id=?").run(new Date().toISOString(), resumeRunId)
@@ -1509,52 +1528,16 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
           }
         }
         const coverage = { ...qualificationCoverage(analysis.runId ?? analysis.jobId, analysis.displayAnalysis ?? analysis.analysis, result.draft, draftInputs.items.map(item => ({ evidenceId: item.id, revision: item.revision, snapshot: item.snapshot }))), repairAttempts: coverageRepairAttempts }
-        const finalSemanticPairs: Array<{ section: keyof DraftRevision['content']; itemPath: string; rewritten: string; evidence: string[] }> = (['education', 'experience', 'projects', 'skills', 'certificates'] as const).flatMap(section => result.draft.content[section].map((item, index) => {
-          const citations = item.citations
-          const citedSources = citations.flatMap(citation => {
-            const frozen = result.draft.evidence.find(evidence => evidence.evidenceId === citation.evidenceId && evidence.revision === citation.revision)
-            const source = safeItems.find(candidate => candidate.id === citation.evidenceId && candidate.revision === citation.revision)
-            return frozen && source ? [source.text] : []
-          })
-          return { section, itemPath: `${section}[${index}]`, rewritten: minimizeRestoredText('text' in item ? item.text : item.name), evidence: citedSources }
-        }))
-        const findingOrigin = { originDraftId: result.draft.id, originDraftRevision: result.draft.revision, originEvidenceRevisionHash: report.evidenceRevisionHash, historical: false }
-        const semanticFindings: ReturnType<typeof factualCheckReportSchema.parse>['findings'] = []
-        let semanticAttempts = 0
-        if (pending.faithfulnessCheck) {
-          const semanticSchema = z.object({ results: z.array(z.object({ itemPath: z.string().min(1), supported: z.boolean(), explanation: z.string().trim().min(1).max(500) }).strict()).max(200) }).strict()
-          if (pending.bundle.containsRestoredIdentifier(finalSemanticPairs)) {
-            semanticFindings.push({ code: 'semantic-unsupported', itemPath: 'faithfulness', ...findingOrigin, message: 'The optional comparison was withheld because a rewritten pair contained a restored identifier or contact detail.', correction: 'Remove the sensitive text and start a fresh authorized review. No semantic request was sent.' })
-          } else {
-            const attemptsBeforeReview = (db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id = ?').get(pending.runId) as { count: number }).count
-            try {
-              authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
-              const review = await dispatcher.generate({ runId: pending.runId, jobId: pending.jobId, model: transportModel(pending.source.model.name), consentId: pending.consentId!, responseSchema: semanticSchema, prompt: `Compare all rewritten/source pairs in this single structured batch. Report each exact itemPath once. Mark unsupported only when the rewrite adds or strengthens factual meaning beyond its cited source. This is a second opinion, not proof. Do not rewrite content or request more data.\n${JSON.stringify({ pairs: finalSemanticPairs })}` })
-              authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
-              semanticAttempts += review.attempts
-              const parsed = semanticSchema.parse(JSON.parse(review.text))
-              const expectedPaths = finalSemanticPairs.map(pair => pair.itemPath)
-              if (parsed.results.length !== expectedPaths.length || new Set(parsed.results.map(item => item.itemPath)).size !== expectedPaths.length || expectedPaths.some(path => !parsed.results.some(item => item.itemPath === path))) throw new Error('Faithfulness review returned incomplete or duplicate item paths.')
-              for (const finding of parsed.results.filter(item => !item.supported)) {
-                const pair = finalSemanticPairs.find(item => item.itemPath === finding.itemPath)!
-                const index = Number(/\[(\d+)\]/.exec(finding.itemPath)?.[1] ?? -1)
-                const contentCitation = result.draft.content[pair.section][index]?.citations[0]
-                semanticFindings.push({ code: 'semantic-unsupported', itemPath: finding.itemPath, evidenceId: contentCitation?.evidenceId, ...findingOrigin, message: `Second-opinion faithfulness check: ${finding.explanation}`, correction: 'Correct or remove this wording, then obtain a new authorized faithfulness check. This result is not proof and does not replace human review.' })
-              }
-            } catch (error) {
-              if (error instanceof AnalysisError && error.code === 'CANCELLED') throw error
-              const attemptsAfterReview = (db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id = ?').get(pending.runId) as { count: number }).count
-              semanticAttempts = attemptsAfterReview - attemptsBeforeReview
-              const reason = error instanceof AnalysisError ? error.code.toLowerCase() : 'malformed structured output'
-              semanticFindings.push({ code: 'semantic-unsupported', itemPath: 'faithfulness', ...findingOrigin, message: `Optional faithfulness review did not complete (${reason}); generated wording was retained but remains blocked.`, correction: 'Review the cited sources and authorize a fresh run if you want another model check. This check is a second opinion, not proof.' })
-            }
-          }
-        }
         if ((['experience', 'projects'] as const).some(section => result.draft.content[section].some(item => item.descriptionFormat === 'paragraph' && !isGeneratedDescriptionParagraph(item.text)))) throw new Error('Final generated paragraphs failed their format contract.')
         saveGenerationStep('check-document', 'Checking draft structure and document readiness.', ['parse-posting', 'score-evidence', 'select-content', 'tailor-paragraphs', 'verify-claims'])
         report = checkDraftFacts(result.draft)
-        const findings = [...report.findings, ...semanticFindings]
-        const totalAttempts = result.attempts + repairAttempts + coverageRepairAttempts + semanticAttempts
+        const previousRow = db.prepare('SELECT data FROM draft_revisions WHERE job_id = ? ORDER BY revision DESC LIMIT 1').get(pending.jobId) as { data: string } | undefined
+        if (previousRow) {
+          // A fresh valid generation resolves earlier schema failures, not an unchanged semantic warning.
+          report = preserveKnownFindings(report, draftRevisionSchema.parse(JSON.parse(previousRow.data)), result.draft, false)
+        }
+        const findings = report.findings
+        const totalAttempts = result.attempts + repairAttempts + coverageRepairAttempts
         const mergedReport = factualCheckReportSchema.parse({ ...report, passed: findings.length === 0, findings })
         if (dispatcher.isCancelled(pending.runId) || activeAnalysisByJob.get(pending.jobId) !== pending.runId) {
           const stillCurrent = activeAnalysisByJob.get(pending.jobId) === pending.runId
@@ -1564,7 +1547,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
           return { ok: false, message: 'Generation was cancelled. Its late response was discarded; no draft changes were saved.' }
         }
         const scopeNotice = workingTextScopeNotice(pending.jobId)
-        const checkedDraft = draftRevisionSchema.parse({ ...result.draft, status: findings.length ? 'blocked' : 'unverified', checkReport: mergedReport, coverage, attempts: totalAttempts, progress: `${findings.length ? `Draft saved for its ${result.draft.pageTarget}-page target; blocked by ${findings.length} unresolved finding(s). The optional semantic review is a second opinion, not proof.` : `${result.draft.progress} Automated checks passed; semantic comparison is a second opinion, not proof. Human review remains required.`}${scopeNotice}` })
+        const checkedDraft = draftRevisionSchema.parse({ ...result.draft, status: findings.length ? 'blocked' : 'unverified', checkReport: mergedReport, coverage, attempts: totalAttempts, progress: `${findings.length ? `Draft saved for its ${result.draft.pageTarget}-page target; blocked by ${findings.length} unresolved finding(s).` : `${result.draft.progress} Automated checks passed. Human review remains required.`}${scopeNotice}` })
         result.draft = checkedDraft
         const tx = db.transaction(() => { db.prepare('INSERT INTO draft_revisions (id,job_id,revision,data) VALUES (?,?,?,?)').run(result.draft.id, result.draft.jobId, result.draft.revision, JSON.stringify(result.draft)); db.prepare('UPDATE provider_attempt_outcomes SET checkpointed_at=? WHERE run_id=? AND checkpointed_at IS NULL').run(new Date().toISOString(), pending.runId); db.prepare("UPDATE generation_recovery SET status='complete',updated_at=? WHERE run_id=?").run(new Date().toISOString(), pending.runId) })
         tx()
@@ -1590,7 +1573,13 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
         if (validationFailure) {
           const failed = draftRevisionSchema.parse({ ...failedDraftIdentity, pageTarget, status: 'blocked', approved: false, content: { education: [], experience: [], projects: [], skills: [], certificates: [] }, evidence: safeItems.map(item => ({ evidenceId: item.id, revision: item.revision, snapshot: item.snapshot })), progress: 'Generation failed validation; model output was discarded. This empty draft is editable only by adding locally authored content and remains blocked pending factual checks.', attempts: observedAttempts })
           const code = error instanceof CitationValidationError ? error.finding : 'schema'
-          const report = factualCheckReportSchema.parse({ ...checkDraftFacts(failed), passed: false, findings: [{ code, itemPath: 'generation', message: code === 'foreign-citation' ? 'The response referenced evidence outside the selected authorized sources. Model output was discarded.' : 'The tailored response did not match the required structured schema. Model output was discarded.', correction: 'Author or correct draft wording using the saved evidence revisions, then run factual checks.' }] })
+          let report = factualCheckReportSchema.parse({ ...checkDraftFacts(failed), passed: false, findings: [{ code, itemPath: 'generation', message: code === 'foreign-citation' ? 'The response referenced evidence outside the selected authorized sources. Model output was discarded.' : 'The tailored response did not match the required structured schema. Model output was discarded.', correction: 'Author or correct draft wording using the saved evidence revisions, then run factual checks.' }] })
+          const previousRow = db.prepare('SELECT data FROM draft_revisions WHERE job_id = ? ORDER BY revision DESC LIMIT 1').get(pending.jobId) as { data: string } | undefined
+          if (previousRow) {
+            const previous = draftRevisionSchema.parse(JSON.parse(previousRow.data))
+            // Discarded model output cannot prove that any earlier flagged wording was corrected.
+            report = preserveKnownFindings(report, previous, previous, false)
+          }
           const blocked = draftRevisionSchema.parse({ ...failed, checkReport: report })
           db.transaction(() => {
             db.prepare('INSERT INTO draft_revisions (id,job_id,revision,data) VALUES (?,?,?,?)').run(blocked.id, blocked.jobId, blocked.revision, JSON.stringify(blocked))
@@ -1631,7 +1620,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       const revision = ((db.prepare('SELECT MAX(revision) AS revision FROM draft_revisions WHERE job_id = ?').get(jobId) as { revision: number | null }).revision ?? prior.revision) + 1
       const sources = prepareDraftInputs(readProfile(), readExperience()).items.map(item => ({ evidenceId: item.id, revision: item.revision, snapshot: item.snapshot }))
       const coverage = qualificationCoverage(analysis.runId ?? jobId, analysis.displayAnalysis ?? analysis.analysis, prior, sources)
-      const renewed = draftRevisionSchema.parse({ ...prior, id: randomUUID(), revision, targetPostingUpdatedAt: job.updatedAt, approved: false, approval: undefined, checkReport: undefined, coverage: { ...coverage, stale: false }, status: 'unverified', progress: 'Existing CV wording retained. Review it against the current posting, then run current checks and page measurement before approval.', createdAt: new Date().toISOString() })
+      const renewed = inheritRevisionFindings(prior, draftRevisionSchema.parse({ ...prior, id: randomUUID(), revision, targetPostingUpdatedAt: job.updatedAt, approved: false, approval: undefined, checkReport: undefined, coverage: { ...coverage, stale: false }, status: 'unverified', progress: 'Existing CV wording retained. Review it against the current posting, then run current checks and page measurement before approval.', createdAt: new Date().toISOString() }), readOrigin)
       const tx = db.transaction(() => {
         const latestJob = db.prepare('SELECT updated_at FROM jobs WHERE id = ?').get(jobId) as { updated_at: string } | undefined
         const latest = db.prepare('SELECT data FROM draft_revisions WHERE job_id = ? ORDER BY revision DESC LIMIT 1').get(jobId) as { data: string } | undefined
@@ -1753,12 +1742,12 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       })
       const now = new Date().toISOString()
       const candidate = draftRevisionSchema.parse({ ...current, id: randomUUID(), revision: current.revision + 1, createdAt: now, content: nextContent, approved: false, approval: undefined, status: 'unverified', checkReport: undefined, progress: `Replacement accepted and factual checks rerun. Actual Electron PDF page measurement is pending at the application boundary; approval remains blocked.${proposalScopeSuffix}` })
-      const checked = checkDraftFacts(candidate)
+      const checked = preserveKnownFindings(checkDraftFacts(candidate), current, candidate)
       const next = draftRevisionSchema.parse({ ...candidate, status: checked.passed ? 'unverified' : 'blocked', checkReport: checked, progress: checked.passed ? candidate.progress : `Accepted replacement is blocked by ${checked.findings.length} factual finding(s). Actual Electron PDF page measurement is pending at the application boundary.${proposalScopeSuffix}` })
       const tx = db.transaction(() => {
         db.prepare('INSERT INTO draft_revisions (id,job_id,revision,data) VALUES (?,?,?,?)').run(next.id, next.jobId, next.revision, JSON.stringify(next))
         db.prepare('DELETE FROM document_fit_reports WHERE job_id = ?').run(jobId)
-        const accepted = regenerationProposalSchema.parse({ ...proposal, status: 'accepted', progress: `Proposal accepted as a new draft revision. Factual checks passed; application-boundary PDF measurement and renewed approval are required.${proposalScopeSuffix}` })
+        const accepted = regenerationProposalSchema.parse({ ...proposal, status: 'accepted', progress: `Proposal accepted as a new draft revision. ${checked.passed ? 'Factual checks passed' : 'Factual findings remain blocked'}; application-boundary PDF measurement and renewed approval are required.${proposalScopeSuffix}` })
         db.prepare('UPDATE regeneration_proposals SET status = ?, data = ? WHERE id = ?').run(accepted.status, JSON.stringify(accepted), proposal.id)
       })
       tx()
@@ -1773,7 +1762,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       if (index < 0) return { ok: false, message: 'This skill suggestion is no longer available.' }
       suggestions[index] = { ...suggestions[index], status: parsed.data.decision, ...(parsed.data.decision === 'pending' ? { decidedAt: undefined } : { decidedAt: new Date().toISOString() }) }
       const next = draftRevisionSchema.parse({ ...prior, id: randomUUID(), revision: prior.revision + 1, suggestedSkills: suggestions, approved: false, approval: undefined, checkReport: undefined, status: 'blocked', progress: 'Skill review decision saved. Run checks and review the current draft again.' })
-      let report = preserveKnownFindings(checkDraftFacts(next), prior)
+      let report = preserveKnownFindings(checkDraftFacts(next), prior, next)
       const stale = currentSourceStatus(next)
       if (stale.length) report = factualCheckReportSchema.parse({ ...report, passed: false, findings: [...report.findings, ...stale.map(evidenceId => ({ code: 'stale-source' as const, itemPath: 'sources', evidenceId, message: 'A cited profile source changed or was deleted after this draft was created.', correction: 'Review current evidence and create a draft from its current revision.' }))] })
       const checked = draftRevisionSchema.parse({ ...next, status: report.passed && !suggestions.some(item => item.status === 'pending') ? 'unverified' : 'blocked', checkReport: report })
@@ -1790,7 +1779,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       if (!prior || prior.id !== parsed.data.draftId || !prior.tailoring) return { ok: false, message: 'This draft changed or has no tailored narrative to edit.' }
       const tailoring = parsed.data.field === 'headline' ? { ...prior.tailoring, headline: parsed.data.text } : { ...prior.tailoring, summary: { ...prior.tailoring.summary, text: parsed.data.text } }
       const next = draftRevisionSchema.parse({ ...prior, id: randomUUID(), revision: prior.revision + 1, tailoring, approved: false, approval: undefined, checkReport: undefined, status: 'unverified', progress: 'Tailored narrative corrected locally. Recheck and remeasure before approval.' })
-      let report = preserveKnownFindings(checkDraftFacts(next), prior)
+      let report = preserveKnownFindings(checkDraftFacts(next), prior, next)
       const stale = currentSourceStatus(next)
       if (stale.length) report = factualCheckReportSchema.parse({ ...report, passed: false, findings: [...report.findings, ...stale.map(evidenceId => ({ code: 'stale-source' as const, itemPath: 'sources', evidenceId, message: 'A cited profile source changed or was deleted after this draft was created.', correction: 'Review current evidence and create a draft from its current revision.' }))] })
       const checked = draftRevisionSchema.parse({ ...next, status: report.passed ? 'unverified' : 'blocked', checkReport: report })
@@ -1917,7 +1906,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       // A manual skill declaration resolves its suggestion, but retain posting provenance so it cannot authorize past role usage.
       const suggestedSkills = prior.suggestedSkills?.map(skill => declaredSkill && skill.name.normalize('NFKC').trim().toLocaleLowerCase() === declaredSkill ? { ...skill, status: 'confirmed' as const, decidedAt: new Date().toISOString() } : skill)
       const next = draftRevisionSchema.parse({ ...prior, ...(suggestedSkills ? { suggestedSkills } : {}), id: randomUUID(), revision: prior.revision + 1, createdAt: new Date().toISOString(), content, evidence, lockedFields: locks, approved: false, approval: undefined, checkReport: undefined, coverage: undefined, status: 'blocked', progress: 'Manual CV record saved locally. Recheck the draft and review factual findings before approval.' })
-      let report = preserveKnownFindings(checkDraftFacts(next), prior)
+      let report = preserveKnownFindings(checkDraftFacts(next), prior, next)
       const stale = currentSourceStatus(next).filter(id => !(sourcePlan && id === sourcePlan.record.id))
       if (stale.length) report = factualCheckReportSchema.parse({ ...report, passed: false, findings: [...report.findings, ...stale.map(evidenceId => ({ code: 'stale-source' as const, itemPath: 'sources', evidenceId, message: 'A cited profile source changed or was deleted after this draft was created.', correction: 'Review current evidence and create a draft from its current revision.' }))] })
       const saved = draftRevisionSchema.parse({ ...next, status: report.passed ? 'unverified' : 'blocked', checkReport: report })
@@ -1949,7 +1938,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       const linkedEvidence = parsed.data.editIntent === 'new-fact' ? [...prior.evidence, ...citations.filter(citation => !prior.evidence.some(source => source.evidenceId === citation.evidenceId && source.revision === citation.revision)).map(citation => { const source = liveItems.find(item => item.id === citation.evidenceId)!; return { evidenceId: source.id, revision: source.revision, snapshot: source.snapshot } })] : prior.evidence
       const updatedContent = { ...prior.content, [parsed.data.section]: section.map((item, index) => index !== parsed.data.index ? item : 'text' in item ? { ...item, text: parsed.data.text, citations } : { ...item, name: parsed.data.text, citations }) }
       const next = draftRevisionSchema.parse({ ...prior, id: randomUUID(), revision: prior.revision + 1, status: 'unverified', approved: false, approval: undefined, checkReport: undefined, evidence: linkedEvidence, content: updatedContent, progress: 'Draft wording corrected locally. Recheck before human review.' })
-      let report = preserveKnownFindings(checkDraftFacts(next), prior)
+      let report = preserveKnownFindings(checkDraftFacts(next), prior, next)
       const stale = currentSourceStatus(next)
       if (stale.length) report = factualCheckReportSchema.parse({ ...report, passed: false, findings: [...report.findings, ...stale.map(evidenceId => ({ code: 'stale-source' as const, itemPath: 'sources', evidenceId, message: 'A cited profile source changed or was deleted after this draft was created.', correction: 'Review and save current evidence, then create a draft using its current revision.' }))] })
       const checked = draftRevisionSchema.parse({ ...next, status: report.passed ? 'unverified' : 'blocked', checkReport: report, progress: report.findings.some(finding => finding.itemPath === 'generation') ? 'Correction saved, but the known generation failure remains unresolved. Only a new authorized generation that passes validation can resolve it.' : report.passed ? 'Correction passes deterministic checks; semantic truth still requires human review. Wording-only versus new-fact is user-declared and cannot be inferred perfectly.' : `Blocked by ${report.findings.length} factual finding(s). Use the correction guidance below.` })
@@ -1972,7 +1961,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       items.push(draftItem as never)
       const evidence = selected ? prior.evidence : [...prior.evidence, { evidenceId: current.id, revision: current.revision, snapshot: current.snapshot }]
       const next = draftRevisionSchema.parse({ ...prior, id: randomUUID(), revision: prior.revision + 1, status: 'blocked', approved: false, approval: undefined, checkReport: undefined, evidence, content: { ...prior.content, [parsed.data.section]: items }, progress: 'Locally authored, cited content was saved. Automated checks do not replace human review.' })
-      const report = preserveKnownFindings(checkDraftFacts(next), prior)
+      const report = preserveKnownFindings(checkDraftFacts(next), prior, next)
       const saved = draftRevisionSchema.parse({ ...next, status: report.passed ? 'unverified' : 'blocked', checkReport: report, progress: report.findings.some(finding => finding.itemPath === 'generation') ? 'Locally authored wording was added, but the known generation failure remains unresolved. Only a new authorized generation that passes validation can resolve it.' : next.progress })
       db.prepare('INSERT INTO draft_revisions (id,job_id,revision,data) VALUES (?,?,?,?)').run(saved.id, saved.jobId, saved.revision, JSON.stringify(saved))
       db.prepare('DELETE FROM document_fit_reports WHERE job_id = ?').run(saved.jobId)
@@ -2080,7 +2069,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       const content = { ...current.content }
       for (const section of ['education', 'experience', 'projects', 'skills', 'certificates'] as const) content[section] = content[section].filter((_, index) => !selected.has(`${section}-${index}`)) as never
       const suggestedSkills = current.suggestedSkills?.map(skill => selected.has(`suggested-skills-${skill.id}`) ? { ...skill, status: 'removed' as const, decidedAt: new Date().toISOString() } : skill)
-      const revised = draftRevisionSchema.parse({ ...current, ...(suggestedSkills ? { suggestedSkills } : {}), id: randomUUID(), revision: current.revision + 1, content, approved: false, approval: undefined, checkReport: undefined, status: 'unverified', progress: 'Accepted page-fit cuts. Factual checks were invalidated; recheck and remeasure before review.', createdAt: new Date().toISOString() })
+      const revised = inheritRevisionFindings(current, draftRevisionSchema.parse({ ...current, ...(suggestedSkills ? { suggestedSkills } : {}), id: randomUUID(), revision: current.revision + 1, content, approved: false, approval: undefined, checkReport: undefined, status: 'unverified', progress: 'Accepted page-fit cuts. Factual checks were invalidated; recheck and remeasure before review.', createdAt: new Date().toISOString() }), readOrigin)
       db.prepare('INSERT INTO draft_revisions (id,job_id,revision,data) VALUES (?,?,?,?)').run(revised.id, revised.jobId, revised.revision, JSON.stringify(revised))
       db.prepare('DELETE FROM document_fit_reports WHERE job_id = ?').run(jobId)
       return { ok: true, message: 'Accepted cuts saved as a new draft revision; remeasure and review it.', draft: revised }
@@ -2126,9 +2115,9 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       const attempts = (db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id=?').get(row.run_id) as { count: number }).count
       const uncertainAttempts = (db.prepare('SELECT COUNT(*) AS count FROM provider_attempt_outcomes WHERE run_id=? AND checkpointed_at IS NULL').get(row.run_id) as { count: number }).count
       let compatible = false
-      try { const snapshot = generationRecoverySnapshotSchema.parse(JSON.parse(row.snapshot)); compatible = snapshot.version === 3 && (Boolean(scriptedTransport) || isDeepStrictEqual(snapshot.model, readPiSelection())) } catch { compatible = false }
+      try { const snapshot = generationRecoverySnapshotSchema.parse(JSON.parse(row.snapshot)); compatible = snapshot.version === 4 && (Boolean(scriptedTransport) || isDeepStrictEqual(snapshot.model, readPiSelection())) } catch { compatible = false }
       const progress = !compatible
-        ? `This saved run predates paragraph generation or its model/format is incompatible. ${uncertainAttempts ? 'A prior model request may have completed and may have incurred a charge. ' : ''}No request will be replayed. Review outgoing data and authorize fresh analysis and generation.`
+        ? `This saved run uses an earlier generation contract or its model/format is incompatible. ${uncertainAttempts ? 'A prior model request may have completed and may have incurred a charge. ' : ''}No request will be replayed. Review outgoing data and authorize fresh analysis and generation.`
         : uncertainAttempts
           ? 'A model request may have completed before the app closed. No new request will be sent until you choose to retry. Retrying could incur another charge.'
           : 'Generation stopped before completion. Your saved draft and source facts remain available. No request will be sent until you choose to resume.'
@@ -2141,7 +2130,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       let frozen: ReturnType<typeof generationRecoverySnapshotSchema.parse>
       try { frozen = generationRecoverySnapshotSchema.parse(JSON.parse(row.snapshot)) }
       catch { return { ok: false, message: 'The saved recovery snapshot is corrupt or incompatible. No requests were sent; cancel this run and inspect the source data.' } }
-      if (frozen.version !== 3 || (!scriptedTransport && !isDeepStrictEqual(frozen.model, readPiSelection()))) return { ok: false, message: 'This saved run predates paragraph generation or its Pi model changed. Review outgoing data, authorize a fresh run, analyze the posting, then generate again. No previous request was replayed.' }
+      if (frozen.version !== 4 || (!scriptedTransport && !isDeepStrictEqual(frozen.model, readPiSelection()))) return { ok: false, message: 'This saved run uses an earlier generation contract or its Pi model changed. Review outgoing data, authorize a fresh run, analyze the posting, then generate again. No previous request was replayed.' }
       if (frozen.runId !== runId || frozen.jobId !== row.job_id || frozen.consentId !== row.consent_id || frozen.scopeHash !== row.scope_hash) return { ok: false, message: 'Saved run identity or consent does not match its recovery record. No requests were sent.' }
       const uncertain = (db.prepare('SELECT COUNT(*) AS count FROM provider_attempt_outcomes WHERE run_id=? AND checkpointed_at IS NULL').get(runId) as { count: number }).count
       if (uncertain && choice !== 'retry-uncertain') return { ok: false, message: 'A provider request may have completed before interruption. Choose explicitly to retry that uncertain step, or cancel this saved run.' }
@@ -2152,7 +2141,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       if (bundle.scopeHash !== row.scope_hash) return { ok: false, message: 'The frozen outgoing bundle failed its integrity check. This run cannot resume.' }
       try { outboundEngine.restoreConsent({ id: consent.id, runId: consent.run_id, scopeHash: consent.scope_hash, createdAt: consent.created_at, revoked: false }) } catch { return { ok: false, message: 'Saved consent could not be restored safely.' } }
       const token = randomUUID()
-      pendingOutbound.set(token, { jobId: row.job_id, source: frozen.source, bundle, runId, faithfulnessCheck: frozen.faithfulnessCheck, consentId: consent.id })
+      pendingOutbound.set(token, { jobId: row.job_id, source: frozen.source, bundle, runId, consentId: consent.id })
       dispatcher.authorize(runId, consent.id)
       recoveredRunIds.add(runId)
       const resume = api.generateDraft as (token: string, pageTarget: 1 | 2, runId: string) => Promise<{ ok: boolean; message: string }>

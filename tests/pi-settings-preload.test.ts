@@ -17,11 +17,11 @@ test('preload sends a typed Pi selection only through the Settings IPC channel',
   bridge.invoke.mockResolvedValue({
     appearance: 'light',
     pi: selection,
-    faithfulnessCheck: false,
   })
   expect(bridge.api).toBeDefined()
   await expect(bridge.api!.setPiModel(input)).resolves.toMatchObject({ pi: selection })
   expect(bridge.invoke).toHaveBeenCalledWith('settings:pi-model', input)
+  expect('setFaithfulnessCheck' in bridge.api!).toBe(false)
 })
 
 test('preload exposes only named search key status, save, remove, reveal and copy methods', async () => {

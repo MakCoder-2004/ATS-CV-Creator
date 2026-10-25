@@ -52,11 +52,11 @@ test('Settings exposes Pi model preferences without in-app credentials or analys
     const tavilyKey = page.getByLabel('Tavily API key', { exact: true })
     await expect(tavilyKey).toBeVisible()
     await expect(page.getByRole('heading', { name: 'Analysis request budgets' })).toHaveCount(0)
-    await expect(page.getByText(/never asks for or stores Pi credentials/i)).toBeVisible()
-
-    const faithfulness = page.getByRole('switch', { name: 'Enable optional faithfulness review for newly authorized runs' })
-    await expect(faithfulness).toBeVisible()
-    await expect(page.getByText(/A model check is not proof/i)).toBeVisible()
+    await expect(modelCard.getByText('Sign in through Pi outside CV Tailor. There is no Pi key here.')).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Provider sign-in' })).toHaveCount(0)
+    await expect(page.getByRole('heading', { name: 'Optional faithfulness review' })).toHaveCount(0)
+    await expect(page.getByRole('switch')).toHaveCount(0)
+    await expect(page.locator('.settings-grid > .settings-block')).toHaveCount(2)
 
     await tavilyKey.fill('tvly-settings-focus-test-key')
     await page.getByRole('button', { name: 'Save Tavily key' }).click()
@@ -126,7 +126,18 @@ test('Settings exposes Pi model preferences without in-app credentials or analys
         await page.getByRole('button', { name: `Use ${mode} mode` }).filter({ visible: true }).click()
         await expect(page.locator('html')).toHaveAttribute('data-appearance', mode)
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
-        if (width === 1440 && mode === 'light') await page.screenshot({ path: 'docs/validation/artifacts/tavily-key-card-0.6-followup/settings-masked-light-1440.png', fullPage: true })
+        const modelBounds = await modelCard.boundingBox()
+        const keyBounds = await card.boundingBox()
+        expect(modelBounds).not.toBeNull()
+        expect(keyBounds).not.toBeNull()
+        if (width === 1440) {
+          expect(Math.abs(modelBounds!.y - keyBounds!.y)).toBeLessThan(2)
+          expect(keyBounds!.x).toBeGreaterThan(modelBounds!.x + modelBounds!.width - 2)
+        } else {
+          expect(keyBounds!.y).toBeGreaterThan(modelBounds!.y + modelBounds!.height - 2)
+        }
+        if (width === 1440 && mode === 'light') await page.screenshot({ path: 'docs/validation/artifacts/settings-followup/settings-masked-light-1440.png', fullPage: true })
+        if (width === 375 && mode === 'dark') await page.screenshot({ path: 'docs/validation/artifacts/settings-followup/settings-masked-dark-375.png', fullPage: true })
       }
     }
     await removeKey.click()

@@ -10,7 +10,7 @@ const modelReference = process.env.CV_TAILOR_PI_LIVE_MODEL
 const effort = process.env.CV_TAILOR_PI_LIVE_EFFORT
 test.skip(!executablePath || !modelReference || !effort, 'Explicit installed Pi executable, model, and effort are required for real-provider checks')
 
-test('installed Pi optional faithfulness and consented regeneration leave the cited draft unchanged until accepted', async () => {
+test('installed Pi consented generation and regeneration leave the cited draft unchanged until accepted', async () => {
   test.setTimeout(900_000)
   const userData = mkdtempSync(join(tmpdir(), 'cv-tailor-pi-regeneration-'))
   let app: Awaited<ReturnType<typeof electron.launch>> | undefined
@@ -27,9 +27,6 @@ test('installed Pi optional faithfulness and consented regeneration leave the ci
     await page.getByRole('option', { name: effort!, exact: true }).click()
     await model.getByRole('button', { name: 'Save Pi model' }).click()
     await expect(page.getByText('Pi model preference saved.')).toBeVisible()
-    const faithfulness = preferences.getByRole('switch', { name: 'Enable optional faithfulness review for newly authorized runs' })
-    await faithfulness.check()
-    await expect(page.getByText('Faithfulness preference saved locally.', { exact: false })).toBeVisible()
     await page.getByRole('button', { name: 'Tailor CV', exact: true }).click()
 
     const setup = await page.evaluate(async () => {
@@ -64,7 +61,6 @@ test('installed Pi optional faithfulness and consented regeneration leave the ci
     expect(analysis?.status, analysis?.progress).toBe('complete')
     expect(draft?.content.experience.length).toBeGreaterThan(0)
     expect(draft?.attempts).toBeGreaterThanOrEqual(3)
-    expect(draft?.checkReport?.findings.some(finding => finding.message.includes('Optional faithfulness review did not complete'))).toBe(false)
     const revision = draft!.revision
 
     await openReviewDetails(page, 'notes')
@@ -93,7 +89,7 @@ test('installed Pi optional faithfulness and consented regeneration leave the ci
     await expect(page.locator('[data-ui-ready="true"]')).toBeVisible({ timeout: 20_000 })
     expect((await page.evaluate(id => window.workbench.getDraft(id), setup.jobId))?.revision).toBe(revision)
     expect(await page.evaluate(id => window.workbench.getRegenerationProposal(id), setup.jobId)).toBeNull()
-    expect((await page.evaluate(() => window.workbench.getSettings())).faithfulnessCheck).toBe(true)
+    expect((await page.evaluate(() => window.workbench.getSettings())).pi).toBeTruthy()
   } finally {
     await app?.close().catch(() => {})
     await rm(userData, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 })

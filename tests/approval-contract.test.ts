@@ -44,7 +44,7 @@ async function fixture(regenerationTransport?: (signal: AbortSignal) => Promise<
   await workspace.api.startAnalysis(preview.token)
   const generated = await workspace.api.generateDraft(preview.token)
   if (!generated.ok || !generated.draft) throw new Error('Could not generate draft fixture')
-  return { directory, workspace, jobId: job.value.id, draft: generated.draft, skillId: skill.value.skills[0].id, prompts, legacyRole: legacyRole?.ok ? legacyRole.value.experience[0] : undefined, legacyProject: legacyProject?.ok ? legacyProject.value.projects[0] : undefined }
+  return { directory, workspace, transport, jobId: job.value.id, draft: generated.draft, skillId: skill.value.skills[0].id, prompts, legacyRole: legacyRole?.ok ? legacyRole.value.experience[0] : undefined, legacyProject: legacyProject?.ok ? legacyProject.value.projects[0] : undefined }
 }
 
 async function approvedLegacyWorkspaceWithoutTargetBinding() {
@@ -164,6 +164,182 @@ test('regeneration proposals require fresh consent, compare without mutation, re
   const accepted = await workspace.api.resolveRegenerationProposal(jobId, third.proposal!.id, 'accept')
   expect(accepted).toMatchObject({ ok: false, message: expect.stringMatching(/PDF page measurement is pending/i), draft: { revision: restored.revision + 1, approved: false, approval: undefined, content: { skills: [{ name: 'TypeScript' }, { name: 'Rust' }] }, checkReport: { passed: true } } })
   expect(await workspace.api.getDocumentFitReport(jobId)).toBeNull()
+})
+
+async function seedHistoricalFinding(state: Awaited<ReturnType<typeof fixture>>, itemPath: string) {
+  state.workspace.close(); opened.splice(opened.indexOf(state.workspace), 1)
+  const database = new Database(join(state.directory, 'workbench.sqlite'))
+  registerWorkspaceBackupRowSizer(database)
+  const row = database.prepare('SELECT data FROM draft_revisions WHERE job_id = ? ORDER BY revision DESC LIMIT 1').get(state.jobId) as { data: string }
+  const draft = JSON.parse(row.data)
+  const finding = { code: 'semantic-unsupported', itemPath, message: 'Historical semantic review flagged this wording.', correction: 'Correct the cited wording or remove this item.', originDraftId: draft.id, originDraftRevision: draft.revision, originEvidenceRevisionHash: draft.checkReport.evidenceRevisionHash, historical: false }
+  database.prepare('UPDATE draft_revisions SET data = ? WHERE id = ?').run(JSON.stringify({ ...draft, status: 'blocked', checkReport: { ...draft.checkReport, passed: false, findings: [...draft.checkReport.findings, finding] } }), draft.id)
+  database.close()
+  const workspace = createWorkbench(state.directory, undefined, state.transport); opened.push(workspace)
+  return { ...state, workspace, flagged: draft, finding }
+}
+
+test('historical item finding survives unrelated page cuts, index shifts and approval checks', async () => {
+  const base = await fixture(undefined, true)
+  const { workspace, jobId, legacyRole, legacyProject } = base
+  if (!legacyRole || !legacyProject) throw new Error('Missing cited sources')
+  await workspace.api.addDraftItem({ jobId, section: 'experience', text: 'Engineer — Example Employer | Built systems.', citation: { evidenceId: legacyRole.id, revision: 1 } })
+  await workspace.api.addDraftItem({ jobId, section: 'experience', text: 'Engineer — Example Employer | Reduced failures.', citation: { evidenceId: legacyRole.factualItems[0].id, revision: 1 } })
+  await workspace.api.addDraftItem({ jobId, section: 'projects', text: 'Compiler — Improved builds.', citation: { evidenceId: legacyProject.id, revision: 1 } })
+  const extra = await workspace.api.saveSkill({ name: 'Rust', category: 'Programming' })
+  if (!extra.ok) throw new Error('Missing additional skill')
+  await workspace.api.addDraftItem({ jobId, section: 'skills', text: 'Rust', citation: { evidenceId: extra.value.skills.find(item => item.name === 'Rust')!.id, revision: 1 } })
+  const state = await seedHistoricalFinding(base, 'skills[1]')
+  const fit = await measure(state.workspace, jobId, true)
+  await state.workspace.api.saveDocumentFitReport(jobId, { ...fit, proposedCuts: [{ entryId: 'projects-0', label: 'Compiler', section: 'Projects' }] })
+  expect(await state.workspace.api.acceptDocumentCuts(jobId, fit.documentHash, ['projects-0'])).toMatchObject({ ok: true })
+  expect(await state.workspace.api.checkDraft(jobId)).toMatchObject({ passed: false, findings: expect.arrayContaining([expect.objectContaining({ code: 'semantic-unsupported', itemPath: 'skills[1]', originDraftId: state.flagged.id, historical: true })]) })
+  expect(await state.workspace.api.approveDraft(jobId)).toMatchObject({ ok: false })
+  const second = await measure(state.workspace, jobId, true)
+  expect(await state.workspace.api.acceptDocumentCuts(jobId, second.documentHash, ['skills-0'])).toMatchObject({ ok: true })
+  expect(await state.workspace.api.checkDraft(jobId)).toMatchObject({ passed: false, findings: expect.arrayContaining([expect.objectContaining({ code: 'semantic-unsupported', itemPath: 'skills[0]' })]) })
+  await measure(state.workspace, jobId)
+  expect(await state.workspace.api.approveDraft(jobId)).toMatchObject({ ok: false })
+  const current = await state.workspace.api.getDraft(jobId)
+  const removed = await state.workspace.api.mutateDraftRecord({ jobId, draftId: current!.id, sourceRevision: current!.revision, section: 'skills', operation: 'remove', scope: 'cv-only', index: 0 })
+  expect(removed).toMatchObject({ ok: true })
+  expect(await state.workspace.api.checkDraft(jobId)).toMatchObject({ passed: true })
+  await measure(state.workspace, jobId)
+  expect(await state.workspace.api.approveDraft(jobId)).toMatchObject({ ok: true })
+  const original = new Database(join(state.directory, 'workbench.sqlite'), { readonly: true })
+  const preserved = JSON.parse((original.prepare('SELECT data FROM draft_revisions WHERE id = ?').get(state.flagged.id) as { data: string }).data)
+  expect(preserved.content).toEqual(state.flagged.content)
+  expect(preserved.checkReport.findings).toContainEqual(state.finding)
+  original.close()
+})
+
+test('historical semantic finding survives unrelated regeneration and unchanged posting renewal', async () => {
+  const base = await fixture(undefined, true)
+  if (!base.legacyRole) throw new Error('Missing source')
+  await base.workspace.api.addDraftItem({ jobId: base.jobId, section: 'experience', text: 'Engineer — Example Employer | Built systems.', citation: { evidenceId: base.legacyRole.id, revision: 1 } })
+  const state = await seedHistoricalFinding(base, 'experience[0]')
+  const consent = await state.workspace.api.prepareOutboundConsent(state.jobId)
+  if (!consent.ok) throw new Error('No consent')
+  await state.workspace.api.acceptOutboundConsent(consent.token, true, true)
+  const proposal = await state.workspace.api.regenerateDraft(consent.token, { kind: 'paragraph', section: 'skills', index: 0 })
+  expect(proposal).toMatchObject({ ok: true })
+  const accepted = await state.workspace.api.resolveRegenerationProposal(state.jobId, proposal.proposal!.id, 'accept')
+  expect(accepted.draft?.checkReport).toMatchObject({ passed: false, findings: expect.arrayContaining([expect.objectContaining({ code: 'semantic-unsupported', itemPath: 'experience[0]' })]) })
+  const job = await state.workspace.api.openJob(state.jobId)
+  if (!job) throw new Error('Missing posting')
+  await state.workspace.api.saveJob({ id: state.jobId, title: job.title, company: job.company, description: `${job.description} Additional requirement.` })
+  const renewalConsent = await state.workspace.api.prepareOutboundConsent(state.jobId)
+  if (!renewalConsent.ok) throw new Error('No renewal consent')
+  await state.workspace.api.acceptOutboundConsent(renewalConsent.token, true, true)
+  await state.workspace.api.startAnalysis(renewalConsent.token)
+  const renewed = await state.workspace.api.renewDraftReview(state.jobId)
+  expect(renewed.draft?.checkReport).toMatchObject({ passed: false, findings: expect.arrayContaining([expect.objectContaining({ code: 'semantic-unsupported', itemPath: 'experience[0]' })]) })
+  expect(await state.workspace.api.checkDraft(state.jobId)).toMatchObject({ passed: false })
+  await measure(state.workspace, state.jobId)
+  expect(await state.workspace.api.approveDraft(state.jobId)).toMatchObject({ ok: false })
+})
+
+test('historical finding clears only for removed flagged item, not an unrelated edit', async () => {
+  const base = await fixture(undefined, true)
+  if (!base.legacyRole) throw new Error('Missing role')
+  await base.workspace.api.addDraftItem({ jobId: base.jobId, section: 'experience', text: 'Engineer — Example Employer | Built systems.', citation: { evidenceId: base.legacyRole.id, revision: 1 } })
+  const state = await seedHistoricalFinding(base, 'experience[0]')
+  await state.workspace.api.correctDraft({ jobId: state.jobId, section: 'skills', index: 0, text: 'TypeScript' })
+  expect(await state.workspace.api.checkDraft(state.jobId)).toMatchObject({ passed: false, findings: expect.arrayContaining([expect.objectContaining({ code: 'semantic-unsupported' })]) })
+  const current = await state.workspace.api.getDraft(state.jobId)
+  const removed = await state.workspace.api.mutateDraftRecord({ jobId: state.jobId, draftId: current!.id, sourceRevision: current!.revision, section: 'experience', operation: 'remove', scope: 'cv-only', index: 0 })
+  expect(removed).toMatchObject({ ok: true })
+  expect(await state.workspace.api.checkDraft(state.jobId)).toMatchObject({ passed: true })
+})
+
+test('an explicit cited correction of the flagged wording resolves only that finding', async () => {
+  const base = await fixture(undefined, true)
+  if (!base.legacyRole) throw new Error('Missing cited source')
+  await base.workspace.api.addDraftItem({ jobId: base.jobId, section: 'experience', text: 'Engineer — Example Employer | Built systems.', citation: { evidenceId: base.legacyRole.id, revision: 1 } })
+  const state = await seedHistoricalFinding(base, 'experience[0]')
+  expect(await state.workspace.api.correctDraft({ jobId: state.jobId, section: 'experience', index: 0, text: 'Unsupported claim', editIntent: 'new-fact' })).toBeNull()
+  const corrected = await state.workspace.api.correctDraft({ jobId: state.jobId, section: 'experience', index: 0, text: 'Engineer — Example Employer | Reduced failures.', editIntent: 'wording-only' })
+  expect(corrected?.content.experience[0].citations).toEqual(state.flagged.content.experience[0].citations)
+  expect(corrected?.checkReport?.findings).not.toEqual(expect.arrayContaining([expect.objectContaining({ code: 'semantic-unsupported' })]))
+  expect(await state.workspace.api.checkDraft(state.jobId)).toMatchObject({ passed: true })
+  await measure(state.workspace, state.jobId)
+  expect(await state.workspace.api.approveDraft(state.jobId)).toMatchObject({ ok: true })
+})
+
+test('ambiguous duplicate wording and global legacy findings remain blocked on unrelated changes', async () => {
+  const base = await fixture(undefined, true)
+  if (!base.legacyRole) throw new Error('Missing role')
+  for (let index = 0; index < 2; index++) await base.workspace.api.addDraftItem({ jobId: base.jobId, section: 'experience', text: 'Engineer — Example Employer | Built systems.', citation: { evidenceId: base.legacyRole.id, revision: 1 } })
+  const state = await seedHistoricalFinding(base, 'experience[1]')
+  await state.workspace.api.correctDraft({ jobId: state.jobId, section: 'experience', index: 1, text: 'Engineer — Example Employer | Reduced failures.' })
+  expect(await state.workspace.api.checkDraft(state.jobId)).toMatchObject({ passed: false, findings: expect.arrayContaining([expect.objectContaining({ code: 'semantic-unsupported' })]) })
+  const other = await fixture()
+  const global = await seedHistoricalFinding(other, 'faithfulness')
+  await global.workspace.api.correctDraft({ jobId: global.jobId, section: 'skills', index: 0, text: 'TypeScript' })
+  expect(await global.workspace.api.checkDraft(global.jobId)).toMatchObject({ passed: false, findings: expect.arrayContaining([expect.objectContaining({ code: 'semantic-unsupported', itemPath: 'faithfulness' })]) })
+  await measure(global.workspace, global.jobId)
+  expect(await global.workspace.api.approveDraft(global.jobId)).toMatchObject({ ok: false })
+})
+
+test('fresh authorized generation cannot silently waive an unchanged historical semantic claim', async () => {
+  const base = await fixture(undefined, true)
+  const state = await seedHistoricalFinding(base, 'experience[0]')
+  const consent = await state.workspace.api.prepareOutboundConsent(state.jobId)
+  if (!consent.ok) throw new Error('Missing generation consent')
+  await state.workspace.api.acceptOutboundConsent(consent.token, true, true)
+  expect(await state.workspace.api.startAnalysis(consent.token)).toMatchObject({ status: 'complete' })
+  const generated = await state.workspace.api.generateDraft(consent.token)
+  expect(generated).toMatchObject({ ok: true })
+  expect(generated.draft?.content.experience[0]).toEqual(state.flagged.content.experience[0])
+  expect(generated.draft?.checkReport).toMatchObject({ passed: false, findings: expect.arrayContaining([expect.objectContaining({ code: 'semantic-unsupported', originDraftId: state.flagged.id, historical: true })]) })
+  expect(await state.workspace.api.checkDraft(state.jobId)).toMatchObject({ passed: false })
+  await measure(state.workspace, state.jobId)
+  expect(await state.workspace.api.approveDraft(state.jobId)).toMatchObject({ ok: false })
+})
+
+test('ambiguous duplicates cannot be waived by shifting a finding onto unrelated wording', async () => {
+  const base = await fixture()
+  const extra = await base.workspace.api.saveSkill({ name: 'Rust', category: 'Programming' })
+  if (!extra.ok) throw new Error('Missing unrelated cited source')
+  await base.workspace.api.addDraftItem({ jobId: base.jobId, section: 'skills', text: 'TypeScript', citation: { evidenceId: base.skillId, revision: 1 } })
+  const state = await seedHistoricalFinding(base, 'skills[1]')
+  const remove = async (index: number) => {
+    const current = (await state.workspace.api.getDraft(state.jobId))!
+    return state.workspace.api.mutateDraftRecord({ jobId: state.jobId, draftId: current.id, sourceRevision: current.revision, section: 'skills', operation: 'remove', scope: 'cv-only', index })
+  }
+  expect(await remove(0)).toMatchObject({ ok: true })
+  expect(await state.workspace.api.checkDraft(state.jobId)).toMatchObject({ passed: false })
+  const rust = extra.value.skills.find(item => item.name === 'Rust')!
+  await state.workspace.api.addDraftItem({ jobId: state.jobId, section: 'skills', text: 'Rust', citation: { evidenceId: rust.id, revision: 1 } })
+  expect(await remove(1)).toMatchObject({ ok: true })
+  expect(await state.workspace.api.checkDraft(state.jobId)).toMatchObject({ passed: false, findings: expect.arrayContaining([expect.objectContaining({ code: 'semantic-unsupported' })]) })
+  expect(await remove(0)).toMatchObject({ ok: true })
+  expect(await state.workspace.api.checkDraft(state.jobId)).toMatchObject({ passed: true })
+})
+
+test('restored validation-failure revision cannot erase earlier findings on later success', async () => {
+  const base = await fixture(undefined, true)
+  const state = await seedHistoricalFinding(base, 'experience[0]')
+  state.workspace.close(); opened.splice(opened.indexOf(state.workspace), 1)
+  const database = new Database(join(state.directory, 'workbench.sqlite'))
+  registerWorkspaceBackupRowSizer(database)
+  const old = JSON.parse((database.prepare('SELECT data FROM draft_revisions WHERE id = ?').get(state.flagged.id) as { data: string }).data)
+  const failed = { ...old, id: randomUUID(), revision: old.revision + 1, content: { education: [], experience: [], projects: [], skills: [], certificates: [] }, status: 'blocked', approved: false, checkReport: { ...old.checkReport, draftId: '', draftRevision: old.revision + 1, passed: false, findings: [...old.checkReport.findings.map((item: object) => ({ ...item, historical: true })), { code: 'schema', itemPath: 'generation', message: 'Output discarded.', correction: 'Generate again.' }] } }
+  failed.checkReport.draftId = failed.id
+  database.prepare('INSERT INTO draft_revisions (id,job_id,revision,data) VALUES (?,?,?,?)').run(failed.id, state.jobId, failed.revision, JSON.stringify(failed))
+  database.close()
+  const workspace = createWorkbench(state.directory, undefined, state.transport); opened.push(workspace)
+  expect(await workspace.api.checkDraft(state.jobId)).toMatchObject({ passed: false, findings: expect.arrayContaining([expect.objectContaining({ code: 'semantic-unsupported' }), expect.objectContaining({ itemPath: 'generation' })]) })
+  await workspace.api.addDraftItem({ jobId: state.jobId, section: 'skills', text: 'TypeScript', citation: { evidenceId: state.skillId, revision: 1 } })
+  expect(await workspace.api.checkDraft(state.jobId)).toMatchObject({ passed: false, findings: expect.arrayContaining([expect.objectContaining({ code: 'semantic-unsupported' }), expect.objectContaining({ itemPath: 'generation' })]) })
+  const preview = await workspace.api.prepareOutboundConsent(state.jobId)
+  if (!preview.ok) throw new Error('Missing consent')
+  await workspace.api.acceptOutboundConsent(preview.token, true, true)
+  await workspace.api.startAnalysis(preview.token)
+  const recovered = await workspace.api.generateDraft(preview.token)
+  expect(recovered.draft?.content.experience[0]).toEqual(state.flagged.content.experience[0])
+  expect(recovered.draft?.checkReport).toMatchObject({ passed: false, findings: expect.arrayContaining([expect.objectContaining({ code: 'semantic-unsupported', originDraftId: state.flagged.id })]) })
+  expect(recovered.draft?.checkReport?.findings.some(finding => finding.itemPath === 'generation')).toBe(false)
 })
 
 test('regeneration reuses cached analysis without automatically retrying provider failures', async () => {
