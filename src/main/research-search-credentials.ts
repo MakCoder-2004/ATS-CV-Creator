@@ -1,0 +1,97 @@
+import { randomBytes } from 'node:crypto'
+import { promises as fs } from 'node:fs'
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+
+/** Electron's safeStorage is supplied by the main process, never imported into Node tests. */
+export type DeviceEncryption = {
+  isEncryptionAvailable(): boolean
+  encryptString(value: string): Buffer
+  decryptString(value: Buffer): string
+}
+export type SearchCredentialStatus = { configured: boolean; storageAvailable: boolean; message: string }
+
+const FILE = 'tavily-key.dpapi'
+const MESSAGE = 'Search is available only after a key is stored on this device.'
+const UNAVAILABLE = 'Device encryption is unavailable. No search key was saved.'
+const FAILED = 'Search key storage failed. The existing key was not replaced.'
+
+/** workspaceDirectory and userDataDirectory must be distinct absolute locations. */
+export function createResearchSearchCredentials(options: {
+  userDataDirectory: string
+  workspaceDirectory: string
+  encryption: DeviceEncryption
+}) {
+  const { userDataDirectory, workspaceDirectory, encryption } = options
+  if (!isAbsolute(userDataDirectory) || !isAbsolute(workspaceDirectory)) throw new Error('A separate absolute private storage path is required.')
+  const file = join(resolve(userDataDirectory), 'private-auth', FILE)
+  const workspace = resolve(workspaceDirectory)
+  const inside = (target: string, parent: string) => {
+    const diff = relative(parent, target)
+    return diff === '' || (!diff.startsWith(`..${sep}`) && diff !== '..' && !isAbsolute(diff))
+  }
+  if (inside(file, workspace)) throw new Error('Search credentials must be stored outside the workspace.')
+  const checkLocation = async () => {
+    const privateDir = dirname(file)
+    await fs.mkdir(resolve(userDataDirectory), { recursive: true, mode: 0o700 })
+    const realWorkspace = await fs.realpath(workspace).catch(() => workspace)
+    const realUserData = await fs.realpath(resolve(userDataDirectory))
+    if (inside(realUserData, realWorkspace)) throw new Error('Search credentials must be stored outside the workspace.')
+    await fs.mkdir(privateDir, { recursive: true, mode: 0o700 })
+    const realPrivate = await fs.realpath(privateDir)
+    if (inside(realPrivate, realWorkspace)) throw new Error('Search credentials must be stored outside the workspace.')
+    const stat = await fs.lstat(file).catch(error => {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+      throw error
+    })
+    if (stat && (!stat.isFile() || stat.isSymbolicLink())) throw new Error('Invalid private key file.')
+  }
+  const available = () => { try { return encryption.isEncryptionAvailable() } catch { return false } }
+  return {
+    async status(): Promise<SearchCredentialStatus> {
+      if (!available()) return { configured: false, storageAvailable: false, message: UNAVAILABLE }
+      try {
+        await checkLocation()
+        const stat = await fs.stat(file).catch(error => {
+          if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+          throw error
+        })
+        return { configured: Boolean(stat), storageAvailable: true, message: MESSAGE }
+      } catch { return { configured: false, storageAvailable: false, message: FAILED } }
+    },
+    async save(key: string): Promise<SearchCredentialStatus> {
+      if (!available()) throw new Error(UNAVAILABLE)
+      if (typeof key !== 'string' || !/^[\x21-\x7e]{12,512}$/.test(key) || /[\s\r\n]/.test(key)) throw new Error('Enter a valid search key.')
+      let temp: string | undefined
+      try {
+        await checkLocation()
+        const encrypted = encryption.encryptString(key)
+        if (!Buffer.isBuffer(encrypted) || encrypted.length < 1 || encrypted.length > 8192) throw new Error('Invalid encrypted bytes.')
+        temp = join(dirname(file), `.tavily-${randomBytes(16).toString('hex')}.tmp`)
+        const handle = await fs.open(temp, 'wx', 0o600)
+        try { await handle.writeFile(encrypted); await handle.sync() } finally { await handle.close() }
+        await fs.rename(temp, file)
+        temp = undefined
+        return { configured: true, storageAvailable: true, message: MESSAGE }
+      } catch { throw new Error(FAILED) }
+      finally { if (temp) await fs.unlink(temp).catch(() => {}) }
+    },
+    async remove(): Promise<SearchCredentialStatus> {
+      try { await checkLocation(); await fs.unlink(file).catch(error => { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }) }
+      catch { throw new Error('The local search key could not be removed.') }
+      return { configured: false, storageAvailable: available(), message: 'The local search key was removed. This does not revoke the provider key.' }
+    },
+    async withKey<T>(use: (key: string) => Promise<T>): Promise<T> {
+      if (!available()) throw new Error(UNAVAILABLE)
+      let key: string
+      try {
+        await checkLocation()
+        const ciphertext = await fs.readFile(file)
+        if (!ciphertext.length || ciphertext.length > 8192) throw new Error('Invalid ciphertext.')
+        key = encryption.decryptString(ciphertext)
+        if (!/^[\x21-\x7e]{12,512}$/.test(key)) throw new Error('Invalid key.')
+      } catch { throw new Error('The local search key could not be used. Check device encryption or reconnect the key.') }
+      return use(key)
+    }
+  }
+}
+export type ResearchSearchCredentials = ReturnType<typeof createResearchSearchCredentials>
