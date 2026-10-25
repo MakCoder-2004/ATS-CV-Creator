@@ -1898,7 +1898,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       const row = db.prepare("SELECT run_id,status,snapshot FROM generation_recovery WHERE job_id=? AND status IN ('running','paused') ORDER BY updated_at DESC LIMIT 1").get(jobId) as { run_id: string; status: 'running' | 'paused'; snapshot: string } | undefined
       if (!row && !scriptedTransport) {
         const legacy = db.prepare("SELECT run_id,updated_at FROM generation_recovery WHERE job_id=? AND status='cancelled' AND json_extract(snapshot,'$.version')=1 ORDER BY updated_at DESC LIMIT 1").get(jobId) as { run_id: string; updated_at: string } | undefined
-        const newer = legacy && db.prepare("SELECT 1 FROM generation_recovery WHERE job_id=? AND json_extract(snapshot,'$.version')=2 AND updated_at>=?").get(jobId, legacy.updated_at)
+        const newer = legacy && db.prepare("SELECT 1 FROM generation_recovery WHERE job_id=? AND json_extract(snapshot,'$.version')>=2 AND updated_at>=?").get(jobId, legacy.updated_at)
         if (legacy && !newer) {
           const attempts = (db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id=?').get(legacy.run_id) as { count: number }).count
           return generationRecoverySchema.parse({ jobId, runId: legacy.run_id, status: 'interrupted', attempts, uncertainAttempts: 0, progress: 'An earlier generation cannot resume with Pi. Your saved draft and history remain available. Review outgoing data, authorize a new run, analyze the posting, then generate again.', canResume: false })

@@ -210,6 +210,29 @@ test.each([1, 2])('pre-paragraph recovery v%s remains readable but cannot dispat
   expect(await reopened.api.cancelGenerationRecovery(recovery!.runId)).toMatchObject({ ok: true })
 }, 20000)
 
+test('a completed paragraph-generation run supersedes cancelled version-1 recovery', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'cv-tailor-v1-supersession-')); dirs.push(directory)
+  const scripted = createWorkbench(directory, undefined, recoveryTransport()); opened.push(scripted)
+  const { jobId, token } = await seed(scripted)
+  expect((await scripted.api.generateDraft(token)).ok).toBe(true)
+  scripted.close(); opened.pop()
+
+  const sqlite = new Database(join(directory, 'workbench.sqlite'))
+  registerWorkspaceBackupRowSizer(sqlite)
+  const completed = sqlite.prepare('SELECT run_id,consent_id,scope_hash,snapshot,updated_at FROM generation_recovery WHERE job_id=?').get(jobId) as { run_id: string; consent_id: string; scope_hash: string; snapshot: string; updated_at: string }
+  const oldRunId = '00000000-0000-4000-8000-000000000001'
+  const oldSnapshot = JSON.parse(completed.snapshot)
+  oldSnapshot.runId = oldRunId
+  oldSnapshot.version = 1
+  oldSnapshot.budgets = { minimumSpacingMs: 0, rateLimitAttempts: 100, rateLimitWindowMs: 86400000, configuredDailyLimit: 10000, runLimit: 12, runTimeLimitMs: 300000 }
+  sqlite.prepare('INSERT INTO generation_recovery (run_id,job_id,consent_id,scope_hash,status,snapshot,updated_at) VALUES (?,?,?,?,?,?,?)').run(oldRunId, jobId, completed.consent_id, completed.scope_hash, 'cancelled', JSON.stringify(oldSnapshot), '2020-01-01T00:00:00.000Z')
+  sqlite.prepare("UPDATE generation_recovery SET updated_at='2021-01-01T00:00:00.000Z' WHERE run_id=?").run(completed.run_id)
+  sqlite.close()
+
+  const reopened = createWorkbench(directory); opened.push(reopened)
+  expect(await reopened.api.getGenerationRecovery(jobId)).toBeNull()
+}, 20000)
+
 test('an uncertain dispatched request requires an explicit duplicate-risk choice before replay', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'cv-tailor-uncertain-recovery-')); dirs.push(directory)
   const initialTransport = recoveryTransport(async () => { throw Object.assign(new Error('response was interrupted'), { code: 'ECONNRESET' }) })
