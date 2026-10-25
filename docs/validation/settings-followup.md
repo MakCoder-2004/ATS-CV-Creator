@@ -1,6 +1,6 @@
 # Settings controls integration — development follow-up
 
-Issue [#90](https://github.com/MakCoder-2004/ATS-CV-Creator/issues/90). This report covers the combined faithfulness retirement and Tavily key controls in the development worktree, not an installed build or real provider/account acceptance. The user's running unpacked 0.6 app and workspace were not touched. No installer or packaged executable was launched.
+Issue [#90](https://github.com/MakCoder-2004/ATS-CV-Creator/issues/90). This report records the development checkpoint for combined faithfulness retirement and Tavily key controls; its statements about unmerged code and the then-running 0.6 app are historical. [The later installed 0.6.1 report](settings-installed-0.6.1.md) records actual installation, SQLite reopen, Settings layout and remaining key/real-provider gates. No installer or packaged executable was launched **at the time of this development report**.
 
 ## Integrated behavior
 
@@ -27,4 +27,4 @@ Screenshots taken **only while the key is masked**: [light desktop 1440px](artif
 
 ## Open gates
 
-An independent review of the combined head, central merge to main, user-approved installed-app validation (including native SQLite reopen), real Pi/Tavily account behavior and a manual real OS clipboard check remain open. Do not infer those results from synthetic development evidence or launch/replace the existing unpacked app without permission.
+At this development checkpoint, independent review, central merge and installed validation remained open. Review and merge later completed; the user approved a separate unpacked 0.6.1 preview, then a per-user installer. Actual installed SQLite reopen and read-only Settings layout evidence are recorded in [the installed report](settings-installed-0.6.1.md). Installed encrypted-key/OS-clipboard controls, legacy semantic finding behavior and real Pi/Tavily account checks remain unverified; do not infer them from this synthetic development evidence.
