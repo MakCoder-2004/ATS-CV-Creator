@@ -281,6 +281,22 @@ test('ambiguous duplicate wording and global legacy findings remain blocked on u
   expect(await global.workspace.api.approveDraft(global.jobId)).toMatchObject({ ok: false })
 })
 
+test('fresh authorized generation cannot silently waive an unchanged historical semantic claim', async () => {
+  const base = await fixture(undefined, true)
+  const state = await seedHistoricalFinding(base, 'experience[0]')
+  const consent = await state.workspace.api.prepareOutboundConsent(state.jobId)
+  if (!consent.ok) throw new Error('Missing generation consent')
+  await state.workspace.api.acceptOutboundConsent(consent.token, true, true)
+  expect(await state.workspace.api.startAnalysis(consent.token)).toMatchObject({ status: 'complete' })
+  const generated = await state.workspace.api.generateDraft(consent.token)
+  expect(generated).toMatchObject({ ok: true })
+  expect(generated.draft?.content.experience[0]).toEqual(state.flagged.content.experience[0])
+  expect(generated.draft?.checkReport).toMatchObject({ passed: false, findings: expect.arrayContaining([expect.objectContaining({ code: 'semantic-unsupported', originDraftId: state.flagged.id, historical: true })]) })
+  expect(await state.workspace.api.checkDraft(state.jobId)).toMatchObject({ passed: false })
+  await measure(state.workspace, state.jobId)
+  expect(await state.workspace.api.approveDraft(state.jobId)).toMatchObject({ ok: false })
+})
+
 test('regeneration reuses cached analysis without automatically retrying provider failures', async () => {
   let retryCalls = 0
   const retryState = await fixture(async () => { retryCalls++; throw Object.assign(new Error('temporary provider failure'), { status: 503 }) })

@@ -113,10 +113,10 @@ function reconcileNestedItems(items: NestedInput[], previous: NestedRecord[], ow
 /** One workspace per userData directory. Opening a workspace applies forward-only migrations. */
 const escapeCoverageTerm = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
-function preserveKnownFindings(checked: ReturnType<typeof checkDraftFacts>, prior: DraftRevision, next: DraftRevision = prior) {
+function preserveKnownFindings(checked: ReturnType<typeof checkDraftFacts>, prior: DraftRevision, next: DraftRevision = prior, includeGenerationFailures = true) {
   const isLegacyNarrativeFinding = (finding: { itemPath: string }) => finding.itemPath.startsWith('tailoring.') || finding.itemPath === 'summary[0]'
   const known = prior.checkReport?.findings.flatMap(finding => {
-    if (isLegacyNarrativeFinding(finding) || (finding.itemPath !== 'generation' && finding.code !== 'semantic-unsupported')) return []
+    if (isLegacyNarrativeFinding(finding) || (finding.itemPath !== 'generation' && finding.code !== 'semantic-unsupported') || (!includeGenerationFailures && finding.code !== 'semantic-unsupported')) return []
     if (finding.code !== 'semantic-unsupported') return [finding]
     const originDraftId = finding.originDraftId ?? prior.checkReport?.draftId ?? prior.id
     const originDraftRevision = finding.originDraftRevision ?? prior.checkReport?.draftRevision ?? prior.revision
@@ -1518,6 +1518,11 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
         if ((['experience', 'projects'] as const).some(section => result.draft.content[section].some(item => item.descriptionFormat === 'paragraph' && !isGeneratedDescriptionParagraph(item.text)))) throw new Error('Final generated paragraphs failed their format contract.')
         saveGenerationStep('check-document', 'Checking draft structure and document readiness.', ['parse-posting', 'score-evidence', 'select-content', 'tailor-paragraphs', 'verify-claims'])
         report = checkDraftFacts(result.draft)
+        const previousRow = db.prepare('SELECT data FROM draft_revisions WHERE job_id = ? ORDER BY revision DESC LIMIT 1').get(pending.jobId) as { data: string } | undefined
+        if (previousRow) {
+          // A fresh valid generation resolves earlier schema failures, not an unchanged semantic warning.
+          report = preserveKnownFindings(report, draftRevisionSchema.parse(JSON.parse(previousRow.data)), result.draft, false)
+        }
         const findings = report.findings
         const totalAttempts = result.attempts + repairAttempts + coverageRepairAttempts
         const mergedReport = factualCheckReportSchema.parse({ ...report, passed: findings.length === 0, findings })
