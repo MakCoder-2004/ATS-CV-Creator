@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { jobResearchRunSchema, reviewedJobResearchSchema } from './job-research'
+import { jobResearchRunSchema, reviewedJobResearchSchema } from './job-research-schema'
 
 export const researchTokenSchema = z.string().uuid()
 export const researchStartSchema = z.object({ token: researchTokenSchema }).strict()

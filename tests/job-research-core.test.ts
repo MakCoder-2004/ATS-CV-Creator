@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { randomUUID } from 'node:crypto'
 import { gzipSync } from 'node:zlib'
 import { normalizeJobResearchUrl, jobResearchRunSchema, reviewedJobResearchSchema, promoteJobResearch, verifyReviewedJobResearch } from '../src/shared/job-research'
+import { normalizeJobResearchUrl as normalizeBrowserJobUrl } from '../src/shared/job-research-url'
+import { directPostingIdentity, samePostingSource } from '../src/shared/posting-identity'
 import { fetchDirectJobResearch } from '../src/main/job-research-fetch'
 
 const roleId = '4464025097'
@@ -22,6 +24,11 @@ const fixtures = { lookup: async () => [{ address: '8.8.8.8', family: 4 }], requ
 describe('job research identities', () => {
   it('selects exact LinkedIn and Indeed roles without keeping tracking', () => {
     expect(normalizeJobResearchUrl(`https://www.linkedin.com/jobs/search-results/?currentJobId=${roleId}&utm_source=mail`).canonicalUrl).toBe(canonical)
+    const linkedInSearch = `https://www.linkedin.com/jobs/search-results/?currentJobId=${roleId}&eBP=NOT_ELIGIBLE_FOR_CHARGING&refId=synthetic-ref&trackingId=synthetic-tracking&keywords=platform%20engineer&origin=PREFERENCES_LANDING&geoId=106155005`
+    expect(normalizeBrowserJobUrl(linkedInSearch).canonicalUrl).toBe(canonical)
+    expect(normalizeJobResearchUrl(linkedInSearch).canonicalUrl).toBe(canonical)
+    expect(normalizeJobResearchUrl(`https://www.linkedin.com/jobs/search/?currentJobId=${roleId}&keywords=platform%20engineer&origin=JOBS_HOME`).canonicalUrl).toBe(canonical)
+    expect(normalizeJobResearchUrl(`https://www.linkedin.com/jobs/view/${roleId}/?trackingId=synthetic-tracking`).canonicalUrl).toBe(canonical)
     expect(normalizeJobResearchUrl(`https://linkedin.com/jobs/view/synthetic-engineer-${roleId}?currentJobId=${roleId}`).canonicalUrl).toBe(canonical)
     expect(normalizeJobResearchUrl('https://www.indeed.com/jobs?vjk=1234567890abcdef&from=search').canonicalUrl).toBe('https://www.indeed.com/viewjob?jk=1234567890abcdef')
     expect(normalizeJobResearchUrl('https://jobs.example.org/job/one?utm_campaign=test').canonicalUrl).toBe('https://jobs.example.org/job/one')
@@ -30,11 +37,36 @@ describe('job research identities', () => {
     `https://www.linkedin.com/jobs/view/${roleId}/?currentJobId=1111122222`,
     `https://www.linkedin.com/jobs/search/?currentJobId=${roleId}&currentJobId=${roleId}`,
     'https://www.linkedin.com/jobs/search/', 'https://www.indeed.com/jobs?q=engineer',
+    `https://www.linkedin.com/jobs/search-results/?currentJobId=${roleId}&access_token=synthetic-secret`,
+    `https://www.linkedin.com/jobs/search-results/?currentJobId=${roleId}&currentJobId=${roleId}`,
+    `https://www.linkedin.com/jobs/search-results/?currentJobId=${roleId}&keywords=platform%01engineer`,
+    'https://www.linkedin.com/jobs/search-results/?keywords=platform%20engineer',
+    `https://www.linkedin.com.evil/jobs/search-results/?currentJobId=${roleId}`,
+    `https://www.linkedin.com/jobs/search-results/extra?currentJobId=${roleId}`,
+    `https://www.linkedin.com/jobs/search-results/?currentJobId=${roleId}%2fother`,
+    `https://www.linkedin.com/jobs/search-results/?currentJobId=${roleId}&unknown=something`,
     'http://jobs.example.org/job/1', 'https://user:pass@jobs.example.org/one',
     'https://127.0.0.1/job', 'https://localhost/job', 'https://jobs.example.org:8443/one',
     'https://jobs.example.org/one?api_key=secret', 'https://jobs.example.org/one#anchor',
     'https://jobs.example.org/job/one?jobId=one&jobId=two',
   ])('rejects unsafe or ambiguous %s', value => expect(() => normalizeJobResearchUrl(value)).toThrow())
+  it('preserves UTF-8 byte bounds in the browser-safe normalizer and server re-export', () => {
+    const prefix = 'https://jobs.example.org/'
+    const atLimit = prefix + 'a'.repeat(2048 - prefix.length)
+    expect(normalizeBrowserJobUrl(atLimit)).toEqual(normalizeJobResearchUrl(atLimit))
+    expect(() => normalizeBrowserJobUrl(atLimit + 'a')).toThrow(/Invalid public job URL/)
+    expect(() => normalizeBrowserJobUrl(prefix + 'é'.repeat(350))).toThrow(/safe limit/)
+    expect(normalizeBrowserJobUrl(`https://linkedin.com/jobs/view/${roleId}/?utm_source=mail`)).toEqual(selected)
+    expect(() => normalizeBrowserJobUrl(`https://linkedin.com/jobs/view/${roleId}/?currentJobId=9999999999`)).toThrow()
+  })
+  it('compares browser posting sources by validated role identity, not stale hints or a shared redirect', () => {
+    const another = 'https://www.linkedin.com/jobs/view/9999999999/'
+    const source = (submittedUrl: string, sourceIdentity?: string) => ({ submittedUrl, finalUrl: 'https://www.linkedin.com/jobs/search/', sourceIdentity })
+    expect(directPostingIdentity(`https://linkedin.com/jobs/view/${roleId}/?utm_source=mail`)).toBe(`linkedin:${canonical}`)
+    expect(samePostingSource(source(canonical, `linkedin:${another}`), source(`https://linkedin.com/jobs/view/${roleId}/?utm_source=mail`))).toBe(true)
+    expect(samePostingSource(source(canonical, `linkedin:${another}`), source(another, `linkedin:${canonical}`))).toBe(false)
+    expect(directPostingIdentity(`https://www.linkedin.com/jobs/view/${roleId}/?api_key=secret`)).toBeNull()
+  })
 })
 
 describe('immutable research and review contracts', () => {

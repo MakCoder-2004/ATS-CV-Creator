@@ -1,4 +1,4 @@
-import { normalizeJobResearchUrl } from './job-research'
+import { normalizeJobResearchUrl } from './job-research-url'
 
 const trackingParameters = new Set(['gclid', 'fbclid', 'li_fat_id', 'mc_cid', 'mc_eid'])
 

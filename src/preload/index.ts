@@ -18,7 +18,7 @@ import { profileAiConsentActionSchema, profileAiConsentPreviewSchema, profileAiR
 import { postingFetchStateSchema, postingPreviewEditSchema, postingRefreshComparisonSchema, postingReviewSchema } from '../shared/posting-import'
 import { workspaceBackupStatusSchema } from '../shared/workspace-backup'
 import { researchCancelSchema, researchReviewInputSchema, researchReviewStateSchema, researchStartSchema, researchStateSchema } from '../shared/job-research-ipc'
-import { normalizeJobResearchUrl } from '../shared/job-research'
+import { normalizeJobResearchUrl } from '../shared/job-research-url'
 
 const workspaceResult = z.object({ ok: z.boolean(), cancelled: z.boolean(), message: z.string() }).strict()
 const restoreSelection = z.discriminatedUnion('ok', [
