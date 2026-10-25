@@ -198,13 +198,17 @@ app.whenReady().then(() => {
     }
   } : undefined
   const singleRequestReleaseCheck = process.env.CV_TAILOR_SINGLE_POSTING_REQUEST === '1'
-  const scriptedResearch = !app.isPackaged && process.env.CV_TAILOR_TEST_RESEARCH === '1' ? {
+  const scriptedResearchMode = !app.isPackaged ? process.env.CV_TAILOR_TEST_RESEARCH : undefined
+  const scriptedResearch = (scriptedResearchMode === '1' || scriptedResearchMode === 'full') ? {
     lookup: async () => [{ address: '8.8.8.8', family: 4 }],
     request: async (url: URL) => {
-      if (url.href !== 'https://jobs.example.org/role/123') throw new Error('The scripted research received an unexpected URL.')
+      if (url.href !== (scriptedResearchMode === 'full' ? 'https://www.linkedin.com/jobs/view/4464025097/' : 'https://jobs.example.org/role/123')) throw new Error('The scripted research received an unexpected URL.')
+      if (scriptedResearchMode === 'full') appendFileSync(join(app.getPath('userData'), 'research-direct-requests.log'), 'request\n')
       return { status: 200, headers: { 'content-type': 'text/html' }, body: Buffer.from('<html><title>Synthetic Engineer</title></html>') }
     },
-    extract: async () => ({ outcome: 'partial' as const, title: 'Synthetic Engineer', employer: 'Example Research', description: 'Review TypeScript systems and document operational decisions. This partial synthetic role wording omits the complete requirements.', reason: 'Full role wording was not available.' })
+    extract: async () => scriptedResearchMode === 'full'
+      ? { outcome: 'full' as const, title: 'Synthetic Research Engineer', employer: 'Example Research', description: 'Build accessible TypeScript interfaces and test resilient desktop workflows. Document operational decisions, review privacy boundaries, collaborate with the engineering team, and maintain reliable services. Qualifications include TypeScript, careful written communication, and experience testing user-facing software.' }
+      : { outcome: 'partial' as const, title: 'Synthetic Engineer', employer: 'Example Research', description: 'Review TypeScript systems and document operational decisions. This partial synthetic role wording omits the complete requirements.', reason: 'Full role wording was not available.' }
   } : undefined
   const postingFetchOptions: SafePostingFetchOptions & { research?: import('./job-research-fetch').JobResearchFetchOptions } = {
     ...scriptedPostingFetch,
@@ -227,7 +231,7 @@ app.whenReady().then(() => {
         completeSimple: async (selected: { provider: string; id: string }, context: { messages: Array<{ role: string; content: string }> }, options: { signal?: AbortSignal }) => {
           const prompt = context.messages.find(message => message.role === 'user')?.content
           if (!prompt) throw new Error('The scripted Pi request has no prompt.')
-          if (!app.isPackaged && process.env.CV_TAILOR_TEST_RESEARCH === '1' && prompt.startsWith('Extract only explicitly stated role responsibilities')) {
+          if (!app.isPackaged && ['1', 'full'].includes(process.env.CV_TAILOR_TEST_RESEARCH ?? '') && prompt.startsWith('Extract only explicitly stated role responsibilities')) {
             appendFileSync(join(app.getPath('userData'), 'research-model-requests.log'), 'request\n')
             const data = JSON.parse(prompt.slice(prompt.indexOf('\n') + 1)) as { roleEvidence: Array<{ findingId: string }> }
             const text = JSON.stringify({ requirements: data.roleEvidence.map(item => ({ category: 'qualification', text: 'Review the synthetic role wording.', findingIds: [item.findingId] })) })
