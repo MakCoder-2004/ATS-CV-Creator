@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { flushSync } from 'react-dom'
 import type { JobResearchRun, ReviewedJobResearch } from '../shared/job-research-schema'
 import type { ResearchState } from '../shared/job-research-ipc'
 import { buildJobResearchQuery } from '../shared/job-research-search-query'
@@ -97,8 +98,12 @@ export function JobResearchReview({ url, postingFetchToken, onPostingHandoff, on
   }
   async function search() {
     if (!token || !run || busy || searched || run.status === 'full') return
+    // Indexed search invalidates the app-held reviewed authority immediately, even if it fails.
+    // The parent unmounts the analysis panel, whose cleanup cancels/discards its one-use token.
+    flushSync(() => onDiscardReviewedResearch?.())
     const current = ++sequence.current
-    setSearched(true); setBusy(true); setError(''); setNotice('Checking indexed sources for this exact role…'); setReviewed(undefined)
+    setSelected([]); setAcknowledged(false); setReviewed(undefined)
+    setSearched(true); setBusy(true); setError(''); setNotice('Checking indexed sources for this exact role…')
     requestAnimationFrame(() => { if (mounted.current && current === sequence.current) statusRef.current?.focus() })
     try {
       const state = await window.workbench.searchJobResearch(token)

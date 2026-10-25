@@ -25,6 +25,7 @@ test('visible public link → partial review → exact outgoing consent → sour
     await model.getByLabel('Provider/model reference').fill('scripted/cv-tailor-fixture')
     await model.getByRole('button', { name: 'Save Pi model' }).click()
     await expect(page.getByRole('status').filter({ hasText: 'Pi model preference saved.' })).toBeVisible()
+    const backupStatus = await page.evaluate(() => window.workbench.getWorkspaceBackupStatus())
     await page.getByRole('button', { name: 'Saved jobs', exact: true }).click()
     await page.getByRole('button', { name: 'Import from link' }).click()
     await page.getByLabel('Public job posting link').fill('https://jobs.example.org/role/123')
@@ -52,7 +53,16 @@ test('visible public link → partial review → exact outgoing consent → sour
     expect(count()).toBe(1)
     expect(await page.evaluate(() => window.workbench.listJobs())).toHaveLength(0)
     await expect(page.getByRole('button', { name: 'Export PDF' })).toHaveCount(0)
-    await page.getByRole('button', { name: 'Discard and close' }).click()
+
+    // Starting another search revokes the reviewed authority before any result is available.
+    await page.getByRole('button', { name: 'Search indexed details' }).click()
+    await expect(page.getByRole('region', { name: 'Analysis suggestions' })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'Inspect outgoing data' })).toHaveCount(0)
+    await expect(page.getByRole('checkbox', { name: 'Include this role finding in review' })).not.toBeChecked()
+    expect(count()).toBe(1)
+    expect(await page.evaluate(() => window.workbench.listJobs())).toHaveLength(0)
+    expect(await page.evaluate(() => window.workbench.getWorkspaceBackupStatus())).toEqual(backupStatus)
+    await expect(page.getByRole('alert')).toBeVisible()
     await expect(page.getByLabel('Exact outgoing analysis data')).toHaveCount(0)
     expect(await page.evaluate(() => window.workbench.listJobs())).toHaveLength(0)
   } finally {
