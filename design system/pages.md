@@ -41,6 +41,10 @@ The production shell is the implemented four-page navigation: **Tailor CV**, **S
 - Selected/hover/focus states are differentiated; selection is not conveyed by color alone. Long company/title/posting content wraps instead of widening the page.
 - Keep the prototype's spatial organization and interaction sequence exactly; replace prototype fixtures and transient-only state with real application data. Do not retain the live app's split list/editor as the default Saved jobs page.
 - At narrow widths, preserve row information and reorder/stack actions without horizontal scrolling.
+- Put selection controls inside Posting cells and the heading area without changing the three table columns. Place an accessible job checkbox beside each posting and a select-all control in a selection toolbar below the heading. Select all covers the jobs currently shown in the table. Keep an individual **Delete** action inside Next action beside Edit and Open posting; selecting or deleting a row never opens it.
+- Keep the selected count visible and clear IDs that disappear after a refresh or deletion. A preview must succeed before the confirmation opens. The confirmation lists each actual title, company, and draft count, with the selected totals. Give **Cancel** initial focus. State that the selected postings, drafts, and local generation history are deleted, while profile facts and exported files remain. Say that this action cannot be undone from the workspace and that older backups may still contain the records.
+- On cancel or refusal, keep the selection. For busy work, identify the affected posting and direct the person to stop the operation in Tailor CV. For stale previews, ask them to review the selection again. Disable repeated submit while deletion runs and show success only after storage commits.
+- After success, refresh the table and sidebar shortcuts. If the active posting was deleted, clear its Tailor CV work and show the choose-a-posting state. Do not select another posting or start a model run automatically.
 
 ### Approved link-intake and refresh extension (issue #28)
 

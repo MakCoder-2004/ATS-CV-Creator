@@ -2,7 +2,7 @@ import { z } from 'zod'
 import type { ContactInput, EvidenceRevision, ProfileEntryInput, ProfileMutationResult, ProfileSnapshot, SkillInput } from './profile'
 import type { ExperienceInput, ExperienceMutationResult, ExperienceSnapshot, ProjectInput } from './experience'
 import { piModelSelectionSchema, type PiModelPreferenceInput } from './pi-model'
-import type { JobInput, JobRecord, JobSaveResult, PostingRefreshChoice } from './jobs'
+import type { JobInput, JobRecord, JobSaveResult, JobDeletionPreview, JobDeletionResult, PostingRefreshChoice } from './jobs'
 import type { ProfileExchangeResult } from './profile-exchange'
 import type { OutboundConsentAction, OutboundConsentPreview } from './outbound-consent-contract'
 import type { AnalysisResult, GenerationRecovery, RecoveryChoice } from './posting-analysis'
@@ -71,6 +71,8 @@ export interface WorkbenchAPI {
   comparePostingRefresh(token: string, jobId: string, expectedUpdatedAt: string, expectedRevision: number): Promise<PostingRefreshComparison>
   acceptPostingRefresh(token: string, revision: number, jobId: string, expectedUpdatedAt: string, expectedBaseRevision: number, choices: PostingRefreshChoice): Promise<JobSaveResult>
   listJobs(): Promise<JobRecord[]>
+  previewJobDeletion(jobIds: string[]): Promise<JobDeletionPreview>
+  executeJobDeletion(token: string, jobIds: string[]): Promise<JobDeletionResult>
   openJob(id: string): Promise<JobRecord | null>
   startPostingFetch(url: string): Promise<{ token: string }>
   readPostingPreview(token: string): Promise<PostingFetchState>
