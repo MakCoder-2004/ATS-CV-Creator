@@ -11,6 +11,14 @@
 - Confirm destructive or hard-to-reverse actions; do not add confirmations to reversible low-risk actions.
 - Profile CV upload review is source-backed and grouped in a full-width list within the existing My profile structure. Keep proposal review/correction/selection distinct from explicit application; never apply implicitly. Any AI analysis is a separate optional action with its own clear, run-specific consent and outgoing-text review; upload and deterministic parsing must not silently invoke AI.
 
+### Saved jobs deletion
+
+- Row checkboxes and **Delete** controls sit inside Posting cells. Select all covers only the rows currently shown. Checkbox, select-all, and Delete actions never open a posting.
+- A selection toolbar reports the count and starts a preview. Do not open the destructive dialog until the backend returns current job names, companies, and draft counts. Show every selected job in an inspectable list. Focus **Cancel** first and restore focus to the trigger when the dialog closes. After deletion removes the trigger, focus the first remaining row checkbox or the Saved jobs title if no rows remain.
+- The confirmation states that deletion removes the selected postings, drafts, and local generation history. It says profile facts and exported files remain untouched, older backups may still contain the jobs, and the workspace offers no undo. Do not claim secure erasure or remote-provider deletion.
+- Cancel and recoverable errors retain the selection. A stale preview requires a new review; a busy job requires the person to stop its operation in Tailor CV. Disable duplicate submit. Announce errors and committed success through status or alert semantics. Never announce success before the storage transaction commits.
+- After success, refresh Saved jobs and sidebar shortcuts. If the active posting was deleted, clear its Tailor CV selection and show the choose-a-posting state without starting another model run.
+
 ### Saved jobs link intake and refresh
 
 - Pasting a link or opening the intake never starts a request. Keep **Fetch posting**, **Save job**, **Refresh**, and any model-analysis authorization as distinct decisions. Show the hostname before fetch; only report fetch/extraction/save completion after that operation succeeds.

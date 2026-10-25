@@ -1,9 +1,16 @@
 import React, { FormEvent, useEffect, useRef, useState } from 'react'
 import { FolderOpen, Plus } from 'lucide-react'
-import type { JobInput, JobRecord, PostingRefreshChoice } from '../shared/jobs'
+import type { JobDeletionPreview, JobInput, JobRecord, PostingRefreshChoice } from '../shared/jobs'
 import type { PostingPreview } from '../shared/posting-import'
 import { samePostingSource } from '../shared/posting-identity'
 import type { DraftRevision } from '../shared/draft'
+
+type ReadyDeletionPreview = JobDeletionPreview & { ok: true; token: string; jobs: NonNullable<JobDeletionPreview['jobs']> }
+type DeletionFlow =
+  | { kind: 'closed' }
+  | { kind: 'previewing'; jobIds: string[] }
+  | { kind: 'confirming'; jobIds: string[]; preview: ReadyDeletionPreview }
+  | { kind: 'submitting'; jobIds: string[]; preview: ReadyDeletionPreview }
 import './jobs.css'
 
 type DraftLabel = 'No draft' | 'Needs review' | 'Earlier target' | 'Blocked' | 'Approved'
@@ -13,7 +20,7 @@ const optionalPostingFields = [
   ['language', 'Language'], ['postedDate', 'Posted date'], ['deadline', 'Deadline'], ['applicationUrl', 'Application URL']
 ] as const
 
-export function SavedJobs({ jobs, activeJob, onSaved, onOpened, onNavigate }: { jobs: JobRecord[]; activeJob: JobRecord | null; onSaved: (job: JobRecord) => void; onOpened: (job: JobRecord) => void; onNavigate: (page: 'Tailor CV') => void }) {
+export function SavedJobs({ jobs, activeJob, onSaved, onOpened, onDeleted, onNavigate }: { jobs: JobRecord[]; activeJob: JobRecord | null; onSaved: (job: JobRecord) => void; onOpened: (job: JobRecord) => void; onDeleted: (jobIds: string[]) => Promise<void>; onNavigate: (page: 'Tailor CV') => void }) {
   const [input, setInput] = useState<JobInput>({ title: '', company: '', description: '' })
   const [editingId, setEditingId] = useState<string | undefined>()
   const [errors, setErrors] = useState<Record<string, string>>({})
@@ -23,6 +30,17 @@ export function SavedJobs({ jobs, activeJob, onSaved, onOpened, onNavigate }: { 
   const [dialogOpen, setDialogOpen] = useState(false)
   const [intakeOpen, setIntakeOpen] = useState(false)
   const [draftLabels, setDraftLabels] = useState<Record<string, DraftLabel>>({})
+  const [selectedJobIds, setSelectedJobIds] = useState<string[]>([])
+  const [deletionFlow, setDeletionFlow] = useState<DeletionFlow>({ kind: 'closed' })
+  const [deletionError, setDeletionError] = useState('')
+  const deletionSequence = useRef(0)
+  const deleteSubmitBusy = useRef(false)
+  const deletionDialogRef = useRef<HTMLDialogElement>(null)
+  const deletionCancelRef = useRef<HTMLButtonElement>(null)
+  const deletionReturnFocus = useRef<HTMLElement | null>(null)
+  const restoreDeletionFocus = useRef(false)
+  const deletionErrorRef = useRef<HTMLParagraphElement>(null)
+  const pageHeadingRef = useRef<HTMLHeadingElement>(null)
   const [captureMode, setCaptureMode] = useState<'manual' | 'link'>('manual')
   const [sourceUrl, setSourceUrl] = useState('')
   const [fetching, setFetching] = useState(false)
@@ -49,6 +67,26 @@ export function SavedJobs({ jobs, activeJob, onSaved, onOpened, onNavigate }: { 
     if (dialogOpen && !dialog.open) { dialog.showModal(); requestAnimationFrame(() => titleRef.current?.focus()) }
     else if (!dialogOpen && dialog.open) dialog.close()
   }, [dialogOpen])
+
+  useEffect(() => {
+    const dialog = deletionDialogRef.current
+    if (!dialog) return
+    const shouldOpen = deletionFlow.kind === 'confirming' || deletionFlow.kind === 'submitting'
+    if (shouldOpen && !dialog.open) { dialog.showModal(); requestAnimationFrame(() => deletionCancelRef.current?.focus()) }
+    else if (!shouldOpen && dialog.open) {
+      dialog.close()
+      if (restoreDeletionFocus.current) requestAnimationFrame(() => {
+        const target = deletionReturnFocus.current
+        if (target?.isConnected) target.focus()
+        else pageHeadingRef.current?.focus()
+        restoreDeletionFocus.current = false
+      })
+    }
+  }, [deletionFlow.kind])
+
+  useEffect(() => {
+    setSelectedJobIds(current => current.filter(id => jobs.some(job => job.id === id)))
+  }, [jobs])
 
   useEffect(() => {
     const dialog = discardDialogRef.current
@@ -81,6 +119,85 @@ export function SavedJobs({ jobs, activeJob, onSaved, onOpened, onNavigate }: { 
   }, [jobs])
 
   function previewWasEdited() { return !!preview && !!capturedPreview && JSON.stringify(preview) !== JSON.stringify(capturedPreview) }
+  function toggleSelectedJob(id: string) {
+    deletionSequence.current++
+    setDeletionError('')
+    setDeletionFlow({ kind: 'closed' })
+    setSelectedJobIds(current => current.includes(id) ? current.filter(selected => selected !== id) : [...current, id])
+  }
+  function toggleAllVisibleJobs() {
+    deletionSequence.current++
+    setDeletionError('')
+    setDeletionFlow({ kind: 'closed' })
+    setSelectedJobIds(current => current.length === jobs.length ? [] : jobs.map(job => job.id))
+  }
+  function reportDeletionError(message: string) {
+    setDeletionError(message)
+    requestAnimationFrame(() => deletionErrorRef.current?.focus())
+  }
+  function describeDeletionFailure(message: string) {
+    const busyJob = jobs.find(job => message.includes(job.id))
+    return busyJob && /stop /i.test(message)
+      ? `${busyJob.title} at ${busyJob.company} is busy. ${message.replace(busyJob.id, `${busyJob.title} at ${busyJob.company}`)} Open Tailor CV and stop that operation, then review this selection again.`
+      : message
+  }
+  async function previewDeletion(jobIds = selectedJobIds) {
+    if (!jobIds.length || deletionFlow.kind === 'previewing' || deletionFlow.kind === 'submitting') return
+    const sequence = ++deletionSequence.current
+    deletionReturnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    restoreDeletionFocus.current = false
+    setDeletionError('')
+    setDeletionFlow({ kind: 'previewing', jobIds })
+    try {
+      const preview = await window.workbench.previewJobDeletion(jobIds)
+      if (sequence !== deletionSequence.current) return
+      if (!preview.ok || !preview.token || !preview.jobs) {
+        setDeletionFlow({ kind: 'closed' }); reportDeletionError(describeDeletionFailure(preview.message)); return
+      }
+      setDeletionFlow({ kind: 'confirming', jobIds, preview: { ...preview, ok: true, token: preview.token, jobs: preview.jobs } })
+    } catch (failure) {
+      if (sequence === deletionSequence.current) { setDeletionFlow({ kind: 'closed' }); reportDeletionError(failure instanceof Error ? failure.message : 'The selection could not be checked. Retry the review.') }
+    }
+  }
+  async function executeDeletion() {
+    if (deletionFlow.kind !== 'confirming' || deleteSubmitBusy.current) return
+    deleteSubmitBusy.current = true
+    const { jobIds, preview } = deletionFlow
+    setDeletionFlow({ kind: 'submitting', jobIds, preview })
+    setDeletionError('')
+    let result: Awaited<ReturnType<typeof window.workbench.executeJobDeletion>>
+    try { result = await window.workbench.executeJobDeletion(preview.token, jobIds) }
+    catch (failure) {
+      setDeletionFlow({ kind: 'closed' })
+      restoreDeletionFocus.current = false
+      reportDeletionError(failure instanceof Error ? failure.message : 'Storage could not delete the selection. Nothing was removed. Retry after checking workspace storage.')
+      deleteSubmitBusy.current = false
+      return
+    }
+    if (!result.ok) {
+      restoreDeletionFocus.current = false
+      setDeletionFlow({ kind: 'closed' }); reportDeletionError(describeDeletionFailure(result.message))
+      deleteSubmitBusy.current = false
+      return
+    }
+    restoreDeletionFocus.current = false
+    setDeletionFlow({ kind: 'closed' })
+    setSelectedJobIds(current => current.filter(id => !jobIds.includes(id)))
+    setMessage(result.message); setMessageError(false)
+    try {
+      await onDeleted(jobIds)
+      requestAnimationFrame(() => (document.querySelector<HTMLInputElement>('.saved-job-row input[type="checkbox"]') ?? pageHeadingRef.current)?.focus())
+    } catch { reportDeletionError('The selected jobs were deleted, but the saved-job list could not refresh. Restart CV Tailor to view the current list.') }
+    finally { deleteSubmitBusy.current = false }
+  }
+  function closeDeletionDialog() {
+    restoreDeletionFocus.current = true
+    deletionSequence.current++
+    setDeletionFlow({ kind: 'closed' })
+  }
+  const deletionPending = deletionFlow.kind === 'previewing' || deletionFlow.kind === 'submitting'
+  const allVisibleSelected = jobs.length > 0 && selectedJobIds.length === jobs.length
+  const someVisibleSelected = selectedJobIds.length > 0 && selectedJobIds.length < jobs.length
   function enqueuePreviewEdit(next: import('../shared/posting-import').PostingPreview) {
     setPreview(next); setCompletenessConfirmed(false)
     const token = fetchToken
@@ -240,18 +357,34 @@ export function SavedJobs({ jobs, activeJob, onSaved, onOpened, onNavigate }: { 
 
   return <div className="saved-jobs-page">
     <header className="saved-jobs-heading">
-      <div><p className="context">Your applications</p><h1>Give every CV a clear target.</h1><p>Saved postings, drafts, and the evidence behind them.</p></div>
+      <div><p className="context">Your applications</p><h1 ref={pageHeadingRef} tabIndex={-1}>Give every CV a clear target.</h1><p>Saved postings, drafts, and the evidence behind them.</p></div>
       <button className="primary-button" type="button" onClick={newJob}><Plus size={17} aria-hidden="true" /> New job</button>
     </header>
+    {jobs.length > 0 && <section className="saved-jobs-selection" aria-label="Saved job selection">
+      <label><input type="checkbox" checked={allVisibleSelected} ref={element => { if (element) element.indeterminate = someVisibleSelected }} onChange={toggleAllVisibleJobs} aria-label="Select all saved jobs" /> Select all saved jobs</label>
+      <span aria-live="polite">{selectedJobIds.length} selected</span>
+      <button className="danger-button" type="button" disabled={!selectedJobIds.length || deletionPending} onClick={() => void previewDeletion()}>{deletionFlow.kind === 'previewing' ? 'Checking selection…' : `Delete${selectedJobIds.length ? ` ${selectedJobIds.length}` : ''}`}</button>
+    </section>}
     {jobs.length > 0 && intakeOpen && renderIntake()}
     {jobs.length ? <section className="saved-jobs-table" aria-label="Saved jobs"><table><thead><tr><th scope="col">Posting</th><th scope="col">Draft status</th><th scope="col">Next action</th></tr></thead><tbody>
       {jobs.map(job => <tr className="saved-job-row" key={job.id} aria-current={activeJob?.id === job.id ? 'true' : undefined}>
-        <td data-label="Posting"><div className="saved-job-description"><div className="saved-job-title"><strong>{job.title}</strong>{activeJob?.id === job.id && <span className="current-target">Current target</span>}</div><span>{job.company}</span><small>Updated {new Date(job.updatedAt).toLocaleDateString()}</small></div></td>
+        <td data-label="Posting"><div className="saved-job-posting-cell"><label className="saved-job-select"><input type="checkbox" checked={selectedJobIds.includes(job.id)} disabled={deletionPending} onChange={() => toggleSelectedJob(job.id)} aria-label={`Select ${job.title} at ${job.company}`} /></label><div className="saved-job-description"><div className="saved-job-title"><strong>{job.title}</strong>{activeJob?.id === job.id && <span className="current-target">Current target</span>}</div><span>{job.company}</span><small>Updated {new Date(job.updatedAt).toLocaleDateString()}</small></div></div></td>
         <td data-label="Draft status"><span className={`draft-status${draftLabels[job.id] === 'Blocked' ? ' is-blocked' : draftLabels[job.id] === 'Approved' ? ' is-approved' : ''}`}>{draftLabels[job.id] ?? 'Checking…'}</span></td>
-        <td data-label="Next action"><div className="saved-job-actions"><button className="secondary-button" type="button" aria-label={`Edit ${job.title} posting`} onClick={() => void loadForEdit(job.id)}>Edit</button><button className="text-button" type="button" onClick={() => void openForTailoring(job.id)}>Open posting</button></div></td>
+        <td data-label="Next action"><div className="saved-job-actions"><button className="secondary-button" type="button" aria-label={`Edit ${job.title} posting`} onClick={() => void loadForEdit(job.id)}>Edit</button><button className="text-button" type="button" onClick={() => void openForTailoring(job.id)}>Open posting</button><button className="text-button danger-text-button" type="button" disabled={deletionPending} onClick={() => { setSelectedJobIds([job.id]); void previewDeletion([job.id]) }}>Delete</button></div></td>
       </tr>)}
     </tbody></table></section> : <section className="saved-jobs-empty"><FolderOpen size={32} aria-hidden="true" /><div><h2>Your first job starts here</h2><p>Save a posting to set a target for your tailored CV.</p></div>{renderIntake(true)}</section>}
     {jobs.length > 0 && <p className="jobs-history-note">Job postings and their draft revisions stay on this device.</p>}
+    {deletionError && <p ref={deletionErrorRef} tabIndex={-1} className="saved-jobs-message is-error" role="alert">{deletionError} {deletionError.includes('changed') || deletionError.includes('no longer') ? <button type="button" className="text-button" disabled={deletionPending || !selectedJobIds.length} onClick={() => void previewDeletion()}>Review selection again</button> : deletionError.includes('Stop ') ? <button type="button" className="text-button" onClick={() => onNavigate('Tailor CV')}>Open Tailor CV</button> : <button type="button" className="text-button" disabled={deletionPending || !selectedJobIds.length} onClick={() => void previewDeletion()}>Try again</button>}</p>}
+    <dialog ref={deletionDialogRef} className="job-dialog deletion-dialog" aria-labelledby="job-deletion-title" aria-describedby="job-deletion-description" onCancel={event => { event.preventDefault(); if (deletionFlow.kind === 'confirming') closeDeletionDialog() }} onClose={() => { if (deletionFlow.kind === 'confirming') closeDeletionDialog() }}>
+      {deletionFlow.kind === 'confirming' || deletionFlow.kind === 'submitting' ? <>
+        <header className="job-dialog-heading"><div><p className="context">Delete saved jobs</p><h2 id="job-deletion-title">Delete {deletionFlow.jobIds.length === 1 ? 'this saved job?' : `${deletionFlow.jobIds.length} saved jobs?`}</h2></div></header>
+        <section className="job-dialog-form"><p id="job-deletion-description">This permanently removes the selected job postings, their drafts, and local generation history. Profile facts and exported files stay untouched. Older backups may still contain these jobs. This action cannot be undone from this workspace.</p>
+          <div className="deletion-preview-list" aria-label="Jobs to delete"><ul>{deletionFlow.preview.jobs.map(job => <li key={job.id}><strong>{job.title}</strong><span>{job.company}</span><small>{job.draftCount} {job.draftCount === 1 ? 'draft' : 'drafts'}</small></li>)}</ul></div>
+          <p className="deletion-counts">{deletionFlow.preview.jobs.length} {deletionFlow.preview.jobs.length === 1 ? 'job' : 'jobs'} and {deletionFlow.preview.draftCount ?? 0} {(deletionFlow.preview.draftCount ?? 0) === 1 ? 'draft' : 'drafts'} will be deleted.</p>
+          <div className="job-dialog-actions"><button ref={deletionCancelRef} type="button" className="secondary-button" disabled={deletionFlow.kind === 'submitting'} onClick={closeDeletionDialog}>Cancel</button><button type="button" className="danger-button" disabled={deletionFlow.kind === 'submitting'} onClick={() => void executeDeletion()}>{deletionFlow.kind === 'submitting' ? 'Deleting…' : `Delete ${deletionFlow.jobIds.length} ${deletionFlow.jobIds.length === 1 ? 'job' : 'jobs'}`}</button></div>
+        </section>
+      </> : null}
+    </dialog>
     {!dialogOpen && !intakeOpen && message && jobs.length > 0 && <p className={`saved-jobs-message${messageError ? ' is-error' : ''}`} role={messageError ? 'alert' : 'status'}>{message}</p>}
     <dialog ref={discardDialogRef} className="job-dialog posting-discard-dialog" aria-labelledby="discard-preview-title" aria-describedby="discard-preview-description" onCancel={event => { event.preventDefault(); cancelDiscard() }} onClose={() => { if (discardIntent) cancelDiscard() }}>
       <header className="job-dialog-heading"><div><p className="context">Unsaved posting</p><h2 id="discard-preview-title">Discard your preview edits?</h2></div></header>

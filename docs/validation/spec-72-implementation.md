@@ -1,6 +1,6 @@
 # Spec 72 D1 implementation evidence
 
-D1 adds a storage and trusted IPC deletion preview and execute contract. The Saved jobs controls and installed acceptance are separate child units D2 and D3. This report uses synthetic workspaces only. The user's installed Windows executable has not been run or approved for this check.
+D1 adds a storage and trusted IPC deletion preview and execute contract. D2 adds and tests the Saved jobs controls. D3 installed acceptance remains open. This report uses synthetic workspaces only. The user's installed Windows executable has not been run or approved for this check.
 
 ## Ownership and baseline
 
@@ -20,6 +20,18 @@ The operation is synchronous inside a SQLite transaction. No provider or export 
 
 `./node_modules/.bin/vitest run tests/transactional-job-deletion*.test.ts tests/workspace-backup.test.ts --maxWorkers=1 --reporter=dot` passed 16 tests in three files. `npm run typecheck`, `node scripts/check-doc-links.cjs`, and `git diff --check a46aba1234193cc85b9d9d24899451e7cbb6c2a4 HEAD` passed. A parallel attempt hit the posting parser's 2-second deadline in one unrelated backup test under worker contention. The same test passed with one worker. No full suite, packaged executable or provider request ran.
 
-## Remaining gates
+## D2 visible deletion UI
 
-D2 must wire the public methods into Saved jobs and Tailor CV with the approved design contract and keyboard/selection behavior. D3 must verify the real installed Windows application, SQLite reopen, cancel/busy/stale/error UX, backup and rollback, and both themes and responsive widths after the user's final executable permission. Neither an installed-app result nor secure erasure or remote-provider deletion is claimed here.
+`SavedJobs.tsx` now exposes row selection inside Posting, select-all for the displayed jobs, a selected count, and individual Delete actions without adding a table column. The confirmation is populated from the deletion preview and lists each title, company, and draft count. Cancel receives initial focus. Cancel and stale errors preserve selection. A stale execute result closes the old confirmation and offers a fresh preview. Busy messages replace internal job IDs with the affected title and company and direct the person to stop the operation in Tailor CV. Submit stays disabled while the request runs.
+
+After commit, `main.tsx` reloads jobs and backup status, updates sidebar shortcuts, clears a deleted active posting, and ignores a pending older sidebar job-open response. Tailor CV shows its choose-a-posting state; it does not select another job or start a model request. The page and interaction contracts document the deletion controls.
+
+`tests/electron/job-deletion.spec.ts` exercises the real development Electron UI with three synthetic saved jobs and the public preload fixture API. It verifies row checkbox clicks do not navigate, confirmation copy and initial focus, focus restoration after cancel, cancel retention, stale preview refusal and re-preview, single and bulk deletion, exact selected totals, dark appearance at 375px without horizontal page scroll, and active/last-job cleanup. It made no provider request. Screenshot artifacts show the baseline and final light and dark narrow pages and confirmations in `docs/validation/spec-72-d2/`. `npm run typecheck`, `node scripts/check-doc-links.cjs`, `npm run build`, `npx playwright test tests/electron/job-deletion.spec.ts --reporter=line`, and `git diff --check` pass. The focused Electron scenario passed after the focus-restoration assertion.
+
+The first development launch exposed two bundled React copies and failed before React rendered. `electron.vite.config.ts` now deduplicates React and React DOM. The visible Electron test passes after that correction. This is a development build configuration change; it does not alter the app's product API.
+
+## D3 installed-test preparation and remaining gates
+
+The installed Windows executable, installed native SQLite reopen, backup and rollback acceptance, and installed busy/storage-failure UX remain NOT VERIFIED. The user has not granted final executable approval. Do not launch a packaged executable before that approval. The D3 run should install the candidate on the user's accepted fresh Windows machine, use a separate synthetic workspace, create three distinct jobs with drafts and histories, preserve an exported file and old backup, delete two through the visible bulk flow, reopen, inspect database ownership and a new backup, restore the new backup, and separately test cancel, busy refusal, stale preview, storage rollback, individual deletion, and last-job empty state. Record the installed version and actual SQLite reopen result. Do not claim secure erasure or remote-provider deletion.
+
+Neither installed acceptance nor secure erasure or remote-provider deletion is claimed here.
