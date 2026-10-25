@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { cancelPostingCaptureForManual, JobResearchFindings, JobResearchReview, startJobResearchFromIntake, startResearchWithCaptureLifecycle, transitionCapturedRead } from '../src/renderer/JobResearchReview'
+import { cancelPostingCaptureForManual, JobResearchFindings, JobResearchReview, searchKeyStatusMessage, searchOutcomeNotice, shouldOfferIndexedSearch, startJobResearchFromIntake, startResearchWithCaptureLifecycle, transitionCapturedRead } from '../src/renderer/JobResearchReview'
 import type { JobResearchRun } from '../src/shared/job-research-schema'
 import { buildJobResearchQuery } from '../src/shared/job-research-search-query'
 import { SavedJobs, temporaryDirectNotice } from '../src/renderer/SavedJobs'
@@ -50,6 +50,22 @@ describe('universal research intake', () => {
     expect(html).toContain('Source (not opened automatically)')
     expect(html).not.toContain('<a ')
     expect((html.match(/type="checkbox"/g) ?? [])).toHaveLength(1)
+  })
+  it('does not offer indexed search for an unsafe source identity', () => {
+    const run: JobResearchRun = {
+      version: 1, id: 'unsafe-run', selected: { canonicalUrl: 'https://jobs.example.org/roles/123', host: 'jobs.example.org', provider: 'generic', roleId: null },
+      startedAt: '2026-01-01T00:00:00Z', completedAt: '2026-01-01T00:01:00Z', status: 'blocked', accessFailure: 'unsafe', sources: [], findings: [], unknowns: ['Source identity was unsafe']
+    }
+    expect(shouldOfferIndexedSearch(run)).toBe(false)
+    expect(searchKeyStatusMessage('unknown')).toContain('may be present or absent')
+    expect(searchKeyStatusMessage('storage-unavailable')).toContain('unavailable')
+    expect(searchOutcomeNotice('one-credit-reported')).toContain('one free credit used')
+    expect(searchOutcomeNotice('not-sent')).toContain('/usage preflight may have occurred')
+    expect(searchOutcomeNotice('charge-uncertain')).toContain('Do not retry')
+    expect(searchOutcomeNotice(undefined)).toBeUndefined()
+    const html = renderToStaticMarkup(React.createElement(JobResearchReview, { url: run.selected.canonicalUrl }))
+    expect(html).not.toContain('Search indexed details')
+    expect(html).not.toContain('Tavily key')
   })
   it('discloses the exact metadata query and blocks unusable host or role identifiers', () => {
     expect(buildJobResearchQuery({ host: 'jobs.example.org', roleId: '4464025097' })).toBe('job 4464025097 site:jobs.example.org')

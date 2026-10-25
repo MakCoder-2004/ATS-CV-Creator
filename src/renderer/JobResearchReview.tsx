@@ -10,6 +10,13 @@ export function startJobResearchFromIntake(api: Pick<Window['workbench'], 'start
 }
 
 export type CapturedReadLifecycle = 'available' | 'consumed' | 'restart-required'
+export function shouldOfferIndexedSearch(run: JobResearchRun) { return run.status !== 'full' && run.accessFailure !== 'unsafe' }
+export function searchKeyStatusMessage(status: 'loading' | 'configured' | 'absent' | 'unknown' | 'storage-unavailable') {
+  return status === 'loading' ? 'Checking local search-key status…' : status === 'configured' ? 'A search key is stored on this device. Search availability is still confirmed by the service when you search.' : status === 'absent' ? 'No search key is stored on this device. Check Settings to add one before a new attempt.' : status === 'storage-unavailable' ? 'Encrypted search-key storage is unavailable. The key status is not usable; check Settings.' : 'Local search-key status could not be checked. The key may be present or absent; check Settings. The search service remains authoritative.'
+}
+export function searchOutcomeNotice(outcome: string | undefined) {
+  return outcome === 'one-credit-reported' ? 'Tavily reported one free credit used. This is a search result, not model analysis.' : outcome === 'not-sent' ? 'No indexed search POST was sent. A /usage preflight may have occurred.' : outcome === 'charge-uncertain' ? 'The search charge is uncertain. Do not retry this search.' : undefined
+}
 export function transitionCapturedRead(state: CapturedReadLifecycle, event: 'transferred' | 'cancelled' | 'refetched'): CapturedReadLifecycle {
   if (event === 'refetched') return 'available'
   if (event === 'transferred' && state === 'available') return 'consumed'
@@ -62,6 +69,7 @@ export function JobResearchReview({ url, postingFetchToken, onPostingHandoff, on
   const fetchAgainButtonRef = useRef<HTMLButtonElement>(null)
   const [notice, setNotice] = useState('')
   const [reviewed, setReviewed] = useState<ReviewedJobResearch>()
+  const [searchKeyStatus, setSearchKeyStatus] = useState<'loading' | 'configured' | 'absent' | 'unknown' | 'storage-unavailable'>('loading')
 
   useEffect(() => {
     mounted.current = true
@@ -81,14 +89,19 @@ export function JobResearchReview({ url, postingFetchToken, onPostingHandoff, on
     document.addEventListener('visibilitychange', expire)
     return () => { window.clearTimeout(timer); document.removeEventListener('visibilitychange', expire) }
   }, [run])
-  function show(state: ResearchState) {
+  function show(state: ResearchState, fromSearch = false) {
     if (state.status === 'ready') {
       setRun(state.run); setSelected([]); setAcknowledged(false); setReviewed(undefined)
-      setNotice(state.run.status === 'full' ? 'A complete direct role source was found. Review its wording before continuing.' : state.run.status === 'blocked' ? 'The public source blocked this read. Nothing was accepted.' : state.run.status === 'none' ? 'No exact-role evidence was found. Nothing was accepted.' : 'Only partial role evidence was found. It is not a complete posting.')
+      const outcome = 'searchOutcome' in state && typeof state.searchOutcome === 'string' ? state.searchOutcome : undefined
+      setNotice(searchOutcomeNotice(outcome) ?? (state.run.status === 'full' ? 'A complete direct role source was found. Review its wording before continuing.' : state.run.status === 'blocked' ? 'The public source blocked this read. Nothing was accepted.' : state.run.status === 'none' ? 'No exact-role evidence was found. Nothing was accepted.' : 'Only partial role evidence was found. It is not a complete posting.'))
       requestAnimationFrame(() => { if (mounted.current) cancelButtonRef.current?.focus() })
     } else if (state.status === 'unavailable') {
-      if (postingFetchToken) { setError('The captured findings are unavailable or expired. Fetch the posting again to continue; no new request was started.'); setHandoffUnavailable(true) }
-      else setError(state.message + (state.settingsAction ? ' Set up a Tavily key in Settings, then start a new research attempt.' : ' Open the original posting or paste complete text instead.'))
+      const outcome = 'searchOutcome' in state && typeof state.searchOutcome === 'string' ? state.searchOutcome : undefined
+      if (fromSearch) {
+        const charge = outcome === 'not-sent' ? ' No indexed search POST was sent; a /usage preflight may have occurred.' : outcome === 'charge-uncertain' ? ' The charge is unknown; do not retry.' : ''
+        setError(state.message + charge)
+      } else if (postingFetchToken) { setError('The captured findings are unavailable or expired. Fetch the posting again to continue; no new request was started.'); setHandoffUnavailable(true) }
+      else setError(state.message + (state.settingsAction ? ' Open Settings to inspect local search-key status, then start a new research attempt.' : ' Open the original posting or paste complete text instead.'))
     }
   }
   async function start() {
@@ -121,8 +134,8 @@ export function JobResearchReview({ url, postingFetchToken, onPostingHandoff, on
     requestAnimationFrame(() => { if (mounted.current && current === sequence.current) statusRef.current?.focus() })
     try {
       const state = await window.workbench.searchJobResearch(token)
-      if (mounted.current && current === sequence.current) show(state)
-    } catch (failure) { if (current === sequence.current) setError(failure instanceof Error ? failure.message : 'Search could not complete. Start a new public read to try again.') }
+      if (mounted.current && current === sequence.current) show(state, true)
+    } catch (failure) { if (current === sequence.current) setError(failure instanceof Error ? failure.message : 'Search could not complete. The charge is unknown; do not retry.') }
     finally { if (current === sequence.current) setBusy(false) }
   }
   async function review() {
@@ -154,6 +167,15 @@ export function JobResearchReview({ url, postingFetchToken, onPostingHandoff, on
       requestAnimationFrame(() => { if (mounted.current) researchButtonRef.current?.focus() })
     }
   }
+  useEffect(() => {
+    if (!run || run.status === 'full' || run.accessFailure === 'unsafe') return
+    let active = true
+    setSearchKeyStatus('loading')
+    window.workbench.getResearchSearchKeyStatus().then(status => {
+      if (active) setSearchKeyStatus(!status.storageAvailable ? 'storage-unavailable' : status.configured ? 'configured' : 'absent')
+    }).catch(() => { if (active) setSearchKeyStatus('unknown') })
+    return () => { active = false }
+  }, [run])
   const role = run?.findings.filter(finding => finding.kind !== 'verified-company-context') ?? []
   const partial = !!run && !selected.some(id => role.some(finding => finding.id === id && finding.kind === 'direct-role-text' && finding.completeness === 'full'))
   return <section className="job-research-review" aria-label="Temporary job research">
@@ -166,7 +188,8 @@ export function JobResearchReview({ url, postingFetchToken, onPostingHandoff, on
     {run && <><div className="research-identity"><strong>Selected role</strong><p>{run.selected.canonicalUrl}</p><p>Host: {run.selected.host}{run.selected.roleId ? ` · Role ID: ${run.selected.roleId}` : ''} · {run.status === 'full' ? 'Full direct posting' : run.status === 'provisional' ? 'Provisional, incomplete' : run.status === 'blocked' ? 'Blocked' : 'No role evidence'}</p><button type="button" className="secondary-button" onClick={() => void window.workbench.openPostingSource(run.selected.canonicalUrl).then(result => { if (!result.ok) setError(result.message) }).catch(() => setError('The original source could not be opened.'))}>Open selected original posting</button></div>
       <JobResearchFindings run={run} selected={selected} disabled={busy || !!reviewed} onToggle={(id, checked) => { setSelected(ids => checked ? [...ids, id] : ids.filter(item => item !== id)); setAcknowledged(false) }} />
       <section className="research-unknowns" aria-label="Still unknown"><h4>Still unknown</h4>{run.unknowns.length ? <ul>{run.unknowns.map((item, index) => <li key={index}>{item}</li>)}</ul> : <p>No additional unknowns were reported; completeness still cannot be guaranteed.</p>}</section>
-      {run.status !== 'full' && !searched && <div className="research-search"><h4>Optional indexed search</h4><p>Search query: <code>{buildJobResearchQuery(run.selected) ?? 'Unavailable: this source has no usable host or role ID.'}</code></p><p>Tavily and its index providers receive the displayed query and your network address; search returns up to 5 results and may use 1 credit. After an exact indexed candidate matches, the app may check the selected public page again. No title, CV, profile, contact data, posting wording, or link tracking parameters are sent. Indexed snippets remain partial.</p><p>Set up a Tavily key in Settings. Paid use is not enabled.</p><button type="button" className="secondary-button" disabled={busy || !buildJobResearchQuery(run.selected)} onClick={() => void search()}>{busy ? 'Checking…' : 'Search indexed details'}</button></div>}
+      {run.accessFailure === 'unsafe' && <p className="research-unsafe" role="status">No Tavily request or credit was used by this action because the source identity is unsafe. Search is unavailable for this source. Open the original posting or paste its text manually.</p>}
+      {shouldOfferIndexedSearch(run) && !searched && <div className="research-search"><h4>Optional indexed search</h4><p>Search query: <code>{buildJobResearchQuery(run.selected) ?? 'Unavailable: this source has no usable host or role ID.'}</code></p><p>Tavily and its index providers receive the displayed query and your network address; search returns up to 5 results and may use 1 credit. After an exact indexed candidate matches, the app may check the selected public page again. No title, CV, profile, contact data, posting wording, or link tracking parameters are sent. Indexed snippets remain partial.</p><p className="research-key-status" role="status">{searchKeyStatusMessage(searchKeyStatus)}</p><button type="button" className="secondary-button" disabled={busy || !buildJobResearchQuery(run.selected)} onClick={() => void search()}>{busy ? 'Checking…' : 'Search indexed details'}</button></div>}
       {role.length > 0 && <div className="research-review-action">{partial && selected.length > 0 && <label className="research-choice"><input type="checkbox" checked={acknowledged} disabled={busy || !!reviewed} onChange={event => setAcknowledged(event.target.checked)} /> I understand these selected role details are partial, not the complete posting. Any analysis must be provisional.</label>}
         <button type="button" className="primary-button" disabled={!selected.length || busy || !!reviewed || (partial && !acknowledged)} onClick={() => void review()}>{busy ? 'Reviewing…' : 'Review selected role findings'}</button>
         {reviewed && <p role="status">Review frozen: {reviewed.analysisScope === 'provisional' ? 'provisional' : 'full'} role evidence. {onReviewedResearch ? 'Continue to Outgoing data to inspect the exact evidence and consent to analysis.' : 'Outgoing data and analysis are not connected yet. Nothing was saved or analyzed. You can paste a complete posting to use the existing CV flow.'}</p>}

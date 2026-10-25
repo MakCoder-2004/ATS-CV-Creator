@@ -6,6 +6,8 @@
 .job-research-review :is(button, input):focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
 .saved-jobs-intake .job-research-review .research-error { margin: 0; padding: 12px 16px; border: 1px solid var(--error); border-left-width: 3px; border-radius: 6px; background: color-mix(in srgb, var(--error) 8%, var(--surface)); color: var(--error); }
 .research-status { color: var(--muted); }
+.research-key-status { padding: 12px 16px; border-left: 3px solid var(--line); background: var(--canvas); }
+.research-unsafe { padding: 12px 16px; border: 1px solid var(--warning-border); border-radius: 6px; background: var(--warning-surface); color: var(--warning-ink); }
 .research-identity, .research-search, .research-review-action { display: grid; justify-items: start; gap: 12px; min-width: 0; padding: 16px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
 .research-identity > p:first-of-type, .research-url { overflow-wrap: anywhere; }
 .research-group, .research-unknowns { min-width: 0; padding-top: 16px; border-top: 1px solid var(--line); }

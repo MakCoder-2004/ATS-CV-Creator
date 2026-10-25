@@ -54,6 +54,8 @@ test('visible public link → partial review → exact outgoing consent → sour
     expect(await page.evaluate(() => window.workbench.listJobs())).toHaveLength(0)
     await expect(page.getByRole('button', { name: 'Export PDF' })).toHaveCount(0)
 
+    // Missing local key is reported without suggesting that status check itself searches.
+    await expect(page.getByText('No search key is stored on this device.', { exact: false })).toBeVisible()
     // Starting another search revokes the reviewed authority before any result is available.
     await page.getByRole('button', { name: 'Search indexed details' }).click()
     await expect(page.getByRole('region', { name: 'Analysis suggestions' })).toHaveCount(0)
