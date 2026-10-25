@@ -1,7 +1,8 @@
 import { expect, test, vi } from 'vitest'
 import { createTavilyResearchSession, TavilySearchError, type TavilyTransport } from '../src/main/tavily-search'
 
-const usage = { key: { usage: 3, limit: 1000 }, account: { current_plan: 'Researcher', plan_usage: 3, plan_limit: 1000, paygo_usage: 0, paygo_limit: 0 } }
+// Shape observed on the user's confirmed free Researcher account (not a live request in this test).
+const usage = { key: { usage: 0, limit: null }, account: { current_plan: 'Researcher', plan_usage: 0, plan_limit: 1000, paygo_usage: 0, paygo_limit: null } }
 const results = { results: [{ url: 'https://jobs.example.org/posting/123#top', title: 'Engineer', content: 'Short public snippet.', raw_content: 'Must never leave adapter.' }], answer: 'Do not forward', usage: { credits: 1 }, request_id: 'request-123' }
 const response = (value: unknown) => ({ status: 200, headers: { 'content-type': 'application/json' }, body: Buffer.from(JSON.stringify(value)) })
 function fixture(plan: unknown = usage, search: unknown = results) {
@@ -32,6 +33,14 @@ test('preflights free plan for every basic search and forwards only bounded attr
   expect(JSON.stringify(result)).not.toContain('Do not forward')
 })
 
+test('accepts the confirmed free response and the legacy zero-paygo, capped-key response', async () => {
+  for (const plan of [usage, { key: { usage: 2, limit: 5 }, account: { ...usage.account, paygo_limit: 0 } }]) {
+    const f = fixture(plan)
+    await expect(createTavilyResearchSession(f.credentials, { transport: f.transport }).search(input)).resolves.toMatchObject({ credits: 1 })
+    expect(f.sent.map(call => call.method)).toEqual(['GET', 'POST'])
+  }
+})
+
 test('three dispatches per action are reserved synchronously even with concurrent calls', async () => {
   const f = fixture()
   const session = createTavilyResearchSession(f.credentials, { transport: f.transport })
@@ -43,16 +52,65 @@ test('three dispatches per action are reserved synchronously even with concurren
   expect(f.sent.map(call => call.method)).toEqual(['GET', 'POST', 'GET', 'POST', 'GET', 'POST'])
 })
 
-test.each([
+const refusedPlans: [unknown, string][] = [
   [{ ...usage, account: { ...usage.account, current_plan: 'Project' } }, 'paid plan'],
   [{ ...usage, account: { ...usage.account, current_plan: 'Researcher', paygo_limit: 100 } }, 'paid overage'],
-  [{ ...usage, account: { ...usage.account, plan_usage: 1000 } }, 'exhausted credits'],
+  ...[997, 998, 999, 1000].map((plan_usage): [unknown, string] => [{ ...usage, account: { ...usage.account, plan_usage } }, `near/exhausted quota ${plan_usage}`]),
+  [{ ...usage, account: { ...usage.account, plan_limit: 999 } }, 'altered plan limit'],
+  [{ ...usage, account: { ...usage.account, plan_usage: -1 } }, 'negative plan usage'],
+  [{ ...usage, account: { ...usage.account, plan_usage: '0' } }, 'non-numeric plan usage'],
+  [{ ...usage, account: { ...usage.account, plan_usage: 0.5 } }, 'fractional plan usage'],
+  [{ ...usage, account: { ...usage.account, paygo_usage: 1 } }, 'paid usage'],
+  [{ ...usage, account: { ...usage.account, paygo_usage: -1 } }, 'invalid paid usage'],
+  [{ ...usage, account: { ...usage.account, paygo_limit: -1 } }, 'invalid paid limit'],
+  [{ ...usage, account: { ...usage.account, paygo_limit: 'disabled' } }, 'unverified paygo'],
+  [{ ...usage, key: { usage: -1, limit: null } }, 'negative key usage'],
+  [{ ...usage, key: { usage: 0.5, limit: null } }, 'fractional key usage'],
+  [{ ...usage, key: { usage: undefined, limit: null } }, 'missing key usage'],
+  [{ ...usage, key: { usage: 0, limit: undefined } }, 'missing key limit'],
+  [{ ...usage, key: undefined }, 'missing key metadata'],
+  [{ ...usage, account: undefined }, 'missing account metadata'],
+  [{ ...usage, key: { usage: 1, limit: 1 } }, 'exhausted key cap'],
+  [{ ...usage, key: { usage: 0, limit: 'unlimited' } }, 'unverified key cap'],
+  [{ ...usage, key: { usage: 1, limit: 0 } }, 'invalid key cap'],
   [{ ...usage, account: { ...usage.account, paygo_limit: undefined } }, 'unknown paygo'],
   [{ ...usage, account: { ...usage.account, current_plan: 'researcher' } }, 'unknown plan name']
-])('refuses %s before search dispatch (%s)', async (plan, _label) => {
+]
+test.each(refusedPlans)('refuses %s before search dispatch (%s)', async (plan, _label) => {
   const f = fixture(plan)
   await expect(createTavilyResearchSession(f.credentials, { transport: f.transport }).search(input)).rejects.toThrow(/free Researcher plan/)
   expect(f.sent).toHaveLength(1)
+})
+
+test('serializes free-plan preflight and search across sessions so a remaining shared credit cannot be double-reserved', async () => {
+  const f = fixture()
+  let planUsage = 996 // Four credits left; the three-credit safety margin permits only one search.
+  const calls: string[] = []
+  let releaseFirstSearch!: () => void
+  let enteredFirstSearch!: () => void
+  const holdFirstSearch = new Promise<void>(resolve => { releaseFirstSearch = resolve })
+  const firstSearchEntered = new Promise<void>(resolve => { enteredFirstSearch = resolve })
+  f.transport.request = async (...args) => {
+    calls.push(args[2])
+    if (args[2] === 'GET') return response({ ...usage, account: { ...usage.account, plan_usage: planUsage } })
+    enteredFirstSearch()
+    await holdFirstSearch
+    planUsage++
+    return response(results)
+  }
+  const first = createTavilyResearchSession(f.credentials, { transport: f.transport }).search(input)
+  const second = createTavilyResearchSession(f.credentials, { transport: f.transport }).search(input)
+  const settledPromise = Promise.allSettled([first, second])
+  try {
+    await firstSearchEntered
+    // A second session must not preflight from stale usage while POST is in flight.
+    await new Promise(resolve => setImmediate(resolve))
+    expect(calls).toEqual(['GET', 'POST'])
+  } finally { releaseFirstSearch() }
+  const settled = await settledPromise
+  expect(settled.map(item => item.status)).toEqual(['fulfilled', 'rejected'])
+  expect(calls).toEqual(['GET', 'POST', 'GET'])
+  expect(planUsage).toBe(997)
 })
 
 test('rejects private or mixed DNS before passing key to a network request', async () => {

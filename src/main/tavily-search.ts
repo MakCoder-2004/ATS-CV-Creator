@@ -8,6 +8,12 @@ import type { ResearchSearchCredentials } from './research-search-credentials'
 const ENDPOINT = 'https://api.tavily.com'
 const MAX_RESPONSE = 256 * 1024
 const DEADLINE_MS = 12_000
+// Stop with three plan credits still available; another client can consume credits
+// after preflight, so this margin is not a guarantee against external races.
+const FREE_PLAN_CREDIT_MARGIN = 3
+// A session's own queue cannot prevent a second session in this process from
+// preflighting stale usage while the first session's POST is still in flight.
+let pendingSearch: Promise<unknown> = Promise.resolve()
 const ERROR = 'Search could not be verified or completed. No search result was accepted.'
 const PLAN_ERROR = 'This pilot requires a verifiable free Researcher plan with pay-as-you-go disabled and available credits. Confirm your account plan in Tavily before searching.'
 export type TavilySearchErrorCode = 'authentication' | 'billing' | 'quota' | 'plan_unverified'
@@ -94,8 +100,9 @@ function queryFromPublicMetadata(input: PublicJobSearch): string {
 function verifyFreePlan(value: Record<string, unknown>): void {
   const account = record(value.account), key = record(value.key)
   if (!account || !key || account.current_plan !== 'Researcher' || account.plan_limit !== 1000 ||
-      account.paygo_limit !== 0 || account.paygo_usage !== 0 || !integer(account.plan_usage) ||
-      account.plan_usage >= 1000 || !integer(key.usage) || !integer(key.limit) || key.usage >= key.limit) throw new TavilySearchError('plan_unverified')
+      (account.paygo_limit !== null && account.paygo_limit !== 0) || account.paygo_usage !== 0 ||
+      !integer(account.plan_usage) || account.plan_usage >= 1000 - FREE_PLAN_CREDIT_MARGIN ||
+      !integer(key.usage) || (key.limit !== null && (!integer(key.limit) || key.usage >= key.limit))) throw new TavilySearchError('plan_unverified')
 }
 // These are inert, untrusted leads, never verified source URLs. No candidate DNS lookup here:
 // the future fetcher MUST resolve all addresses again, reject private/mixed answers, pin
@@ -132,7 +139,6 @@ function parseResult(value: Record<string, unknown>): TavilySearchResult {
 /** One explicit user action creates one session; it cannot dispatch more than three searches. */
 export function createTavilyResearchSession(credentials: Pick<ResearchSearchCredentials, 'withKey'>, options: { transport?: TavilyTransport; signal?: AbortSignal } = {}) {
   let dispatched = 0
-  let pending: Promise<unknown> = Promise.resolve()
   const network = options.transport ?? transport
   const request = async (key: string, route: '/usage' | '/search', body: Buffer | undefined) => {
     const controller = new AbortController()
@@ -177,8 +183,8 @@ export function createTavilyResearchSession(credentials: Pick<ResearchSearchCred
           }
         })
       }
-      const result = pending.then(run, run)
-      pending = result.catch(() => {})
+      const result = pendingSearch.then(run, run)
+      pendingSearch = result.catch(() => {})
       return result
     },
     get searchesDispatched() { return dispatched }
