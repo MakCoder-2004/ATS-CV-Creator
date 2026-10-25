@@ -374,7 +374,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
     const selected = ids.map(id => db.prepare('SELECT * FROM jobs WHERE id=?').get(id))
     if (selected.some(row => !row)) return null
     const values = (table: string, column: string, keys: string[]) => keys.length
-      ? db.prepare(`SELECT * FROM ${table} WHERE ${column} IN (${keys.map(() => '?').join(',')}) ORDER BY rowid`).all(...keys)
+      ? db.prepare(`SELECT * FROM ${table} WHERE ${column} IN (SELECT value FROM json_each(?)) ORDER BY rowid`).all(JSON.stringify(keys))
       : []
     const jobTables = ['posting_analysis_cache', 'analysis_run_state', 'generation_recovery', 'draft_revisions', 'regeneration_proposals', 'document_fit_reports'] as const
     const owned = Object.fromEntries(jobTables.map(table => [table, values(table, 'job_id', ids)])) as Record<string, Array<Record<string, unknown>>>
@@ -1146,10 +1146,10 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
           const state = deletionOwnership(preview.ids)
           if (!state || state.fingerprint !== preview.fingerprint) throw new Error('STALE_DELETION')
           for (const table of ['outbound_consents', 'posting_analysis_cache', 'analysis_run_state', 'generation_recovery'] as const) {
-            if (state.runIds.length && db.prepare(`SELECT 1 FROM ${table} WHERE run_id IN (${state.runIds.map(() => '?').join(',')}) AND job_id IS NOT NULL AND job_id NOT IN (${preview.ids.map(() => '?').join(',')}) LIMIT 1`).get(...state.runIds, ...preview.ids)) throw new Error('STALE_DELETION')
+            if (state.runIds.length && db.prepare(`SELECT 1 FROM ${table} WHERE run_id IN (SELECT value FROM json_each(?)) AND job_id IS NOT NULL AND job_id NOT IN (SELECT value FROM json_each(?)) LIMIT 1`).get(JSON.stringify(state.runIds), JSON.stringify(preview.ids))) throw new Error('STALE_DELETION')
           }
           const remove = (table: string, column: string, keys: string[]) => {
-            if (keys.length) db.prepare(`DELETE FROM ${table} WHERE ${column} IN (${keys.map(() => '?').join(',')})`).run(...keys)
+            if (keys.length) db.prepare(`DELETE FROM ${table} WHERE ${column} IN (SELECT value FROM json_each(?))`).run(JSON.stringify(keys))
           }
           for (const table of ['langgraph_checkpoint_writes', 'langgraph_checkpoints']) remove(table, 'thread_id', state.runIds)
           for (const table of ['generation_recovery_extensions', 'provider_attempt_outcomes', 'analysis_attempts', 'outbound_consents']) remove(table, 'run_id', state.runIds)

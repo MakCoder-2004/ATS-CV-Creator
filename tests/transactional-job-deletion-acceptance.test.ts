@@ -7,6 +7,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { createWorkbench } from '../src/main/workbench'
 import { registerWorkspaceBackupRowSizer } from '../src/main/workspace-backup'
 import type { AnalysisTransport } from '../src/main/posting-analysis'
+import { jobDeletionSelectionSchema, MAX_SAVED_JOBS } from '../src/shared/jobs'
 
 const directories: string[] = []
 const workbenches: Array<ReturnType<typeof createWorkbench>> = []
@@ -156,19 +157,84 @@ test.each(['draft_revisions', 'jobs'])('injected SQLite failure at %s rolls back
   } finally { db.close() }
 }, 30_000)
 
-test('pre-ownership backups upgrade old consent rows without inventing job identity', async () => {
-  const { directory, workbench, jobs } = await fixture()
+test('old superseded analysis and regeneration runs without surviving job links keep unknown history after deletion', async () => {
+  const { directory, workbench, jobs, runs } = await fixture()
   const legacy = JSON.parse(workbench.backup.createBackup())
   legacy.tables.schema_migrations.rows = legacy.tables.schema_migrations.rows.filter((row: { version: number }) => row.version !== 10)
   legacy.tables.outbound_consents.schema = String(legacy.tables.outbound_consents.schema).replace(', job_id TEXT', '')
   for (const row of legacy.tables.outbound_consents.rows) delete row.job_id
+  const oldAnalysisRun = randomUUID(), oldRegenerationRun = randomUUID()
+  const consent = legacy.tables.outbound_consents.rows[0]
+  const nextId = Math.max(...legacy.tables.analysis_attempts.rows.map((row: { id: number }) => row.id)) + 1
+  for (const runId of [oldAnalysisRun, oldRegenerationRun]) {
+    legacy.tables.outbound_consents.rows.push({ ...consent, id: randomUUID(), run_id: runId, revoked: 1 })
+    legacy.tables.analysis_attempts.rows.push({ id: nextId + (runId === oldAnalysisRun ? 0 : 1), run_id: runId, attempted_at: '2026-01-01T00:00:00.000Z' })
+  }
+  const outcome = legacy.tables.provider_attempt_outcomes.rows[0]
+  legacy.tables.provider_attempt_outcomes.rows.push({ ...outcome, id: Math.max(...legacy.tables.provider_attempt_outcomes.rows.map((row: { id: number }) => row.id)) + 1, run_id: oldAnalysisRun })
+  legacy.tables.generation_recovery_extensions.rows.push({ id: 1, run_id: oldRegenerationRun, prior_run_limit: 1, new_run_limit: 2, prior_time_limit_ms: 100, new_time_limit_ms: 200, recorded_at: '2026-01-01T00:00:00.000Z' })
   const preview = workbench.backup.previewRestore(JSON.stringify(legacy))
   workbench.backup.applyRestore(preview.token, text => text)
   expect((await workbench.api.listJobs()).map(job => job.id).sort()).toEqual([...jobs].sort())
   const db = dbFor(directory)
-  try { expect((db.prepare('SELECT job_id FROM outbound_consents').all() as Array<{ job_id: string }>).every(row => jobs.includes(row.job_id))).toBe(true) }
-  finally { db.close() }
+  try {
+    const ownership = db.prepare('SELECT job_id FROM outbound_consents WHERE run_id=?')
+    expect((ownership.get(runs[0].runId) as { job_id: string }).job_id).toBe(jobs[0])
+    for (const runId of [oldAnalysisRun, oldRegenerationRun]) expect((ownership.get(runId) as { job_id: string | null }).job_id).toBeNull()
+    const deletion = await workbench.api.previewJobDeletion([jobs[0]])
+    expect(deletion.ok).toBe(true)
+    expect(await workbench.api.executeJobDeletion(deletion.token!, [jobs[0]])).toMatchObject({ ok: true, deletedCount: 1 })
+    expect(ownership.get(runs[0].runId)).toBeUndefined()
+    expect(db.prepare('SELECT 1 FROM analysis_attempts WHERE run_id=?').get(runs[0].runId)).toBeUndefined()
+    for (const runId of [oldAnalysisRun, oldRegenerationRun]) {
+      expect((ownership.get(runId) as { job_id: string | null }).job_id).toBeNull()
+      expect(db.prepare('SELECT 1 FROM analysis_attempts WHERE run_id=?').get(runId)).toBeDefined()
+    }
+    expect(db.prepare('SELECT 1 FROM provider_attempt_outcomes WHERE run_id=?').get(oldAnalysisRun)).toBeDefined()
+    expect(db.prepare('SELECT 1 FROM generation_recovery_extensions WHERE run_id=?').get(oldRegenerationRun)).toBeDefined()
+    expect((await workbench.api.listJobs()).map(job => job.id).sort()).toEqual(jobs.slice(1).sort())
+  } finally { db.close() }
 }, 30_000)
+
+test('the public deletion selection accepts the workspace capacity and rejects one more', () => {
+  const ids = Array.from({ length: MAX_SAVED_JOBS + 1 }, () => randomUUID())
+  expect(jobDeletionSelectionSchema.parse(ids.slice(0, MAX_SAVED_JOBS))).toHaveLength(5_000)
+  expect(jobDeletionSelectionSchema.safeParse(ids).success).toBe(false)
+})
+
+test('preview and execute delete 501 selected jobs and more than 999 owned runs without removing an unselected job', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'job-delete-large-selection-'))
+  directories.push(directory)
+  const workbench = createWorkbench(directory, undefined, scripted)
+  workbenches.push(workbench)
+  const ids: string[] = []
+  for (let i = 0; i < 502; i++) {
+    const result = await workbench.api.saveJob({ title: `Posting ${i}`, company: 'Synthetic Co', description: 'TypeScript required.' })
+    if (!result.ok) throw Error(`failed to save posting ${i}`)
+    ids.push(result.value.id)
+  }
+  const db = dbFor(directory)
+  try {
+    const selected = ids.slice(0, 501)
+    const unselected = ids[501]
+    const insert = db.prepare('INSERT INTO outbound_consents (id,run_id,scope_hash,created_at,revoked,job_id) VALUES (?,?,?,?,1,?)')
+    const insertAttempt = db.prepare('INSERT INTO analysis_attempts (run_id,attempted_at) VALUES (?,?)')
+    db.transaction(() => {
+      for (let i = 0; i < 1_102; i++) {
+        const runId = randomUUID()
+        insert.run(randomUUID(), runId, 'synthetic', '2026-01-01T00:00:00.000Z', i === 1_101 ? unselected : selected[i % selected.length])
+        insertAttempt.run(runId, '2026-01-01T00:00:00.000Z')
+      }
+    })()
+    const preview = await workbench.api.previewJobDeletion(selected)
+    expect(preview).toMatchObject({ ok: true })
+    expect(preview.jobs).toHaveLength(501)
+    expect(await workbench.api.executeJobDeletion(preview.token!, selected)).toMatchObject({ ok: true, deletedCount: 501 })
+    expect((await workbench.api.listJobs()).map(job => job.id)).toEqual([unselected])
+    expect((db.prepare('SELECT COUNT(*) AS count FROM outbound_consents').get() as { count: number }).count).toBe(1)
+    expect((db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts').get() as { count: number }).count).toBe(1)
+  } finally { db.close() }
+}, 120_000)
 
 test('cancelled in-flight analysis remains busy until its late response has settled', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'job-delete-late-response-'))

@@ -13,7 +13,7 @@
 
 ### Saved jobs deletion
 
-- Row checkboxes and **Delete** controls sit inside Posting cells. Select all covers only the rows currently shown. Checkbox, select-all, and Delete actions never open a posting.
+- Row checkboxes sit inside Posting cells. Individual **Delete** actions sit inside Next action beside Edit and Open posting. The selection toolbar sits below the heading and contains select-all for only the rows currently shown. Checkbox, select-all, and Delete actions never open a posting.
 - A selection toolbar reports the count and starts a preview. Do not open the destructive dialog until the backend returns current job names, companies, and draft counts. Show every selected job in an inspectable list. Focus **Cancel** first and restore focus to the trigger when the dialog closes. After deletion removes the trigger, focus the first remaining row checkbox or the Saved jobs title if no rows remain.
 - The confirmation states that deletion removes the selected postings, drafts, and local generation history. It says profile facts and exported files remain untouched, older backups may still contain the jobs, and the workspace offers no undo. Do not claim secure erasure or remote-provider deletion.
 - Cancel and recoverable errors retain the selection. A stale preview requires a new review; a busy job requires the person to stop its operation in Tailor CV. Disable duplicate submit. Announce errors and committed success through status or alert semantics. Never announce success before the storage transaction commits.

@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { MAX_POSTING_REVISIONS } from './jobs'
+import { MAX_POSTING_REVISIONS, MAX_SAVED_JOBS } from './jobs'
 
 export const WORKSPACE_BACKUP_VERSION = 3 as const
 export const MAX_WORKSPACE_BACKUP_BYTES = 64 * 1024 * 1024
@@ -11,7 +11,7 @@ export const WORKSPACE_BACKUP_SIZE_TABLE = 'cv_workspace_backup_sizes'
 export const WORKSPACE_BACKUP_TABLE_ROW_LIMITS: Readonly<Record<string, number>> = {
   schema_migrations: 100, settings: 100, profile_contact: 1, profile_skills: 10_000, profile_entries: 10_000,
   evidence_revisions: 50_000, profile_import_provenance: 50_000, profile_experience: 10_000, profile_projects: 10_000,
-  jobs: 5_000, outbound_consents: 50_000, posting_analysis_cache: 5_000, analysis_run_state: 5_000,
+  jobs: MAX_SAVED_JOBS, outbound_consents: 50_000, posting_analysis_cache: 5_000, analysis_run_state: 5_000,
   analysis_attempts: 100_000, provider_attempt_outcomes: 100_000, generation_recovery: 5_000,
   generation_recovery_extensions: 50_000, draft_revisions: 10_000, regeneration_proposals: 10_000,
   document_fit_reports: 10_000, langgraph_checkpoints: 50_000, langgraph_checkpoint_writes: 100_000
