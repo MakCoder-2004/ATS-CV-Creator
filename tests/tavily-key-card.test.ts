@@ -69,7 +69,7 @@ describe('TavilyKeyCard', () => {
     const source = readFileSync(new URL('../src/renderer/TavilyKeyCard.tsx', import.meta.url), 'utf8')
     expect(source).toContain('function hideReveal() { clearReveal(); setRevealPending(false); setBusy(false) }')
     expect(source).toContain('if (generation.current === request) { revealedRef.current = result.key; setRevealed(result.key) }')
-    expect(source).toContain('clearReveal(); setRevealPending(false); setConfirm(false); setReplacing(true)')
+    expect(source).toContain("clearReveal(); setRevealPending(false); setConfirm(false); focusIntent.current = 'key'; setReplacing(true)")
     expect(source).toContain('Hide typed key')
     expect(source).toContain('Cancel replacement')
     expect(source).toContain('Tavily may share the public query with other search-index providers and receive network metadata. No profile data is sent.')

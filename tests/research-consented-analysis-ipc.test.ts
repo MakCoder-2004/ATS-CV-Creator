@@ -20,8 +20,9 @@ const model = { id: 'synthetic', name: 'Fake', api: 'synthetic' as Api, provider
 const selection = { providerId: 'fake', modelId: 'synthetic', thinkingLevel: 'low' as const }
 async function connected() {
   let clock = 0
+  const now = () => Date.parse(stamp) + clock
   const sessions = createJobResearchSessions({ credentials: { status: async () => ({ configured: false, storageAvailable: false, message: '' }), withKey: async () => { throw Error('No search') } } as never,
-    direct: async () => structuredClone(fixture), now: () => clock })
+    direct: async () => structuredClone(fixture), now })
   const { token } = sessions.startJobResearch(url)
   await vi.waitFor(() => expect(sessions.getJobResearch(token).status).toBe('ready'))
   let choice: PiModelSelection = { ...selection }, epoch = 0
@@ -32,7 +33,7 @@ async function connected() {
   const sdk = { getProviders: () => [], getPhysicalModel: () => model, getAvailable,
     getAuth: async () => ({ source: 'synthetic' }), completeSimple: requests } as unknown as PiModelRuntime
   const controller = createVolatileResearchAnalysis({ getAppHeldRun: runId => sessions.getReviewedRunById(runId).run,
-    getAppHeldReview: runId => sessions.getReviewedRunById(runId).review, getPiSelection: () => choice, getSelectionEpoch: () => epoch, piRuntime: sdk })
+    getAppHeldReview: runId => sessions.getReviewedRunById(runId).review, getPiSelection: () => choice, getSelectionEpoch: () => epoch, piRuntime: sdk, now })
   return { sessions, token, controller, requests, getAvailable, changeModel: () => { choice = { ...selection, thinkingLevel: 'high' }; epoch++ },
     holdAuth: () => { authGate = new Promise<void>(resolve => { releaseAuth = resolve }) }, releaseAuth: () => releaseAuth?.(),
     advanceTime: (milliseconds: number) => { clock += milliseconds } }
