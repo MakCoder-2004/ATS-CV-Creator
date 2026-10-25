@@ -16,6 +16,15 @@ test('legacy version-1 DOCX documents accept and omit empty sections', async () 
   expect(parsed.text).not.toContain('Education')
 })
 
+test('paragraph metadata writes a prose paragraph without changing legacy bullet output', async () => {
+  const paragraph = canonicalDocumentSchema.parse({ ...canonical, sections: [{ name: 'Experience', entries: [{ ...canonical.sections[1].entries[0], descriptionFormat: 'paragraph', bullets: undefined }] }] })
+  const xml = await (await JSZip.loadAsync(await renderCanonicalDocx(paragraph))).file('word/document.xml')!.async('string')
+  expect(xml).toContain('Built tools for résumé review with Unicode support.')
+  expect(xml).not.toContain('<w:numPr>')
+  const legacy = await (await JSZip.loadAsync(await renderCanonicalDocx(canonical))).file('word/document.xml')!.async('string')
+  expect(legacy).toContain('<w:numPr>')
+})
+
 test('writes an editable single-column DOCX with ordered text, Unicode and live hyperlinks', async () => {
   const zip = await JSZip.loadAsync(await renderCanonicalDocx(canonical))
   const xml = await zip.file('word/document.xml')!.async('string')

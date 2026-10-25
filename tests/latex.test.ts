@@ -28,6 +28,13 @@ test('template sections render employer once before locked role and use short co
   expect(files['education.tex']).toBe('')
   expect(files['projects.tex']).toBe('')
 })
+test('explicit paragraph descriptions compile as prose and legacy descriptions remain bullet items', () => {
+  const paragraph = { ...document, sections: [{ ...document.sections[0], entries: [{ ...document.sections[0].entries[0], text: 'Contributed to reliable services with supported deployment practices.', descriptionFormat: 'paragraph' as const }] }] }
+  const tex = renderLatexSections(paragraph)['experience.tex']
+  expect(tex).toContain('\\small{Contributed to reliable services with supported deployment practices.}\\par')
+  expect(tex).not.toContain('\\resumeItem{Contributed')
+  expect(renderLatexSections(document)['experience.tex']).toContain('\\resumeItem{Built reliable APIs.}')
+})
 test('all user and model content is escaped once, not accepted as executable TeX', () => {
   expect(escapeLatex('\\input{secret} 50% & C# $ _ ~ ^')).toBe('\\textbackslash{}input\\{secret\\} 50\\% \\& C\\# \\$ \\_ \\textasciitilde{} \\textasciicircum{}')
   const files = renderLatexSections({ ...document, identity: { ...document.identity, name: '\\write18{calc.exe}' } })

@@ -183,7 +183,7 @@ test('shortened working posting scope persists through import, generation, reope
   expect(modelPrompts).toHaveLength(promptsBeforeRegeneration + 1)
 })
 
-test('content-only generation groups role evidence and bounds concise bullets without retaining narrative fields', async () => {
+test('content-only generation groups role evidence into one explicitly tagged paragraph without retaining narrative fields', async () => {
   const roleId = randomUUID(), factId = randomUUID()
   const items = [
     { id: roleId, revision: 1, category: 'experience' as const, parentId: roleId, snapshot: { title: 'Engineer', organization: 'Example Co', description: 'Built services.' }, text: 'Built services.' },
@@ -194,18 +194,18 @@ test('content-only generation groups role evidence and bounds concise bullets wi
   const result = await runSourceLinkedGraph({ job: { title: 'Engineer' }, analysis: {}, items, identity: { id: randomUUID(), jobId: randomUUID(), revision: 1, createdAt: new Date().toISOString(), lockedFields: { fullName: 'Candidate', experience: [{ evidenceId: roleId, title: 'Engineer', organization: 'Example Co' }], education: [], projects: [], certificates: [] } }, call: async (prompt, schema) => {
     prompts.push({ prompt, schema })
     if (prompt.startsWith('Score these numbered')) return { value: { relevance: items.flatMap((item, index) => item.category === 'certificates' ? [] : [{ index, score: 1, rationale: 'Relevant.' }]) }, attempts: 1 }
-    return { value: { experience: [{ text: 'Built reliable services.\nImproved reliability.', evidence: [0, 1], rationale: 'Relevant facts.' }], education: [], projects: [], skills: [], headline: 'Legacy headline', summary: { text: 'Legacy summary', evidence: [0], rationale: 'Legacy' }, certificates: [{ text: 'Ignore me', evidence: [0], rationale: 'Legacy' }] }, attempts: 1 }
+    return { value: { experience: [{ text: 'Built reliable services and improved reliability.', evidence: [0, 1], rationale: 'Relevant facts.' }], education: [], projects: [], skills: [], headline: 'Legacy headline', summary: { text: 'Legacy summary', evidence: [0], rationale: 'Legacy' }, certificates: [{ text: 'Ignore me', evidence: [0], rationale: 'Legacy' }] }, attempts: 1 }
   } })
   expect(prompts[0].prompt).not.toContain('Private certificate')
   expect(prompts[1].schema.safeParse({ experience: [], education: [], projects: [], skills: [], headline: 'legacy', summary: {}, certificates: [] }).data).toEqual({ experience: [], education: [], projects: [], skills: [] })
   expect(result.draft.content.experience).toHaveLength(1)
   expect(result.draft.content.experience[0].citations).toEqual([{ evidenceId: roleId, revision: 1 }, { evidenceId: factId, revision: 1 }])
-  expect(result.draft.content.experience[0].text.split(/\r?\n/)).toHaveLength(2)
+  expect(result.draft.content.experience[0]).toMatchObject({ text: 'Built reliable services and improved reliability.', descriptionFormat: 'paragraph' })
   expect(result.draft.content.certificates).toEqual([])
   expect('tailoring' in result.draft).toBe(false)
 })
 
-test('content generation retries repeated/overlong bullets and rejects cross-parent citations', async () => {
+test('content generation retries repeated titles and rejects cross-parent citations', async () => {
   const roleId = randomUUID(), secondRoleId = randomUUID()
   const items = [
     { id: roleId, revision: 1, category: 'experience' as const, parentId: roleId, snapshot: {}, text: 'Built APIs.' },

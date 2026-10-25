@@ -11,6 +11,7 @@ function link(url: string, label: string): string {
   return `\\href{${target}}{\\underline{${escapeLatex(label)}}}`
 }
 const itemList = (entry: CanonicalDocumentEntry, includeLinks = true) => {
+  if (entry.descriptionFormat === 'paragraph') return entry.text ? `\\small{${escapeLatex(entry.text)}}\\par${includeLinks && entry.links.length ? `\n${entry.links.map(value => link(value.url, value.label)).join(' \\quad ')}` : ''}` : ''
   const bullets = entry.bullets?.length ? entry.bullets : splitDocumentBullets(entry.text)
   const items = [...bullets.map(bullet => `    \\resumeItem{${escapeLatex(bullet)}}`), ...(includeLinks && entry.links.length ? [`    \\resumeItem{${entry.links.map(value => link(value.url, value.label)).join(' \\quad ')}}`] : [])]
   return items.length ? `\\resumeItemListStart\n${items.join('\n')}\n\\resumeItemListEnd` : ''

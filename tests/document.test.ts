@@ -92,6 +92,16 @@ test('canonical text parts reflect export reading order, visible headings and st
   expect(html).toContain('<h2>Technical Skills</h2>')
 })
 
+test('explicit paragraph format renders prose while absent metadata keeps legacy bullets', () => {
+  const paragraph = canonicalDocumentSchema.parse({ ...document, sections: [{ name: 'Experience', entries: [{ ...document.sections[0].entries[0], text: 'Contributed to reliable services and supported deployment workflows.', descriptionFormat: 'paragraph' }] }] })
+  const html = renderDocumentHtml(paragraph)
+  expect(html).toContain('<p class="paper-paragraph">Contributed to reliable services and supported deployment workflows.</p>')
+  expect(html).not.toContain('<ul>')
+  expect(canonicalDocumentTextParts(paragraph)).toContain('Contributed to reliable services and supported deployment workflows.')
+  const legacy = canonicalDocumentSchema.parse({ ...document, sections: [{ name: 'Experience', entries: [{ ...document.sections[0].entries[0], text: 'Built Unicode résumé tools.' }] }] })
+  expect(renderDocumentHtml(legacy)).toContain('<li>Built Unicode résumé tools.</li>')
+})
+
 test('description segmentation preserves wording and the HTML renderer safely escapes user content', () => {
   expect(splitDocumentBullets('• First item\n2. Second <item>')).toEqual(['First item', 'Second <item>'])
   const html = renderDocumentHtml({ ...document, identity: { ...document.identity, name: '<script>alert("x")</script>' } })
