@@ -52,6 +52,18 @@ function listingShell(elements) {
   )
 }
 function truncatedDescription(description) { return /(?:\.\.\.|…|\b(?:read|show|see|view) more\b|\bcontinue reading\b)\s*[.!?]?\s*$/i.test(description) }
+function descriptionExpansionControl(elements) {
+  const containers = elements.filter(node => {
+    const identity = `${attrs(node, 'class')} ${attrs(node, 'id')}`.toLowerCase().replace(/[_]/g, '-')
+    const label = attrs(node, 'aria-label')
+    return /(?:^|[\s-])job[-\s]?(?:description|details|posting)(?:$|[\s-])|(?:^|[\s-])description[-\s]?(?:body|content|container|text|details)(?:$|[\s-])/.test(identity) || /(?:job )?description|job details/i.test(label)
+  })
+  return containers.some(container => walk(container).some(node => {
+    if (!['button', 'a'].includes(node.tagName) && attrs(node, 'role').toLowerCase() !== 'button') return false
+    const signal = `${content(node)} ${attrs(node, 'aria-label')} ${attrs(node, 'title')} ${attrs(node, 'class')}`
+    return /\b(?:read|show|see|view)\s+more\b|\bexpand(?: description)?\b|\bcontinue reading\b/i.test(signal)
+  }))
+}
 function completeStructuredDescription(raw, description) {
   // Exact JSON-LD identity proves ownership, not that a search card contains the whole posting.
   const sections = walk(parse5.parseFragment(raw)).filter(node => ['h2', 'h3', 'h4', 'strong'].includes(node.tagName)).map(content)
@@ -102,7 +114,8 @@ function extract() {
   const title = typeof posting?.title === 'string' ? posting.title.trim() : titleNode.length === 1 ? content(titleNode[0]) : null
   const employer = typeof posting?.hiringOrganization?.name === 'string' ? posting.hiringOrganization.name.trim() : null
   if (!description || !title || description.length < 80) return { outcome: 'none', reason: 'The selected page lacks a substantive readable job posting.' }
-  const complete = description.length <= 16_000 && !listingShell(elements) && !truncatedDescription(description) && (description === primary && !!primary || !!posting && completeStructuredDescription(posting.description, description))
+  const expansionSignal = selected.provider !== 'linkedin' && !primary && descriptionExpansionControl(elements)
+  const complete = description.length <= 16_000 && !listingShell(elements) && !truncatedDescription(description) && !expansionSignal && (description === primary && !!primary || !!posting && completeStructuredDescription(posting.description, description))
   return { outcome: complete ? 'full' : 'partial', reason: description.length > 16_000 ? 'The readable description exceeded 16,000 characters; the captured text is incomplete.' : 'The selected page may contain only a job teaser or search listing; the description is provisional.', description: description.slice(0, 16_000), title: title.slice(0, 500), employer: employer?.slice(0, 500) || null }
 }
 try { parentPort.postMessage(extract()) } catch (error) { parentPort.postMessage({ outcome: 'none', reason: error instanceof Error ? error.message : 'Extraction failed.' }) }

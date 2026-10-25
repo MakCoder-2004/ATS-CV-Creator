@@ -117,6 +117,17 @@ describe('bounded direct read', () => {
     const namesake = await fetchDirectJobResearch(generic, { ...fixtures, request: async () => response(structured('https://jobs.example.org/positions/other-engineer')) })
     expect(namesake.status).toBe('none')
   })
+  it('treats read-more controls in job description as provisional, not unrelated controls or LinkedIn clamps', async () => {
+    const generic = 'https://jobs.example.org/positions/engineer'
+    const structured = `<script type="application/ld+json">${JSON.stringify({ '@type': 'JobPosting', url: generic, title: 'Synthetic engineer', description: completeDescription })}</script>`
+    const insideDescription = `<main><section class="job-description"><h2>Job description</h2><div>${completeDescription}</div><button>Read more</button></section></main>${structured}`
+    const provisional = await fetchDirectJobResearch(generic, { ...fixtures, request: async () => response(insideDescription) })
+    expect(provisional.status).toBe('provisional')
+    const unrelated = await fetchDirectJobResearch(generic, { ...fixtures, request: async () => response(`<aside><button>Read more</button></aside>${structured}`) })
+    expect(unrelated.status).toBe('full')
+    const linkedInClamped = html(completeDescription).replace('show-more-less-html__markup', 'show-more-less-html__markup show-more-less-html__clamp')
+    expect((await fetchDirectJobResearch(canonical, { ...fixtures, request: async () => response(linkedInClamped) })).status).toBe('full')
+  })
   it('rejects search-page or query-conflicting Indeed structured identities', async () => {
     const indeed = 'https://www.indeed.com/viewjob?jk=1234567890abcdef'
     const structured = (url: string) => `<script type="application/ld+json">${JSON.stringify({ '@type': 'JobPosting', url, title: 'Synthetic engineer', description: completeDescription })}</script>`
