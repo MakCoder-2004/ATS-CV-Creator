@@ -1,5 +1,6 @@
 import { expect, test, vi } from 'vitest'
 import { createTavilyResearchSession, TavilySearchError, type TavilyTransport } from '../src/main/tavily-search'
+import { buildJobResearchQuery } from '../src/shared/job-research-search-query'
 
 // Shape observed on the user's confirmed free Researcher account (not a live request in this test).
 const usage = { key: { usage: 0, limit: null }, account: { current_plan: 'Researcher', plan_usage: 0, plan_limit: 1000, paygo_usage: 0, paygo_limit: null } }
@@ -28,9 +29,19 @@ test('preflights free plan for every basic search and forwards only bounded attr
   expect(f.sent.map(call => call.path)).toEqual(['https://api.tavily.com/usage', 'https://api.tavily.com/search'])
   expect(f.sent.map(call => call.method)).toEqual(['GET', 'POST'])
   expect(f.sent.every(call => call.headers.Authorization === `Bearer ${f.key}` && call.address === '8.8.8.8')).toBe(true)
-  expect(JSON.parse(f.sent[1].body!.toString())).toEqual({ query: 'Engineer 123 site:jobs.example.org', search_depth: 'basic', auto_parameters: false, include_answer: false, include_raw_content: false, max_results: 5, chunks_per_source: 1, topic: 'general', include_usage: true })
+  expect(JSON.parse(f.sent[1].body!.toString())).toEqual({ query: 'job 123 site:jobs.example.org', search_depth: 'basic', auto_parameters: false, include_answer: false, include_raw_content: false, max_results: 5, chunks_per_source: 1, topic: 'general', include_usage: true })
   expect(JSON.stringify(result)).not.toContain(f.key)
   expect(JSON.stringify(result)).not.toContain('Do not forward')
+})
+
+test.each([null, '123'])('sends exactly the disclosed role query with role ID %s', async roleId => {
+  const f = fixture()
+  await createTavilyResearchSession(f.credentials, { transport: f.transport }).search({ kind: 'role', title: 'Engineer', postingHost: 'jobs.example.org', ...(roleId ? { roleId } : {}) })
+  const body = JSON.parse(f.sent[1].body!.toString()) as { query: string; search_depth: string; max_results: number }
+  expect(body.query).toBe(buildJobResearchQuery({ host: 'jobs.example.org', roleId }))
+  expect(body.query).toBe(roleId ? 'job 123 site:jobs.example.org' : 'job site:jobs.example.org')
+  expect(body).toMatchObject({ search_depth: 'basic', max_results: 5 })
+  expect(f.sent.map(call => call.method)).toEqual(['GET', 'POST'])
 })
 
 test('accepts the confirmed free response and the legacy zero-paygo, capped-key response', async () => {

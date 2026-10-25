@@ -88,11 +88,12 @@ function queryFromPublicMetadata(input: PublicJobSearch): string {
     return name.toLowerCase()
   }
   if (input.kind === 'role') {
-    const title = text(input.title, 120)
+    text(input.title, 120) // Validate the public role title, but never transmit it.
     const postingHost = host(input.postingHost)
     const roleId = input.roleId === undefined ? '' : text(input.roleId, 100)
     if (roleId && !/^[a-z0-9_-]+$/i.test(roleId)) throw new Error('Enter only public job metadata for search.')
-    return `${title} ${roleId} site:${postingHost}`.trim()
+    // Match the exact query disclosed before the user authorizes search.
+    return ['job', ...(roleId ? [roleId] : []), `site:${postingHost}`].join(' ')
   }
   if (input.kind === 'company') return `${input.title === undefined ? 'careers' : text(input.title, 120)} site:${host(input.verifiedEmployerDomain)}`
   throw new Error('Enter only public job metadata for search.')
