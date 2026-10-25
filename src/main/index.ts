@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } from 'electron'
 import type { ZodError } from 'zod'
 import { fileURLToPath } from 'node:url'
 import { existsSync, linkSync, lstatSync, mkdirSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
@@ -30,10 +30,14 @@ import { regenerationProposalSchema, regenerationResultSchema, regenerationTarge
 import { mutateDraftRecordInputSchema } from '../shared/draft-records'
 import { validateLeverPostingUrl, type SafePostingFetchOptions } from './safe-posting-fetch'
 import { normalizeJobResearchUrl } from '../shared/job-research'
+import { researchCancelSchema, researchReviewInputSchema, researchReviewStateSchema, researchStartSchema, researchStateSchema } from '../shared/job-research-ipc'
+import { createResearchSearchCredentials, defaultResearchCredentialDirectory } from './research-search-credentials'
+import { createJobResearchSessions } from './job-research-session'
 import { postingPreviewEditSchema, postingReviewSchema } from '../shared/posting-import'
 
 let window: BrowserWindow | undefined
 let workspace: ReturnType<typeof createWorkbench> | undefined
+let research: ReturnType<typeof createJobResearchSessions> | undefined
 
 function invalidProfileInput(error: ZodError, kind: string) {
   const fieldErrors: Record<string, string> = {}
@@ -203,6 +207,11 @@ app.whenReady().then(() => {
       .then(({ ModelRuntime }) => ModelRuntime.create({ allowModelNetwork: false, refreshOnCreate: false }))
       .catch(() => null)
   workspace = createWorkbench(app.getPath('userData'), undefined, useScriptedPi ? undefined : scriptedAnalysis, undefined, postingFetchOptions, piRuntime)
+  const researchCredentials = createResearchSearchCredentials({
+    credentialsDirectory: defaultResearchCredentialDirectory(app.getPath('appData'), app.getPath('userData')),
+    workspaceDirectory: app.getPath('userData'), encryption: safeStorage
+  })
+  research = createJobResearchSessions({ credentials: researchCredentials })
   registerWorkspaceBackupIpc(() => window!, () => workspace!, () => {
     const reopened = createWorkbench(app.getPath('userData'), undefined, useScriptedPi ? undefined : scriptedAnalysis, undefined, postingFetchOptions, piRuntime)
     const previous = workspace!
@@ -357,6 +366,27 @@ app.whenReady().then(() => {
     const choices = postingRefreshChoiceSchema.safeParse(args[5])
     if (!choices.success) return jobSaveResultSchema.parse({ ok: false, error: { code: 'VALIDATION_ERROR', message: 'Choose source or current wording for each field.' } })
     return jobSaveResultSchema.parse(await workspace!.api.acceptPostingRefresh(uuidSchema.parse(args[0]), args[1] as number, uuidSchema.parse(args[2]), args[3], args[4] as number, choices.data))
+  })
+  ipcMain.handle('job-research:start', (event, ...args: unknown[]) => {
+    trusted(event); if (args.length !== 1 || typeof args[0] !== 'string') throw new Error('Expected one public job URL.')
+    return researchStartSchema.parse(research!.startJobResearch(args[0]))
+  })
+  ipcMain.handle('job-research:get', (event, ...args: unknown[]) => {
+    trusted(event); if (args.length !== 1) throw new Error('Expected one research token.')
+    return researchStateSchema.parse(research!.getJobResearch(uuidSchema.parse(args[0])))
+  })
+  ipcMain.handle('job-research:search', async (event, ...args: unknown[]) => {
+    trusted(event); if (args.length !== 1) throw new Error('Expected one research token.')
+    return researchStateSchema.parse(await research!.searchJobResearch(uuidSchema.parse(args[0])))
+  })
+  ipcMain.handle('job-research:review', (event, ...args: unknown[]) => {
+    trusted(event); if (args.length !== 2) throw new Error('Expected token and review decisions.')
+    const review = researchReviewInputSchema.parse(args[1])
+    return researchReviewStateSchema.parse({ reviewed: research!.reviewJobResearch(uuidSchema.parse(args[0]), review.acceptedFindingIds, review.acknowledgedPartial) })
+  })
+  ipcMain.handle('job-research:cancel', (event, ...args: unknown[]) => {
+    trusted(event); if (args.length !== 1) throw new Error('Expected one research token.')
+    return researchCancelSchema.parse(research!.cancelJobResearch(uuidSchema.parse(args[0])))
   })
   ipcMain.handle('posting-import:start', async (event, ...args: unknown[]) => {
     trusted(event); if (args.length !== 1 || typeof args[0] !== 'string') throw new Error('Expected a posting link')
@@ -555,4 +585,4 @@ app.whenReady().then(() => {
 })
 
 app.on('window-all-closed', () => app.quit())
-app.on('before-quit', () => workspace?.close())
+app.on('before-quit', () => { research?.close(); workspace?.close() })

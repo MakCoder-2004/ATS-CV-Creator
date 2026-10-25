@@ -17,6 +17,8 @@ import { profilePdfApplyResultSchema, profilePdfPreviewSchema, profilePdfProposa
 import { profileAiConsentActionSchema, profileAiConsentPreviewSchema, profileAiRunResultSchema } from '../shared/profile-ai-structuring'
 import { postingFetchStateSchema, postingPreviewEditSchema, postingRefreshComparisonSchema, postingReviewSchema } from '../shared/posting-import'
 import { workspaceBackupStatusSchema } from '../shared/workspace-backup'
+import { researchCancelSchema, researchReviewInputSchema, researchReviewStateSchema, researchStartSchema, researchStateSchema } from '../shared/job-research-ipc'
+import { normalizeJobResearchUrl } from '../shared/job-research'
 
 const workspaceResult = z.object({ ok: z.boolean(), cancelled: z.boolean(), message: z.string() }).strict()
 const restoreSelection = z.discriminatedUnion('ok', [
@@ -118,6 +120,17 @@ const api: WorkbenchAPI = Object.freeze({
     const job = await ipcRenderer.invoke('jobs:open', uuidSchema.parse(id))
     return job === null ? null : jobRecordSchema.parse(job)
   },
+  async startJobResearch(url: string) {
+    // Normalize only public metadata; never accept credential-bearing or tracking-laden IPC inputs.
+    return researchStartSchema.parse(await ipcRenderer.invoke('job-research:start', normalizeJobResearchUrl(url).canonicalUrl))
+  },
+  async getJobResearch(token: string) { return researchStateSchema.parse(await ipcRenderer.invoke('job-research:get', uuidSchema.parse(token))) },
+  async searchJobResearch(token: string) { return researchStateSchema.parse(await ipcRenderer.invoke('job-research:search', uuidSchema.parse(token))) },
+  async reviewJobResearch(token: string, acceptedFindingIds: string[], acknowledgedPartial: boolean) {
+    const review = researchReviewInputSchema.parse({ acceptedFindingIds, acknowledgedPartial })
+    return researchReviewStateSchema.parse(await ipcRenderer.invoke('job-research:review', uuidSchema.parse(token), review))
+  },
+  async cancelJobResearch(token: string) { return researchCancelSchema.parse(await ipcRenderer.invoke('job-research:cancel', uuidSchema.parse(token))) },
   async startPostingFetch(url: string) {
     if (typeof url !== 'string' || new TextEncoder().encode(url).length > 2048) throw new Error('The posting link is invalid or too long.')
     return z.object({ token: uuidSchema }).strict().parse(await ipcRenderer.invoke('posting-import:start', url))

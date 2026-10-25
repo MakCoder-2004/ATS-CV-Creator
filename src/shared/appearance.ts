@@ -16,6 +16,8 @@ import type { ProfilePdfProposal, ProfilePdfPreview } from './profile-pdf-import
 import type { ProfileAiConsentAction, ProfileAiConsentPreview, ProfileAiRunResult } from './profile-ai-structuring'
 import type { PostingFetchState, PostingPreviewEdit, PostingRefreshComparison, PostingReview } from './posting-import'
 import type { WorkspaceBackupStatus } from './workspace-backup'
+import type { ResearchState } from './job-research-ipc'
+import type { ReviewedJobResearch } from './job-research'
 
 export const appearanceSchema = z.enum(['light', 'dark'])
 export type Appearance = z.infer<typeof appearanceSchema>
@@ -76,6 +78,11 @@ export interface WorkbenchAPI {
   previewJobDeletion(jobIds: string[]): Promise<JobDeletionPreview>
   executeJobDeletion(token: string, jobIds: string[]): Promise<JobDeletionResult>
   openJob(id: string): Promise<JobRecord | null>
+  startJobResearch(url: string): Promise<{ token: string }>
+  getJobResearch(token: string): Promise<ResearchState>
+  searchJobResearch(token: string): Promise<ResearchState>
+  reviewJobResearch(token: string, acceptedFindingIds: string[], acknowledgedPartial: boolean): Promise<{ reviewed: ReviewedJobResearch }>
+  cancelJobResearch(token: string): Promise<{ ok: boolean }>
   startPostingFetch(url: string): Promise<{ token: string }>
   readPostingPreview(token: string): Promise<PostingFetchState>
   cancelPostingFetch(token: string): Promise<{ ok: boolean }>
@@ -112,7 +119,7 @@ export interface WorkbenchAPI {
   acceptDocumentCuts(jobId: string, documentHash: string, entryIds: string[]): Promise<{ ok: boolean; message: string; draft?: DraftRevision }>
 }
 
-export type WorkbenchStorageAPI = Omit<WorkbenchAPI, 'exportProfile' | 'previewProfileImport' | 'applyProfileImport' | 'cancelProfileImport' | 'previewProfilePdfImport' | 'cancelProfilePdfImport' | 'rebaseProfilePdfImport' | 'applyProfilePdfImport' | 'previewProfileDocxImport' | 'cancelProfileDocxImport' | 'rebaseProfileDocxImport' | 'applyProfileDocxImport' | 'previewProfileAiStructuring' | 'consentProfileAiStructuring' | 'runProfileAiStructuring' | 'cancelProfileAiStructuring' | 'exportWorkspaceBackup' | 'previewWorkspaceRestore' | 'applyWorkspaceRestore' | 'cancelWorkspaceRestore' | 'measureDocument' | 'getDocumentPdf' | 'exportApprovedPdf' | 'exportDraftDocx' | 'openPostingSource'> & {
+export type WorkbenchStorageAPI = Omit<WorkbenchAPI, 'exportProfile' | 'previewProfileImport' | 'applyProfileImport' | 'cancelProfileImport' | 'previewProfilePdfImport' | 'cancelProfilePdfImport' | 'rebaseProfilePdfImport' | 'applyProfilePdfImport' | 'previewProfileDocxImport' | 'cancelProfileDocxImport' | 'rebaseProfileDocxImport' | 'applyProfileDocxImport' | 'previewProfileAiStructuring' | 'consentProfileAiStructuring' | 'runProfileAiStructuring' | 'cancelProfileAiStructuring' | 'exportWorkspaceBackup' | 'previewWorkspaceRestore' | 'applyWorkspaceRestore' | 'cancelWorkspaceRestore' | 'measureDocument' | 'getDocumentPdf' | 'exportApprovedPdf' | 'exportDraftDocx' | 'openPostingSource' | 'startJobResearch' | 'getJobResearch' | 'searchJobResearch' | 'reviewJobResearch' | 'cancelJobResearch'> & {
   saveDocumentFitReport(jobId: string, report: DocumentFitReport): Promise<DocumentFitReport>
   validateProfileImport(input: string): Promise<{ ok: boolean; message: string }>
   replaceProfile(input: string): Promise<{ ok: boolean; message: string; profile?: ProfileSnapshot }>
