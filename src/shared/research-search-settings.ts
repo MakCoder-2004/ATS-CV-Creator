@@ -14,3 +14,12 @@ export const researchSearchKeyStatusSchema = z.object({
   ])
 }).strict()
 export type ResearchSearchKeyStatus = z.infer<typeof researchSearchKeyStatusSchema>
+
+/** These shapes are for explicit trusted actions only, never Settings status or backups. */
+export const researchSearchKeyRevealSchema = z.object({ key: researchSearchKeyInputSchema }).strict()
+export const researchSearchKeyCopySchema = z.object({
+  ok: z.literal(true),
+  message: z.literal('Search key copied. Clipboard contents remain outside CV Tailor until replaced.')
+}).strict()
+export type ResearchSearchKeyReveal = z.infer<typeof researchSearchKeyRevealSchema>
+export type ResearchSearchKeyCopy = z.infer<typeof researchSearchKeyCopySchema>

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import type { IpcMainInvokeEvent } from 'electron'
 import { registerResearchSearchSettingsIpc } from '../src/main/research-search-settings-ipc'
 import { createResearchSearchCredentials, defaultResearchCredentialDirectory } from '../src/main/research-search-credentials'
-import { researchSearchKeyStatusSchema } from '../src/shared/research-search-settings'
+import { researchSearchKeyCopySchema, researchSearchKeyRevealSchema, researchSearchKeyStatusSchema } from '../src/shared/research-search-settings'
 
 const directories: string[] = []
 afterEach(() => { for (const dir of directories.splice(0)) rmSync(dir, { recursive: true, force: true }); vi.restoreAllMocks() })
@@ -24,9 +24,10 @@ function fixture() {
   const handlers = new Map<string, (event: IpcMainInvokeEvent, ...args: unknown[]) => Promise<unknown>>()
   const trusted = vi.fn((event: IpcMainInvokeEvent) => { if (event !== allowed) throw new Error('Untrusted IPC sender') })
   const allowed = { senderFrame: {} } as IpcMainInvokeEvent
-  registerResearchSearchSettingsIpc({ handle: (name, handler) => { handlers.set(name, handler); return undefined } } as Parameters<typeof registerResearchSearchSettingsIpc>[0], store(), trusted)
+  const clipboard = { writeText: vi.fn((_value: string) => {}) }
+  registerResearchSearchSettingsIpc({ handle: (name, handler) => { handlers.set(name, handler); return undefined } } as Parameters<typeof registerResearchSearchSettingsIpc>[0], store(), trusted, clipboard)
   const invoke = (name: string, event: IpcMainInvokeEvent, ...args: unknown[]) => handlers.get(name)!(event, ...args)
-  return { root, workspace, directory, encryption, store, allowed, trusted, invoke }
+  return { root, workspace, directory, encryption, store, allowed, trusted, clipboard, invoke }
 }
 
 test('only trusted exact-arity requests can save, read status and remove; responses never return the key', async () => {
@@ -49,6 +50,75 @@ test('only trusted exact-arity requests can save, read status and remove; respon
   const removed = await x.invoke(remove, x.allowed)
   expect(researchSearchKeyStatusSchema.parse(removed).configured).toBe(false)
   expect(await reopened.status()).toMatchObject({ configured: false })
+})
+
+test('reveal and copy decrypt only for explicit trusted no-argument calls; copy returns no key', async () => {
+  const x = fixture()
+  const reveal = 'research-search:key:reveal', copy = 'research-search:key:copy'
+  const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+  await x.invoke('research-search:key:save', x.allowed, key)
+  const callsBefore = x.encryption.decryptString.mock.calls.length
+  const status = await x.invoke('research-search:key:status', x.allowed)
+  expect(researchSearchKeyStatusSchema.parse(status)).toMatchObject({ configured: true })
+  expect(JSON.stringify(status).includes(key)).toBe(false)
+  expect(x.encryption.decryptString).toHaveBeenCalledTimes(callsBefore)
+  expect(() => researchSearchKeyStatusSchema.parse({ ...(status as object), key })).toThrow()
+  for (const action of [reveal, copy]) {
+    await expect(x.invoke(action, {} as IpcMainInvokeEvent)).rejects.toThrow('Untrusted IPC sender')
+    await expect(x.invoke(action, x.allowed, key)).rejects.toThrow('Unexpected arguments')
+    await expect(x.invoke(action, x.allowed, null)).rejects.toThrow('Unexpected arguments')
+  }
+  expect(x.encryption.decryptString).toHaveBeenCalledTimes(callsBefore)
+  expect(x.clipboard.writeText).not.toHaveBeenCalled()
+  const response = researchSearchKeyRevealSchema.parse(await x.invoke(reveal, x.allowed))
+  expect(response.key === key).toBe(true)
+  expect(() => researchSearchKeyRevealSchema.parse({ key, metadata: 'unexpected' })).toThrow()
+  const copied = researchSearchKeyCopySchema.parse(await x.invoke(copy, x.allowed))
+  expect(copied).toEqual({ ok: true, message: 'Search key copied. Clipboard contents remain outside CV Tailor until replaced.' })
+  expect(JSON.stringify(copied).includes(key)).toBe(false)
+  expect(() => researchSearchKeyCopySchema.parse({ ...copied, key })).toThrow()
+  expect(x.clipboard.writeText.mock.calls.length).toBe(1)
+  expect(x.clipboard.writeText.mock.calls[0][0] === key).toBe(true)
+  expect(consoleSpy).not.toHaveBeenCalled()
+})
+
+test('missing, encrypted-unavailable, failed decryption and local removal never reveal or copy', async () => {
+  const x = fixture()
+  const reveal = 'research-search:key:reveal', copy = 'research-search:key:copy'
+  const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+  for (const action of [reveal, copy]) await expect(x.invoke(action, x.allowed)).rejects.toThrow('could not be')
+  await x.invoke('research-search:key:save', x.allowed, key)
+  x.encryption.isEncryptionAvailable.mockReturnValue(false)
+  for (const action of [reveal, copy]) await expect(x.invoke(action, x.allowed)).rejects.toThrow('could not be')
+  x.encryption.isEncryptionAvailable.mockReturnValue(true)
+  x.encryption.decryptString.mockImplementationOnce(() => { throw new Error(`private:${key}`) })
+  await expect(x.invoke(copy, x.allowed)).rejects.toThrow('could not be copied')
+  expect(x.clipboard.writeText).not.toHaveBeenCalled()
+  await x.invoke('research-search:key:remove', x.allowed)
+  for (const action of [reveal, copy]) await expect(x.invoke(action, x.allowed)).rejects.toThrow('could not be')
+  expect(x.clipboard.writeText).not.toHaveBeenCalled()
+  expect(consoleSpy).not.toHaveBeenCalled()
+})
+
+test('clipboard failures are sanitized and do not return secret text', async () => {
+  const x = fixture()
+  await x.invoke('research-search:key:save', x.allowed, key)
+  x.clipboard.writeText.mockImplementationOnce(() => { throw new Error(`clipboard:${key}`) })
+  const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+  try { await x.invoke('research-search:key:copy', x.allowed); throw new Error('Expected copy failure') }
+  catch (error) {
+    expect((error as Error).message).toBe('The local search key could not be copied. Check device encryption or reconnect the key.')
+  }
+  expect(consoleSpy).not.toHaveBeenCalled()
+})
+
+test('no injected clipboard fails closed without reading the key', async () => {
+  const x = fixture()
+  await x.invoke('research-search:key:save', x.allowed, key)
+  const handlers = new Map<string, (event: IpcMainInvokeEvent, ...args: unknown[]) => Promise<unknown>>()
+  registerResearchSearchSettingsIpc({ handle: (name, handler) => { handlers.set(name, handler); return undefined } } as Parameters<typeof registerResearchSearchSettingsIpc>[0], x.store(), x.trusted)
+  await expect(handlers.get('research-search:key:copy')!(x.allowed)).rejects.toThrow('Clipboard access is unavailable')
+  expect(x.encryption.decryptString).not.toHaveBeenCalled()
 })
 
 test('encrypted private sibling is outside workspace and backups; unavailable encryption saves nothing', async () => {
