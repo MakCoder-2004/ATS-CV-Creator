@@ -17,7 +17,8 @@ function isolatedStorage(prefix: string) {
       APPDATA: appData,
       CV_TAILOR_TEST_STORAGE_ROOT: root,
       CV_TAILOR_TEST_USER_DATA_DIR: userData,
-      CV_TAILOR_TEST_APP_DATA_DIR: appData
+      CV_TAILOR_TEST_APP_DATA_DIR: appData,
+      CV_TAILOR_TEST_KEY_CLIPBOARD: '1'
     }
   }
 }
@@ -57,7 +58,28 @@ test('Settings exposes Pi model preferences without in-app credentials or analys
 
     await tavilyKey.fill('tvly-settings-focus-test-key')
     await page.getByRole('button', { name: 'Save Tavily key' }).click()
-    const removeKey = page.getByRole('button', { name: 'Remove local key' })
+    const card = page.getByRole('region', { name: 'Tavily search key' })
+    const savedKey = card.getByRole('textbox', { name: 'Saved Tavily key' })
+    await expect(savedKey).toHaveAttribute('type', 'password')
+    await expect(savedKey).not.toHaveValue('tvly-settings-focus-test-key')
+    const status = await page.evaluate(() => window.workbench.getResearchSearchKeyStatus())
+    expect(status.configured).toBe(true)
+    expect(JSON.stringify(status).includes('tvly-settings-focus-test-key')).toBe(false)
+    expect(JSON.stringify(await page.evaluate(() => window.workbench.getSettings())).includes('tvly-settings-focus-test-key')).toBe(false)
+    await card.getByRole('button', { name: 'Reveal' }).click()
+    expect(await savedKey.evaluate(input => (input as HTMLInputElement).value === 'tvly-settings-focus-test-key')).toBe(true)
+    await card.getByRole('button', { name: 'Hide' }).click()
+    await expect(savedKey).toHaveAttribute('type', 'password')
+    expect(await savedKey.evaluate(input => (input as HTMLInputElement).value === 'tvly-settings-focus-test-key')).toBe(false)
+    await card.getByRole('button', { name: 'Copy' }).click()
+    await expect(card.getByRole('status').filter({ hasText: 'Search key copied.' })).toBeVisible()
+    expect(await app.evaluate(({ app }) => (app as typeof app & { __testKeyClipboardWrites: number }).__testKeyClipboardWrites)).toBe(1)
+    await card.getByRole('button', { name: 'Reveal' }).click()
+    await page.getByRole('button', { name: 'Saved jobs' }).click()
+    await page.getByRole('button', { name: 'Settings' }).click()
+    await expect(savedKey).toHaveAttribute('type', 'password')
+    expect(await savedKey.evaluate(input => (input as HTMLInputElement).value === 'tvly-settings-focus-test-key')).toBe(false)
+    const removeKey = card.getByRole('button', { name: 'Revoke locally' })
     await expect(removeKey).toBeVisible()
     const ciphertextPath = join(storage.appData, 'CV Tailor Search Credentials', 'tavily-key.dpapi')
     expect(existsSync(ciphertextPath)).toBe(true)
@@ -67,13 +89,31 @@ test('Settings exposes Pi model preferences without in-app credentials or analys
     // The main-process appData assertion gates Save; this proves the isolated write.
     expect(realpathSync.native(ciphertextPath)).toBe(realpathSync.native(join(storage.root, 'appdata', 'CV Tailor Search Credentials', 'tavily-key.dpapi')))
     expect(existsSync(join(storage.userData, 'CV Tailor Search Credentials', 'tavily-key.dpapi'))).toBe(false)
-    await tavilyKey.fill('tvly-next-key-keep-this')
+    const replacement = card.getByLabel('New or replacement API key')
+    await replacement.fill('tvly-next-key-keep-this')
     await removeKey.click()
-    const cancelRemoval = page.getByRole('button', { name: 'Cancel', exact: true })
+    const cancelRemoval = card.getByRole('button', { name: 'Cancel', exact: true })
     await expect(cancelRemoval).toBeFocused()
-    await expect(tavilyKey).toHaveValue('tvly-next-key-keep-this')
+    expect(await replacement.evaluate(input => (input as HTMLInputElement).value === 'tvly-next-key-keep-this')).toBe(true)
     await cancelRemoval.click()
     await expect(removeKey).toBeFocused()
+    await replacement.fill('')
+    for (const width of [1440, 375]) {
+      await page.setViewportSize({ width, height: 950 })
+      for (const mode of ['light', 'dark'] as const) {
+        await page.getByRole('button', { name: `Use ${mode} mode` }).filter({ visible: true }).click()
+        await expect(page.locator('html')).toHaveAttribute('data-appearance', mode)
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+        if (width === 1440 && mode === 'light') await page.screenshot({ path: 'docs/validation/artifacts/tavily-key-card-0.6-followup/settings-masked-light-1440.png', fullPage: true })
+      }
+    }
+    await removeKey.click()
+    await expect(cancelRemoval).toBeFocused()
+    await card.getByRole('button', { name: 'Remove local key' }).click()
+    await expect(card.getByText('No Tavily key is saved on this device.')).toBeVisible()
+    expect(existsSync(ciphertextPath)).toBe(false)
+    expect(existsSync(join(storage.userData, 'research-model-requests.log'))).toBe(false)
+    expect(existsSync(join(storage.userData, 'research-direct-requests.log'))).toBe(false)
   } finally {
     await app?.close().catch(() => {})
     await rm(storage.root, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 })

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } from 'electron'
+import { app, BrowserWindow, clipboard, dialog, ipcMain, safeStorage, shell } from 'electron'
 import type { ZodError } from 'zod'
 import { fileURLToPath } from 'node:url'
 import { appendFileSync, existsSync, linkSync, lstatSync, mkdirSync, realpathSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
@@ -253,7 +253,15 @@ app.whenReady().then(() => {
   })
   research = createJobResearchSessions({ credentials: researchCredentials,
     ...(scriptedResearch ? { direct: (url, options) => fetchDirectJobResearch(url, { ...scriptedResearch, signal: options.signal }) } : {}) })
-  registerResearchSearchSettingsIpc(ipcMain, researchCredentials, trusted)
+  // Development-only clipboard stub prevents synthetic GUI tests from touching the OS clipboard.
+  // Neither the copied text nor the clipboard itself is persisted in test data.
+  let testKeyClipboardWrites = 0
+  const fakeClipboard = !app.isPackaged && process.env.CV_TAILOR_TEST_KEY_CLIPBOARD === '1'
+  if (fakeClipboard) Object.defineProperty(app, '__testKeyClipboardWrites', { get: () => testKeyClipboardWrites })
+  const keyClipboard = fakeClipboard
+    ? { writeText(_text: string) { testKeyClipboardWrites++ } }
+    : clipboard
+  registerResearchSearchSettingsIpc(ipcMain, researchCredentials, trusted, keyClipboard)
   let analysisSelection: PiModelSelection | null = null
   let selectionEpoch = 0
   let modelUpdatePending = false

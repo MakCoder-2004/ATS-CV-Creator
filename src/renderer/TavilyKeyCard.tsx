@@ -1,18 +1,14 @@
 import React, { FormEvent, useEffect, useRef, useState } from 'react'
 import { KeyRound } from 'lucide-react'
+import type { WorkbenchAPI } from '../shared/appearance'
 import type { ResearchSearchKeyStatus } from '../shared/research-search-settings'
 import './TavilyKeyCard.css'
 
-export interface TavilyKeyCardClient {
-  getResearchSearchKeyStatus(): Promise<ResearchSearchKeyStatus>
-  saveResearchSearchKey(key: string): Promise<ResearchSearchKeyStatus>
-  removeResearchSearchKey(): Promise<ResearchSearchKeyStatus>
-  revealResearchSearchKey(): Promise<{ key: string }>
-  copyResearchSearchKey(): Promise<{ ok: true; message: string }>
-}
+export type TavilyKeyCardClient = Pick<WorkbenchAPI,
+  'getResearchSearchKeyStatus' | 'saveResearchSearchKey' | 'removeResearchSearchKey' | 'revealResearchSearchKey' | 'copyResearchSearchKey'>
 
 interface Props { client?: TavilyKeyCardClient }
-const defaultClient = () => (window as unknown as { workbench: TavilyKeyCardClient }).workbench
+const defaultClient = () => window.workbench
 
 export function TavilyKeyCard({ client }: Props) {
   const api = client ?? defaultClient()

@@ -15,7 +15,7 @@ const client: TavilyKeyCardClient = {
   saveResearchSearchKey: async () => configured,
   removeResearchSearchKey: async () => ({ ...configured, configured: false }),
   revealResearchSearchKey: async () => ({ key: 'never-render-this-by-default' }),
-  copyResearchSearchKey: async () => ({ ok: true, message: 'Key copied.' })
+  copyResearchSearchKey: async () => ({ ok: true, message: 'Search key copied. Clipboard contents remain outside CV Tailor until replaced.' })
 }
 
 describe('TavilyKeyCard', () => {

@@ -24,16 +24,25 @@ test('preload sends a typed Pi selection only through the Settings IPC channel',
   expect(bridge.invoke).toHaveBeenCalledWith('settings:pi-model', input)
 })
 
-test('preload exposes only named search key status, save and remove methods', async () => {
+test('preload exposes only named search key status, save, remove, reveal and copy methods', async () => {
   const key = 'tvly-secret-example-key-12345'
   const status = { configured: true, storageAvailable: true, message: 'Search is available only after a key is stored on this device.' }
   bridge.invoke.mockResolvedValue(status)
   await expect(bridge.api!.getResearchSearchKeyStatus()).resolves.toEqual(status)
   await expect(bridge.api!.saveResearchSearchKey(key)).resolves.toEqual(status)
   await expect(bridge.api!.removeResearchSearchKey()).resolves.toEqual(status)
+  bridge.invoke.mockResolvedValue({ key })
+  await expect(bridge.api!.revealResearchSearchKey()).resolves.toEqual({ key })
+  bridge.invoke.mockResolvedValue({ ok: true, message: 'Search key copied. Clipboard contents remain outside CV Tailor until replaced.' })
+  await expect(bridge.api!.copyResearchSearchKey()).resolves.toMatchObject({ ok: true })
   expect(bridge.invoke.mock.calls).toEqual([
-    ['research-search:key:status'], ['research-search:key:save', key], ['research-search:key:remove']
+    ['research-search:key:status'], ['research-search:key:save', key], ['research-search:key:remove'],
+    ['research-search:key:reveal'], ['research-search:key:copy']
   ])
+  bridge.invoke.mockResolvedValue({ key: 'short' })
+  await expect(bridge.api!.revealResearchSearchKey()).rejects.toThrow()
+  bridge.invoke.mockResolvedValue({ ok: true, message: 'unexpected', key })
+  await expect(bridge.api!.copyResearchSearchKey()).rejects.toThrow()
   bridge.invoke.mockClear()
   await expect(bridge.api!.saveResearchSearchKey('short')).rejects.toThrow()
   expect(bridge.invoke).not.toHaveBeenCalled()

@@ -19,7 +19,7 @@ import { postingFetchStateSchema, postingPreviewEditSchema, postingRefreshCompar
 import { workspaceBackupStatusSchema } from '../shared/workspace-backup'
 import { researchCancelSchema, researchReviewInputSchema, researchReviewStateSchema, researchStartSchema, researchStateSchema } from '../shared/job-research-ipc'
 import { normalizeJobResearchUrl } from '../shared/job-research-url'
-import { researchSearchKeyInputSchema, researchSearchKeyStatusSchema } from '../shared/research-search-settings'
+import { researchSearchKeyCopySchema, researchSearchKeyInputSchema, researchSearchKeyRevealSchema, researchSearchKeyStatusSchema } from '../shared/research-search-settings'
 import { researchAnalysisTokenSchema, researchAnalysisConsentSchema, researchAnalysisPreviewReplySchema, researchAnalysisProgressReplySchema, researchAnalysisDiscardReplySchema } from '../shared/research-volatile-analysis-ipc'
 
 const workspaceResult = z.object({ ok: z.boolean(), cancelled: z.boolean(), message: z.string() }).strict()
@@ -49,6 +49,8 @@ const api: WorkbenchAPI = Object.freeze({
   async getResearchSearchKeyStatus() { return researchSearchKeyStatusSchema.parse(await ipcRenderer.invoke('research-search:key:status')) },
   async saveResearchSearchKey(key: string) { return researchSearchKeyStatusSchema.parse(await ipcRenderer.invoke('research-search:key:save', researchSearchKeyInputSchema.parse(key))) },
   async removeResearchSearchKey() { return researchSearchKeyStatusSchema.parse(await ipcRenderer.invoke('research-search:key:remove')) },
+  async revealResearchSearchKey() { return researchSearchKeyRevealSchema.parse(await ipcRenderer.invoke('research-search:key:reveal')) },
+  async copyResearchSearchKey() { return researchSearchKeyCopySchema.parse(await ipcRenderer.invoke('research-search:key:copy')) },
   async exportWorkspaceBackup() { return workspaceResult.parse(await ipcRenderer.invoke('workspace:backup')) },
   async previewWorkspaceRestore() { return restoreSelection.parse(await ipcRenderer.invoke('workspace:restore:preview')) },
   async applyWorkspaceRestore(token: string) { return restoreDecision.parse(await ipcRenderer.invoke('workspace:restore:apply', uuidSchema.parse(token))) },
