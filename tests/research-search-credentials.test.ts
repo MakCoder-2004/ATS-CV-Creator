@@ -45,10 +45,14 @@ test('unavailable encryption and failed encryption never write plaintext or repl
   await expect(broken.save('tvly-NEXT-SECRET')).rejects.toThrow(/storage failed/)
   expect(await readFile(file)).toEqual(before)
   const offline = createResearchSearchCredentials({ ...f, encryption: { ...f.encryption, isEncryptionAvailable: () => false } })
-  expect(await offline.status()).toMatchObject({ configured: false, storageAvailable: false })
+  const offlineStatus = await offline.status()
+  expect(offlineStatus).toMatchObject({ configured: true, storageAvailable: false })
+  expect(JSON.stringify(offlineStatus)).not.toContain('tvly-')
   await expect(offline.save('tvly-NEW-SECRET')).rejects.toThrow(/unavailable/)
   await expect(offline.withKey(async () => undefined)).rejects.toThrow(/unavailable/)
   expect(await readFile(file)).toEqual(before)
+  expect(await offline.remove()).toMatchObject({ configured: false, storageAvailable: false })
+  expect(await readFile(file).catch(() => null)).toBeNull()
 })
 
 test('rejects storage below workspace, including an alias to it', async () => {

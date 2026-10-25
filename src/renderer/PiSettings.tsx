@@ -1,4 +1,4 @@
-import React, { FormEvent, useEffect, useState } from 'react'
+import React, { FormEvent, useEffect, useRef, useState } from 'react'
 import { KeyRound, ShieldCheck, Sparkles } from 'lucide-react'
 import type { ResearchSearchKeyStatus } from '../shared/research-search-settings'
 import { PI_THINKING_LEVELS, type PiModelSelection } from '../shared/pi-model'
@@ -12,6 +12,8 @@ function ResearchSearchKeySettings() {
   const [confirmRemove, setConfirmRemove] = useState(false)
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
+  const removeTrigger = useRef<HTMLButtonElement>(null)
+  const cancelRemove = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
     let active = true
@@ -41,6 +43,15 @@ function ResearchSearchKeySettings() {
     finally { setBusy(false) }
   }
 
+  useEffect(() => {
+    if (confirmRemove) cancelRemove.current?.focus()
+  }, [confirmRemove])
+
+  function cancelRemoval() {
+    setConfirmRemove(false)
+    removeTrigger.current?.focus()
+  }
+
   return <section className="settings-block" aria-labelledby="research-key-heading">
     <div className="settings-block-heading"><span className="settings-block-icon"><KeyRound size={18} aria-hidden="true" /></span><div><h2 id="research-key-heading">Tavily search key</h2><p>Separate from your Pi model sign-in.</p></div></div>
     <p className="settings-helper pi-settings-helper" role="status">{status ? status.storageAvailable ? status.configured ? 'A Tavily key is saved on this device.' : 'No Tavily key is saved on this device.' : 'Secure local key storage is unavailable. A Tavily key cannot be saved here.' : loadFailed ? 'Local key status is unavailable.' : 'Checking local key storage…'}</p>
@@ -49,7 +60,7 @@ function ResearchSearchKeySettings() {
       <p className="settings-helper pi-settings-helper" id="research-key-help">Create and manage your own free Researcher account with Tavily. Saving a key makes no search request and does not enable a paid plan. The encrypted key stays outside workspace backups.</p>
       <div className="form-actions"><button className="primary-button" type="submit" disabled={busy || !status?.storageAvailable || !key}>Save Tavily key</button></div>
     </form>
-    {status?.configured && <div className="research-key-removal">{confirmRemove ? <><p className="settings-helper">Remove the local key? This will not revoke the key in your Tavily account.</p><div className="form-actions"><button className="secondary-button" type="button" disabled={busy} onClick={() => setConfirmRemove(false)}>Cancel</button><button className="secondary-button" type="button" disabled={busy} onClick={() => void remove()}>Remove local key</button></div></> : <button className="secondary-button" type="button" disabled={busy} onClick={() => setConfirmRemove(true)}>Remove local key</button>}</div>}
+    {status?.configured && <div className="research-key-removal">{confirmRemove ? <><p className="settings-helper">Remove the local key? This will not revoke the key in your Tavily account.</p><div className="form-actions"><button ref={cancelRemove} className="secondary-button" type="button" disabled={busy} onClick={cancelRemoval}>Cancel</button><button className="secondary-button" type="button" disabled={busy} onClick={() => void remove()}>Remove local key</button></div></> : <button ref={removeTrigger} className="secondary-button" type="button" disabled={busy} onClick={() => setConfirmRemove(true)}>Remove local key</button>}</div>}
     <p className="settings-helper pi-settings-helper">A later search may send the public role title, posting host and job ID, or a verified employer domain, to Tavily. Tavily may share queries with other search-index providers. No profile data goes into search queries. Search requires a separate action and is not started here.</p>
     {error && <p className="profile-message error" role="alert">{error}</p>}{message && <p className="profile-message success" role="status">{message}</p>}
   </section>

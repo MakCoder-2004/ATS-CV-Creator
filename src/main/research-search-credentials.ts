@@ -69,14 +69,13 @@ export function createResearchSearchCredentials(options: {
   const available = () => { try { return encryption.isEncryptionAvailable() } catch { return false } }
   return {
     async status(): Promise<SearchCredentialStatus> {
-      if (!available()) return { configured: false, storageAvailable: false, message: UNAVAILABLE }
       try {
         await checkLocation()
-        const stat = await fs.stat(file).catch(error => {
+        const stat = await fs.lstat(file).catch(error => {
           if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
           throw error
         })
-        return { configured: Boolean(stat), storageAvailable: true, message: MESSAGE }
+        return { configured: Boolean(stat), storageAvailable: available(), message: available() ? MESSAGE : UNAVAILABLE }
       } catch { return { configured: false, storageAvailable: false, message: FAILED } }
     },
     async save(key: string): Promise<SearchCredentialStatus> {
