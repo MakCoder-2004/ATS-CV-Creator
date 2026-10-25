@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { cancelPostingCaptureForManual, JobResearchFindings, JobResearchReview, searchKeyStatusMessage, searchOutcomeNotice, shouldOfferIndexedSearch, startJobResearchFromIntake, startResearchWithCaptureLifecycle, transitionCapturedRead } from '../src/renderer/JobResearchReview'
+import { cancelPostingCaptureForManual, classifySearchKeyStatus, JobResearchFindings, JobResearchReview, searchKeyStatusMessage, searchOutcomeNotice, shouldOfferIndexedSearch, startJobResearchFromIntake, startResearchWithCaptureLifecycle, transitionCapturedRead } from '../src/renderer/JobResearchReview'
+import type { ResearchSearchKeyStatus } from '../src/shared/research-search-settings'
 import type { JobResearchRun } from '../src/shared/job-research-schema'
 import { buildJobResearchQuery } from '../src/shared/job-research-search-query'
 import { SavedJobs, temporaryDirectNotice } from '../src/renderer/SavedJobs'
@@ -57,8 +58,18 @@ describe('universal research intake', () => {
       startedAt: '2026-01-01T00:00:00Z', completedAt: '2026-01-01T00:01:00Z', status: 'blocked', accessFailure: 'unsafe', sources: [], findings: [], unknowns: ['Source identity was unsafe']
     }
     expect(shouldOfferIndexedSearch(run)).toBe(false)
+    const inspectionFailure: ResearchSearchKeyStatus = { configured: false, storageAvailable: false, message: 'Search key storage failed. The existing key was not replaced.' }
+    expect(classifySearchKeyStatus(inspectionFailure)).toBe('unknown')
+    expect(searchKeyStatusMessage(classifySearchKeyStatus(inspectionFailure))).toContain('may be present or absent')
+    expect(searchKeyStatusMessage(classifySearchKeyStatus(inspectionFailure))).not.toContain('No search key is stored')
+    expect(classifySearchKeyStatus({ configured: false, storageAvailable: false, message: 'Device encryption is unavailable. No search key was saved.' })).toBe('storage-unavailable')
+    expect(classifySearchKeyStatus({ configured: true, storageAvailable: true, message: 'Search is available only after a key is stored on this device.' })).toBe('configured')
+    expect(classifySearchKeyStatus({ configured: false, storageAvailable: true, message: 'Search is available only after a key is stored on this device.' })).toBe('absent')
     expect(searchKeyStatusMessage('unknown')).toContain('may be present or absent')
     expect(searchKeyStatusMessage('storage-unavailable')).toContain('unavailable')
+    expect(searchOutcomeNotice('one-credit-reported', { findings: [] })).toContain('No exact-role findings were found')
+    expect(searchOutcomeNotice('one-credit-reported', { findings: [{ kind: 'indexed-role-claim' } as JobResearchRun['findings'][number]] })).toContain('Partial exact-role findings were returned')
+    expect(searchOutcomeNotice('one-credit-reported', { findings: [{ kind: 'direct-role-text', completeness: 'full' } as JobResearchRun['findings'][number]] })).toContain('Full exact-role findings were returned')
     expect(searchOutcomeNotice('one-credit-reported')).toContain('one free credit used')
     expect(searchOutcomeNotice('not-sent')).toContain('/usage preflight may have occurred')
     expect(searchOutcomeNotice('charge-uncertain')).toContain('Do not retry')

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import type { JobResearchRun, ReviewedJobResearch } from '../shared/job-research-schema'
 import type { ResearchState } from '../shared/job-research-ipc'
+import type { ResearchSearchKeyStatus } from '../shared/research-search-settings'
 import { buildJobResearchQuery } from '../shared/job-research-search-query'
 import './job-research-review.css'
 
@@ -11,11 +12,22 @@ export function startJobResearchFromIntake(api: Pick<Window['workbench'], 'start
 
 export type CapturedReadLifecycle = 'available' | 'consumed' | 'restart-required'
 export function shouldOfferIndexedSearch(run: JobResearchRun) { return run.status !== 'full' && run.accessFailure !== 'unsafe' }
-export function searchKeyStatusMessage(status: 'loading' | 'configured' | 'absent' | 'unknown' | 'storage-unavailable') {
+export type SearchKeyStatusKind = 'loading' | 'configured' | 'absent' | 'unknown' | 'storage-unavailable'
+export function classifySearchKeyStatus(status: ResearchSearchKeyStatus): Exclude<SearchKeyStatusKind, 'loading'> {
+  if (status.message === 'Search key storage failed. The existing key was not replaced.') return 'unknown'
+  if (!status.storageAvailable) return 'storage-unavailable'
+  return status.configured ? 'configured' : 'absent'
+}
+export function searchKeyStatusMessage(status: SearchKeyStatusKind) {
   return status === 'loading' ? 'Checking local search-key status…' : status === 'configured' ? 'A search key is stored on this device. Search availability is still confirmed by the service when you search.' : status === 'absent' ? 'No search key is stored on this device. Check Settings to add one before a new attempt.' : status === 'storage-unavailable' ? 'Encrypted search-key storage is unavailable. The key status is not usable; check Settings.' : 'Local search-key status could not be checked. The key may be present or absent; check Settings. The search service remains authoritative.'
 }
-export function searchOutcomeNotice(outcome: string | undefined) {
-  return outcome === 'one-credit-reported' ? 'Tavily reported one free credit used. This is a search result, not model analysis.' : outcome === 'not-sent' ? 'No indexed search POST was sent. A /usage preflight may have occurred.' : outcome === 'charge-uncertain' ? 'The search charge is uncertain. Do not retry this search.' : undefined
+export function searchOutcomeNotice(outcome: string | undefined, run?: Pick<JobResearchRun, 'findings'>) {
+  if (outcome === 'one-credit-reported') {
+    const roleFindings = run?.findings.filter(finding => finding.kind !== 'verified-company-context') ?? []
+    const result = roleFindings.length === 0 ? 'No exact-role findings were found.' : roleFindings.some(finding => finding.kind === 'direct-role-text' && finding.completeness === 'full') ? 'Full exact-role findings were returned.' : 'Partial exact-role findings were returned.'
+    return `Tavily reported one free credit used. ${result} This is a search result, not model analysis.`
+  }
+  return outcome === 'not-sent' ? 'No indexed search POST was sent. A /usage preflight may have occurred.' : outcome === 'charge-uncertain' ? 'The search charge is uncertain. Do not retry this search.' : undefined
 }
 export function transitionCapturedRead(state: CapturedReadLifecycle, event: 'transferred' | 'cancelled' | 'refetched'): CapturedReadLifecycle {
   if (event === 'refetched') return 'available'
@@ -69,7 +81,7 @@ export function JobResearchReview({ url, postingFetchToken, onPostingHandoff, on
   const fetchAgainButtonRef = useRef<HTMLButtonElement>(null)
   const [notice, setNotice] = useState('')
   const [reviewed, setReviewed] = useState<ReviewedJobResearch>()
-  const [searchKeyStatus, setSearchKeyStatus] = useState<'loading' | 'configured' | 'absent' | 'unknown' | 'storage-unavailable'>('loading')
+  const [searchKeyStatus, setSearchKeyStatus] = useState<SearchKeyStatusKind>('loading')
 
   useEffect(() => {
     mounted.current = true
@@ -93,7 +105,7 @@ export function JobResearchReview({ url, postingFetchToken, onPostingHandoff, on
     if (state.status === 'ready') {
       setRun(state.run); setSelected([]); setAcknowledged(false); setReviewed(undefined)
       const outcome = 'searchOutcome' in state && typeof state.searchOutcome === 'string' ? state.searchOutcome : undefined
-      setNotice(searchOutcomeNotice(outcome) ?? (state.run.status === 'full' ? 'A complete direct role source was found. Review its wording before continuing.' : state.run.status === 'blocked' ? 'The public source blocked this read. Nothing was accepted.' : state.run.status === 'none' ? 'No exact-role evidence was found. Nothing was accepted.' : 'Only partial role evidence was found. It is not a complete posting.'))
+      setNotice(searchOutcomeNotice(outcome, state.run) ?? (state.run.status === 'full' ? 'A complete direct role source was found. Review its wording before continuing.' : state.run.status === 'blocked' ? 'The public source blocked this read. Nothing was accepted.' : state.run.status === 'none' ? 'No exact-role evidence was found. Nothing was accepted.' : 'Only partial role evidence was found. It is not a complete posting.'))
       requestAnimationFrame(() => { if (mounted.current) cancelButtonRef.current?.focus() })
     } else if (state.status === 'unavailable') {
       const outcome = 'searchOutcome' in state && typeof state.searchOutcome === 'string' ? state.searchOutcome : undefined
@@ -172,7 +184,7 @@ export function JobResearchReview({ url, postingFetchToken, onPostingHandoff, on
     let active = true
     setSearchKeyStatus('loading')
     window.workbench.getResearchSearchKeyStatus().then(status => {
-      if (active) setSearchKeyStatus(!status.storageAvailable ? 'storage-unavailable' : status.configured ? 'configured' : 'absent')
+      if (active) setSearchKeyStatus(classifySearchKeyStatus(status))
     }).catch(() => { if (active) setSearchKeyStatus('unknown') })
     return () => { active = false }
   }, [run])
