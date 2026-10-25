@@ -2,7 +2,7 @@
 
 Issue [#90](https://github.com/Makrious/cv-tailor/issues/90), integration branch `feat/settings-controls-integration`. This is development-build evidence, **not** an installed-app or real Tavily account check. The user's running unpacked 0.6 app and installed executable were not touched.
 
-The Settings grid now mounts `TavilyKeyCard` instead of the earlier inline key form. The saved value starts masked; Reveal alone returns decrypted plaintext to the renderer, Hide clears it, and leaving Settings unmounts the card. Copy decrypts only in trusted main IPC and writes to Electron's clipboard in normal use; it returns a secret-free notice. A separate replacement field does not overwrite the saved key until Save. Removing the device copy requires confirmation, initially focuses Cancel, and explains that Tavily account revocation is separate. Ordinary status, Settings and workspace backups exclude the key; these controls do not initiate search or Pi model work.
+The Settings grid now mounts `TavilyKeyCard` instead of the earlier inline key form. The saved value starts masked; Reveal alone returns decrypted plaintext to the renderer, Hide clears it, and leaving Settings unmounts the card. Any edit to the Pi provider/model reference or thinking level, and each successful Pi model save, also clears revealed plaintext in a layout effect before paint without remounting the key card or clearing replacement input. A model-context change invalidates a pending reveal response while leaving unrelated work alone. Copy decrypts only in trusted main IPC and writes to Electron's clipboard in normal use; it returns a secret-free notice. A separate replacement field does not overwrite the saved key until Save. Removing the device copy requires confirmation, initially focuses Cancel, and explains that Tavily account revocation is separate. Ordinary status, Settings and workspace backups exclude the key; these controls do not initiate search or Pi model work.
 
 ## Focused receipts
 
@@ -11,6 +11,11 @@ The Settings grid now mounts `TavilyKeyCard` instead of the earlier inline key f
 - `npm run build` — passed (Electron Vite main, preload and renderer). No npm reinstall or native module rebuild.
 - `playwright test tests/electron/pi-settings.spec.ts -g 'Settings exposes Pi model preferences' --workers=1 --reporter=line` — passed, then passed again after adding the page-leave clearance assertion. The test gates synthetic Save on separately verified sibling `appData` and `userData` paths, confirms the encrypted file lives outside the workspace, checks default masking, explicit Reveal/Hide/Copy, clearing plaintext on navigation, preserved replacement input and Cancel focus restoration, local removal and ciphertext deletion. It checks secret-free Settings/status, absence of scripted provider requests and no page horizontal overflow at 1440px and 375px in both appearances. The dev-only clipboard stub increments a count without writing to the real OS clipboard or persisting clipboard contents; production uses Electron's clipboard. No real key or account was used.
 - [Masked 1440px light screenshot](artifacts/tavily-key-card-0.6-followup/settings-masked-light-1440.png). It predates the separately owned Provider sign-in and faithfulness removal; those older cards are intentionally visible in this branch's evidence, not the requested final two-card arrangement. No screenshot was captured while plaintext was revealed.
+
+## Model-context masking follow-up
+
+- A focused Settings Electron regression now reveals the synthetic saved key, edits the provider/model field, and verifies it is masked; it repeats for a thinking-level change before saving the scripted Pi selection. The existing Hide/page-exit checks remain in the same bounded UI case.
+- `tests/tavily-key-card.test.ts` verifies layout-effect invalidation, generation protection against late responses, stable card mounting, and preservation of replacement input. No delayed IPC response was injected into the Electron test.
 
 ## Open gates
 

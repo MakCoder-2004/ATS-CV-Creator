@@ -18,7 +18,9 @@ function isolatedStorage(prefix: string) {
       CV_TAILOR_TEST_STORAGE_ROOT: root,
       CV_TAILOR_TEST_USER_DATA_DIR: userData,
       CV_TAILOR_TEST_APP_DATA_DIR: appData,
-      CV_TAILOR_TEST_KEY_CLIPBOARD: '1'
+      CV_TAILOR_TEST_KEY_CLIPBOARD: '1',
+      CV_TAILOR_SCRIPTED_ANALYSIS: '1',
+      CV_TAILOR_SCRIPTED_PI_MODEL: '1'
     }
   }
 }
@@ -60,6 +62,8 @@ test('Settings exposes Pi model preferences without in-app credentials or analys
     await page.getByRole('button', { name: 'Save Tavily key' }).click()
     const card = page.getByRole('region', { name: 'Tavily search key' })
     const savedKey = card.getByRole('textbox', { name: 'Saved Tavily key' })
+    const replacement = card.getByLabel('New or replacement API key')
+    await replacement.fill('tvly-next-key-keep-this')
     await expect(savedKey).toHaveAttribute('type', 'password')
     await expect(savedKey).not.toHaveValue('tvly-settings-focus-test-key')
     const status = await page.evaluate(() => window.workbench.getResearchSearchKeyStatus())
@@ -71,6 +75,25 @@ test('Settings exposes Pi model preferences without in-app credentials or analys
     await card.getByRole('button', { name: 'Hide' }).click()
     await expect(savedKey).toHaveAttribute('type', 'password')
     expect(await savedKey.evaluate(input => (input as HTMLInputElement).value === 'tvly-settings-focus-test-key')).toBe(false)
+
+    const modelReference = page.getByLabel('Provider/model reference')
+    await modelReference.fill('scripted/cv-tailor-fixture')
+    await card.getByRole('button', { name: 'Reveal' }).click()
+    await expect(savedKey).toHaveAttribute('type', 'text')
+    await modelReference.fill('scripted/cv-tailor-fixture-v2')
+    await expect(savedKey).toHaveAttribute('type', 'password')
+    expect(await savedKey.evaluate(input => (input as HTMLInputElement).value)).not.toBe('tvly-settings-focus-test-key')
+
+    await modelReference.fill('scripted/cv-tailor-fixture')
+    await card.getByRole('button', { name: 'Reveal' }).click()
+    await expect(savedKey).toHaveAttribute('type', 'text')
+    const thinkingLevel = page.getByLabel('Thinking level')
+    await thinkingLevel.click()
+    await page.getByRole('option', { name: 'low', exact: true }).click()
+    await expect(savedKey).toHaveAttribute('type', 'password')
+    await modelCard.getByRole('button', { name: 'Save Pi model' }).click()
+    await expect(page.getByRole('status').filter({ hasText: 'Pi model preference saved.' })).toBeVisible()
+    await expect(replacement).toHaveValue('tvly-next-key-keep-this')
     await card.getByRole('button', { name: 'Copy' }).click()
     await expect(card.getByRole('status').filter({ hasText: 'Search key copied.' })).toBeVisible()
     expect(await app.evaluate(({ app }) => (app as typeof app & { __testKeyClipboardWrites: number }).__testKeyClipboardWrites)).toBe(1)
@@ -89,7 +112,6 @@ test('Settings exposes Pi model preferences without in-app credentials or analys
     // The main-process appData assertion gates Save; this proves the isolated write.
     expect(realpathSync.native(ciphertextPath)).toBe(realpathSync.native(join(storage.root, 'appdata', 'CV Tailor Search Credentials', 'tavily-key.dpapi')))
     expect(existsSync(join(storage.userData, 'CV Tailor Search Credentials', 'tavily-key.dpapi'))).toBe(false)
-    const replacement = card.getByLabel('New or replacement API key')
     await replacement.fill('tvly-next-key-keep-this')
     await removeKey.click()
     const cancelRemoval = card.getByRole('button', { name: 'Cancel', exact: true })

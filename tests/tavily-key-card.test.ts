@@ -43,6 +43,17 @@ describe('TavilyKeyCard', () => {
     expect(source).toContain('setConfirm(false); requestAnimationFrame(() => revokeRef.current?.focus())')
   })
 
+  it('clears on model-context changes before paint without remounting or resetting replacement input', () => {
+    const source = readFileSync(new URL('../src/renderer/TavilyKeyCard.tsx', import.meta.url), 'utf8')
+    const settings = readFileSync(new URL('../src/renderer/PiSettings.tsx', import.meta.url), 'utf8')
+    expect(source).toContain('useLayoutEffect(() => {')
+    expect(source).toContain('}, [modelContext])')
+    expect(settings).toContain('<TavilyKeyCard modelContext={`${reference}\\u0000${thinkingLevel}\\u0000${modelSaveEpoch}`} />')
+    expect(settings).toContain('setModelSaveEpoch(epoch => epoch + 1)')
+    expect(source).not.toContain('key={modelContext}')
+    expect(source).toContain('const [keyInput, setKeyInput] = useState(\'\')')
+  })
+
   it('provides explicit Hide during a pending reveal and invalidates its late result', () => {
     const source = readFileSync(new URL('../src/renderer/TavilyKeyCard.tsx', import.meta.url), 'utf8')
     expect(source).toContain('function hideReveal() { clearReveal(); setRevealPending(false); setBusy(false) }')

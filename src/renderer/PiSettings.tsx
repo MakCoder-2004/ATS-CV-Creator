@@ -13,6 +13,7 @@ export function PiSettingsPanel() {
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
+  const [modelSaveEpoch, setModelSaveEpoch] = useState(0)
 
   useEffect(() => {
     window.workbench.getSettings().then(value => {
@@ -33,6 +34,7 @@ export function PiSettingsPanel() {
       const saved = await window.workbench.setPiModel({ reference, thinkingLevel })
       setSelection(saved.pi)
       setReference(saved.pi ? `${saved.pi.providerId}/${saved.pi.modelId}` : reference)
+      setModelSaveEpoch(epoch => epoch + 1)
       setMessage('Pi model preference saved.')
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Pi model preference was not saved. Check the model reference and try again.')
@@ -64,7 +66,7 @@ export function PiSettingsPanel() {
         <div className="settings-block-heading"><span className="settings-block-icon"><ShieldCheck size={18} aria-hidden="true" /></span><div><h2 id="pi-auth-heading">Provider sign-in</h2><p>Authentication is managed by Pi, not in CV Tailor.</p></div></div>
         <p className="settings-helper pi-settings-helper">Sign in through Pi outside CV Tailor, then choose an available model here. CV Tailor never asks for or stores Pi credentials.</p>
       </section>
-      <TavilyKeyCard />
+      <TavilyKeyCard modelContext={`${reference}\u0000${thinkingLevel}\u0000${modelSaveEpoch}`} />
       <section className="settings-block faithfulness-panel" aria-labelledby="faithfulness-heading"><div className="settings-block-heading"><span className="settings-block-icon"><ShieldCheck size={18} aria-hidden="true" /></span><div><h2 id="faithfulness-heading">Optional faithfulness review</h2><p>One structured, batched second opinion compares rewritten wording with its cited minimized evidence.</p></div></div><div className="faithfulness-options"><label className="faithfulness-toggle"><input role="switch" aria-label="Enable optional faithfulness review for newly authorized runs" aria-describedby="faithfulness-helper" type="checkbox" checked={faithfulnessCheck} onChange={event => void saveFaithfulness(event.target.checked)} /><span>Enable for newly authorized runs</span></label><p className="settings-helper" id="faithfulness-helper">Findings remain blocking even if you later disable this option. A model check is not proof and does not replace your review. Provider charges may apply.</p></div></section>
     </div>
     {error && <p className="profile-message error" role="alert">{error}</p>}{message && <p className="profile-message success" role="status">{message}</p>}

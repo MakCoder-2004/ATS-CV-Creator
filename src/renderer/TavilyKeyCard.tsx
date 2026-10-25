@@ -1,4 +1,4 @@
-import React, { FormEvent, useEffect, useRef, useState } from 'react'
+import React, { FormEvent, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { KeyRound } from 'lucide-react'
 import type { WorkbenchAPI } from '../shared/appearance'
 import type { ResearchSearchKeyStatus } from '../shared/research-search-settings'
@@ -7,10 +7,10 @@ import './TavilyKeyCard.css'
 export type TavilyKeyCardClient = Pick<WorkbenchAPI,
   'getResearchSearchKeyStatus' | 'saveResearchSearchKey' | 'removeResearchSearchKey' | 'revealResearchSearchKey' | 'copyResearchSearchKey'>
 
-interface Props { client?: TavilyKeyCardClient }
+interface Props { client?: TavilyKeyCardClient; modelContext?: string }
 const defaultClient = () => window.workbench
 
-export function TavilyKeyCard({ client }: Props) {
+export function TavilyKeyCard({ client, modelContext = '' }: Props) {
   const api = client ?? defaultClient()
   const [status, setStatus] = useState<ResearchSearchKeyStatus | null>(null)
   const [keyInput, setKeyInput] = useState('')
@@ -28,6 +28,10 @@ export function TavilyKeyCard({ client }: Props) {
 
   function clearReveal() { generation.current++; revealedRef.current = ''; setRevealed('') }
   function hideReveal() { clearReveal(); setRevealPending(false); setBusy(false) }
+  useLayoutEffect(() => {
+    clearReveal()
+    if (revealPending) { setRevealPending(false); setBusy(false) }
+  }, [modelContext])
   useEffect(() => {
     let active = true
     api.getResearchSearchKeyStatus().then(value => { if (active) setStatus(value) })
