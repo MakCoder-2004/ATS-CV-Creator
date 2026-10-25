@@ -73,7 +73,7 @@ describe('trusted provisional research analysis seam', () => {
       expect(f.requests).toHaveBeenCalledTimes(1)
       f.controller.close(); f.sessions.close()
     }
-  })
+  }, 20_000) // Two synthetic completions run on a cold Pi runtime; no external provider call is made.
   it('rejects changed model/effort before dispatch and revoked research after review', async () => {
     const f = await connected()
     f.sessions.reviewJobResearch(f.token, [findingId], true)
