@@ -8,10 +8,10 @@ const pinnedVersion = '0.44.0';
 const npmRegistry = 'https://registry.npmjs.org/';
 const repoRoot = path.resolve(import.meta.dirname, '..');
 const expectedIntegrity = 'sha512-8YK2Nb0P7ezRL0FS7P1cPYu7gDUOuhXWA3FOBev0bKsuPtG2QrDVm2GriKBgZI1Sq7SC8QRsfVFYYP8huUEo8w==';
-const tempParent = process.env.ISSUE_102_TEMP_ROOT || 'C:\\Temp';
-const tempRoot = await mkdtemp(path.join(tempParent, 'cv102-'));
 const nodeRoot = path.dirname(await realpath(process.execPath));
 const npmCli = path.join(nodeRoot, 'node_modules', 'npm', 'bin', 'npm-cli.js');
+const tempParent = process.env.ISSUE_102_TEMP_ROOT || 'C:\\Temp';
+const tempRoot = await mkdtemp(path.join(tempParent, 'cv102-'));
 
 function buildNpmEnvironment(root, parentEnv = process.env) {
   const env = {};
