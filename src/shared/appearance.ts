@@ -99,7 +99,7 @@ export interface WorkbenchAPI {
   readPostingPreview(token: string): Promise<PostingFetchState>
   cancelPostingFetch(token: string): Promise<{ ok: boolean }>
   startNamedPostingPreview(url: string, personalLocalOptIn: boolean): Promise<{ token: string }>
-  readNamedPostingPreview(token: string): Promise<import('./named-posting-contract').NamedPostingPreviewReply>
+  readNamedPostingPreview(token: string): Promise<import('./named-posting-schema').NamedPostingPreviewReply>
   cancelNamedPostingPreview(token: string): Promise<{ ok: true }>
   openPostingSource(url: string): Promise<{ ok: boolean; message: string }>
   prepareOutboundConsent(jobId: string): Promise<OutboundConsentPreview>

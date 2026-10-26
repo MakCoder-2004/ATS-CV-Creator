@@ -1,10 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import { fetchNamedPostingApi, type NamedPostingApiOptions } from './named-posting-api'
-import { namedPostingAttemptSchema, namedPostingCandidateSchema, namedPostingPreviewReplySchema, parseNamedPostingUrl, type NamedPostingAttempt, type NamedPostingCandidate } from '../shared/named-posting-contract'
+import { namedPostingAttemptSchema, namedPostingCandidateSchema, namedPostingPreviewReplySchema, parseNamedPostingUrl, type NamedPostingAttempt, type NamedPostingCandidate, type NamedPostingPreviewReply } from '../shared/named-posting-schema'
 
 
-export type { NamedPostingPreviewReply } from '../shared/named-posting-contract'
-import type { NamedPostingPreviewReply } from '../shared/named-posting-contract'
 type Entry = { generation: string; controller: AbortController; status: 'loading' | 'ready' | 'failed'; attempt?: NamedPostingAttempt; candidate?: NamedPostingCandidate; timer: ReturnType<typeof setTimeout>; expiresAt: number }
 const ttl = 10 * 60_000
 /** Volatile exact Greenhouse detail preview; no persistence or promotion capability. */

@@ -21,7 +21,7 @@ import { researchCancelSchema, researchReviewInputSchema, researchReviewStateSch
 import { normalizeJobResearchUrl } from '../shared/job-research-url'
 import { researchSearchKeyCopySchema, researchSearchKeyRevealSchema, researchSearchKeyStatusSchema } from '../shared/research-search-settings'
 import { researchAnalysisTokenSchema, researchAnalysisConsentSchema, researchAnalysisPreviewReplySchema, researchAnalysisProgressReplySchema, researchAnalysisDiscardReplySchema } from '../shared/research-volatile-analysis-ipc'
-import { namedPostingPreviewReplySchema } from '../shared/named-posting-contract'
+import { namedPostingPreviewReplySchema } from '../shared/named-posting-schema'
 
 const workspaceResult = z.object({ ok: z.boolean(), cancelled: z.boolean(), message: z.string() }).strict()
 const restoreSelection = z.discriminatedUnion('ok', [
