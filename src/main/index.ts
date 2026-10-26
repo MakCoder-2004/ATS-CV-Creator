@@ -192,6 +192,7 @@ app.whenReady().then(() => {
   const scriptedPostingFetch = !app.isPackaged && ['1', 'delayed', 'refresh'].includes(process.env.CV_TAILOR_SCRIPTED_POSTING_FETCH ?? '') ? {
     lookup: async () => [{ address: '8.8.8.8', family: 4 }],
     request: async (url: URL) => {
+      if (process.env.CV_TAILOR_TEST_POSTING_REQUEST_COUNTER === '1') appendFileSync(join(app.getPath('userData'), 'scripted-posting-requests.log'), 'request\n')
       if (process.env.CV_TAILOR_SCRIPTED_POSTING_FETCH === 'delayed') await new Promise(resolve => setTimeout(resolve, 800))
       const id = url.pathname.split('/').at(-1)
       const refreshCount = (scriptedPostingRefreshCounts.get(id ?? '') ?? 0) + 1

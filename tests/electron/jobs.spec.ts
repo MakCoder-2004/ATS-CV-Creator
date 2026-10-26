@@ -9,7 +9,7 @@ test('paused source reads fail visibly while manual posting text remains availab
   const userData = mkdtempSync(join(tmpdir(), 'cv-tailor-source-pause-'))
   let running: ElectronApplication | undefined
   try {
-    running = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData } })
+    running = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData, CV_TAILOR_TEST_RESEARCH: '1', CV_TAILOR_SCRIPTED_POSTING_FETCH: '1', CV_TAILOR_TEST_POSTING_REQUEST_COUNTER: '1' } })
     const page = await running.firstWindow()
     await expect(page.locator('[data-ui-ready="true"]')).toBeVisible({ timeout: 20_000 })
     await page.getByRole('button', { name: 'Saved jobs', exact: true }).click()
@@ -29,6 +29,8 @@ test('paused source reads fail visibly while manual posting text remains availab
     }
     const requestLog = join(userData, 'research-direct-requests.log')
     expect(existsSync(requestLog) ? readFileSync(requestLog, 'utf8') : '').toBe('')
+    const postingRequestLog = join(userData, 'scripted-posting-requests.log')
+    expect(existsSync(postingRequestLog) ? readFileSync(postingRequestLog, 'utf8') : '').toBe('')
 
     await page.getByRole('button', { name: 'Paste posting text instead' }).click()
     await page.getByLabel('Job title').fill('Manual Platform Engineer')
