@@ -5,16 +5,14 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 // One dev-only synthetic direct read and Pi runtime, with isolated sibling credential/workspace roots.
-test('unsafe LinkedIn identity shows a visible no-search refusal without accepting evidence', async () => {
+test('paused LinkedIn reads show a visible no-request refusal and keep manual fallback available', async () => {
   test.setTimeout(90_000)
   const root = mkdtempSync(join(tmpdir(), 'cv-research-unsafe-'))
   const userData = join(root, 'workspace'), appData = join(root, 'appdata')
   mkdirSync(userData); mkdirSync(appData)
   const directRequests = join(userData, 'research-direct-requests.log')
-  const modelRequests = join(userData, 'research-model-requests.log')
   const count = (path: string) => existsSync(path) ? readFileSync(path, 'utf8').trim().split('\n').filter(Boolean).length : 0
-  const submittedUrl = 'https://www.linkedin.com/jobs/search-results/?currentJobId=4482137197&keywords=unique-context-never-share&origin=JOB_SEARCH_PAGE_JOB_FILTER&geoId=12345&trackingId=dummy-tracking'
-  const canonicalUrl = 'https://www.linkedin.com/jobs/view/4482137197/'
+  const submittedUrl = 'https://www.linkedin.com/jobs/search-results/?currentJobId=4482137197&keywords=synthetic-role'
   let app: Awaited<ReturnType<typeof electron.launch>> | undefined
   try {
     app = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], timeout: 45_000, env: {
@@ -28,32 +26,10 @@ test('unsafe LinkedIn identity shows a visible no-search refusal without accepti
     await page.getByRole('button', { name: 'Import from link' }).click()
     await page.getByLabel('Public job posting link').fill(submittedUrl)
     await page.getByRole('button', { name: 'Fetch posting' }).click()
-    await expect(page.getByRole('button', { name: 'Inspect captured findings' })).toBeVisible()
+    await expect(page.getByRole('alert')).toContainText(/LinkedIn.*paused|paused.*LinkedIn/i)
     await expect(page.getByLabel('Public job posting link')).toHaveValue(submittedUrl)
-    expect(count(directRequests)).toBe(1)
-    await page.getByRole('button', { name: 'Inspect captured findings' }).click()
-
-    const research = page.getByRole('region', { name: 'Temporary job research' })
-    await expect(research.getByText(canonicalUrl, { exact: true })).toBeVisible()
-    await expect(research).toContainText('The page canonical identity differs from the selected role.')
-    await expect(research).toContainText('No Tavily request or credit was used by this action because the source identity is unsafe.')
-    await expect(research).not.toContainText('unique-context-never-share')
-    await expect(research).not.toContainText('trackingId')
-    await expect(research.getByRole('region', { name: 'Direct role source' })).toContainText('No usable direct role wording.')
-    await expect(research.getByRole('button', { name: 'Search indexed details' })).toHaveCount(0)
-    await expect(research.getByText(/search-key status|search key is stored|No search key is stored|Checking local search-key/i)).toHaveCount(0)
-    await expect(research.getByRole('checkbox', { name: 'Include this role finding in review' })).toHaveCount(0)
-    await expect(research.getByRole('button', { name: 'Review selected role findings' })).toHaveCount(0)
-    expect(count(directRequests)).toBe(1)
-    expect(count(modelRequests)).toBe(0)
-    expect(await page.evaluate(() => window.workbench.listJobs())).toHaveLength(0)
-    expect(await page.evaluate(() => window.workbench.getWorkspaceBackupStatus())).toEqual(backupStatus)
-
-    await research.getByRole('button', { name: 'Cancel and discard research' }).click()
-    await expect(research.getByRole('button', { name: 'Fetch posting again' })).toBeVisible()
-    // Recovery is offered explicitly; merely cancelling must not reread the source.
-    expect(count(directRequests)).toBe(1)
-    expect(count(modelRequests)).toBe(0)
+    expect(count(directRequests)).toBe(0)
+    await expect(page.getByRole('button', { name: 'Paste posting text instead' })).toBeVisible()
     expect(await page.evaluate(() => window.workbench.listJobs())).toHaveLength(0)
     expect(await page.evaluate(() => window.workbench.getWorkspaceBackupStatus())).toEqual(backupStatus)
   } finally {

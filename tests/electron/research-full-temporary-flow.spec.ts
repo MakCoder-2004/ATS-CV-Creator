@@ -21,7 +21,7 @@ test('delayed full source preview clears at the original fetch deadline, not 15 
     await expect(page.locator('[data-ui-ready="true"]')).toBeVisible()
     await page.getByRole('button', { name: 'Saved jobs', exact: true }).click()
     await page.getByRole('button', { name: 'Import from link' }).click()
-    await page.getByLabel('Public job posting link').fill('https://www.linkedin.com/jobs/view/4464025097/')
+    await page.getByLabel('Public job posting link').fill('https://jobs.example.org/role/123')
     await page.clock.install() // Before the first public read, not after the response.
     await page.getByRole('button', { name: 'Fetch posting' }).click()
     await expect(page.getByRole('button', { name: 'Fetching…' })).toBeVisible()
@@ -39,7 +39,7 @@ test('delayed full source preview clears at the original fetch deadline, not 15 
   }
 })
 
-test('selected LinkedIn search URL → full temporary review → outgoing consent → source-linked analysis without persistence', async () => {
+test('permitted generic HTTPS URL → full temporary review → outgoing consent → source-linked analysis without persistence', async () => {
   test.setTimeout(150_000)
   const root = mkdtempSync(join(tmpdir(), 'cv-research-full-'))
   const userData = join(root, 'workspace'), appData = join(root, 'appdata')
@@ -62,12 +62,12 @@ test('selected LinkedIn search URL → full temporary review → outgoing consen
     await page.getByRole('button', { name: 'Saved jobs', exact: true }).click()
     await page.getByRole('button', { name: 'Import from link' }).click()
     // A search-results URL must resolve to the selected ID, not the listing/keyword/geo query.
-    await page.getByLabel('Public job posting link').fill('https://www.linkedin.com/jobs/search/?currentJobId=4464025097&eBP=NOT-SENT&keywords=research&origin=JOBS_HOME_SEARCH_BUTTON&geoId=102713980')
+    await page.getByLabel('Public job posting link').fill('https://jobs.example.org/role/123')
     expect(count('research-direct-requests.log')).toBe(0)
     await page.getByRole('button', { name: 'Fetch posting' }).click()
     const temporary = page.getByRole('region', { name: 'Temporary direct posting preview' })
     await expect(temporary).toContainText('Synthetic Research Engineer')
-    await expect(temporary).toContainText('https://www.linkedin.com/jobs/view/4464025097/')
+    await expect(temporary).toContainText('https://jobs.example.org/role/123')
     await expect(temporary).not.toContainText('NOT-SENT')
     await expect(temporary.getByRole('button', { name: 'Save job' })).toHaveCount(0)
     await expect(temporary.getByRole('button', { name: 'Search indexed details' })).toHaveCount(0)
@@ -81,7 +81,7 @@ test('selected LinkedIn search URL → full temporary review → outgoing consen
     await expect(page.getByRole('button', { name: 'Inspect outgoing data' })).toBeVisible()
     await page.getByRole('button', { name: 'Inspect outgoing data' }).click()
     const outgoing = page.getByLabel('Exact outgoing analysis data')
-    await expect(outgoing).toContainText('https://www.linkedin.com/jobs/view/4464025097/')
+    await expect(outgoing).toContainText('https://jobs.example.org/role/123')
     await expect(outgoing).toContainText('TypeScript')
     await expect(outgoing).not.toContainText('NOT-SENT')
     await expect(page.getByText('Full role evidence', { exact: true })).toBeVisible()

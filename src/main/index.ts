@@ -209,8 +209,7 @@ app.whenReady().then(() => {
     lookup: async () => [{ address: '8.8.8.8', family: 4 }],
     request: async (url: URL) => {
       appendFileSync(join(app.getPath('userData'), 'research-direct-requests.log'), 'request\n')
-      const expectedUrl = scriptedResearchMode === 'unsafe' ? 'https://www.linkedin.com/jobs/view/4482137197/'
-        : scriptedResearchMode !== '1' ? 'https://www.linkedin.com/jobs/view/4464025097/' : 'https://jobs.example.org/role/123'
+      const expectedUrl = scriptedResearchMode === 'unsafe' ? 'https://www.linkedin.com/jobs/view/4482137197/' : 'https://jobs.example.org/role/123'
       if (url.href.replace(/\/$/, '') !== expectedUrl.replace(/\/$/, '')) throw new Error('The scripted research received an unexpected URL.')
       if (scriptedResearchMode === 'full-delayed') await new Promise(resolve => setTimeout(resolve, 1500))
       return { status: 200, headers: { 'content-type': 'text/html' }, body: Buffer.from('<html><title>Synthetic Engineer</title></html>') }
