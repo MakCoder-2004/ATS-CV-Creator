@@ -1,14 +1,16 @@
 # Issue 102 keyless Exa provider probe
 
-**Verdict: provider feasibility candidate only.** One explicit keyless Exa query returned a result, but it did not return the RFC 2606 material sought. The query surfaced `http://www.example.com/cdn-cgi/trace` with ExaSearchBot request metadata instead. Do not treat this as evidence of useful result quality or approve application integration. The MCP lifecycle, runtime packaging, source rights, and installed-app gates remain open.
+**Verdict: one useful public search result was verified, but the provider and integration gates remain incomplete.** A single explicit keyless Exa query returned RFC 2606 text from the RFC Editor at `https://www.rfc-editor.org/rfc/rfc2606.html` and `.txt`. This corrects the earlier example.com result, which surfaced unrelated ExaSearchBot trace metadata. The result supports Exa as a nonpaid search candidate for harmless public queries. It does not approve application integration or prove reliability across queries. The MCP lifecycle, runtime packaging, source rights, and installed-app gates remain open.
 
 ## Isolated probe
 
-The probe used the locally installed Pi Web Access `0.44.0` stdio MCP server and a temporary configuration with `provider: "exa"` and `allowedProviders: ["exa"]`. It exposed only `web_search`, with the remaining tools disabled, and submitted exactly one request: `site:example.com RFC 2606 example domain`, with `provider: "exa"` and `numResults: 2`. It did not use `auto`, `all`, batches, `includeContent`, cookies, user Pi configuration, profile/CV data, a real posting, an API key, or another provider. No retry was made.
+The probe used the locally installed Pi Web Access `0.44.0` stdio MCP server and a temporary configuration with `provider: "exa"` and `allowedProviders: ["exa"]`. It exposed only `web_search`, with the remaining tools disabled, and submitted exactly one additional request: `site:rfc-editor.org/rfc/rfc2606 RFC 2606 Reserved Top Level DNS Names`, with `provider: "exa"` and `numResults: 2`. The only query values are hard-coded, selected by an explicit CLI flag. The script rejects arbitrary query text. It did not use `auto`, `all`, batches, `includeContent`, cookies, user Pi configuration, profile/CV data, a real posting, an API key, or another provider. No retry was made.
 
-The observed MCP result labeled itself `Provider: exa` and returned one source titled `Trace`, at `http://www.example.com/cdn-cgi/trace`. Its text exposed ExaSearchBot request metadata rather than RFC 2606. Thus the live query completed, but the requested source quality was not demonstrated.
+The MCP result labeled itself `Provider: exa` and returned RFC 2606 title text and matching passages from `https://www.rfc-editor.org/rfc/rfc2606.html` and `https://www.rfc-editor.org/rfc/rfc2606.txt`. The result matched the requested document. It establishes useful exact-source search for this one harmless public query, not general result quality or reliability.
 
-The client and server ran with isolated `HOME`, `USERPROFILE`, `PI_CODING_AGENT_DIR`, and `PI_WEB_ACCESS_CACHE_ROOT`; the child received only a small allowlist of system environment variables. The separate cache directory was empty before cleanup, and the harness removed its temporary root after closing the MCP client and child. This is one normal-success observation, not proof of cleanup under failure, cancellation, forced termination, restart, or deletion failure. Pi Web Access documents MCP search-result storage as in-memory for the server process; the configured disk cache is for fetched content. No fetched content was requested.
+The client and server ran with isolated `HOME`, `USERPROFILE`, `PI_CODING_AGENT_DIR`, and `PI_WEB_ACCESS_CACHE_ROOT`; the child received only a small allowlist of system environment variables. The script now places root creation, config setup, imports, and MCP operations inside one `try/finally`. The MCP call has a 30-second SDK request deadline. On exit, the SDK transport closes stdin and waits up to two seconds before SIGTERM, then two more seconds before SIGKILL. The script removes only its created temporary root and asserts that the root is gone. The one live run observed an empty cache and successful root deletion.
+
+These controls bound the harness's request and transport cleanup paths. They do not prove cleanup under an injected setup failure, cancellation, deletion failure, restart, or every possible socket and descendant-process condition. No fetched content was requested. Pi Web Access stores MCP search results in server-process memory; its configured disk cache is for fetched content.
 
 ## Provider endpoint and transport evidence
 
@@ -31,7 +33,7 @@ Keep this as an explicit candidate for later evaluation, not an authorization to
 Run from the repository with Node.js `>=22.19` and the local package path available:
 
 ```sh
-PI_WEB_ACCESS_PACKAGE='C:/Users/Makrious/.pi/agent/npm/node_modules/pi-web-access' node scripts/issue-102-exa-probe.mjs
+PI_WEB_ACCESS_PACKAGE='C:/Users/Makrious/.pi/agent/npm/node_modules/pi-web-access' node scripts/issue-102-exa-probe.mjs rfc2606
 ```
 
-The script pins Exa in isolated provider configuration, submits one query, prints the bounded tool result and cache observations, then removes its temporary data. It is a live external request whenever rerun; do not retry automatically after a provider error.
+The script accepts either `rfc2606` or `exampleCom`; both choices map to fixed harmless public queries. The RFC Editor query was selected for this run. The script pins Exa in isolated provider configuration, submits one query, prints at most 5,000 result characters, then removes its temporary data. It makes a live external request whenever rerun. Do not retry automatically after a provider error.

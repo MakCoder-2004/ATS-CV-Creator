@@ -43,7 +43,7 @@ These reports record source-access decisions that are not shipped product behavi
 | [LinkedIn job intake feasibility](research/linkedin-job-intake-feasibility-2026-10-25.md) | Bounded research on approved single-job read routes; no suitable route was verified. |
 | [Job-posting source access and retention gates](research/source-access-retention-gates-2026-10-26.md) | Official-source access and save/retention statuses for LinkedIn, Indeed, Greenhouse, and Lever; no source currently passes both gates. |
 | [Issue 95 Pi Web Access prototype](validation/issue-95-pi-web-access-prototype.md) | Isolated pinned extension/MCP proof is explicitly STOP; stubbed search works, but cache lifecycle, usable live provider, auth, packaging, and installed gates remain open. |
-| [Issue 102 keyless Exa provider probe](validation/issue-102-exa-provider-probe-2026-10-26.md) | One explicit keyless Exa MCP query completed but returned irrelevant example.com trace metadata; no integration, source-rights, lifecycle, or packaging gate passes. |
+| [Issue 102 keyless Exa provider probe](validation/issue-102-exa-provider-probe-2026-10-26.md) | One explicit keyless Exa MCP query returned matching RFC Editor content; integration, full lifecycle, source-rights, and packaging gates remain open. |
 
 ## Historical research and feasibility
 
