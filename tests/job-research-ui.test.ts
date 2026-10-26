@@ -27,7 +27,7 @@ describe('universal research intake', () => {
     expect(html).toContain('Import from link')
     expect(html).toContain('Posting and requirements')
     expect(html).toContain('Paste posting text instead')
-    expect(html).toContain('Automatic LinkedIn, Indeed, and Lever reads are paused')
+    expect(html).toContain('Automatic LinkedIn and Indeed reads remain paused. Lever reads are paused until the new source checks pass.')
     const source = readFileSync(new URL('../src/renderer/SavedJobs.tsx', import.meta.url), 'utf8')
     expect(source).toContain('placeholder="Paste a public job posting link"')
     expect(source).not.toContain('placeholder="https://www.linkedin.com')

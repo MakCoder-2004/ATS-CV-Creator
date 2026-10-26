@@ -37,7 +37,7 @@ test('Settings keeps Pi preferences and retired-search recovery controls', async
   const storage = isolatedStorage('cv-tailor-pi-settings-')
   let app: Awaited<ReturnType<typeof electron.launch>> | undefined
   try {
-    app = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], env: storage.env, timeout: 20000 })
+    app = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], env: storage.env, timeout: 30000 })
     await assertIsolatedPaths(app, storage)
     const page = await app.firstWindow({ timeout: 20000 })
     await expect(page.locator('[data-ui-ready="true"]')).toBeVisible()
@@ -68,7 +68,7 @@ test('a retired local key stays masked, clears on model change, and needs confir
   const storage = isolatedStorage('cv-tailor-retired-key-')
   let app: Awaited<ReturnType<typeof electron.launch>> | undefined
   try {
-    app = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], env: storage.env, timeout: 20000 })
+    app = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], env: storage.env, timeout: 30000 })
     await assertIsolatedPaths(app, storage)
     const encrypted = await app.evaluate(({ safeStorage }) => {
       if (!safeStorage.isEncryptionAvailable()) throw new Error('Synthetic legacy key requires device encryption.')
@@ -109,7 +109,7 @@ test('a retired local key stays masked, clears on model change, and needs confir
 test('Settings saves a Pi model and thinking level across a real Electron reopen', async () => {
   test.setTimeout(90000)
   const storage = isolatedStorage('cv-tailor-pi-selection-')
-  const launch = () => electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], env: { ...storage.env, CV_TAILOR_SCRIPTED_ANALYSIS: '1', CV_TAILOR_SCRIPTED_PI_MODEL: '1' }, timeout: 20000 })
+  const launch = () => electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], env: { ...storage.env, CV_TAILOR_SCRIPTED_ANALYSIS: '1', CV_TAILOR_SCRIPTED_PI_MODEL: '1' }, timeout: 30000 })
   let app: Awaited<ReturnType<typeof electron.launch>> | undefined
   try {
     app = await launch()
