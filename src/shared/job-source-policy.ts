@@ -1,9 +1,9 @@
 export type JobSourcePolicy = { status: 'paused'; source: 'lever' | 'linkedin' | 'indeed'; reason: string } | { status: 'unchanged' }
 
 const paused = {
-  lever: 'Automatic Lever fetching, saving, and refresh are paused while source rights remain unresolved. Paste the posting text instead.',
-  linkedin: 'Automatic LinkedIn reads and indexed-search fallback are paused while source rights remain unresolved. Paste the posting text instead.',
-  indeed: 'Automatic Indeed reads and indexed-search fallback are paused while source rights remain unresolved. Paste the posting text instead.'
+  lever: 'Automatic Lever fetching, saving, and refresh stay paused until the named-posting adapter and review flow pass safety checks. Paste the posting text instead.',
+  linkedin: 'Automatic LinkedIn reads remain paused without an approved selected-job route. Paste the posting text instead.',
+  indeed: 'Automatic Indeed reads remain paused without an approved selected-job route. Paste the posting text instead.'
 } as const
 
 const indeedDomains = [
