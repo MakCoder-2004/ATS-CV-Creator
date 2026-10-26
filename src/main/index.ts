@@ -542,8 +542,7 @@ app.whenReady().then(() => {
   })
   ipcMain.handle('named-posting-preview:start', async (event, ...args: unknown[]) => {
     trusted(event); if (args.length !== 2 || typeof args[0] !== 'string' || typeof args[1] !== 'boolean') throw new Error('Expected Greenhouse link and personal-local opt-in.')
-    const policy = decideJobSourcePolicy(args[0]); if (policy.status === 'paused') return { token: randomUUID(), attempt: { id: randomUUID(), reference: { source: 'lever', board: 'paused', postingId: 'paused', canonicalUrl: 'https://jobs.lever.co/paused/paused' }, startedAt: new Date().toISOString(), status: 'failed', reason: 'opt-in-required' }, reason: policy.reason }
-    return await namedPostingPreviews!.start(args[0], args[1])
+    return namedPostingPreviews!.start(args[0], args[1])
   })
   ipcMain.handle('named-posting-preview:read', (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected preview token.'); return namedPostingPreviews!.read(uuidSchema.parse(args[0])) })
   ipcMain.handle('named-posting-preview:cancel', (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected preview token.'); return namedPostingPreviews!.cancel(uuidSchema.parse(args[0])) })

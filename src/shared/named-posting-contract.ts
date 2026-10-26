@@ -28,7 +28,7 @@ export const namedPostingReferenceSchema = z.object({ source, board: z.string().
 export type NamedPostingReference = z.infer<typeof namedPostingReferenceSchema>
 
 const retrievedAttemptSchema = z.object({ id: z.string().uuid(), reference: namedPostingReferenceSchema, startedAt: timestamp, status: z.literal('retrieved'), expiresAt: timestamp, eligibility: z.object({ personalLocalOptIn: z.literal(true), source, scope: z.literal('personal-local'), optedInAt: timestamp }).strict() }).strict().superRefine((attempt, ctx) => {
-  if (attempt.eligibility.source !== attempt.reference.source || Date.parse(attempt.eligibility.optedInAt) >= Date.parse(attempt.startedAt)) ctx.addIssue({ code: 'custom', message: 'Retrieved attempt requires prior source-specific personal-local opt-in.' })
+  if (attempt.eligibility.source !== attempt.reference.source || Date.parse(attempt.eligibility.optedInAt) > Date.parse(attempt.startedAt)) ctx.addIssue({ code: 'custom', message: 'Retrieved attempt requires prior source-specific personal-local opt-in.' })
   const start = Date.parse(attempt.startedAt), expiry = Date.parse(attempt.expiresAt)
   if (!(start < expiry) || expiry - start > ttlMs) ctx.addIssue({ code: 'custom', message: 'Attempt expiry must be after start and within the bounded TTL.' })
 })
@@ -51,6 +51,14 @@ export const namedPostingCandidateSchema = z.object({ version: z.literal(1), att
   if (candidate.completeness !== 'full' || candidate.text.length < 80) ctx.addIssue({ code: 'custom', message: 'Incomplete posting cannot be accepted.' })
 })
 export type NamedPostingCandidate = z.infer<typeof namedPostingCandidateSchema>
+
+export const namedPostingPreviewReplySchema = z.discriminatedUnion('status', [
+  z.object({ status: z.literal('loading'), expiresAt: timestamp }).strict(),
+  z.object({ status: z.literal('ready'), attempt: namedPostingAttemptSchema, candidate: namedPostingCandidateSchema, expiresAt: timestamp }).strict(),
+  z.object({ status: z.literal('failed'), attempt: namedPostingAttemptSchema, expiresAt: timestamp }).strict(),
+  z.object({ status: z.literal('expired') }).strict(),
+])
+export type NamedPostingPreviewReply = z.infer<typeof namedPostingPreviewReplySchema>
 
 export const namedPostingAcceptanceSchema = z.object({ version: z.literal(1), attemptId: z.string().uuid(), acceptedAt: timestamp, source: z.enum(['lever', 'greenhouse']), board: z.string(), postingId: z.string(), title: z.string().max(200), employer: z.string().max(200), text: boundedText, provenanceUrl: z.string().url(), retrievalMethod: z.enum(['lever-postings-api-v0', 'greenhouse-job-board-api-v1']), retrievalUrl: z.string().url(), capturedAt: timestamp, sourceUpdatedAt: timestamp.nullable(), evidenceHash: z.string().regex(/^[a-f0-9]{64}$/), userReviewedExactRole: z.literal(true), userReviewedCompleteness: z.literal(true) }).strict()
 export type NamedPostingAcceptance = z.infer<typeof namedPostingAcceptanceSchema>
