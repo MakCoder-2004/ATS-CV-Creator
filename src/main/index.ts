@@ -277,7 +277,7 @@ app.whenReady().then(() => {
     request: async (url: URL, _address: { address: string; family: number }, signal: AbortSignal) => {
       const expected = 'https://boards-api.greenhouse.io/v1/boards/acme/jobs/123'
       if (url.href !== expected) throw new Error('Unexpected named-preview fixture route.')
-      appendFileSync(join(app.getPath('userData'), 'named-preview-request-count.log'), 'request\\n')
+      appendFileSync(join(app.getPath('userData'), 'named-preview-request-count.log'), 'request\n')
       await new Promise<void>((resolve, reject) => {
         const timer = setTimeout(() => { signal.removeEventListener('abort', abort); resolve() }, 500)
         const abort = () => { clearTimeout(timer); reject(new Error('Synthetic named-preview request cancelled.')) }
@@ -293,7 +293,8 @@ app.whenReady().then(() => {
     credentialsDirectory: defaultResearchCredentialDirectory(app.getPath('appData'), app.getPath('userData')),
     workspaceDirectory: app.getPath('userData'), encryption: safeStorage
   })
-  research = createJobResearchSessions({ ...(scriptedResearch ? { direct: (url, options) => fetchDirectJobResearch(url, { ...scriptedResearch, signal: options.signal }) } : {}) })
+  const researchOptions = scriptedResearch ?? namedPreviewNoNetwork?.research
+  research = createJobResearchSessions({ ...(researchOptions ? { direct: (url, options) => fetchDirectJobResearch(url, { ...researchOptions, signal: options.signal }) } : {}) })
   // Development-only clipboard stub prevents synthetic GUI tests from touching the OS clipboard.
   // Neither the copied text nor the clipboard itself is persisted in test data.
   let testKeyClipboardWrites = 0
