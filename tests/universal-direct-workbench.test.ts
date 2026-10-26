@@ -31,12 +31,10 @@ async function settled(wb: ReturnType<typeof createWorkbench>, token: string) {
   return state
 }
 test('selected synthetic role text is inspectable and transfers exactly once to full temporary research, never a saved job', async () => {
-  let modelCalls = 0, searchCalls = 0
+  let modelCalls = 0
   const { wb, requested, folder } = open(() => ({ status: 200, headers: { 'content-type': 'text/html' }, body: Buffer.from('<html><body>synthetic posting</body></html>') }), { async generate() { modelCalls++; throw Error('No model request before consent') } })
   const sessions = createJobResearchSessions({
-    credentials: { status: async () => ({ configured: true, storageAvailable: true, message: '' }), withKey: async <T>(fn: (key: string) => Promise<T>) => fn('synthetic') },
     direct: async () => { throw Error('Handoff must not reread the source') },
-    createSearch: () => ({ searchesDispatched: 0, search: async () => { searchCalls++; throw Error('Full text must not search') } }),
   })
   try {
     const { token } = await wb.api.startPostingFetch(selected)
@@ -71,7 +69,6 @@ test('selected synthetic role text is inspectable and transfers exactly once to 
     expect(research).toMatchObject({ status: 'ready', run: { id: captured.id, findings: [{ id: captured.findings[0].id, text: body.trim() }] } })
     expect(sessions.reviewJobResearch(transferred, [captured.findings[0].id], false)).toMatchObject({ analysisScope: 'full', selected: { canonicalUrl: canonical } })
     expect(requested).toEqual([canonical])
-    expect(searchCalls).toBe(0)
     expect(modelCalls).toBe(0)
     expect(await wb.api.listJobs()).toEqual([])
     expect(wb.backup.createBackup()).not.toContain(body.trim())

@@ -34,7 +34,6 @@ import { validateLeverPostingUrl, type SafePostingFetchOptions } from './safe-po
 import { normalizeJobResearchUrl } from '../shared/job-research'
 import { researchCancelSchema, researchReviewInputSchema, researchReviewStateSchema, researchStartSchema, researchStateSchema } from '../shared/job-research-ipc'
 import { createJobResearchSessions } from './job-research-session'
-import { createTavilyResearchSession, type TavilyTransport } from './tavily-search'
 import { fetchDirectJobResearch } from './job-research-fetch'
 import { createVolatileResearchAnalysis } from './research-volatile-analysis'
 import { researchAnalysisTokenSchema, researchAnalysisConsentSchema, researchAnalysisPreviewReplySchema, researchAnalysisProgressReplySchema, researchAnalysisDiscardReplySchema } from '../shared/research-volatile-analysis-ipc'
@@ -261,20 +260,7 @@ app.whenReady().then(() => {
     credentialsDirectory: defaultResearchCredentialDirectory(app.getPath('appData'), app.getPath('userData')),
     workspaceDirectory: app.getPath('userData'), encryption: safeStorage
   })
-  const scriptedTavily: TavilyTransport | undefined = !app.isPackaged && process.env.CV_TAILOR_TEST_TAVILY === '1' ? {
-    lookup: async () => [{ address: '8.8.8.8', family: 4 }],
-    request: async (_url, _address, method, _headers, body) => {
-      const request = method === 'GET' ? { method, body: '' } : { method, body: body?.toString('utf8') ?? '' }
-      appendFileSync(join(app.getPath('userData'), 'research-tavily-requests.log'), `${JSON.stringify(request)}\n`)
-      const payload = method === 'GET'
-        ? { account: { current_plan: 'Researcher', plan_limit: 1000, paygo_limit: 0, paygo_usage: 0, plan_usage: 10 }, key: { usage: 10, limit: null } }
-        : { usage: { credits: 1 }, request_id: 'synthetic-search-1', results: [{ url: 'https://jobs.example.org/role/123', title: 'Synthetic Engineer - Example Research', content: 'Exact matching indexed role excerpt: review TypeScript systems and document operational decisions.' }] }
-      return { status: 200, headers: { 'content-type': 'application/json' }, body: Buffer.from(JSON.stringify(payload)) }
-    }
-  } : undefined
-  research = createJobResearchSessions({ credentials: researchCredentials,
-    ...(scriptedResearch ? { direct: (url, options) => fetchDirectJobResearch(url, { ...scriptedResearch, signal: options.signal }) } : {}),
-    ...(scriptedTavily ? { createSearch: (credentials, options) => createTavilyResearchSession(credentials, { ...options, transport: scriptedTavily }) } : {}) })
+  research = createJobResearchSessions({ ...(scriptedResearch ? { direct: (url, options) => fetchDirectJobResearch(url, { ...scriptedResearch, signal: options.signal }) } : {}) })
   // Development-only clipboard stub prevents synthetic GUI tests from touching the OS clipboard.
   // Neither the copied text nor the clipboard itself is persisted in test data.
   let testKeyClipboardWrites = 0
