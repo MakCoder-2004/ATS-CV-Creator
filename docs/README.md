@@ -75,7 +75,7 @@ These reports record tests, artifacts, and claims at the stated version or issue
 | [Version 0.6.0 job-link research](validation/universal-research-0.6.0.md) | Reviewed temporary public-link intake, scoped consented analysis, focused development checks and an unsigned installer checked statically. Installed and real-provider acceptance remain open under #89. |
 | [Installed Settings 0.6.1](validation/settings-installed-0.6.1.md) | Actual per-user installation, isolated SQLite reopen and two-card layout checks; encrypted-key/clipboard, legacy semantic and real-provider gates remain open. |
 | [Installed PDF and search safety 0.6.2](validation/installed-pdf-tavily-safety-0.6.2.md) | Actual per-user installation, isolated native SQLite reopen and synthetic PDF/DOCX export; user-approved unpacked PDF layout, with real Pi/Tavily and key/recovery gates still open. |
-| [Issue 94 link-intake and authorization baseline](validation/issue-94-link-intake-authorization-baseline.md) | Synthetic visible and domain-test evidence for direct/manual intake, research, consent and profile import; Tailor CV dispatch totals, visible regeneration and a successful Tavily search remain inconclusive. |
+| [Issue 94 link-intake and authorization baseline](validation/issue-94-link-intake-authorization-baseline.md) | Synthetic visible and domain-test evidence for direct/manual intake, research, consent, profile import and paragraph regeneration; fixed Tailor CV graph-call totals and a successful Tavily search remain inconclusive. |
 
 ## Prototype design evidence
 

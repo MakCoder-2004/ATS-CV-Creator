@@ -370,7 +370,7 @@ test('switching to paste text supersedes a late scripted posting response', asyn
     await page.getByRole('button', { name: 'Saved jobs', exact: true }).click()
     await page.locator('.saved-jobs-heading').getByRole('button', { name: 'New job' }).click()
     await page.getByRole('button', { name: 'Import from link' }).click()
-    await page.getByLabel('Public Lever posting link').fill('https://api.lever.co/v0/postings/example-board/late-response')
+    await page.getByLabel('Public job posting link').fill('https://api.lever.co/v0/postings/example-board/late-response')
     await page.getByRole('button', { name: 'Fetch posting' }).click()
     await expect(page.getByRole('button', { name: 'Cancel fetch' })).toBeEnabled()
     await page.getByRole('button', { name: 'Paste posting text instead' }).click()

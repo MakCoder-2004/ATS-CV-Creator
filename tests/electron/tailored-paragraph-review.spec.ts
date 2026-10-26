@@ -1,5 +1,5 @@
 import { test, expect, _electron as electron } from '@playwright/test'
-import { mkdtempSync } from 'node:fs'
+import { mkdtempSync, readFileSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -7,9 +7,18 @@ import { join } from 'node:path'
 test('development Electron selects a generated paragraph and source, opens its editor, and compares a scoped replacement', async () => {
   test.setTimeout(120000)
   const userData = mkdtempSync(join(tmpdir(), 'cv-tailor-paragraph-review-'))
+  const dispatchLog = 'model-dispatches.log'
+  const dispatches = () => {
+    try {
+      return readFileSync(join(userData, dispatchLog), 'utf8').trim().split(/\r?\n/).filter(Boolean)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
+      throw error
+    }
+  }
   let app: Awaited<ReturnType<typeof electron.launch>> | undefined
   try {
-    app = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData, CV_TAILOR_SCRIPTED_ANALYSIS: 'generation' }, timeout: 60000 })
+    app = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData, CV_TAILOR_TEST_MODEL_DISPATCH_LOG: dispatchLog, CV_TAILOR_SCRIPTED_ANALYSIS: 'generation' }, timeout: 60000 })
     const page = await app.firstWindow()
     await page.setViewportSize({ width: 1440, height: 900 })
     await expect(page.locator('[data-ui-ready="true"]')).toBeVisible()
@@ -26,9 +35,12 @@ test('development Electron selects a generated paragraph and source, opens its e
     await page.getByRole('button', { name: 'Tailor CV', exact: true }).click()
     await page.getByRole('button', { name: 'Inspect outgoing data' }).click()
     const flow = page.getByRole('region', { name: 'Tailoring workflow' })
+    expect(dispatches()).toEqual([])
     await flow.getByRole('checkbox', { name: /reviewed what is sent/i }).check()
+    expect(dispatches()).toEqual([])
     await flow.getByRole('button', { name: 'Authorize this run' }).click()
     await expect(flow.getByRole('button', { name: 'Generate tailored draft' })).toBeVisible({ timeout: 60000 })
+    expect(dispatches()).toEqual(['other'])
     await flow.getByRole('button', { name: 'Generate tailored draft' }).click()
     const paper = page.getByRole('article', { name: 'Draft CV review layout' })
     await expect(paper.locator('.paper-entry--experience .paper-paragraph')).toContainText('Built reliable services', { timeout: 45000 })
@@ -44,7 +56,10 @@ test('development Electron selects a generated paragraph and source, opens its e
     await selected.getByRole('button', { name: 'Suggest different wording' }).click()
     const consent = flow.getByText('What will be shared for this suggestion').locator('..')
     await consent.getByRole('checkbox', { name: /reviewed this bundle/ }).check()
+    const beforeProposal = dispatches()
+    expect(beforeProposal).toEqual(['other', 'posting-analysis', 'generation'])
     await consent.getByRole('button', { name: 'Authorize and propose' }).click()
+    await expect.poll(dispatches).toEqual([...beforeProposal, 'regeneration'])
     const comparison = flow.getByRole('region', { name: 'Compare suggestion' })
     await expect(comparison.getByRole('heading', { name: 'Current', exact: true })).toBeVisible({ timeout: 30000 })
     await expect(comparison.getByRole('heading', { name: 'Suggested', exact: true })).toBeVisible()
