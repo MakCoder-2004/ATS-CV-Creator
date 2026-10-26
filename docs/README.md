@@ -41,6 +41,7 @@ These reports record source-access decisions that are not shipped product behavi
 | Document | Scope |
 | --- | --- |
 | [LinkedIn job intake feasibility](research/linkedin-job-intake-feasibility-2026-10-25.md) | Bounded research on approved single-job read routes; no suitable route was verified. |
+| [Issue 95 Pi Web Access prototype](validation/issue-95-pi-web-access-prototype.md) | Isolated pinned extension/MCP fetch and stubbed-search proof; cache lifecycle, auth, packaging, and installed gates remain open. |
 
 ## Historical research and feasibility
 
