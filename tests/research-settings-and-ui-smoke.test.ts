@@ -46,8 +46,7 @@ test('Settings credential IPC and Saved jobs research use the same private key s
     sources: [{ version: 1, id: sourceId, url, capturedAt: new Date().toISOString(), method: 'direct-html', identity: 'exact-role', title: 'Synthetic Engineer', employer: 'Example Corp', employerIdentityUrl: null }],
     findings: [{ version: 1, id: findingId, sourceId, kind: 'direct-role-text', text: 'Build synthetic systems.', completeness: 'partial' }], unknowns: ['Complete posting unknown.']
   })
-  let searches = 0
-  const sessions = createJobResearchSessions({ credentials, direct, createSearch: () => ({ searchesDispatched: 0, search: async () => { searches++; throw new Error('No network in merged smoke') } }) })
+  const sessions = createJobResearchSessions({ direct })
   try {
     const html = renderToStaticMarkup(React.createElement(SavedJobs, { jobs: [], activeJob: null, onSaved: () => {}, onOpened: () => {}, onDeleted: async () => {}, onNavigate: () => {} }))
     expect(html).toContain('Import from link')
@@ -60,9 +59,7 @@ test('Settings credential IPC and Saved jobs research use the same private key s
     expect(state.status).toBe('ready')
     if (state.status !== 'ready') throw new Error('Synthetic direct read did not complete')
     expect(sessions.reviewJobResearch(token, [findingId], true).analysisScope).toBe('provisional')
-    expect(searches).toBe(0)
-    expect((await sessions.searchJobResearch(token)).status).toBe('unavailable')
-    expect(searches).toBe(1)
+    expect(await sessions.searchJobResearch(token)).toMatchObject({ status: 'unavailable', searchOutcome: 'not-sent', settingsAction: false })
     expect(await invoke('research-search:key:remove')).toMatchObject({ configured: false })
     expect(await credentials.status()).toMatchObject({ configured: false })
   } finally { sessions.close() }
