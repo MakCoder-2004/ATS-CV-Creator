@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
 import type { z } from 'zod'
 import { jobResearchRunSchema, verifyReviewedJobResearch, type JobResearchRun, type ReviewedJobResearch } from '../shared/job-research'
+import { decideJobResearchPolicy } from '../shared/job-source-policy'
 import { piModelSelectionSchema, type PiModelSelection } from '../shared/pi-model'
 import {
   volatileAnalysisPreviewSchema, volatileAnalysisProgressSchema, volatileAnalysisResponseSchema,
@@ -83,6 +84,8 @@ export function createVolatileResearchAnalysis(options: VolatileResearchAnalysis
   function assertCurrent(entry: Entry) {
     if (now() >= entry.preview.expiresAt) throw new Error('The outgoing review expired.')
     const run = jobResearchRunSchema.parse(options.getAppHeldRun(entry.run.id))
+    const policy = decideJobResearchPolicy(run)
+    if (policy.status === 'paused') throw new Error(policy.reason)
     const review = verifyReviewedJobResearch(run, options.getAppHeldReview(entry.run.id))
     const selection = piModelSelectionSchema.parse(options.getPiSelection())
     if (options.getSelectionEpoch && options.getSelectionEpoch() !== entry.selectionEpoch) throw new Error('Pi settings changed. Start a new research run and outgoing review.')
@@ -101,6 +104,8 @@ export function createVolatileResearchAnalysis(options: VolatileResearchAnalysis
     if (entries.size >= maxRuns) throw new Error('Too many temporary analyses. Discard an older preview or wait for expiry.')
     const run = jobResearchRunSchema.parse(options.getAppHeldRun(runId))
     if (run.id !== runId) throw new Error('The app-held research run did not match.')
+    const policy = decideJobResearchPolicy(run)
+    if (policy.status === 'paused') throw new Error(policy.reason)
     const review = verifyReviewedJobResearch(run, options.getAppHeldReview(runId))
     const selection = piModelSelectionSchema.parse(options.getPiSelection())
     const selectedUrl = minimizedRoleUrl(run.selected.canonicalUrl, run.selected)

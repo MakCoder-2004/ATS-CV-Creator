@@ -1,4 +1,5 @@
 import type { JobResearchIdentity } from './job-research-schema'
+import { isIndeedHost } from './job-source-policy'
 
 const tracking = /^(utm_[a-z0-9_]+|gclid|fbclid|li_fat_id|mc_cid|mc_eid|ref|refid|trk|trackingid|source|src|from)$/i
 const sensitive = /(token|secret|password|passwd|auth|session|api.?key|email|e-mail|phone|user.?id|cookie|signature|access.?key)/i
@@ -31,7 +32,7 @@ export function normalizeJobResearchUrl(input: string): JobResearchIdentity {
     if (!id || [...url.searchParams.keys()].some(key => !tracking.test(key) && key.toLowerCase() !== 'currentjobid' && !linkedinSearchContext.has(key.toLowerCase()))) throw new Error('LinkedIn URL does not select one unambiguous role.')
     return { canonicalUrl: `https://www.linkedin.com/jobs/view/${id}/`, host: 'www.linkedin.com', provider: 'linkedin', roleId: id }
   }
-  if (hostname === 'indeed.com' || hostname === 'www.indeed.com' || /^[a-z]{2}(?:\.[a-z]{2})?\.indeed\.com$/.test(hostname)) {
+  if (isIndeedHost(hostname) || hostname === 'uk.indeed.com' || /^[a-z]{2}(?:\.[a-z]{2})?\.indeed\.com$/.test(hostname)) {
     const keys = [...url.searchParams.keys()]
     const identity = url.searchParams.get('jk') ?? url.searchParams.get('vjk')
     if (identity && /^[a-z0-9]{8,32}$/i.test(identity) && /^(\/viewjob|\/rc\/clk|\/jobs|\/m\/viewjob)\/?$/.test(url.pathname) && keys.every(key => tracking.test(key) || key === 'jk' || key === 'vjk')) {

@@ -10,6 +10,7 @@ import { createWorkbench } from '../src/main/workbench'
 import { createWorkspaceBackupEngine, registerWorkspaceBackupRowSizer } from '../src/main/workspace-backup'
 import type { AnalysisTransport } from '../src/main/posting-analysis'
 import { normalizePostingUrl, samePostingSource } from '../src/shared/posting-identity'
+import { emptyPostingOptionalDetails } from '../src/shared/jobs'
 
 const directories: string[] = []
 test('posting source identity removes known tracking only and preserves role-bearing URL differences', () => {
@@ -39,6 +40,37 @@ async function acceptImport(api: ReturnType<typeof createWorkbench>['api'], toke
   const staged = await stageImportReview(api, token, input, review)
   return api.acceptPostingImport(token, staged.revision)
 }
+
+test.each([
+  ['submitted', 'https://www.indeed.co.uk/viewjob?jk=abcdefgh', 'https://jobs.example.org/role/legacy'],
+  ['final', 'https://jobs.example.org/role/legacy', 'https://www.indeed.co.uk/viewjob?jk=abcdefgh'],
+])('refresh pauses when a saved snapshot has a paused %s URL without writing', async (_field, submittedUrl, finalUrl) => {
+  const directory = mkdtempSync(join(tmpdir(), 'cv-tailor-refresh-source-pause-'))
+  directories.push(directory)
+  const lookup = vi.fn(async () => [{ address: '8.8.8.8', family: 4 }])
+  const request = vi.fn(async () => ({ status: 200, headers: { 'content-type': 'text/html' }, body: Buffer.from('<html></html>') }))
+  const wb = createWorkbench(directory, undefined, undefined, undefined, { lookup, request, research: { lookup, request, extract: async () => ({ outcome: 'full' as const, description: 'A synthetic role description with responsibilities and qualifications that is comfortably longer than the required full-text threshold.', title: 'Synthetic role', employer: 'Example' }) } })
+  const manual = await wb.api.saveJob({ title: 'Saved role', company: 'Example', description: 'Previously saved manual posting.' })
+  if (!manual.ok) throw new Error(manual.error.message)
+  const db = new Database(join(directory, 'workbench.sqlite'))
+  registerWorkspaceBackupRowSizer(db)
+  const raw = db.prepare('SELECT data FROM jobs WHERE id = ?').get(manual.value.id) as { data: string }
+  const record = JSON.parse(raw.data)
+  const text = 'Historical source wording.'
+  const hash = createHash('sha256').update(text, 'utf8').digest('hex')
+  record.sourceSnapshot = { title: 'Old source role', company: 'Example', description: text, submittedUrl, finalUrl, sourceIdentity: 'synthetic-source', capturedAt: new Date().toISOString(), extractionMethod: 'lever-json-v1', extractionVersion: 1, optionalDetails: emptyPostingOptionalDetails(), conflicts: [], hashes: { title: hash, company: hash, description: hash }, fieldOrigins: { title: 'source', company: 'source', description: 'source', optionalDetails: {} } }
+  db.prepare('UPDATE jobs SET data = ? WHERE id = ?').run(JSON.stringify(record), manual.value.id)
+  const before = (db.prepare('SELECT data FROM jobs WHERE id = ?').get(manual.value.id) as { data: string }).data
+  try {
+    const fetched = await wb.api.startPostingFetch('https://jobs.example.org/roles/current')
+    const preview = await readReady(wb.api, fetched.token)
+    expect(await wb.api.comparePostingRefresh(fetched.token, manual.value.id, manual.value.updatedAt, manual.value.revisions.at(-1)!.revision)).toMatchObject({ ok: false, message: expect.stringMatching(/Indeed reads.*paused/) })
+    expect(await wb.api.acceptPostingRefresh(fetched.token, preview.revision, manual.value.id, manual.value.updatedAt, manual.value.revisions.at(-1)!.revision, { title: 'source', company: 'source', description: 'source', optionalDetails: {} })).toMatchObject({ ok: false, error: { message: expect.stringMatching(/Indeed reads.*paused/) } })
+    expect((db.prepare('SELECT data FROM jobs WHERE id = ?').get(manual.value.id) as { data: string }).data).toBe(before)
+    expect(lookup).toHaveBeenCalledTimes(1)
+    expect(request).toHaveBeenCalledTimes(1)
+  } finally { db.close(); wb.close() }
+}, 30_000)
 
 test('changed exact-source refresh compares all three versions and explicitly accepts selected fields atomically', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'cv-tailor-refresh-contract-'))

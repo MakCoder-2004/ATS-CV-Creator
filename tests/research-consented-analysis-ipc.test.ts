@@ -5,7 +5,7 @@ import { createJobResearchSessions } from '../src/main/job-research-session'
 import { createVolatileResearchAnalysis } from '../src/main/research-volatile-analysis'
 import type { PiModelRuntime } from '../src/main/pi-model'
 import type { PiModelSelection } from '../src/shared/pi-model'
-import type { JobResearchRun } from '../src/shared/job-research'
+import { normalizeJobResearchUrl, promoteJobResearch, type JobResearchRun } from '../src/shared/job-research'
 import { researchAnalysisTokenSchema, researchAnalysisPreviewReplySchema, researchAnalysisProgressReplySchema, researchAnalysisConsentSchema } from '../src/shared/research-volatile-analysis-ipc'
 
 const id = '00000000-0000-4000-8000-000000000001'
@@ -40,6 +40,19 @@ async function connected() {
 }
 
 describe('trusted provisional research analysis seam', () => {
+  it('rejects a legacy paused-source run before creating an outgoing preview or consulting Pi', () => {
+    const selected = normalizeJobResearchUrl('https://www.indeed.co.uk/viewjob?jk=abcdefgh')
+    const stale = { ...structuredClone(fixture), selected, sources: [{ ...fixture.sources[0], url: selected.canonicalUrl }] }
+    const review = promoteJobResearch(stale, [findingId], true)
+    const requests = vi.fn()
+    const getAvailable = vi.fn(async () => [model])
+    const sdk = { getProviders: () => [], getPhysicalModel: () => model, getAvailable, getAuth: async () => ({ source: 'synthetic' }), completeSimple: requests } as unknown as PiModelRuntime
+    const controller = createVolatileResearchAnalysis({ getAppHeldRun: () => stale, getAppHeldReview: () => review, getPiSelection: () => selection, piRuntime: sdk })
+    try { expect(() => controller.preview(id)).toThrow(/Indeed reads.*paused/) }
+    finally { controller.close() }
+    expect(getAvailable).not.toHaveBeenCalled()
+    expect(requests).not.toHaveBeenCalled()
+  })
   it('accepts only an app-held reviewed run; no provider request before explicit consent', async () => {
     const f = await connected()
     expect(() => f.controller.preview(id)).toThrow(/reviewed/)

@@ -6,12 +6,36 @@ const paused = {
   indeed: 'Automatic Indeed reads and indexed-search fallback are paused while source rights remain unresolved. Paste the posting text instead.'
 } as const
 
+const indeedDomains = [
+  'indeed.com', 'indeed.co.uk', 'indeed.ie', 'indeed.ca', 'indeed.com.au', 'indeed.co.nz',
+  'indeed.fr', 'indeed.de', 'indeed.es', 'indeed.it', 'indeed.nl', 'indeed.be', 'indeed.ch',
+  'indeed.at', 'indeed.se', 'indeed.no', 'indeed.dk', 'indeed.fi', 'indeed.pl', 'indeed.pt',
+  'indeed.gr', 'indeed.cz', 'indeed.hu', 'indeed.ro', 'indeed.bg', 'indeed.hr', 'indeed.sk',
+  'indeed.si', 'indeed.lt', 'indeed.lv', 'indeed.ee', 'indeed.is', 'indeed.co.jp', 'indeed.co.in',
+  'indeed.com.br', 'indeed.com.mx', 'indeed.com.sg', 'indeed.com.hk', 'indeed.com.ph',
+  'indeed.com.my', 'indeed.com.pk', 'indeed.com.sa', 'indeed.ae', 'indeed.co.za', 'indeed.com.tr',
+  'indeed.co.kr'
+] as const
+
+export function isIndeedHost(host: string): boolean {
+  const normalized = host.toLowerCase().replace(/\.$/, '')
+  return indeedDomains.some(domain => normalized === domain || normalized.endsWith(`.${domain}`))
+}
+
+export function decideJobResearchPolicy(run: { selected: { canonicalUrl: string }; sources: Array<{ url: string }> }): JobSourcePolicy {
+  for (const source of [run.selected.canonicalUrl, ...run.sources.map(item => item.url)]) {
+    const decision = decideJobSourcePolicy(source)
+    if (decision.status === 'paused') return decision
+  }
+  return { status: 'unchanged' }
+}
+
 export function decideJobSourcePolicy(input: string): JobSourcePolicy {
   let url: URL
   try { url = new URL(input) } catch { return { status: 'unchanged' } }
   const host = url.hostname.toLowerCase().replace(/\.$/, '')
   if (host === 'jobs.lever.co' || host === 'api.lever.co') return { status: 'paused', source: 'lever', reason: paused.lever }
   if (host === 'linkedin.com' || host.endsWith('.linkedin.com')) return { status: 'paused', source: 'linkedin', reason: paused.linkedin }
-  if (host === 'indeed.com' || host.endsWith('.indeed.com')) return { status: 'paused', source: 'indeed', reason: paused.indeed }
+  if (isIndeedHost(host)) return { status: 'paused', source: 'indeed', reason: paused.indeed }
   return { status: 'unchanged' }
 }

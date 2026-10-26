@@ -88,6 +88,14 @@ function completeDirectPreview(input: string, result: JobResearchRun): PostingPr
     notices: ['Review temporary role source before analysis. Nothing was saved to jobs or backups.'], conflicts: [],
     extractionMethod: selected.provider === 'linkedin' ? 'linkedin-public-html-v1' : 'public-jsonld-v1' })
 }
+function postingSourcePolicy(...urls: Array<string | null | undefined>) {
+  for (const url of urls) {
+    if (!url) continue
+    const policy = decideJobSourcePolicy(url)
+    if (policy.status === 'paused') return policy
+  }
+  return { status: 'unchanged' as const }
+}
 function postingSourceIdentity(value: string): string | null {
   return leverSourceIdentity(value) ?? directPostingIdentity(value)
 }
@@ -1099,8 +1107,8 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
     },
     async acceptPostingImport(token: string, revision: number) {
       const checkedToken = uuidSchema.safeParse(token), pending = checkedToken.success ? livePostingFetch(checkedToken.data) : undefined
-      const candidateUrl = pending?.state.status === 'ready' || pending?.state.status === 'incomplete' ? pending.state.preview.submittedUrl : ''
-      const sourcePolicy = decideJobSourcePolicy(candidateUrl)
+      const candidate = pending?.state.status === 'ready' || pending?.state.status === 'incomplete' ? pending.state.preview : undefined
+      const sourcePolicy = postingSourcePolicy(candidate?.submittedUrl, candidate?.finalUrl, pending?.selected?.canonicalUrl, ...(pending?.directRun?.sources.map(source => source.url) ?? []))
       if (sourcePolicy.status === 'paused') return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: sourcePolicy.reason } })
       if (pending?.selected || (pending?.state.status === 'ready' || pending?.state.status === 'incomplete') && !isSaveablePostingSource(pending.state.preview.extractionMethod)) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'Review temporarily or paste text manually. This fetched source cannot be saved.' } })
       if (!pending || pending.revision !== revision || pending.reviewed?.revision !== revision || !pending.reviewed.review.completenessConfirmed) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'Review the current preview after your last edit before saving.' } })
@@ -1146,7 +1154,8 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
     async comparePostingRefresh(token: string, jobId: string, expectedUpdatedAt: string, expectedRevision: number) {
       const pending = livePostingFetch(token), row = db.prepare('SELECT data FROM jobs WHERE id = ?').get(jobId) as { data: string } | undefined
       const current = row ? jobRecordSchema.parse(JSON.parse(row.data)) : undefined
-      const refreshPolicy = current?.sourceSnapshot ? decideJobSourcePolicy(current.sourceSnapshot.finalUrl) : { status: 'unchanged' as const }
+      const candidate = pending?.state.status === 'ready' || pending?.state.status === 'incomplete' ? pending.state.preview : undefined
+      const refreshPolicy = postingSourcePolicy(current?.sourceSnapshot?.submittedUrl, current?.sourceSnapshot?.finalUrl, candidate?.submittedUrl, candidate?.finalUrl, pending?.selected?.canonicalUrl, ...(pending?.directRun?.sources.map(source => source.url) ?? []))
       if (refreshPolicy.status === 'paused') return { ok: false, message: refreshPolicy.reason }
       if (pending?.selected || (pending?.state.status === 'ready' || pending?.state.status === 'incomplete') && !isSaveablePostingSource(pending.state.preview.extractionMethod) || current?.sourceSnapshot && !isSaveablePostingSource(current.sourceSnapshot.extractionMethod)) return { ok: false, message: 'Review temporarily or paste text manually. This fetched source cannot update a saved job.' }
       if (!pending || !current || pending.state.status !== 'ready' && pending.state.status !== 'incomplete') return { ok: false, message: 'This refresh preview or saved posting is unavailable.' }
@@ -1159,10 +1168,12 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
     },
     async acceptPostingRefresh(token: string, revision: number, jobId: string, expectedUpdatedAt: string, expectedBaseRevision: number, choices: PostingRefreshChoice) {
       const invalid = (message: string) => jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message } })
+      const checkedChoices = postingRefreshChoiceSchema.safeParse(choices), pending = livePostingFetch(token)
       const existingRow = db.prepare('SELECT data FROM jobs WHERE id = ?').get(jobId) as { data: string } | undefined
       const existing = existingRow ? jobRecordSchema.parse(JSON.parse(existingRow.data)) : undefined
-      if (existing?.sourceSnapshot) { const policy = decideJobSourcePolicy(existing.sourceSnapshot.finalUrl); if (policy.status === 'paused') return invalid(policy.reason) }
-      const checkedChoices = postingRefreshChoiceSchema.safeParse(choices), pending = livePostingFetch(token)
+      const candidate = pending?.state.status === 'ready' || pending?.state.status === 'incomplete' ? pending.state.preview : undefined
+      const sourcePolicy = postingSourcePolicy(existing?.sourceSnapshot?.submittedUrl, existing?.sourceSnapshot?.finalUrl, candidate?.submittedUrl, candidate?.finalUrl, pending?.selected?.canonicalUrl, ...(pending?.directRun?.sources.map(source => source.url) ?? []))
+      if (sourcePolicy.status === 'paused') return invalid(sourcePolicy.reason)
       if (pending?.selected || (pending?.state.status === 'ready' || pending?.state.status === 'incomplete') && !isSaveablePostingSource(pending.state.preview.extractionMethod)) return invalid('Review temporarily or paste text manually. This fetched source cannot update a saved job.')
       if (!checkedChoices.success || !pending || pending.revision !== revision || pending.reviewed?.revision !== revision || !pending.reviewed.review.completenessConfirmed || pending.state.status !== 'ready' && pending.state.status !== 'incomplete') return invalid('Review the current refresh and choose which source fields to accept before applying it.')
       const row = db.prepare('SELECT created_at, data FROM jobs WHERE id = ?').get(jobId) as { created_at: string; data: string } | undefined

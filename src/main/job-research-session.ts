@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { jobResearchRunSchema, normalizeJobResearchUrl, promoteJobResearch, verifyReviewedJobResearch, type JobResearchRun, type ReviewedJobResearch } from '../shared/job-research'
-import { decideJobSourcePolicy } from '../shared/job-source-policy'
+import { decideJobResearchPolicy, decideJobSourcePolicy } from '../shared/job-source-policy'
 import { researchStateSchema, type ResearchState } from '../shared/job-research-ipc'
 import { fetchDirectJobResearch, type JobResearchFetchOptions } from './job-research-fetch'
 import { createTavilyResearchSession, TavilySearchError, type TavilySearchResult } from './tavily-search'
@@ -73,6 +73,8 @@ export function createJobResearchSessions(options: ResearchSessionOptions) {
     const policy = decideJobSourcePolicy(input.selected.canonicalUrl)
     if (policy.status === 'paused') throw new Error(policy.reason)
     const run = jobResearchRunSchema.parse(input)
+    const runPolicy = decideJobResearchPolicy(run)
+    if (runPolicy.status === 'paused') throw new Error(runPolicy.reason)
     assertCanAcceptInitialDirectRun()
     makeRoom()
     const expiresAt = Math.min(clock() + EXPIRY_MS, Date.parse(run.startedAt) + EXPIRY_MS)
@@ -99,6 +101,11 @@ export function createJobResearchSessions(options: ResearchSessionOptions) {
           session.state = safeState({ status: 'unavailable', message: 'The public read did not confirm the selected role identity. No source content was accepted; verify the original link or paste the posting.', settingsAction: false })
           return
         }
+        const policy = decideJobResearchPolicy(run)
+        if (policy.status === 'paused') {
+          session.state = safeState({ status: 'unavailable', message: policy.reason, settingsAction: false })
+          return
+        }
         session.state = safeState({ status: 'ready', run: freeze(run) })
       } catch {
         session.state = safeState({ status: 'unavailable', message: 'The public read failed. No source content was accepted; try the original link or paste a posting.', settingsAction: false })
@@ -111,9 +118,9 @@ export function createJobResearchSessions(options: ResearchSessionOptions) {
   function getJobResearch(token: string): ResearchState { return safeState(clone(get(token).state)) }
   async function searchJobResearch(token: string): Promise<ResearchState> {
     const session = get(token)
-    const policy = decideJobSourcePolicy(session.state.status === 'ready' ? session.state.run.selected.canonicalUrl : '')
-    if (policy.status === 'paused') throw new Error(policy.reason)
     if (session.state.status !== 'ready') throw new Error('Wait for the public read before requesting search.')
+    const policy = decideJobResearchPolicy(session.state.run)
+    if (policy.status === 'paused') throw new Error(policy.reason)
     if (session.state.run.status === 'full') throw new Error('The exact direct posting is already complete; no indexed search is needed.')
     if (session.searched) throw new Error('This research already used its one explicit search action. Start a new public read to try again.')
     session.searched = true // includes missing-key/failed attempts: never retry a possibly charged request silently
@@ -179,7 +186,10 @@ export function createJobResearchSessions(options: ResearchSessionOptions) {
         unknowns: [...new Set([...original.unknowns, ...(next?.unknowns ?? [])])],
       })
       if (verified?.status === 'full') {
-        session.state = { status: 'ready', run: freeze(jobResearchRunSchema.parse({ ...verified, id: original.id, startedAt: original.startedAt })), searchOutcome: 'one-credit-reported' }
+        const completeRun = jobResearchRunSchema.parse({ ...verified, id: original.id, startedAt: original.startedAt })
+        const policy = decideJobResearchPolicy(completeRun)
+        if (policy.status === 'paused') throw new Error(policy.reason)
+        session.state = { status: 'ready', run: freeze(completeRun), searchOutcome: 'one-credit-reported' }
         return getJobResearch(token)
       }
       const base = preserved(verified?.status === 'provisional' ? verified : undefined)
@@ -215,6 +225,8 @@ export function createJobResearchSessions(options: ResearchSessionOptions) {
       unknowns: [...base.unknowns, directRoles.length
         ? 'The indexed title and excerpt match directly read role metadata, but the excerpt is partial and not independently confirmed on source; verify on original.'
         : 'Identity matched by selected URL only; job title/employer and excerpt are indexed, not independently confirmed on source; verify on original.'] })
+      const policy = decideJobResearchPolicy(run)
+      if (policy.status === 'paused') throw new Error(policy.reason)
       session.state = { status: 'ready', run: freeze(run), searchOutcome: 'one-credit-reported' }
       return getJobResearch(token)
     } catch (error) {
@@ -227,6 +239,8 @@ export function createJobResearchSessions(options: ResearchSessionOptions) {
   function reviewJobResearch(token: string, acceptedFindingIds: string[], acknowledgedPartial: boolean): ReviewedJobResearch {
     const session = get(token)
     if (session.state.status !== 'ready') throw new Error('No available research run to review.')
+    const policy = decideJobResearchPolicy(session.state.run)
+    if (policy.status === 'paused') throw new Error(policy.reason)
     const review = promoteJobResearch(session.state.run, acceptedFindingIds, acknowledgedPartial)
     session.reviewed = freeze(verifyReviewedJobResearch(session.state.run, review))
     return clone(session.reviewed)
@@ -234,6 +248,8 @@ export function createJobResearchSessions(options: ResearchSessionOptions) {
   function verifyAppHeldReview(token: string, review: unknown): ReviewedJobResearch {
     const session = get(token)
     if (session.state.status !== 'ready' || !session.reviewed) throw new Error('No reviewed app-held research is available.')
+    const policy = decideJobResearchPolicy(session.state.run)
+    if (policy.status === 'paused') throw new Error(policy.reason)
     const checked = verifyReviewedJobResearch(session.state.run, review)
     if (checked.evidenceHash !== session.reviewed.evidenceHash) throw new Error('Research review has changed. Review the current run again.')
     return checked
@@ -242,6 +258,8 @@ export function createJobResearchSessions(options: ResearchSessionOptions) {
     prune()
     for (const session of sessions.values()) {
       if (session.state.status !== 'ready' || session.state.run.id !== runId || !session.reviewed || session.controller.signal.aborted) continue
+      const policy = decideJobResearchPolicy(session.state.run)
+      if (policy.status === 'paused') throw new Error(policy.reason)
       const review = verifyReviewedJobResearch(session.state.run, session.reviewed)
       return { run: clone(session.state.run), review: clone(review) }
     }
@@ -250,6 +268,8 @@ export function createJobResearchSessions(options: ResearchSessionOptions) {
   function getReviewedRun(token: string): { run: JobResearchRun; review: ReviewedJobResearch } {
     const session = get(token)
     if (session.state.status !== 'ready' || !session.reviewed || session.controller.signal.aborted) throw new Error('Review the public read before preparing outgoing analysis.')
+    const policy = decideJobResearchPolicy(session.state.run)
+    if (policy.status === 'paused') throw new Error(policy.reason)
     return getReviewedRunById(session.state.run.id)
   }
   return { startJobResearch, assertCanAcceptInitialDirectRun, acceptInitialDirectRun, getJobResearch, searchJobResearch, reviewJobResearch, verifyAppHeldReview, getReviewedRun, getReviewedRunById,
