@@ -1,16 +1,10 @@
 # Issue 95 Pi Web Access prototype
 
-**Verdict:** NOT VERIFIED for production integration. The pinned prototype demonstrated direct fetch and explicit search through both adapters, but required cache lifecycle deletion, Pi-auth behavior, packaging, and real installed-app gates remain incomplete. This is disposable research evidence, not a shipped app capability or source-rights approval.
+**Verdict: STOP.** The isolated harness demonstrates that the pinned package exposes direct fetch and search tools over extension and stdio MCP routes. It does not satisfy issue #95 acceptance. Keep web search disabled and use manual paste as the fallback. No production `src/` files changed.
 
-## Proof record shape
+## Scope and command
 
-The harness records one `ProofCase` per route and lifecycle: `{ route, operation, inputUrlOrQuery, provider, allowedDestinationOrigins, observedDestinationOrigins, outcome, outputCharacters, cacheFilesBeforeCleanup, cleanup, restartObservation }`. It contains synthetic public examples and query text only. It must not contain user profile, CV, credential, session, or real job data.
-
-## Setup and exact command
-
-Pinned package: Pi Web Access `0.44.0`, from `C:/Users/Makrious/.pi/agent/npm/node_modules/pi-web-access`. Pi `1.4.0` peer modules came from `C:/Users/Makrious/.pi/agent/install/releases/1.4.0/node_modules`. Node `v24.21.0` satisfies the package's `>=22.19.0` requirement.
-
-The focused proof command was:
+The harness uses Pi Web Access `0.44.0` installed at `C:/Users/Makrious/.pi/agent/npm/node_modules/pi-web-access`, Pi `1.4.0` peer modules, and Node `v24.21.0`. It creates isolated configuration and cache roots, and never reads private Pi settings, credentials, sessions, cookies, CV/profile data, or job data. It exercises synthetic public RFC text and a locally stubbed DuckDuckGo response. There were no Tavily, paid-provider, live posting, LinkedIn, packaged-app, or installed-app requests.
 
 ```sh
 PI_WEB_ACCESS_PACKAGE='C:/Users/Makrious/.pi/agent/npm/node_modules/pi-web-access' \
@@ -18,31 +12,26 @@ PI_WEB_ACCESS_RUNTIME_NODE_MODULES='C:/Users/Makrious/.pi/agent/install/releases
 node scripts/issue-95-pi-web-proof.mjs
 ```
 
-The harness copies the pinned package distribution to a temp adapter and links only installed runtime modules needed to load it. Before child start, it creates separate temporary `HOME`, `USERPROFILE`, `PI_CODING_AGENT_DIR`, and `PI_WEB_ACCESS_CACHE_ROOT` values and a restrictive `web-search.json`. It inherits only process-launch environment fields, not provider keys, proxy settings, Pi settings, sessions, extensions, or browser auth. It allows only explicit `duckduckgo` search, restricts fetch to the test hostname, disables remote extraction fallbacks and browser cookies, bounds inline output to 1,000 content characters, and observes global `fetch` destinations.
+## Observed proof
 
-## Observations
+The latest focused run passed all six tool cases. Both routes fetched `GET https://www.rfc-editor.org/rfc/rfc2606.txt`, returned 1,144 visible characters, and traced the exact method and path. Extension fetch created one JSON cache file; MCP fetch created none. Both routes searched the local stub with `GET /html/?q=site%3Aexample.com+RFC+2606+example+domain` and returned 354 visible characters. No real search-provider usability was tested. Both cancellation cases reached the delayed stub before abort and returned an abort error. Each normal case's harness-owned temporary root was removed.
 
-- Both the manually hosted extension tool and stdio MCP returned `fetch_content` for `https://www.rfc-editor.org/rfc/rfc2606.txt`. The visible response contained 1,144 characters, including truncation/continuation framing. The request went only to `https://www.rfc-editor.org`; full fetched content remained in extension cache storage, not just the visible bounded slice.
-- Both routes returned explicit `web_search` results using provider `duckduckgo` against a locally stubbed response. The stub produced a synthetic `example.com` result and made no outbound request. No Tavily or other provider was dispatched in this final proof.
-- Cancellation against a delayed local DuckDuckGo stub surfaced `AbortError` for both routes. The extension adapter threw the abort to its caller; MCP returned a cancelled request error.
-- After the extension fetch completed, one JSON cache file existed in the isolated `web-search-cache`. The successful MCP fetch produced no disk cache file in its isolated root. The harness deleted each temporary case root after closing the route and verified the path was absent. This proves parent-owned temp-root cleanup for the observed successful fetch, not package-native cleanup on all lifecycle paths.
-- Error, process-close/restart recovery, cleanup failure, and deletion-cancellation paths were not separately proven. The package documents a one-hour cache TTL; extension session shutdown releases in-memory references but leaves disk cache entries for resumable sessions. Therefore the cache acceptance gate is **NOT VERIFIED**. An app-owned MCP child with an isolated cache root is the narrower candidate, but must be explicitly stopped and its per-run directory reliably removed, including after abnormal termination and restart, before acceptance.
-- One earlier attempted live keyless DuckDuckGo call, before replacing it with the local stub, went to `https://html.duckduckgo.com/html/` with the synthetic query `site:example.com RFC 2606 example domain`. DuckDuckGo returned HTTP 202 bot-check/rate-limit response. No fallback provider was called. That endpoint was not contacted in the final stubbed proof.
-- Pi model login is not MCP web-search authorization. The package MCP implementation rejects OpenAI/Codex sign-in use and requires a standalone API key for OpenAI search; it likewise excludes Kimi's Pi-only login. The extension can resolve eligible Pi credentials inside a real Pi host. This proof loaded the extension with a mock host and no credentials, so neither authenticated Pi extension behavior nor credentials available in the installed CV Tailor app were established. No real credentials were inspected.
+The harness also defines a small app-owned operation shape. Its `search` shape only accepts the `duckduckgo` provider and a bounded query, and its `fetch` shape only accepts HTTPS `www.rfc-editor.org` URLs. It rejects extra keys such as batches, `includeContent`, provider lists, proxy settings, implicit `auto`/`all`, and disallowed fetch hosts before the harness launches a child. This is a harness validation demonstration, not integrated application code or evidence that Pi Web Access MCP enforces the same boundary.
 
-## Package and Windows assessment
+## Why this is a STOP
 
-The package declares MIT and requires Node `>=22.19.0`; the tested host had Node `24.21.0`. It declares MCP SDK `1.32.1`, Readability, Defuddle, LinkeDOM, p-limit, promise.try, Turndown, Undici, and unpdf runtime dependencies. Pi extension peers are optional in package metadata but the extension needs Pi runtime APIs. This is not a complete transitive-license or security audit. Windows support is claimed upstream, but this harness used Node on Windows rather than the packaged Electron runtime. The app-owned MCP child model has fewer Pi coupling assumptions; its runtime inclusion, dependency layout, shutdown ownership, signing/packaging impact, and license notices remain **NOT VERIFIED**. No package was installed and no new packaged app was launched.
+- **Cancellation is only a tool-call abort.** The synthetic delay is set in the environment before worker/server spawn, the request is observed at the stub, and the tool reports abort. The run does not establish server process death before shutdown, forced-death behavior, or cancellation cleanup/restart safety.
+- **Cache deletion is incomplete evidence.** The successful extension fetch produced a disk cache file, while the MCP fetch did not. The harness deletes the enclosing temporary case root after each normal case. It does not prove cleanup after every error, cancellation, clean shutdown, forced death, or restart, and it does not simulate deletion failure or fail-closed behavior. The extension's persisted cache makes it an unsuitable candidate on this evidence. MCP's lack of an observed file is not proof of its full lifecycle contract.
+- **The transport trace has limits.** The harness observes Node's global `fetch` only. Exact observed fetch and local stub requests are nonempty and asserted. Other transport mechanisms would not be visible, so this is not a complete outbound network boundary proof.
+- **Real search remains unverified.** An earlier harmless keyless DuckDuckGo request returned HTTP 202 bot-check. This harness uses a stub, not a live result. No Exa attempt was made, so provider usefulness is not established. Do not enable the provider based on these cases.
+- **Packaging and licensing remain open.** Runtime peer modules are linked into a temporary adapter for this Node proof. Junction-based loading is not a packaging test. No complete transitive license/security inventory or Windows packaged runtime validation was performed. The public npm query returned 404 for the scoped package name, so this report relies on the locally installed pinned package rather than a reproducible public registry install.
+- **Authentication and source rights remain open.** No real credentials were inspected and Pi model login does not establish MCP search authorization. Public fetch success does not establish content rights or downstream retention permission.
 
-## Remaining #95 acceptance gates
+## Acceptance decision and next gates
 
-1. Prove temporary cache cleanup on success, fetch error, cancellation, clean close, abnormal close, and restart; prove cleanup errors fail closed and cannot leave unaccepted text behind. Current source explicitly retains extension cache files across session shutdown; do not accept extension integration on this evidence.
-2. Verify installed-app MCP credentials independently from Pi model login. Do not infer model authorization transfers to the MCP child.
-3. Complete transitive dependency/license and Windows packaging review, then test the actual installed app only under the project's accepted fresh Windows environment and user approval.
-4. Verify permitted source terms and downstream use/retention separately. Public reachability and successful fetch do not grant rights. LinkedIn remains unsupported without an approved route.
-5. Keep exact-role review/save, provenance, durable-storage exclusion, and manual paste fallback for later issue work; this prototype does not address them.
+Issue #95 acceptance does not permit a **VERIFIED candidate**. Recommend negative feasibility closure only if the issue owner accepts these explicit unmet gates. Otherwise keep #95 open as NOT VERIFIED. A future reconsideration needs app-owned validation integrated before any tool launch; cache lifecycle coverage for success, error, cancellation, clean close, forced death, and restart; deletion-failure simulation that fails closed; complete file-tree inspection; process-stop assertions; a usable explicitly permitted free search provider or manual-paste-only scope; installed-app credential review; and transitive license/security plus actual packaging checks. No production integration should proceed first.
 
 ## Artifacts
 
-- [`scripts/issue-95-pi-web-proof.mjs`](../../scripts/issue-95-pi-web-proof.mjs) is the bounded, isolated rerunnable harness. It creates and removes only its own temp roots.
-- No production `src/` file or app UI changed.
+- [`scripts/issue-95-pi-web-proof.mjs`](../../scripts/issue-95-pi-web-proof.mjs) is the rerunnable, disposable harness.
+- This report records prototype observations, not shipped behavior or source-rights approval.

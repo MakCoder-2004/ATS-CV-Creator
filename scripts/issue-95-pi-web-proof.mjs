@@ -21,7 +21,7 @@ if (process.env.ISSUE95_TRACE_FILE) {
     const url = new URL(typeof input === "string" || input instanceof URL ? input : input.url);
     if (url.hostname === "html.duckduckgo.com") {
       origins.add("local://duckduckgo-stub");
-      appendFileSync(process.env.ISSUE95_TRACE_FILE, "local://duckduckgo-stub\n");
+      appendFileSync(process.env.ISSUE95_TRACE_FILE, `${init?.method ?? "GET"} local://duckduckgo-stub${url.pathname}${url.search}\n`);
       const html = '<html><div class="result"><a class="result__a" href="https://example.com/">Example Domain</a><a class="result__snippet">Synthetic local result</a></div></html>';
       if (process.env.ISSUE95_STUB_DELAY === "1") {
         return new Promise((resolveResponse, rejectResponse) => {
@@ -32,10 +32,25 @@ if (process.env.ISSUE95_TRACE_FILE) {
       return new Response(html, { status: 200, headers: { "content-type": "text/html" } });
     }
     origins.add(url.origin);
-    appendFileSync(process.env.ISSUE95_TRACE_FILE, `${url.origin}\n`);
+    appendFileSync(process.env.ISSUE95_TRACE_FILE, `${init?.method ?? "GET"} ${url.origin}${url.pathname}${url.search}\n`);
     return originalFetch(input, init);
   };
 }
+
+const appOperation = (input) => {
+  if (!input || typeof input !== "object" || Array.isArray(input)) throw new TypeError("operation must be an object");
+  const keys = Object.keys(input).sort().join(",");
+  if (keys === "query,type" && input.type === "search" && typeof input.query === "string" && input.query.trim().length > 0 && input.query.length <= 240) {
+    if (input.query.trim().toLowerCase() === "auto" || input.query.trim().toLowerCase() === "all") throw new TypeError("implicit provider selection is forbidden");
+    return { type: "search", query: input.query.trim(), provider: "duckduckgo", maxResults: 2 };
+  }
+  if (keys === "type,url" && input.type === "fetch" && typeof input.url === "string") {
+    const url = new URL(input.url);
+    if (url.protocol !== "https:" || url.hostname !== "www.rfc-editor.org" || url.username || url.password || url.port) throw new TypeError("fetch URL is outside the proof allowlist");
+    return { type: "fetch", url: url.href };
+  }
+  throw new TypeError("unsupported operation shape or option");
+};
 
 function safeEnv(configDir, cacheRoot, traceFile) {
   const env = {};
@@ -77,9 +92,17 @@ function prepareCase(root, route, caseName) {
 }
 
 function fetchCacheFiles(cacheRoot) {
-  const cacheDir = join(cacheRoot, "web-search-cache");
-  if (!existsSync(cacheDir)) return [];
-  return readdirSync(cacheDir).filter((name) => name.endsWith(".json"));
+  const files = [];
+  const visit = (directory) => {
+    if (!existsSync(directory)) return;
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) visit(path);
+      else files.push(path.slice(cacheRoot.length + 1));
+    }
+  };
+  visit(cacheRoot);
+  return files;
 }
 
 function cleanupCase(testCase) {
@@ -106,7 +129,6 @@ async function extensionCase(testCase, operation) {
   const params = operation === "fetch"
     ? { url: fixtureUrl, mode: "readable", redirects: "same-origin" }
     : { query: fixtureQuery, provider: "duckduckgo", numResults: 2, workflow: "none" };
-  if (operation === "cancel") process.env.ISSUE95_STUB_DELAY = "1";
   const controller = new AbortController();
   const pending = tool.execute("issue95-proof", params, controller.signal, () => {}, undefined);
   if (operation === "cancel") setTimeout(() => controller.abort(), 30);
@@ -125,7 +147,7 @@ async function mcpCase(testCase, operation) {
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: ["--import", pathToFileURL(resolve(process.argv[1])).href, join(packageDir, "dist", "mcp-cli.js")],
-    env: testCase.env,
+    env: { ...testCase.env, ...(operation === "cancel" ? { ISSUE95_STUB_DELAY: "1" } : {}) },
     stderr: "pipe",
   });
   let serverStderr = "";
@@ -138,7 +160,6 @@ async function mcpCase(testCase, operation) {
     const params = operation === "fetch"
       ? { url: fixtureUrl, mode: "readable" }
       : { query: fixtureQuery, provider: "duckduckgo", numResults: 2 };
-    if (operation === "cancel") testCase.env.ISSUE95_STUB_DELAY = "1";
     const controller = new AbortController();
     const pending = client.callTool({ name: operation === "fetch" ? "fetch_content" : "web_search", arguments: params }, undefined, { signal: controller.signal });
     if (operation === "cancel") setTimeout(() => controller.abort(), 30);
@@ -170,6 +191,7 @@ async function runWorker(mode) {
 async function run() {
   const root = resolve(tmpdir(), `cv-tailor-issue95-${process.pid}-${Date.now()}`);
   mkdirSync(root, { recursive: true });
+  try {
   const runtimeModules = resolve(process.env.PI_WEB_ACCESS_RUNTIME_NODE_MODULES || "C:/Users/Makrious/.pi/agent/install/releases/1.4.0/node_modules");
   assert.ok(existsSync(join(runtimeModules, "@earendil-works", "pi-coding-agent", "package.json")), "the isolated extension runtime needs the installed Pi peer dependencies");
   const mirror = join(root, "adapter", "pi-web-access");
@@ -190,14 +212,21 @@ async function run() {
   }
   packageDir = mirror;
   const proofCases = [];
-  try {
+    for (const invalid of [
+      { type: "search", query: "x", provider: "auto" },
+      { type: "search", query: "x", includeContent: true },
+      { type: "search", query: "x", providers: ["duckduckgo", "tavily"] },
+      { type: "fetch", url: fixtureUrl, proxy: "http://127.0.0.1" },
+      { type: "fetch", url: "https://example.org/" },
+    ]) assert.throws(() => appOperation(invalid), /unsupported|implicit|allowlist/, "app boundary rejects unsafe shape before launch");
+    assert.deepEqual(appOperation({ type: "search", query: fixtureQuery }), { type: "search", query: fixtureQuery, provider: "duckduckgo", maxResults: 2 });
     for (const route of ["extension", "mcp"]) {
       for (const operation of ["fetch", "search", "cancel"]) {
         const testCase = prepareCase(root, route, operation);
         let result;
         if (route === "extension") {
           const child = spawn(process.execPath, [resolve(process.argv[1]), "--worker", "extension"], {
-            env: { ...testCase.env, ISSUE95_OPERATION: operation }, stdio: ["ignore", "pipe", "inherit"],
+            env: { ...testCase.env, ISSUE95_OPERATION: operation, ...(operation === "cancel" ? { ISSUE95_STUB_DELAY: "1" } : {}) }, stdio: ["ignore", "pipe", "inherit"],
           });
           let stdout = "";
           for await (const chunk of child.stdout) stdout += chunk;
@@ -207,10 +236,13 @@ async function run() {
         } else {
           result = await mcpCase(testCase, operation);
         }
-        const destinations = readFileSync(testCase.traceFile, "utf8").split(/\r?\n/).filter(Boolean);
-        const allowed = operation === "fetch" ? ["https://www.rfc-editor.org"] : ["local://duckduckgo-stub"];
-        const unexpected = [...new Set(destinations)].filter((origin) => !allowed.includes(origin));
-        assert.deepEqual(unexpected, [], `${route}/${operation} contacted only the configured destination`);
+        const traces = readFileSync(testCase.traceFile, "utf8").split(/\r?\n/).filter(Boolean);
+        assert.ok(traces.length > 0, `${route}/${operation} produced a nonempty transport trace`);
+        if (operation === "fetch") assert.ok(traces.includes("GET https://www.rfc-editor.org/rfc/rfc2606.txt"), `${route} observed exact fetch method/path`);
+        if (operation === "search") assert.ok(traces.some((trace) => trace.includes("local://duckduckgo-stub/html/") && trace.includes("q=")), `${route} observed search request path/query`);
+        if (operation === "cancel") assert.ok(traces.some((trace) => trace.startsWith("GET local://duckduckgo-stub/")), `${route} cancellation reached delayed stub before abort`);
+        const unexpected = traces.filter((trace) => operation === "fetch" ? !trace.startsWith("GET https://www.rfc-editor.org/") : !trace.startsWith("GET local://duckduckgo-stub/"));
+        assert.deepEqual(unexpected, [], `${route}/${operation} contacted only observed destination`);
         if (operation === "fetch") assert.match(result.output, /Reserved Top Level DNS Names/i, `${route} fetch contains the expected harmless RFC text`);
         if (operation === "search") assert.match(result.output, /duckduckgo/i, `${route} search identifies selected provider`);
         if (operation === "cancel") assert.match(result.outcome, /error|abort|cancel/i, `${route} cancellation is surfaced`);
@@ -218,11 +250,11 @@ async function run() {
         const cleanup = cleanupCase(testCase);
         assert.equal(cleanup.deleted, true, `${route}/${operation} isolated cache removed by harness owner`);
         proofCases.push({ route, operation, inputUrlOrQuery: operation === "fetch" ? fixtureUrl : fixtureQuery,
-          provider: operation === "search" ? "duckduckgo" : "direct-http", allowedDestinationOrigins: allowed,
-          observedDestinationOrigins: [...new Set(destinations)], outcome: result.outcome,
+          provider: operation === "search" ? "duckduckgo" : "direct-http", allowedDestinationOrigins: [operation === "fetch" ? "https://www.rfc-editor.org" : "local://duckduckgo-stub"],
+          observedDestinationOrigins: [...new Set(traces.map((trace) => trace.split(" ")[1]?.split("/").slice(0, 3).join("/")))], outcome: result.outcome,
           outputCharacters: result.visibleCharacters, cacheFilesBeforeCleanup: cleanup.files,
           cleanup: cleanup.deleted ? "temporary case removed" : "FAILED", restartObservation: "not separately run" });
-        process.stdout.write(`${route}/${operation}: ${result.outcome}; visible characters ${result.visibleCharacters}; observed ${[...new Set(destinations)].join(", ")}; cache files ${cleanup.files.length}; isolated cleanup ${cleanup.deleted ? "PASS" : "FAIL"}\n`);
+        process.stdout.write(`${route}/${operation}: ${result.outcome}; visible characters ${result.visibleCharacters}; trace ${traces.join(" | ")}; cache files ${cleanup.files.length}; isolated cleanup ${cleanup.deleted ? "PASS" : "FAIL"}\n`);
       }
     }
     process.stdout.write(`ProofCase shape: ${recordShape}\n`);
