@@ -23,6 +23,7 @@ describe('inert named public API adapter', () => {
     expect((await run('lever',{...lever(),id:'wrong'})).attempt).toMatchObject({status:'failed',reason:'ambiguous'})
     expect((await run('greenhouse',{...greenhouse(),id:124})).attempt).toMatchObject({status:'failed',reason:'ambiguous'})
     expect((await run('greenhouse',{...greenhouse(),gh_jid:124})).attempt).toMatchObject({status:'failed',reason:'ambiguous'})
+    expect((await run('greenhouse',{...greenhouse(),absolute_url:'http://careers.acme.example/opening/123?gh_jid=124'})).attempt).toMatchObject({status:'failed',reason:'ambiguous'})
     expect((await run('lever',{...lever(),hostedUrl:'https://jobs.lever.co/other/role1'})).attempt).toMatchObject({status:'failed',reason:'ambiguous'})
     expect((await run('lever',{...lever(),descriptionPlain:'',description:'<script>hostile but unclosed content'})).attempt.status).toBe('failed')
     expect((await run('lever',null)).attempt.status).toBe('failed')
@@ -32,7 +33,10 @@ describe('inert named public API adapter', () => {
   })
   it('does not fetch without trusted source-specific opt-in and reports HTTP access limits', async () => {
     const request=vi.fn(), lookup=vi.fn(async()=>[{address:'8.8.8.8',family:4}]);
-    expect((await fetchNamedPostingApi(ref('lever'),{request,lookup,now:()=>Date.parse('2026-01-02T00:00Z'),eligibility:{...grant('lever'),optedInAt:'bogus'}})).attempt).toMatchObject({status:'failed',reason:'opt-in-required'}); expect(request).not.toHaveBeenCalled(); expect(lookup).not.toHaveBeenCalled()
+    for (const optedInAt of ['bogus', 'January 1, 2026']) {
+      expect((await fetchNamedPostingApi(ref('lever'),{request,lookup,now:()=>Date.parse('2026-01-02T00:00Z'),eligibility:{...grant('lever'),optedInAt}})).attempt).toMatchObject({status:'failed',reason:'opt-in-required'})
+    }
+    expect(request).not.toHaveBeenCalled(); expect(lookup).not.toHaveBeenCalled()
     expect((await run('lever',lever(),{request:async()=>({status:429,headers:{},body:Buffer.alloc(0)})})).attempt).toMatchObject({status:'failed',reason:'source-error'})
     expect((await run('lever',lever(),{request:async()=>({status:403,headers:{},body:Buffer.alloc(0)})})).attempt).toMatchObject({status:'failed',reason:'login-required'})
   })

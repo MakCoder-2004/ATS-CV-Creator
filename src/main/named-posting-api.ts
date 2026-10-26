@@ -77,9 +77,8 @@ export async function fetchNamedPostingApi(input: unknown, options: NamedPosting
   const reference = namedPostingReferenceSchema.parse(input)
   const started = (options.now ?? Date.now)(), startedAt = new Date(started).toISOString(), id = randomUUID()
   const failed = (reason: Extract<NamedPostingAttempt, {status:'failed'}>['reason']) => ({ attempt: namedPostingAttemptSchema.parse({ id, reference, startedAt, status: 'failed', reason }) as NamedPostingAttempt })
-  const grant = options.eligibility
-  const optedInAt = grant && typeof grant.optedInAt === 'string' ? Date.parse(grant.optedInAt) : Number.NaN
-  if (!grant || grant.personalLocalOptIn !== true || grant.source !== reference.source || grant.scope !== 'personal-local' || !Number.isFinite(optedInAt) || optedInAt >= started) return failed('opt-in-required')
+  const preflight = namedPostingAttemptSchema.safeParse({ id, reference, startedAt, status: 'retrieved', expiresAt: new Date(started + 600_000).toISOString(), eligibility: options.eligibility })
+  if (!preflight.success || preflight.data.status !== 'retrieved') return failed('opt-in-required')
   const api = reference.source === 'lever' ? new URL(`https://api.lever.co/v0/postings/${reference.board}/${reference.postingId}`) : new URL(`https://boards-api.greenhouse.io/v1/boards/${reference.board}/jobs/${reference.postingId}`)
   const controller = new AbortController(); const abort = () => controller.abort(options.signal?.reason)
   options.signal?.addEventListener('abort', abort, { once: true })
@@ -114,6 +113,14 @@ export async function fetchNamedPostingApi(input: unknown, options: NamedPosting
       returnedPostingId = String(value.id ?? ''); title = value.title; employer = value.company_name
       text = cleanHtml(String(value.content ?? ''))
       if (value.gh_jid !== undefined && String(value.gh_jid) !== reference.postingId) return failed('ambiguous')
+      if (value.absolute_url !== undefined) {
+        if (typeof value.absolute_url !== 'string' || value.absolute_url.length > 2048) return failed('ambiguous')
+        let displayed: URL
+        try { displayed = new URL(value.absolute_url) } catch { return failed('ambiguous') }
+        if (!['http:', 'https:'].includes(displayed.protocol) || displayed.username || displayed.password) return failed('ambiguous')
+        const decoratedIds = displayed.searchParams.getAll('gh_jid')
+        if (decoratedIds.length > 1 || decoratedIds.length === 1 && decoratedIds[0] !== reference.postingId) return failed('ambiguous')
+      }
       if (typeof value.updated_at === 'string') {
         const update = Date.parse(value.updated_at)
         if (!Number.isFinite(update)) return failed('incomplete')
@@ -125,8 +132,7 @@ export async function fetchNamedPostingApi(input: unknown, options: NamedPosting
     if (typeof title !== 'string' || typeof employer !== 'string' || title.trim().length === 0 || employer.trim().length === 0 || text.length < 80 || text.length > MAX_TEXT) return failed('incomplete')
     const capturedAt = new Date((options.now ?? Date.now)()).toISOString()
     const candidate = namedPostingCandidateSchema.parse({ version: 1, attemptId: id, reference, returnedBoard, returnedPostingId: String(returnedPostingId), title: title.trim(), employer: employer.trim(), text, completeness: 'full', capturedAt, sourceUpdatedAt, retrievalMethod: reference.source === 'lever' ? 'lever-postings-api-v0' : 'greenhouse-job-board-api-v1', retrievalUrl: api.href })
-    const attempt = namedPostingAttemptSchema.parse({ id, reference, startedAt, status: 'retrieved', expiresAt: new Date(started + 600_000).toISOString(), eligibility: grant })
-    return { attempt: attempt as NamedPostingAttempt, candidate }
+    return { attempt: preflight.data, candidate }
   } catch (error) { return failed(options.signal?.aborted ? 'cancelled' : controller.signal.aborted ? 'deadline' : error instanceof Error && error.message.includes('unsafe') ? 'unsafe-address' : 'source-error') }
   finally { clearTimeout(timer); options.signal?.removeEventListener('abort', abort) }
 }
