@@ -96,6 +96,15 @@ describe('volatile public research session', () => {
     sessions.close()
   })
 
+  it.each(['https://www.linkedin.com/jobs/view/4464025097/', 'https://www.indeed.com/viewjob?jk=abcdefgh'])('pauses automatic research for blocked source %s before direct reads or provider access', async sourceUrl => {
+    const t = fixture(); let directReads = 0
+    const sessions = createJobResearchSessions({ credentials: t.credentials, createSearch: t.createSearch, direct: async () => { directReads++; return synthetic('full') } })
+    expect(() => sessions.startJobResearch(sourceUrl)).toThrow(/paused/)
+    expect(directReads).toBe(0)
+    expect(t.requests).toBe(0)
+    sessions.close()
+  })
+
   it('rejects a valid direct result for a different selected role before enabling search', async () => {
     const t = fixture(); let credentialChecks = 0
     const wrongRole = { ...synthetic('none'), selected: normalizeJobResearchUrl('https://www.linkedin.com/jobs/view/4464025098/') }
