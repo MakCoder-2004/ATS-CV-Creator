@@ -85,7 +85,8 @@ These reports record tests, artifacts, and claims at the stated version or issue
 | [Issue 94 link-intake and authorization baseline](validation/issue-94-link-intake-authorization-baseline.md) | Synthetic visible and domain-test evidence for direct/manual intake, research, consent, profile import and paragraph regeneration; the visible Tavily search uses a fake key/transport, and no live-provider behavior or fixed Tailor CV graph-call totals are claimed. |
 | [Issue 97 reviewed named-posting contract](validation/issue-97-reviewed-posting-contract.md) | Contract-only Lever/Greenhouse posting identities and synthetic tests; explicitly NOT ENABLED and not proof of live provider behavior. |
 | [Issue 98 named API adapter](validation/issue-98-named-api-adapter-2026-10-26.md) | Inert main-process named API adapter and deterministic fake tests; explicitly NOT ENABLED, with no IPC/renderer path or live provider behavior. |
-| [Issue 98 named API and search retirement](validation/issue-98-named-api-and-search-retirement.md) | Focused contract/adapter, no-Tavily-dispatch and retired-key UI evidence; dev Electron used synthetic isolated storage, while named-source intake remains disabled. |
+| [Issue 98 named API and search retirement](validation/issue-98-named-api-and-search-retirement.md) | Historical foundation check: the adapter was inert then, Tavily dispatch retired and a synthetic legacy key was verified. |
+| [Issue 98 temporary Greenhouse preview](validation/issue-98-temporary-greenhouse-preview.md) | Personal-local opt-in for a read-only, volatile exact-job preview; synthetic visible checks passed, no Save, Lever/LinkedIn/Indeed still paused. |
 
 ## Prototype design evidence
 
