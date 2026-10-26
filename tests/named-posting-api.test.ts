@@ -40,6 +40,15 @@ describe('inert named public API adapter', () => {
     expect((await run('lever',lever(),{request:async()=>({status:429,headers:{},body:Buffer.alloc(0)})})).attempt).toMatchObject({status:'failed',reason:'source-error'})
     expect((await run('lever',lever(),{request:async()=>({status:403,headers:{},body:Buffer.alloc(0)})})).attempt).toMatchObject({status:'failed',reason:'login-required'})
   })
+  it('preserves literal angle brackets in Lever plain fields while parsing only HTML sections', async () => {
+    const result = await run('lever', { ...lever(), descriptionPlain: `${long} We teach <script>alert(1)</script> safely.`, lists: [{ text: '<React> skills', content: '<p>Build reliable applications.</p>' }], additionalPlain: 'Additional <React> examples are welcome.' })
+    expect(result.attempt.status).toBe('retrieved')
+    expect(result.candidate?.text).toContain('We teach <script>alert(1)</script> safely.')
+    expect(result.candidate?.text).toContain('<React> skills')
+    expect(result.candidate?.text).toContain('Additional <React> examples are welcome.')
+    expect(result.candidate?.text).toContain('Build reliable applications.')
+    expect((await run('lever', { ...lever(), lists: [{ text: '', content: '<p>Hidden requirement</p>' }] })).attempt.status).toBe('failed')
+  })
   it('sanitizes HTML text and rejects unsafe or over-complex hidden suffixes', async () => {
     const result=await run('greenhouse',greenhouse()); expect(result.candidate?.text).not.toContain('ignore this script')
     const prefix = `<p>${long}</p>`

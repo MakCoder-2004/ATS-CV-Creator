@@ -44,7 +44,7 @@ function extractHtmlSections(sections: string[], signal: AbortSignal): Promise<s
   return new Promise((resolve, reject) => {
     let settled = false
     const finish = (action: () => void) => { if (settled) return; settled = true; clearTimeout(timer); signal.removeEventListener('abort', cancel); void worker.terminate(); action() }
-    const timer = setTimeout(() => finish(() => reject(new Error('HTML parsing exceeded its 1.5-second budget.'))), 1_500)
+    const timer = setTimeout(() => finish(() => reject(new Error('HTML parsing exceeded its 3-second budget.'))), 3_000)
     const cancel = () => finish(() => reject(new Error('HTML parsing cancelled.')))
     if (signal.aborted) return cancel()
     signal.addEventListener('abort', cancel, { once: true })
@@ -54,14 +54,15 @@ function extractHtmlSections(sections: string[], signal: AbortSignal): Promise<s
   })
 }
 async function leverText(value: any, signal: AbortSignal): Promise<string> {
-  const pieces: string[] = []
+  const pieces: string[] = [], htmlIndexes: number[] = []
   if (typeof value.descriptionPlain === 'string' && value.descriptionPlain.trim()) pieces.push(value.descriptionPlain.trim())
-  else if (typeof value.description === 'string' && value.description.trim()) pieces.push(value.description)
+  else if (typeof value.description === 'string' && value.description.trim()) { htmlIndexes.push(pieces.length); pieces.push(value.description) }
   if (value.lists !== undefined) {
     if (!Array.isArray(value.lists) || value.lists.length > 100) throw new Error('Lever section format is ambiguous.')
     for (const list of value.lists) {
-      if (!list || typeof list !== 'object' || typeof list.text !== 'string' || typeof list.content !== 'string') throw new Error('Lever section format is ambiguous.')
-      pieces.push(list.text.trim(), list.content)
+      if (!list || typeof list !== 'object' || typeof list.text !== 'string' || typeof list.content !== 'string' || !list.text.trim() || !list.content.trim()) throw new Error('Lever section format is ambiguous.')
+      pieces.push(list.text.trim())
+      htmlIndexes.push(pieces.length); pieces.push(list.content)
     }
   }
   if (value.additionalPlain !== undefined) {
@@ -69,9 +70,8 @@ async function leverText(value: any, signal: AbortSignal): Promise<string> {
     if (value.additionalPlain.trim()) pieces.push(value.additionalPlain.trim())
   } else if (value.additional !== undefined) {
     if (typeof value.additional !== 'string') throw new Error('Lever additional HTML format is ambiguous.')
-    if (value.additional.trim()) pieces.push(value.additional)
+    if (value.additional.trim()) { htmlIndexes.push(pieces.length); pieces.push(value.additional) }
   }
-  const htmlIndexes = pieces.map((piece, index) => typeof piece === 'string' && /</.test(piece) ? index : -1).filter(index => index >= 0)
   const extracted = htmlIndexes.length ? await extractHtmlSections(htmlIndexes.map(index => pieces[index]), signal) : []
   htmlIndexes.forEach((index, i) => { pieces[index] = extracted[i] })
   return pieces.filter(Boolean).join('\n\n')
