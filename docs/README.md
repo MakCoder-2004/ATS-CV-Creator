@@ -74,6 +74,7 @@ These reports record tests, artifacts, and claims at the stated version or issue
 | [Version 0.5.0 integration and build](validation/specs-integration-0.5.0.md) | Reviewed spec integration, 345 passing tests, four integrated development Electron cases and a statically checked installer. Installed and real-provider gates remain open. |
 | [Version 0.6.0 job-link research](validation/universal-research-0.6.0.md) | Reviewed temporary public-link intake, scoped consented analysis, focused development checks and an unsigned installer checked statically. Installed and real-provider acceptance remain open under #89. |
 | [Installed Settings 0.6.1](validation/settings-installed-0.6.1.md) | Actual per-user installation, isolated SQLite reopen and two-card layout checks; encrypted-key/clipboard, legacy semantic and real-provider gates remain open. |
+| [Installed PDF and search safety 0.6.2](validation/installed-pdf-tavily-safety-0.6.2.md) | Actual per-user installation, isolated native SQLite reopen and synthetic PDF/DOCX export; user-approved unpacked PDF layout, with real Pi/Tavily and key/recovery gates still open. |
 
 ## Prototype design evidence
 
