@@ -47,6 +47,7 @@ These reports record source-access decisions that are not shipped product behavi
 | [Issue 102 keyless Exa provider probe](validation/issue-102-exa-provider-probe-2026-10-26.md) | One reported matching RFC Editor result from keyless Exa; role-search reliability, source rights, and packaging remain unproved. |
 | [Issue 102 synthetic MCP lifecycle experiment](validation/issue-102-mcp-lifecycle.md) | Synthetic exchanges ran, but independent review rejected the lifecycle and cleanup claims. Integration remains blocked. |
 | [Issue 102 physical package feasibility](validation/issue-102-physical-package.md) | One isolated run found 212 physical installed package manifests; static-only evidence, with transitive versions untracked and app packaging, legal, security, process, egress, installed, and source-rights gates still open. |
+| [Issue 102 strict Pi Web Access feasibility](validation/issue-102-unmodified-pi-web-access-feasibility.md) | Deferred negative for unmodified MCP 0.44.0 under OS-denied child network access; the separate named Lever/Greenhouse API route is not Pi integration. |
 
 ## Historical research and feasibility
 
