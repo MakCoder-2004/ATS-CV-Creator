@@ -21,10 +21,11 @@ const html = (body: string, id = roleId) => `<html><head><link rel="canonical" h
 const description = 'Build practical software with measured outcomes. Collaborate with colleagues to maintain useful systems and explain technical decisions to reviewers.'
 const completeDescription = '<h2>Responsibilities</h2><p>Build practical software with measured outcomes. Collaborate with colleagues to maintain useful systems and explain technical decisions to reviewers. Document service boundaries and keep systems reliable for customers.</p><h2>Qualifications</h2><p>Experience building production services, reviewing code, resolving incidents, and communicating decisions with a cross-functional team. Apply for this role if you enjoy developing reliable software.</p>'
 const response = (body: string | Buffer, status = 200, headers: Record<string, string> = {}) => ({ status, body: Buffer.isBuffer(body) ? body : Buffer.from(body), headers: { 'content-type': 'text/html; charset=utf-8', ...headers } })
-const fixtures = { lookup: async () => [{ address: '8.8.8.8', family: 4 }], request: async () => response(html(description)) }
+const genericUrl = 'https://jobs.example.org/positions/engineer'
 const structuredRole = (overrides: Record<string, unknown> = {}) => ({ '@type': 'JobPosting', url: canonical, identifier: { value: roleId }, title: 'Wrong employer role', hiringOrganization: { name: 'Wrong employer' }, description: completeDescription, ...overrides })
 const structuredPage = (role: unknown, head = '', body = '') => `<html><head>${head}<script type="application/ld+json">${JSON.stringify(role)}</script></head><body>${body}</body></html>`
-const extractWorker = (page: string): Promise<{ outcome: string; reason?: string }> => new Promise((resolveResult, reject) => {
+const fixtures = { lookup: async () => [{ address: '8.8.8.8', family: 4 }], request: async () => response(structuredPage({ '@type': 'JobPosting', url: genericUrl, title: 'Synthetic engineer', description: completeDescription })) }
+const extractWorker = (page: string): Promise<{ outcome: string; reason?: string; description?: string }> => new Promise((resolveResult, reject) => {
   const worker = new Worker(resolve('src/main/job-research-extraction-worker.cjs'), { workerData: { html: page, selected } })
   worker.once('message', resolveResult)
   worker.once('error', reject)
@@ -145,20 +146,19 @@ describe('immutable research and review contracts', () => {
 })
 
 describe('bounded direct read', () => {
-  it('extracts a synthetic LinkedIn primary description in an inert worker', async () => {
-    const run = await fetchDirectJobResearch(canonical, fixtures)
-    expect(run.status).toBe('full')
-    expect(run.findings[0]).toMatchObject({ kind: 'direct-role-text', text: description, completeness: 'full' })
+  it('extracts proprietary LinkedIn primary description markup in an inert worker', async () => {
+    const result = await extractWorker(html(description))
+    expect(result).toMatchObject({ outcome: 'full', description })
   })
-  it('keeps the selected LinkedIn primary markup when JSON-LD is a teaser', async () => {
+  it('keeps selected LinkedIn primary markup when JSON-LD is a teaser', async () => {
     const structured = `<script type="application/ld+json">${JSON.stringify({ '@type': 'JobPosting', url: canonical, title: 'Synthetic engineer', description })}</script>`
-    const run = await fetchDirectJobResearch(canonical, { ...fixtures, request: async () => response(html(completeDescription) + structured) })
-    expect(run.status).toBe('full')
-    expect(run.findings[0].text).toContain('Qualifications')
+    const result = await extractWorker(html(completeDescription) + structured)
+    expect(result).toMatchObject({ outcome: 'full' })
+    expect(result.description).toContain('Qualifications')
   })
-  it('marks a selected LinkedIn primary with an explicit truncation marker provisional', async () => {
-    const run = await fetchDirectJobResearch(canonical, { ...fixtures, request: async () => response(html(`${description} Read more`)) })
-    expect(run.status).toBe('provisional')
+  it('marks selected LinkedIn primary markup with an explicit truncation marker provisional', async () => {
+    const result = await extractWorker(html(`${description} Read more`))
+    expect(result).toMatchObject({ outcome: 'partial', reason: 'The selected page may contain only a job teaser or search listing; the description is provisional.' })
   })
   it('accepts one exact structured generic role but not a different role on the same page', async () => {
     const generic = 'https://jobs.example.org/positions/engineer'
@@ -190,32 +190,22 @@ describe('bounded direct read', () => {
     ['two roles, one matching', [structuredRole(), structuredRole({ url: 'https://www.linkedin.com/jobs/view/9999999999/' })], ''],
   ])('rejects %s rather than attributing wrong-role text', async (_, role, extra) => {
     const page = structuredPage(role, '', extra)
-    expect((await extractWorker(page)).outcome).toBe('none')
-    const run = await fetchDirectJobResearch(canonical, { ...fixtures, request: async () => response(page) })
-    expect(run.status).toBe('none')
-    expect(run.sources).toEqual([])
-    expect(run.findings).toEqual([])
+    expect(await extractWorker(page)).toMatchObject({ outcome: 'none', reason: expect.any(String) })
   })
   it('does not turn a metadata-free selected page into a full posting', async () => {
     const page = `<html><body><h1>Synthetic engineer</h1><div class="show-more-less-html__markup">${completeDescription}</div></body></html>`
     expect((await extractWorker(page)).outcome).toBe('none')
-    const run = await fetchDirectJobResearch(canonical, { ...fixtures, request: async () => response(page) })
-    expect(run).toMatchObject({ status: 'none', sources: [], findings: [] })
   })
   it('accepts a single role with nested non-job data and repeated consistent scripted IDs', async () => {
     const page = structuredPage({ ...structuredRole({ '@id': canonical }), '@graph': [{ '@type': 'Organization', name: 'Example Ltd' }] }, '',
       `<script>window.data={decoratedJobPostingId:"${roleId}"};window.backup={'decoratedJobPostingId':${roleId},"decoratedJobPostingId":"${roleId}"}</script>`)
-    expect((await extractWorker(page)).outcome).toBe('full')
-    const run = await fetchDirectJobResearch(canonical, { ...fixtures, request: async () => response(page) })
-    expect(run.status).toBe('full')
+    const result = await extractWorker(page)
+    expect(result).toMatchObject({ outcome: 'full', description: expect.stringContaining('Qualifications') })
   })
   it('accepts mutually consistent structured, page, canonical and decorated identity signals', async () => {
     const page = structuredPage(structuredRole({ mainEntityOfPage: { '@id': canonical, url: canonical }, identifier: { value: roleId, url: canonical } }),
       `<link rel="canonical" href="${canonical}">`, `<code id="decoratedJobPostingId"><!--"${roleId}"--></code><script>window.data={"decoratedJobPostingId":"${roleId}"}</script>`)
     expect((await extractWorker(page)).outcome).toBe('full')
-    const run = await fetchDirectJobResearch(canonical, { ...fixtures, request: async () => response(page) })
-    expect(run.status).toBe('full')
-    expect(run.findings[0].text).toContain('Qualifications')
   })
   it('requires a generic posting URL and refuses contradictory identifier URLs', async () => {
     const generic = 'https://jobs.example.org/positions/engineer'
@@ -231,22 +221,16 @@ describe('bounded direct read', () => {
     expect(provisional.status).toBe('provisional')
     const unrelated = await fetchDirectJobResearch(generic, { ...fixtures, request: async () => response(`<aside><button>Read more</button></aside>${structured}`) })
     expect(unrelated.status).toBe('full')
-    const linkedInClamped = html(completeDescription).replace('show-more-less-html__markup', 'show-more-less-html__markup show-more-less-html__clamp')
-    expect((await fetchDirectJobResearch(canonical, { ...fixtures, request: async () => response(linkedInClamped) })).status).toBe('full')
   })
-  it('rejects search-page or query-conflicting Indeed structured identities', async () => {
+  it('pauses canonical LinkedIn and Indeed sources before DNS or HTTP access', async () => {
     const indeed = 'https://www.indeed.com/viewjob?jk=1234567890abcdef'
-    const structured = (url: string) => `<script type="application/ld+json">${JSON.stringify({ '@type': 'JobPosting', url, title: 'Synthetic engineer', description: completeDescription })}</script>`
-    expect((await fetchDirectJobResearch(indeed, { ...fixtures, request: async () => response(structured(indeed)) })).status).toBe('full')
-    for (const url of [
-      'https://www.indeed.com/jobs?q=engineer&jk=1234567890abcdef',
-      'https://www.indeed.com/viewjob?jk=1234567890abcdef&q=engineer',
-      'https://www.indeed.com/viewjob?jk=1234567890abcdef&vjk=1111111111111111',
-      'https://www.indeed.com/rc/clk?jk=1234567890abcdef',
-      'https://www.indeed.com/viewjob?jk=1234567890abcdef#other',
-    ]) {
-      expect((await fetchDirectJobResearch(indeed, { ...fixtures, request: async () => response(structured(url)) })).status).toBe('none')
+    let lookups = 0
+    let requests = 0
+    const pausedFixtures = { lookup: async () => { lookups++; return [{ address: '8.8.8.8', family: 4 }] }, request: async () => { requests++; return response('') } }
+    for (const url of [canonical, indeed]) {
+      await expect(fetchDirectJobResearch(url, pausedFixtures)).rejects.toThrow(/paused/)
     }
+    expect({ lookups, requests }).toEqual({ lookups: 0, requests: 0 })
   })
   it.each([
     ['listing shell', '<h1>Search results</h1><form><input name="q"></form><div class="job-list">More jobs</div>', completeDescription],
@@ -264,21 +248,21 @@ describe('bounded direct read', () => {
     expect(run.findings[0].completeness).toBe('partial')
   })
   it('does not treat namesakes or mixed roles as the selected full posting', async () => {
-    const mismatch = await fetchDirectJobResearch(canonical, { ...fixtures, request: async () => response(html(description, '9999999999')) })
+    const mismatch = await fetchDirectJobResearch(genericUrl, { ...fixtures, request: async () => response(structuredPage({ '@type': 'JobPosting', url: 'https://jobs.example.org/positions/other', title: 'Synthetic engineer', description })) })
     expect(mismatch.status).toBe('none')
-    const mixed = await fetchDirectJobResearch(canonical, { ...fixtures, request: async () => response(`<script type="application/ld+json">${JSON.stringify({ '@graph': [
-      { '@type': 'JobPosting', url: canonical, title: 'Role A', description },
-      { '@type': 'JobPosting', url: canonical, title: 'Role B', description },
+    const mixed = await fetchDirectJobResearch(genericUrl, { ...fixtures, request: async () => response(`<script type="application/ld+json">${JSON.stringify({ '@graph': [
+      { '@type': 'JobPosting', url: genericUrl, title: 'Role A', description },
+      { '@type': 'JobPosting', url: genericUrl, title: 'Role B', description },
     ] })}</script>`) })
     expect(mixed.status).toBe('none')
   })
   it('returns blocked rather than fabricated evidence for login and redirects', async () => {
-    expect((await fetchDirectJobResearch(canonical, { ...fixtures, request: async () => response('<h1>Sign in to view</h1>') })).status).toBe('blocked')
+    expect((await fetchDirectJobResearch(genericUrl, { ...fixtures, request: async () => response('<h1>Sign in to view</h1>') })).status).toBe('blocked')
     let calls = 0
-    const blocked = await fetchDirectJobResearch(canonical, { ...fixtures, request: async () => { calls++; return response('', 307, { location: 'https://www.linkedin.com/login' }) } })
-    expect(blocked).toMatchObject({ status: 'blocked', accessFailure: 'unreadable' })
+    const blocked = await fetchDirectJobResearch(genericUrl, { ...fixtures, request: async () => { calls++; return response('', 307, { location: 'https://www.linkedin.com/login' }) } })
+    expect(blocked).toMatchObject({ status: 'blocked', accessFailure: 'unsafe' })
     expect(calls).toBe(1)
-    const denied = await fetchDirectJobResearch(canonical, { ...fixtures, request: async () => response('', 403) })
+    const denied = await fetchDirectJobResearch(genericUrl, { ...fixtures, request: async () => response('', 403) })
     expect(denied).toMatchObject({ status: 'blocked', accessFailure: 'unreadable' })
     const generic = 'https://jobs.example.org/positions/engineer'
     const genericLogin = await fetchDirectJobResearch(generic, { ...fixtures, request: async () => response('', 302, { location: 'https://jobs.example.org/login' }) })
@@ -287,7 +271,7 @@ describe('bounded direct read', () => {
   it.each([
     [404, 'removed'], [410, 'removed'], [500, 'server-error'], [503, 'server-error'], [429, 'unsafe'], [451, 'unsafe'],
   ] as const)('does not classify HTTP %s as a benign indexed fallback', async (status, accessFailure) => {
-    const run = await fetchDirectJobResearch(canonical, { ...fixtures, request: async () => response('', status) })
+    const run = await fetchDirectJobResearch(genericUrl, { ...fixtures, request: async () => response('', status) })
     expect(run).toMatchObject({ accessFailure, findings: [] })
     expect(['none', 'blocked']).toContain(run.status)
   })
@@ -299,22 +283,22 @@ describe('bounded direct read', () => {
     ['invalid redirect', 'https://%'],
     ['loop', canonical],
   ])('tags %s redirects unsafe, never as a login fallback', async (_, location) => {
-    const run = await fetchDirectJobResearch(canonical, { ...fixtures, request: async () => response('', 302, { location }) })
+    const run = await fetchDirectJobResearch(genericUrl, { ...fixtures, request: async () => response('', 302, { location }) })
     expect(run).toMatchObject({ status: 'blocked', accessFailure: 'unsafe' })
   })
   it('rejects non-public DNS and compression bombs before parsing', async () => {
-    await expect(fetchDirectJobResearch(canonical, { ...fixtures, lookup: async () => [{ address: '8.8.8.8', family: 4 }, { address: '127.0.0.1', family: 4 }] })).rejects.toThrow(/private/)
-    await expect(fetchDirectJobResearch(canonical, { ...fixtures, request: async () => response(gzipSync(Buffer.alloc(8 * 1024 * 1024 + 1, 65)), 200, { 'content-encoding': 'gzip' }) })).rejects.toThrow(/expanded/)
+    await expect(fetchDirectJobResearch(genericUrl, { ...fixtures, lookup: async () => [{ address: '8.8.8.8', family: 4 }, { address: '127.0.0.1', family: 4 }] })).rejects.toThrow(/private/)
+    await expect(fetchDirectJobResearch(genericUrl, { ...fixtures, request: async () => response(gzipSync(Buffer.alloc(8 * 1024 * 1024 + 1, 65)), 200, { 'content-encoding': 'gzip' }) })).rejects.toThrow(/expanded/)
   })
   it('marks truncated descriptions provisional rather than claiming a full source', async () => {
-    const result = await fetchDirectJobResearch(canonical, { ...fixtures, request: async () => response(html(description.repeat(150))) })
+    const result = await fetchDirectJobResearch(genericUrl, { ...fixtures, request: async () => response(structuredPage({ '@type': 'JobPosting', url: genericUrl, title: 'Synthetic engineer', description: description.repeat(150) })) })
     expect(result.status).toBe('provisional')
     expect(result.findings[0].completeness).toBe('partial')
     expect(() => promoteJobResearch(result, [result.findings[0].id], false)).toThrow(/Acknowledge/)
   })
   it('honors cancellation and rejects overlong downloads', async () => {
     const controller = new AbortController(); controller.abort()
-    await expect(fetchDirectJobResearch(canonical, { ...fixtures, signal: controller.signal })).rejects.toThrow(/cancelled/)
-    await expect(fetchDirectJobResearch(canonical, { ...fixtures, request: async () => response(Buffer.alloc(2 * 1024 * 1024 + 1)) })).rejects.toThrow(/compressed/)
+    await expect(fetchDirectJobResearch(genericUrl, { ...fixtures, signal: controller.signal })).rejects.toThrow(/cancelled/)
+    await expect(fetchDirectJobResearch(genericUrl, { ...fixtures, request: async () => response(Buffer.alloc(2 * 1024 * 1024 + 1)) })).rejects.toThrow(/compressed/)
   })
 })
