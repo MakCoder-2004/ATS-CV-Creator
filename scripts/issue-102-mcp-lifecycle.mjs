@@ -237,16 +237,16 @@ async function main() {
     assert.deepEqual(receipt.map(item => item.url), [exaUrl], "stub received exact allowlisted Exa request before cancellation");
     await closeAndWait(cancel, true);
     const late = await Promise.race([pending, new Promise(resolve => setTimeout(() => resolve(false), 250))]);
-    assert.equal(late, false, "terminated child cannot deliver a late result");
+    assert.equal(late, false, "no result was observed within 250 ms after child exit");
     const cancelTree = await tree(cancel.cacheRoot);
     await removeOwned(cancel.caseRoot);
-    assert.deepEqual(await tree(cancel.cacheRoot).catch(() => []), [], "cancelled run has no retained cache tree");
+    await assert.rejects(access(cancel.cacheRoot), { code: "ENOENT" }, "owned cancelled root was removed");
     results.push({ name: "cancel-after-request", observed: "one child exited; no result within 250 ms", receipts: receipt, childKilledAndExitObserved: true, cacheTreeBeforeCleanup: cancelTree, rootRemoved: true });
 
     const normal = await createClient(runRoot, "normal-close", "normal");
     const normalClose = await closeAndWait(normal);
     await removeOwned(normal.caseRoot);
-    results.push({ name: "normal-close", verdict: "PASS", process: normalClose, rootRemoved: true });
+    results.push({ name: "normal-close", observed: "one child exit and healthy root removal", process: normalClose, rootRemoved: true });
 
     const forced = await createClient(runRoot, "run-stale-forced-death", "normal");
     const forcedEvidence = await closeAndWait(forced, true);
@@ -254,7 +254,7 @@ async function main() {
     await writeFile(join(forced.caseRoot, "owner.json"), JSON.stringify({ pid: forcedEvidence.pid, cacheText: fixtureText }));
     await reconcile();
     await assert.rejects(access(forced.caseRoot), { code: "ENOENT" }, "next operation removes the dead child's stale owned root");
-    results.push({ name: "forced-death-next-run-reconcile", verdict: "PASS", process: forcedEvidence, cacheTreeBeforeCleanup: forcedFiles, nextRunReconciled: true, rootRemoved: true });
+    results.push({ name: "forced-death-next-run-reconcile", observed: "one killed child and same-process cleanup after a post-death marker", process: forcedEvidence, cacheTreeBeforeCleanup: forcedFiles, rootRemoved: true });
 
     const failed = await createClient(runRoot, "cleanup-failure", "normal");
     await closeAndWait(failed);
@@ -266,11 +266,11 @@ async function main() {
     owner.blocked = false;
     await reconcile();
     assert.equal((await readdir(runRoot)).includes("cleanup-failure"), false, "owned cleanup retry removes failed root");
-    results.push({ name: "cleanup-failure-fail-closed-retry", verdict: "PASS", injectedFailureObserved: true, nextRunBlocked: true, ownedRetryRemovedRoot: true });
+    results.push({ name: "cleanup-failure-fail-closed-retry", observed: "deletion throw with a manually set block flag, followed by retry", injectedFailureObserved: true, manuallyBlockedNextCall: true, ownedRetryRemovedRoot: true });
 
     const remaining = await readdir(runRoot);
     assert.deepEqual(remaining, [], "cleanup and restart leave no per-run root or unaccepted fixture text behind");
-    console.log(JSON.stringify({ verdict: "NOT_VERIFIED", offline: true, package: packageJson.version, operationShape: "fixed search or fetch only; checks 512 input bytes and serialized result size after parsing", bounds: { deadlineRaceMs: TOTAL_MS, attemptedStderrCapBytes: MAX_STDERR_BYTES, preParseIngressCap: false }, cases: results }, null, 2));
+    console.log(JSON.stringify({ verdict: "NOT_VERIFIED", syntheticFetchStub: true, egressUnverified: true, package: packageJson.version, operationShape: "fixed search or fetch only; checks 512 input bytes and serialized result size after parsing", bounds: { deadlineRaceMs: TOTAL_MS, attemptedStderrCapBytes: MAX_STDERR_BYTES, preParseIngressCap: false }, cases: results }, null, 2));
   } finally {
     await rm(runRoot, { recursive: true, force: true });
   }
