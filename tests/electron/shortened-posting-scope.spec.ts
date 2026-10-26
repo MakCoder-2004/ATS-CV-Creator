@@ -39,8 +39,7 @@ test('analysis and qualification review label imported source requirements omitt
     await page.locator('.saved-job-row').filter({ hasText: saved.title }).getByRole('button', { name: 'Open posting' }).click()
     await expect(page.getByRole('heading', { name: saved.title, exact: true })).toBeVisible()
     await page.getByRole('button', { name: 'Inspect outgoing data' }).click()
-    await page.getByRole('checkbox', { name: /reviewed what is sent/ }).check()
-    await page.getByRole('button', { name: 'Authorize this run' }).click()
+    await page.getByRole('button', { name: 'Authorize and start this run' }).click()
     const scopeNote = 'This assessment uses only the accepted working posting. The separately retained source snapshot differs, so source requirements absent from the working text were not assessed.'
     await expect(page.getByText(scopeNote, { exact: true })).toBeVisible({ timeout: 30_000 })
     await page.getByRole('button', { name: 'Generate tailored draft' }).click()

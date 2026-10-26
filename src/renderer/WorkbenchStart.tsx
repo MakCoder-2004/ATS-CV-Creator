@@ -22,7 +22,6 @@ export function WorkbenchStart({ activeJob, onNavigate }: { activeJob: JobRecord
   const [reviewApprovedDraft, setReviewApprovedDraft] = useState(false)
   const [authorizedRunId, setAuthorizedRunId] = useState<string | null>(null)
   const [newRun, setNewRun] = useState(false)
-  const [termsAcknowledged, setTermsAcknowledged] = useState(false)
   const [consentError, setConsentError] = useState('')
   const [consentBusy, setConsentBusy] = useState(false)
   const [analysis, setAnalysis] = useState<Awaited<ReturnType<typeof window.workbench.getAnalysis>>>(null)
@@ -44,7 +43,7 @@ export function WorkbenchStart({ activeJob, onNavigate }: { activeJob: JobRecord
   selectedJob.current = activeJob?.id
   useEffect(() => {
     setAnalysis(null); setRecovery(null); setReviewApprovedDraft(false)
-    setReview(null); setConsentAccepted(false); setAuthorizedRunId(null); setNewRun(false); setTermsAcknowledged(false); setConsentError(''); setDraft(null); setCanonical(null); setFitReport(null); setAcceptedCuts([]); setDraftError(''); setDraftBusy(false)
+    setReview(null); setConsentAccepted(false); setAuthorizedRunId(null); setNewRun(false); setConsentError(''); setDraft(null); setCanonical(null); setFitReport(null); setAcceptedCuts([]); setDraftError(''); setDraftBusy(false)
     if (activeJob) {
       const jobId = activeJob.id
       void window.workbench.getDraft(jobId).then(async value => {
@@ -80,7 +79,7 @@ export function WorkbenchStart({ activeJob, onNavigate }: { activeJob: JobRecord
       }
       if (!result.ok) { setConsentError(result.message); return }
       pendingToken.current = result.token
-      setTermsAcknowledged(false); setConsentAccepted(false); setAuthorizedRunId(null); setAnalysis(null); setReview(result); setNewRun(true)
+      setConsentAccepted(false); setAuthorizedRunId(null); setAnalysis(null); setReview(result); setNewRun(true)
     } catch { setConsentError('Outgoing data could not be prepared. Try again.') }
     finally { setConsentBusy(false) }
   }
@@ -274,13 +273,13 @@ export function WorkbenchStart({ activeJob, onNavigate }: { activeJob: JobRecord
       const result = await window.workbench.cancelOutboundConsent(token)
       if (!result.ok) { setConsentError(result.message); return }
       pendingToken.current = null
-      setReview(null); setConsentAccepted(false); setAuthorizedRunId(null); setNewRun(false); setTermsAcknowledged(false)
+      setReview(null); setConsentAccepted(false); setAuthorizedRunId(null); setNewRun(false)
     } catch { setConsentError('This run could not be cancelled. Try again.') }
     finally { setConsentBusy(false) }
   }
   async function authorizeOutgoing() {
     const token = pendingToken.current
-    if (!token || !termsAcknowledged || consentBusy) return
+    if (!token || consentBusy) return
     setConsentBusy(true); setConsentError('')
     try {
       const result = await window.workbench.acceptOutboundConsent(token, true, true)
@@ -327,7 +326,7 @@ export function WorkbenchStart({ activeJob, onNavigate }: { activeJob: JobRecord
   const displayedAnalysis = newRun && consentAccepted && analysis?.runId !== authorizedRunId ? null : analysis
   return <WorkbenchStageLayout
     activeJob={activeJob} onNavigate={page => onNavigate(page)} error={error} retry={() => setAttempt(value => value + 1)} activePhase={activePhase}
-    review={review} consentAccepted={consentAccepted} termsAcknowledged={termsAcknowledged} setTermsAcknowledged={setTermsAcknowledged} consentError={consentError} consentBusy={consentBusy}
+    review={review} consentAccepted={consentAccepted} consentError={consentError} consentBusy={consentBusy}
     analysis={displayedAnalysis} recovery={recovery} recoveryBusy={recoveryBusy} resumeSavedGeneration={resumeSavedGeneration} cancelSavedGeneration={cancelSavedGeneration} draft={draft} canonical={canonical} fitReport={fitReport} fitBusy={fitBusy} acceptedCuts={acceptedCuts} setAcceptedCuts={setAcceptedCuts} draftBusy={draftBusy} draftError={draftError}
     pageTarget={pageTarget} setPageTarget={setPageTarget} addSection={addSection} setAddSection={setAddSection} addEvidence={addEvidence} setAddEvidence={setAddEvidence} sources={sources} outgoingProfileCounts={outgoingProfileCounts}
     inspectOutgoing={inspectOutgoing} cancelOutgoing={cancelOutgoing} authorizeOutgoing={authorizeOutgoing} startAnalysis={startAnalysis} generateDraft={generateDraft} cancelAnalysis={async () => { if (activeJob) setAnalysis(await window.workbench.cancelAnalysis(activeJob.id)) }}

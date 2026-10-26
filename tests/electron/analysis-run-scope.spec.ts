@@ -53,8 +53,7 @@ test('saved posting analysis does not skip analysis for a newly authorized draft
     await page.getByRole('button', { name: 'Tailor CV', exact: true }).click()
     const authorize = async () => {
       await page.getByRole('button', { name: 'Inspect outgoing data' }).click()
-      await page.getByRole('checkbox', { name: /reviewed what is sent/ }).check()
-      await page.getByRole('button', { name: 'Authorize this run' }).click()
+      await page.getByRole('button', { name: 'Authorize and start this run' }).click()
     }
     await authorize()
     await expect(page.getByRole('button', { name: 'Generate tailored draft' })).toBeVisible()

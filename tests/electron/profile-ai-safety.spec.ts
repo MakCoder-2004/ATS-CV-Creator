@@ -31,8 +31,7 @@ async function authorizeAndRun(page: Awaited<ReturnType<ElectronApplication['fir
   await page.getByRole('button', { name: 'Preview AI request' }).click()
   const consent = page.getByRole('region', { name: 'Review text sent through Pi' })
   await expect(consent).toBeVisible()
-  await consent.getByLabel(/I authorize this one-time request/).check()
-  await consent.getByRole('button', { name: 'Send text and structure' }).click()
+  await consent.getByRole('button', { name: 'Authorize and structure CV' }).click()
   return consent
 }
 

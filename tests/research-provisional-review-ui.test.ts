@@ -1,7 +1,7 @@
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, test, vi } from 'vitest'
-import { PROVISIONAL_REVIEW_ACKNOWLEDGEMENT, ProvisionalResearchAnalysis, ProvisionalReviewedSources, createProvisionalReviewSession, createSourceOpenHandler } from '../src/renderer/ProvisionalResearchAnalysis'
+import { ProvisionalResearchAnalysis, ProvisionalReviewedSources, createProvisionalReviewSession, createSourceOpenHandler } from '../src/renderer/ProvisionalResearchAnalysis'
 import type { WorkbenchAPI } from '../src/shared/appearance'
 import type { VolatileAnalysisPreview, VolatileAnalysisProgress } from '../src/shared/research-volatile-analysis'
 
@@ -30,8 +30,6 @@ describe('temporary research review', () => {
     const report = vi.fn()
     const onClick = createSourceOpenHandler({ openPostingSource }, evidence.url, 'finding 1', report)
     expect(openPostingSource).not.toHaveBeenCalled()
-    expect(PROVISIONAL_REVIEW_ACKNOWLEDGEMENT).toBe('I reviewed the displayed user message and understand a separate JSON-schema instruction is sent to Pi')
-
     await onClick()
     expect(openPostingSource).toHaveBeenCalledTimes(1)
     expect(openPostingSource).toHaveBeenCalledWith(evidence.url)
@@ -51,7 +49,7 @@ describe('temporary research review', () => {
     expect(preview.outgoingText).toContain('"findingId"')
   })
 
-  test('no preview or provider dispatch on render; inspection, checkbox and consent never dispatch', async () => {
+  test('no preview or provider dispatch on render; one explicit authorization action starts analysis', async () => {
     const api = fixture()
     const html = renderToStaticMarkup(React.createElement(ProvisionalResearchAnalysis, { researchToken: runId, onClose() {}, api }))
     expect(html).toContain('<button')
@@ -61,20 +59,26 @@ describe('temporary research review', () => {
     expect(html).not.toContain('Export')
     expect(api.previewResearchAnalysis).not.toHaveBeenCalled()
     const session = createProvisionalReviewSession(api, runId)
-    await session.start(); await session.authorize()
+    await session.authorizeAndStart()
     expect(api.startResearchAnalysis).toHaveBeenCalledTimes(0)
     await session.inspect()
     expect(api.previewResearchAnalysis).toHaveBeenCalledWith(runId)
     expect(session.getSnapshot().preview?.outgoingText).toBe(preview.outgoingText)
-    await session.authorize(); await session.start()
-    expect(api.consentResearchAnalysis).toHaveBeenCalledTimes(0)
-    session.setReviewed(true)
-    await session.authorize()
-    expect(session.getSnapshot().phase).toBe('authorized')
-    expect(api.startResearchAnalysis).toHaveBeenCalledTimes(0)
-    await session.start()
+    await session.authorizeAndStart()
+    expect(api.consentResearchAnalysis).toHaveBeenCalledTimes(1)
     expect(api.startResearchAnalysis).toHaveBeenCalledTimes(1)
     expect(session.getSnapshot().phase).toBe('complete')
+    session.close()
+  })
+
+  test('authorization failure is reported before dispatch and never starts analysis', async () => {
+    const api = fixture()
+    api.consentResearchAnalysis.mockRejectedValue(new Error('Consent expired.'))
+    const session = createProvisionalReviewSession(api, runId)
+    await session.inspect()
+    await session.authorizeAndStart()
+    expect(api.startResearchAnalysis).not.toHaveBeenCalled()
+    expect(session.getSnapshot()).toMatchObject({ phase: 'error', message: 'Authorization failed before analysis started. Consent expired.' })
     session.close()
   })
 
@@ -97,26 +101,32 @@ describe('temporary research review', () => {
     const api = fixture()
     api.startResearchAnalysis.mockImplementation(() => new Promise(resolve => { deliver = resolve }))
     const session = createProvisionalReviewSession(api, runId)
-    await session.inspect(); session.setReviewed(true); await session.authorize()
-    const pending = session.start()
+    await session.inspect()
+    const pending = session.authorizeAndStart()
+    await vi.waitFor(() => expect(api.startResearchAnalysis).toHaveBeenCalledTimes(1))
     await session.cancel()
     deliver({ ...progress('complete'), result: { researchRunId: runId, analysisScope: 'provisional', evidence: [evidence], requirements: [], unknowns: [], humanReviewRequired: true } })
     await pending
     expect(session.getSnapshot().phase).toBe('cancelled')
     expect(session.getSnapshot().result).toBeUndefined()
-    await session.start()
+    await session.authorizeAndStart()
     expect(api.startResearchAnalysis).toHaveBeenCalledTimes(1)
     session.close()
   })
 
-  test('closing an authorized review cancels before discarding, without dispatch', async () => {
+  test('closing while consent is pending cancels and prevents a late dispatch', async () => {
     const events: string[] = []
     const api = fixture()
     api.cancelResearchAnalysis.mockImplementation(async () => { events.push('cancel'); return progress('cancelled') })
     api.discardResearchAnalysis.mockImplementation(async () => { events.push('discard'); return { ok: true } })
     const session = createProvisionalReviewSession(api, runId)
-    await session.inspect(); session.setReviewed(true); await session.authorize()
+    let deliver!: (value: VolatileAnalysisProgress) => void
+    api.consentResearchAnalysis.mockImplementation(() => new Promise(resolve => { deliver = resolve }))
+    await session.inspect()
+    const pending = session.authorizeAndStart()
     session.close()
+    deliver(progress('consented'))
+    await pending
     await vi.waitFor(() => expect(events).toEqual(['cancel', 'discard']))
     expect(api.startResearchAnalysis).not.toHaveBeenCalled()
   })
@@ -124,7 +134,7 @@ describe('temporary research review', () => {
   test('provisional suggestions require reviewed finding IDs; no fabricated full posting', async () => {
     const api = fixture()
     const session = createProvisionalReviewSession(api, runId)
-    await session.inspect(); session.setReviewed(true); await session.authorize(); await session.start()
+    await session.inspect(); await session.authorizeAndStart()
     expect(session.getSnapshot()).toMatchObject({ phase: 'complete', result: { analysisScope: 'provisional', humanReviewRequired: true, unknowns: ['Full posting unavailable'] } })
     expect(session.getSnapshot().outgoing?.roleEvidence[0].url).toBe(evidence.url)
     expect(session.getSnapshot().outgoing?.roleEvidence[0].kind).toBe('indexed-role-claim')
@@ -132,7 +142,7 @@ describe('temporary research review', () => {
     const invalid = fixture()
     invalid.startResearchAnalysis.mockResolvedValue({ ...progress('complete'), result: { ...((await fixture().startResearchAnalysis()).result!), requirements: [{ category: 'skill', text: 'Unlinked', findingIds: [sourceId] }] } })
     const second = createProvisionalReviewSession(invalid, runId)
-    await second.inspect(); second.setReviewed(true); await second.authorize(); await second.start()
+    await second.inspect(); await second.authorizeAndStart()
     expect(second.getSnapshot().result).toBeUndefined()
     expect(second.getSnapshot().phase).toBe('error')
     second.close()

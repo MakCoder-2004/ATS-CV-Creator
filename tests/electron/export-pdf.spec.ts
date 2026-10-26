@@ -42,8 +42,7 @@ test('user approves and exports a selectable PDF, while cancellation and overwri
 
     await page.getByRole('button', { name: 'Inspect outgoing data' }).click()
     const flow = page.getByRole('region', { name: 'Tailoring workflow' })
-    await flow.getByRole('checkbox', { name: /reviewed what is sent/i }).check()
-    await flow.getByRole('button', { name: 'Authorize this run' }).click()
+    await flow.getByRole('button', { name: 'Authorize and start this run' }).click()
     await expect(flow.getByRole('button', { name: 'Generate tailored draft' })).toBeVisible({ timeout: 15000 })
     await flow.getByRole('button', { name: 'Generate tailored draft' }).click()
     await expect(page.getByRole('region', { name: 'CV document' }).getByText('Zoë Candidate')).toBeVisible({ timeout: 15000 })

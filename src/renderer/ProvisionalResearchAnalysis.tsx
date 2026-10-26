@@ -5,10 +5,9 @@ import './provisional-research-analysis.css'
 
 type AnalysisAPI = Pick<WorkbenchAPI, 'previewResearchAnalysis' | 'consentResearchAnalysis' | 'startResearchAnalysis' | 'cancelResearchAnalysis' | 'discardResearchAnalysis'>
 type SourceAPI = Pick<WorkbenchAPI, 'openPostingSource'>
-type Phase = 'idle' | 'inspecting' | 'preview' | 'authorizing' | 'authorized' | 'running' | 'complete' | 'cancelled' | 'uncertain' | 'error'
+type Phase = 'idle' | 'inspecting' | 'preview' | 'authorizing' | 'running' | 'complete' | 'cancelled' | 'uncertain' | 'error'
 type Outgoing = ReturnType<typeof volatileOutgoingSchema.parse>
-export type ProvisionalReviewState = { phase: Phase; preview?: VolatileAnalysisPreview; outgoing?: Outgoing; result?: VolatileAnalysisResult; reviewed: boolean; message: string }
-export const PROVISIONAL_REVIEW_ACKNOWLEDGEMENT = 'I reviewed the displayed user message and understand a separate JSON-schema instruction is sent to Pi'
+export type ProvisionalReviewState = { phase: Phase; preview?: VolatileAnalysisPreview; outgoing?: Outgoing; result?: VolatileAnalysisResult; message: string }
 
 /** Called only by a visible source button; raw IPC errors are deliberately not exposed in the renderer. */
 export function createSourceOpenHandler(api: SourceAPI, url: string, finding: string, report: (message: string, failed: boolean) => void) {
@@ -34,7 +33,7 @@ export function ProvisionalReviewedSources({ evidence, onOpen, openingSources, s
 
 /** Deliberate, one-use outgoing consent. No network call is made by construction or subscription. */
 export function createProvisionalReviewSession(api: AnalysisAPI, researchToken: string, onStatus?: (status: Phase) => void) {
-  let state: ProvisionalReviewState = { phase: 'idle', reviewed: false, message: '' }
+  let state: ProvisionalReviewState = { phase: 'idle', message: '' }
   let generation = 0
   let closed = false
   let busy = false
@@ -82,44 +81,36 @@ export function createProvisionalReviewSession(api: AnalysisAPI, researchToken: 
         const json = preview.outgoingText.slice(preview.outgoingText.indexOf('\n') + 1)
         const outgoing = volatileOutgoingSchema.parse(JSON.parse(json) as unknown)
         if (outgoing.analysisScope !== preview.analysisScope) throw new Error('The outgoing review did not match its analysis scope.')
-        set({ phase: 'preview', preview, outgoing, reviewed: false, message: 'Inspect the complete outgoing text before authorizing.' })
+        set({ phase: 'preview', preview, outgoing, message: 'Inspect the complete outgoing text before authorizing.' })
       } catch (error) { if (current(request)) set({ phase: 'error', message: errorMessage(error) }) }
       finally { busy = false }
     },
-    setReviewed(value: boolean) {
-      if (state.phase === 'preview' && !closed) set({ reviewed: value })
-    },
-    async authorize() {
-      if (busy || closed || state.phase !== 'preview' || !state.reviewed || !state.preview || !state.outgoing) return
-      busy = true
-      const request = ++generation
-      const preview = state.preview
-      set({ phase: 'authorizing', message: 'Recording authorization…' })
-      try {
-        const progress = await api.consentResearchAnalysis(preview.token, true)
-        if (!current(request)) return
-        if (progress.status !== 'consented') throw new Error('Authorization was not recorded. Discard this review and start again.')
-        set({ phase: 'authorized', message: 'Authorized. Analysis has not started. Choose Generate analysis to send the reviewed data.' })
-      } catch (error) { if (current(request)) set({ phase: 'error', message: errorMessage(error) }) }
-      finally { busy = false }
-    },
-    async start() {
-      if (busy || closed || state.phase !== 'authorized' || !state.preview || !state.outgoing) return
+    async authorizeAndStart() {
+      if (busy || closed || state.phase !== 'preview' || !state.preview || !state.outgoing) return
       busy = true
       const request = ++generation
       const { preview, outgoing } = state
-      set({ phase: 'running', message: 'Preparing analysis. A provider request may be sent; cancellation may not prevent charges.' })
+      let dispatched = false
+      set({ phase: 'authorizing', message: 'Recording authorization before analysis starts…' })
       try {
+        const consent = await api.consentResearchAnalysis(preview.token, true)
+        if (!current(request)) return
+        if (consent.status !== 'consented') throw new Error('Authorization was not recorded. Discard this review and start again.')
+        set({ phase: 'running', message: 'Analysis started. A provider request may be sent; cancellation may not prevent charges.' })
+        dispatched = true
         const progress = await api.startResearchAnalysis(preview.token)
         if (current(request)) acceptProgress(progress, preview, outgoing)
-      } catch (error) { if (current(request)) set({ phase: 'uncertain', message: `${errorMessage(error)} A provider request may have been sent and may incur charges. Do not retry this consent.` }) }
-      finally { busy = false }
+      } catch (error) {
+        if (current(request)) {
+          set({ phase: dispatched ? 'uncertain' : 'error', message: dispatched ? `${errorMessage(error)} A provider request may have been sent and may incur charges. Do not retry this consent.` : `Authorization failed before analysis started. ${errorMessage(error)}` })
+        }
+      } finally { busy = false }
     },
     async cancel() {
-      if (closed || !['preview', 'authorizing', 'authorized', 'running'].includes(state.phase)) return
+      if (closed || !['preview', 'authorizing', 'running'].includes(state.phase)) return
       const token = state.preview?.token
       ++generation
-      set({ phase: 'cancelled', reviewed: false, preview: undefined, outgoing: undefined, result: undefined, message: token ? 'Cancelling. A dispatched request may still incur charges.' : 'Closing outgoing review.' })
+      set({ phase: 'cancelled', preview: undefined, outgoing: undefined, result: undefined, message: token ? 'Cancelling. A dispatched request may still incur charges.' : 'Closing outgoing review.' })
       if (!token) return
       try {
         const progress = await api.cancelResearchAnalysis(token)
@@ -128,7 +119,7 @@ export function createProvisionalReviewSession(api: AnalysisAPI, researchToken: 
     },
     close() {
       if (closed) return
-      const shouldCancel = ['authorizing', 'authorized', 'running'].includes(state.phase)
+      const shouldCancel = ['authorizing', 'running'].includes(state.phase)
       const token = state.preview?.token
       closed = true
       ++generation
@@ -137,7 +128,7 @@ export function createProvisionalReviewSession(api: AnalysisAPI, researchToken: 
         if (shouldCancel && value === token) void api.cancelResearchAnalysis(value).catch(() => {}).finally(() => discard(value))
         else discard(value)
       }
-      state = { phase: 'cancelled', reviewed: false, message: 'Temporary research discarded.' }
+      state = { phase: 'cancelled', message: 'Temporary research discarded.' }
       listeners.forEach(listener => listener())
       listeners.clear()
       tokens.clear()
@@ -197,8 +188,7 @@ export function ProvisionalResearchAnalysis({ researchToken, onClose, onStatus, 
         void handler().finally(() => setOpeningSources(current => { const next = new Set(current); next.delete(item.findingId); return next }))
       }} />
       {outgoing.unknowns.length > 0 && <section aria-label="Unknowns"><h3>Still unknown</h3><ul>{outgoing.unknowns.map((text, index) => <li key={index}>{text}</li>)}</ul></section>}
-      {state.phase === 'preview' && <div className="provisional-analysis-actions"><label className="provisional-analysis-check"><input type="checkbox" checked={state.reviewed} onChange={event => session.setReviewed(event.target.checked)} />{PROVISIONAL_REVIEW_ACKNOWLEDGEMENT}</label><button className="primary-button" type="button" disabled={!state.reviewed} onClick={() => void session.authorize()}>Authorize analysis</button><button className="secondary-button" type="button" onClick={() => void session.cancel()}>Cancel review</button></div>}
-      {state.phase === 'authorized' && <div className="provisional-analysis-actions"><button type="button" className="primary-button" onClick={() => void session.start()}>Start analysis</button><button type="button" className="secondary-button" onClick={() => void session.cancel()}>Cancel analysis</button></div>}
+      {state.phase === 'preview' && <div className="provisional-analysis-actions"><button className="primary-button" type="button" onClick={() => void session.authorizeAndStart()}>Authorize and start analysis</button><button className="secondary-button" type="button" onClick={() => void session.cancel()}>Cancel review</button></div>}
       {['authorizing', 'running'].includes(state.phase) && <button type="button" className="secondary-button" onClick={() => void session.cancel()}>Cancel analysis</button>}
     </>}
     {result && state.phase === 'complete' && <section aria-label="Analysis suggestions" className="provisional-analysis-result">

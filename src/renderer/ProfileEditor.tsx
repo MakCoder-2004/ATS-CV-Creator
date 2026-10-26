@@ -61,7 +61,6 @@ export function ProfileEditor() {
   const [profileChangedDuringReview, setProfileChangedDuringReview] = useState(false)
   const [reviewTokenExpired, setReviewTokenExpired] = useState(false)
   const [aiPreview, setAiPreview] = useState<Extract<ProfileAiConsentPreview, { ok: true }> | null>(null)
-  const [aiAuthorized, setAiAuthorized] = useState(false)
   const [aiBusy, setAiBusy] = useState(false)
   const [aiDispatched, setAiDispatched] = useState(false)
   const [aiStage, setAiStage] = useState<'preparing' | 'running' | null>(null)
@@ -101,7 +100,7 @@ export function ProfileEditor() {
   useEffect(() => () => { if (aiPreview?.token) void window.workbench.cancelProfileAiStructuring(aiPreview.token).catch(() => {}) }, [aiPreview?.token])
   async function prepareProfileAi() {
     if (!pdfPreview) return
-    setMutationError(''); setNotice(''); setAiBusy(true); setAiStage('preparing'); setAiAuthorized(false)
+    setMutationError(''); setNotice(''); setAiBusy(true); setAiStage('preparing')
     try {
       const result = await window.workbench.previewProfileAiStructuring(pdfPreview.token)
       if (result.ok) { activeAiToken.current = result.token; setAiPreview(result) } else setMutationError(result.message)
@@ -110,11 +109,11 @@ export function ProfileEditor() {
   }
   async function cancelProfileAi() {
     if (!aiPreview) return
-    const token = aiPreview.token; activeAiToken.current = null; setAiPreview(null); setAiAuthorized(false)
+    const token = aiPreview.token; activeAiToken.current = null; setAiPreview(null)
     try { await window.workbench.cancelProfileAiStructuring(token) } catch { /* The run has already expired or ended. */ }
   }
   async function authorizeProfileAi() {
-    if (!pdfPreview || !aiPreview || !aiAuthorized) return
+    if (!pdfPreview || !aiPreview || aiBusy) return
     const importToken = pdfPreview.token, consentToken = aiPreview.token
     if (activePdfToken.current !== importToken || activeAiToken.current !== consentToken) return
     const stillCurrent = () => activePdfToken.current === importToken && activeAiToken.current === consentToken
@@ -127,7 +126,7 @@ export function ProfileEditor() {
       const result = await window.workbench.runProfileAiStructuring(consentToken)
       if (!stillCurrent()) return
       if (!result.ok) {
-        activeAiToken.current = null; setAiPreview(current => current?.token === consentToken ? null : current); setAiAuthorized(false)
+        activeAiToken.current = null; setAiPreview(current => current?.token === consentToken ? null : current)
         setMutationError(result.message); return
       }
       const proposals = result.proposals
@@ -135,10 +134,10 @@ export function ProfileEditor() {
       const [currentProfile, currentExperience] = await Promise.all([window.workbench.getProfile(), window.workbench.getExperience()])
       setSnapshot(currentProfile); setExperienceSnapshot(currentExperience); setPdfDecisions(initialPdfDecisions(proposals, currentProfile, currentExperience))
       setPdfSelected({ contact: Boolean(proposals.contact?.fullName), skills: proposals.skills.map(() => true), experience: proposals.experience.map(item => !item.requiresDateResolution && item.kind !== 'unresolved'), entries: proposals.entries.map(item => !item.requiresDateResolution), projects: proposals.projects.map(() => true) })
-      activeAiToken.current = null; setAiPreview(current => current?.token === consentToken ? null : current); setAiAuthorized(false); setMutationError(''); setNotice(result.message)
+      activeAiToken.current = null; setAiPreview(current => current?.token === consentToken ? null : current); setMutationError(''); setNotice(result.message)
     } catch {
       if (stillCurrent()) {
-        activeAiToken.current = null; setAiPreview(current => current?.token === consentToken ? null : current); setAiAuthorized(false)
+        activeAiToken.current = null; setAiPreview(current => current?.token === consentToken ? null : current)
         setMutationError('AI structuring failed. Your local proposals remain available for correction.')
       }
     } finally { setAiBusy(false); setAiStage(null) }
@@ -151,7 +150,7 @@ export function ProfileEditor() {
       const result = await (format === 'docx' ? window.workbench.previewProfileDocxImport() : window.workbench.previewProfilePdfImport())
       if (!result.ok) { if (!result.cancelled) setMutationError(result.message); return }
       if (activeAiToken.current) void window.workbench.cancelProfileAiStructuring(activeAiToken.current).catch(() => {})
-      activePdfToken.current = result.token; activeAiToken.current = null; setAiPreview(null); setAiAuthorized(false); setLocalOnlyReview(false); setAiDispatched(false); setProfileChangedDuringReview(false); setReviewTokenExpired(false)
+      activePdfToken.current = result.token; activeAiToken.current = null; setAiPreview(null); setLocalOnlyReview(false); setAiDispatched(false); setProfileChangedDuringReview(false); setReviewTokenExpired(false)
       setPdfPreview(result)
       const [currentProfile, currentExperience] = await Promise.all([window.workbench.getProfile(), window.workbench.getExperience()])
       setSnapshot(currentProfile); setExperienceSnapshot(currentExperience)
@@ -165,7 +164,7 @@ export function ProfileEditor() {
     if (aiPreview) {
       activeAiToken.current = null
       void window.workbench.cancelProfileAiStructuring(aiPreview.token).catch(() => {})
-      setAiPreview(null); setAiAuthorized(false)
+      setAiPreview(null)
     }
     setPdfPreview(current => current ? { ...current, proposals: update(current.proposals) } : current)
   }
@@ -363,7 +362,7 @@ export function ProfileEditor() {
     {pdfPreview && <section className="profile-panel pdf-import-review" role="region" aria-labelledby="pdf-import-title"><div className="panel-heading"><div><span className="context">{docxReview ? 'Local Word review' : 'Local PDF review'}</span><h2 id="pdf-import-title">Review proposed profile details</h2><p>Choose add, update, or skip for each group. Nothing is saved until you apply. Original source passages provide context; manual corrections do not become source-supported. Source passages may contain sensitive personal data and will be retained only for accepted facts.</p></div></div>{pdfValidationError && <p className="profile-message error" role="alert">{pdfValidationError}</p>}{profileChangedDuringReview && <div className="profile-message error" role="alert"><p>Your saved profile changed during this review. Refresh the merge choices before applying. Your proposed edits are still visible.</p>{!reviewTokenExpired && <button className="secondary-button" type="button" disabled={pdfBusy || aiBusy} onClick={() => void rebasePdfReview()}>Refresh merge choices</button>}<button className="secondary-button" type="button" disabled={pdfBusy || aiBusy} onClick={() => void uploadCv(docxReview ? 'docx' : 'pdf')}>Read CV again</button></div>}
       {!aiPreview && !localOnlyReview && <section className="profile-ai-route" aria-labelledby="profile-ai-route-title"><div><span className="context">AI-assisted extraction</span><h3 id="profile-ai-route-title">Structure readable CV details with AI</h3><p>Review the exact minimized text and selected Pi model before authorizing one request. Your saved profile and other documents stay local.</p></div><div className="form-actions"><button className="primary-button" type="button" disabled={pdfBusy || aiBusy} onClick={() => void prepareProfileAi()}>{aiBusy ? 'Preparing AI preview…' : 'Preview AI request'}</button><button className="secondary-button" type="button" disabled={pdfBusy || aiBusy} onClick={() => setLocalOnlyReview(true)}>Continue locally</button></div></section>}
       {!aiPreview && localOnlyReview && <p className="profile-message" role="status">Local review selected. {aiDispatched ? 'No further AI request was sent.' : 'No request was sent.'} <button className="text-button" type="button" onClick={() => setLocalOnlyReview(false)}>Use AI instead</button></p>}
-      {aiPreview && <section className="profile-panel ai-consent-review" role="region" aria-labelledby="profile-ai-consent-title"><h3 id="profile-ai-consent-title">Review text sent through Pi</h3><p>Destination: Pi · Provider: <strong>{aiPreview.providerId}</strong> · Model: <strong>{aiPreview.modelId}</strong> · Thinking level: <strong>{aiPreview.thinkingLevel}</strong></p><label>Exact outgoing text<textarea rows={10} readOnly value={aiPreview.outgoing} /></label><p role="note">{aiPreview.warning}</p><p>{aiPreview.termsNotice}</p><label className="pdf-include"><input type="checkbox" checked={aiAuthorized} onChange={event => setAiAuthorized(event.target.checked)} /> I authorize this one-time request to send the text above through Pi to the selected provider for CV structuring.</label><div className="form-actions"><button className="primary-button" type="button" disabled={!aiAuthorized || aiBusy} onClick={() => void authorizeProfileAi()}>{aiBusy ? 'Structuring CV…' : 'Send text and structure'}</button><button className="secondary-button" type="button" onClick={() => void cancelProfileAi()}>{aiBusy ? 'Cancel AI request' : 'Decline AI assistance'}</button></div></section>}
+      {aiPreview && <section className="profile-panel ai-consent-review" role="region" aria-labelledby="profile-ai-consent-title"><h3 id="profile-ai-consent-title">Review text sent through Pi</h3><p>Destination: Pi · Provider: <strong>{aiPreview.providerId}</strong> · Model: <strong>{aiPreview.modelId}</strong> · Thinking level: <strong>{aiPreview.thinkingLevel}</strong></p><label>Exact outgoing text<textarea rows={10} readOnly value={aiPreview.outgoing} /></label><p role="note">{aiPreview.warning}</p><p>{aiPreview.termsNotice}</p><div className="form-actions"><button className="primary-button" type="button" disabled={aiBusy} onClick={() => void authorizeProfileAi()}>{aiBusy ? 'Structuring CV…' : 'Authorize and structure CV'}</button><button className="secondary-button" type="button" onClick={() => void cancelProfileAi()}>{aiBusy ? 'Cancel AI request' : 'Decline AI assistance'}</button></div></section>}
       <div className="profile-ai-proposals" inert={aiBusy} aria-busy={aiBusy}>
 
       {pdfPreview.proposals.contact && <fieldset className="pdf-proposal"><legend>Contact details</legend><label className="pdf-include"><input type="checkbox" checked={pdfSelected.contact} onChange={event => setPdfSelected(state => ({ ...state, contact: event.target.checked }))} /> Include this proposal</label>

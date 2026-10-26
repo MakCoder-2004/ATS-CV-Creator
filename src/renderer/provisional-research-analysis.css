@@ -22,8 +22,6 @@
 .provisional-analysis-evidence [role="alert"] { color: var(--error); }
 .provisional-analysis-evidence [role="status"] { color: var(--muted); }
 .provisional-analysis-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; }
-.provisional-analysis-check { display: flex; align-items: center; gap: 12px; cursor: pointer; }
-.provisional-analysis-check input { width: 20px; height: 20px; accent-color: var(--blue); }
 .provisional-analysis button { cursor: pointer; min-height: 44px; font: inherit; }
 .provisional-analysis button:disabled { cursor: not-allowed; }
 .provisional-analysis :is(button, input, a, pre):focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }

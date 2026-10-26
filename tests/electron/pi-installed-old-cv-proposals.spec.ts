@@ -92,13 +92,12 @@ test('installed Pi structures synthetic PDF and DOCX CVs into reviewable, unconf
       const outgoingText = await outgoing.inputValue()
       expect(outgoingText.length).toBeGreaterThan(20)
       expect(outgoingText).not.toContain(personalEmail)
-      await expect(consent.getByLabel(/I authorize this one-time request/)).not.toBeChecked()
-      await expect(consent.getByRole('button', { name: 'Send text and structure' })).toBeDisabled()
+      await expect(consent.getByLabel(/I authorize this one-time request/)).toHaveCount(0)
+      await expect(consent.getByRole('button', { name: 'Authorize and structure CV' })).toBeEnabled()
       await profileIsEmpty()
 
       // This is the only dispatch click for this CV. A timeout/failure fails the test; it is not retried.
-      await consent.getByLabel(/I authorize this one-time request/).check()
-      await consent.getByRole('button', { name: 'Send text and structure' }).click()
+      await consent.getByRole('button', { name: 'Authorize and structure CV' }).click()
       const success = page.getByRole('status').filter({ hasText: 'AI suggestions are ready for review.' })
       const failure = page.getByRole('alert').filter({ hasText: /structuring failed|provider|could not complete|request failed/i })
       await expect(success.or(failure).first()).toBeVisible({ timeout: 180_000 })

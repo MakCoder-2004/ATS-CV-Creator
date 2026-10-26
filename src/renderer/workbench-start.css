@@ -63,9 +63,6 @@
 .cv-workbench-start .outbound-privacy-notice details { display: grid; gap: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
 .cv-workbench-start .outbound-privacy-notice summary { min-height: 28px; color: var(--link); font-size: 12px; font-weight: 650; cursor: pointer; }
 .cv-workbench-start .outbound-review a { color: var(--link); text-decoration: underline; text-underline-offset: 2px; }
-.cv-workbench-start .outbound-ack { display: flex; align-items: flex-start; gap: 10px; min-height: 44px; margin: 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: 7px; background: var(--canvas); font-size: 13px; font-weight: 650; line-height: 1.5; cursor: pointer; }
-.cv-workbench-start .outbound-ack input { flex: none; width: 18px; height: 18px; margin: 1px 0 0; accent-color: var(--blue); }
-.cv-workbench-start .outbound-ack input:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
 .cv-workbench-start .outbound-actions { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
 .cv-workbench-start .outbound-actions button, .cv-workbench-start .analysis-actions button { min-height: 44px; }
 .cv-workbench-start .outbound-authorized-status { margin: 0; padding: 14px 16px; border-left: 3px solid var(--link); border-radius: 5px; background: var(--raised); color: var(--muted); line-height: 1.55; }

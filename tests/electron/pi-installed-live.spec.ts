@@ -59,8 +59,7 @@ test('installed Pi migration: settings, consented cited CV, review, and exports'
     await expect(outgoing).not.toContainText('Ari Example')
     await expect(outgoing).not.toContainText('ari@example.test')
     await expect(outgoing).toContainText(/\[\[EMPLOYER_\d+\]\]/)
-    await workflow.getByRole('checkbox', { name: /reviewed what is sent/i }).check()
-    await workflow.getByRole('button', { name: 'Authorize this run' }).click()
+    await workflow.getByRole('button', { name: 'Authorize and start this run' }).click()
     await expect(workflow.getByRole('button', { name: 'Generate tailored draft' })).toBeVisible({ timeout: 90_000 })
 
     await workflow.getByRole('button', { name: 'Generate tailored draft' }).click()
