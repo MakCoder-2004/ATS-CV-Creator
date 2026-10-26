@@ -40,8 +40,17 @@ describe('inert named public API adapter', () => {
     expect((await run('lever',lever(),{request:async()=>({status:429,headers:{},body:Buffer.alloc(0)})})).attempt).toMatchObject({status:'failed',reason:'source-error'})
     expect((await run('lever',lever(),{request:async()=>({status:403,headers:{},body:Buffer.alloc(0)})})).attempt).toMatchObject({status:'failed',reason:'login-required'})
   })
-  it('sanitizes HTML text and honors cancellation', async () => {
+  it('sanitizes HTML text and rejects unsafe or over-complex hidden suffixes', async () => {
     const result=await run('greenhouse',greenhouse()); expect(result.candidate?.text).not.toContain('ignore this script')
+    const prefix = `<p>${long}</p>`
+    for (const tag of ['script','style','iframe']) {
+      const unsafe = await run('greenhouse',{...greenhouse(),content:`${prefix}<${tag}>hidden unsafe tail`})
+      expect(unsafe.attempt).toMatchObject({status:'failed',reason:'source-error'})
+    }
+    const deep = await run('greenhouse',{...greenhouse(),content:`${'<div>'.repeat(120)}${long}${'</div>'.repeat(120)}`})
+    expect(deep.attempt).toMatchObject({status:'failed',reason:'source-error'})
+    const withAdditional = await run('lever',{...lever(),descriptionPlain:long,additional:'<p>Extra employer-provided hiring details are important and should not disappear from the captured posting.</p>'})
+    expect(withAdditional.candidate?.text).toContain('Extra employer-provided hiring details')
     const controller=new AbortController(); controller.abort(); expect((await run('lever',lever(),{signal:controller.signal})).attempt).toMatchObject({status:'failed',reason:'cancelled'})
     const timed=new AbortController(); const pending=run('lever',lever(),{signal:timed.signal,request:()=>new Promise(()=>{})}); setTimeout(()=>timed.abort(new Error('deadline')),5); expect((await pending).attempt).toMatchObject({status:'failed',reason:'cancelled'})
     const syncAbort=new AbortController(); const late=run('lever',lever(),{signal:syncAbort.signal,request:()=>{syncAbort.abort(); return Promise.reject(new Error('late rejection'))}}); expect((await late).attempt).toMatchObject({status:'failed',reason:'cancelled'})

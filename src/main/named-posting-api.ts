@@ -2,7 +2,8 @@ import { lookup as dnsLookup } from 'node:dns/promises'
 import { request as httpsRequest } from 'node:https'
 import { randomUUID } from 'node:crypto'
 import type { IncomingHttpHeaders } from 'node:http'
-import * as parse5 from 'parse5'
+import { Worker } from 'node:worker_threads'
+import { join } from 'node:path'
 import { isPublicAddress, pinnedAddressLookup } from './safe-posting-fetch'
 import { namedPostingReferenceSchema, namedPostingAttemptSchema, namedPostingCandidateSchema, type NamedPostingReference, type NamedPostingAttempt, type NamedPostingCandidate } from '../shared/named-posting-contract'
 
@@ -37,38 +38,42 @@ const defaultRequest = (url: URL, address: Address, signal: AbortSignal, request
   req.setTimeout(timeout, () => req.destroy(new Error('deadline')))
   req.once('error', reject); req.end()
 })
-const SKIP_TAGS = new Set(['script','style','noscript','iframe','svg','template'])
-function cleanHtml(html: string): string {
-  if (Buffer.byteLength(html, 'utf8') > MAX_BYTES) throw new Error('HTML source exceeds the parsing limit.')
-  const parseErrors: unknown[] = []
-  const root = parse5.parseFragment(html, { onParseError: error => parseErrors.push(error) })
-  if (parseErrors.length) throw new Error('HTML structure is malformed; completeness cannot be established.')
-  const parts: string[] = [], stack: Array<{node:any;depth:number}> = [{ node:root, depth:0 }]; let nodes = 0
-  while (stack.length) {
-    const {node,depth} = stack.pop()!
-    if (++nodes > 100_000 || depth > 128) throw new Error('HTML structure exceeds safe parsing limits.')
-    if (node.nodeName === '#text') { parts.push(node.value); continue }
-    if (SKIP_TAGS.has(node.tagName)) continue
-    if (['br','p','div','li','h1','h2','h3','h4','h5','h6','section','article'].includes(node.tagName)) parts.push('\n')
-    for (let i=(node.childNodes ?? []).length-1;i>=0;i--) stack.push({node:node.childNodes[i],depth:depth+1})
-  }
-  return parts.join('').replace(/[ \t]+/g,' ').replace(/\n\s+/g,'\n').replace(/\n{3,}/g,'\n\n').trim()
+function extractHtmlSections(sections: string[], signal: AbortSignal): Promise<string[]> {
+  if (sections.length > 202 || sections.reduce((size, section) => size + Buffer.byteLength(section, 'utf8'), 0) > 512 * 1024) return Promise.reject(new Error('HTML sections exceed the bounded parsing input.'))
+  const worker = new Worker(join(__dirname, 'named-posting-html-worker.cjs'), { workerData: { sections }, resourceLimits: { maxOldGenerationSizeMb: 48, maxYoungGenerationSizeMb: 16, stackSizeMb: 2 } })
+  return new Promise((resolve, reject) => {
+    let settled = false
+    const finish = (action: () => void) => { if (settled) return; settled = true; clearTimeout(timer); signal.removeEventListener('abort', cancel); void worker.terminate(); action() }
+    const timer = setTimeout(() => finish(() => reject(new Error('HTML parsing exceeded its 1.5-second budget.'))), 1_500)
+    const cancel = () => finish(() => reject(new Error('HTML parsing cancelled.')))
+    if (signal.aborted) return cancel()
+    signal.addEventListener('abort', cancel, { once: true })
+    worker.once('message', (result: { text?: string[]; error?: string }) => finish(() => result.error || !result.text ? reject(new Error(result.error ?? 'HTML parsing failed.')) : resolve(result.text)))
+    worker.once('error', error => finish(() => reject(error)))
+    worker.once('exit', code => { if (code !== 0) finish(() => reject(new Error('HTML parser worker exited unexpectedly.'))) })
+  })
 }
-function leverText(value: any): string {
+async function leverText(value: any, signal: AbortSignal): Promise<string> {
   const pieces: string[] = []
   if (typeof value.descriptionPlain === 'string' && value.descriptionPlain.trim()) pieces.push(value.descriptionPlain.trim())
-  else if (typeof value.description === 'string' && value.description.trim()) pieces.push(cleanHtml(value.description))
+  else if (typeof value.description === 'string' && value.description.trim()) pieces.push(value.description)
   if (value.lists !== undefined) {
     if (!Array.isArray(value.lists) || value.lists.length > 100) throw new Error('Lever section format is ambiguous.')
     for (const list of value.lists) {
       if (!list || typeof list !== 'object' || typeof list.text !== 'string' || typeof list.content !== 'string') throw new Error('Lever section format is ambiguous.')
-      pieces.push(list.text.trim(), cleanHtml(list.content))
+      pieces.push(list.text.trim(), list.content)
     }
   }
   if (value.additionalPlain !== undefined) {
     if (typeof value.additionalPlain !== 'string') throw new Error('Lever additional text format is ambiguous.')
     if (value.additionalPlain.trim()) pieces.push(value.additionalPlain.trim())
+  } else if (value.additional !== undefined) {
+    if (typeof value.additional !== 'string') throw new Error('Lever additional HTML format is ambiguous.')
+    if (value.additional.trim()) pieces.push(value.additional)
   }
+  const htmlIndexes = pieces.map((piece, index) => typeof piece === 'string' && /</.test(piece) ? index : -1).filter(index => index >= 0)
+  const extracted = htmlIndexes.length ? await extractHtmlSections(htmlIndexes.map(index => pieces[index]), signal) : []
+  htmlIndexes.forEach((index, i) => { pieces[index] = extracted[i] })
   return pieces.filter(Boolean).join('\n\n')
 }
 
@@ -106,12 +111,12 @@ export async function fetchNamedPostingApi(input: unknown, options: NamedPosting
       returnedBoard = hosted.pathname.split('/')[1] ?? ''
       returnedPostingId = value.id
       title = value.text; employer = value.categories?.team ?? value.categories?.department ?? reference.board
-      text = leverText(value)
+      text = await leverText(value, controller.signal)
       if (hosted.protocol !== 'https:' || hosted.hostname !== 'jobs.lever.co' || hosted.username || hosted.password || hosted.port || hosted.search || hosted.hash || hosted.pathname !== `/${reference.board}/${reference.postingId}`) return failed('ambiguous')
     } else {
       returnedBoard = null
       returnedPostingId = String(value.id ?? ''); title = value.title; employer = value.company_name
-      text = cleanHtml(String(value.content ?? ''))
+      text = (await extractHtmlSections([String(value.content ?? '')], controller.signal))[0]
       if (value.gh_jid !== undefined && String(value.gh_jid) !== reference.postingId) return failed('ambiguous')
       if (value.absolute_url !== undefined) {
         if (typeof value.absolute_url !== 'string' || value.absolute_url.length > 2048) return failed('ambiguous')
