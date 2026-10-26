@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { KeyRound } from 'lucide-react'
 import type { WorkbenchAPI } from '../shared/appearance'
 import type { ResearchSearchKeyStatus } from '../shared/research-search-settings'
@@ -7,7 +7,7 @@ import './TavilyKeyCard.css'
 export type TavilyKeyCardClient = Pick<WorkbenchAPI,
   'getResearchSearchKeyStatus' | 'removeResearchSearchKey' | 'revealResearchSearchKey' | 'copyResearchSearchKey'>
 
-interface Props { client?: TavilyKeyCardClient }
+interface Props { client?: TavilyKeyCardClient; modelContext?: string }
 const defaultClient = () => window.workbench
 const STORAGE_FAILURE = 'Search key storage failed. The existing key was not replaced.'
 
@@ -21,7 +21,7 @@ export function TavilyKeySummary({ status, loadFailed }: { status: ResearchSearc
   return <p className="settings-helper tavily-summary" role="status">{summary}</p>
 }
 
-export function TavilyKeyCard({ client }: Props) {
+export function TavilyKeyCard({ client, modelContext = '' }: Props) {
   const api = client ?? defaultClient()
   const [status, setStatus] = useState<ResearchSearchKeyStatus | null>(null)
   const [revealed, setRevealed] = useState('')
@@ -32,6 +32,8 @@ export function TavilyKeyCard({ client }: Props) {
   const [notice, setNotice] = useState('')
   const cancelRef = useRef<HTMLButtonElement>(null)
   const removeRef = useRef<HTMLButtonElement>(null)
+  const headingRef = useRef<HTMLHeadingElement>(null)
+  const focusIntent = useRef<'remove' | 'heading' | null>(null)
   const generation = useRef(0)
   function hide() { generation.current++; setRevealed(''); setBusy(false) }
   useEffect(() => {
@@ -40,9 +42,21 @@ export function TavilyKeyCard({ client }: Props) {
       .catch(() => { if (active) { setLoadFailed(true); setError('Tavily key status could not be loaded. Reopen Settings to retry.') } })
     return () => { active = false; generation.current++ }
   }, [api])
-  useEffect(() => { if (confirm) cancelRef.current?.focus() }, [confirm])
   const known = !!status && !loadFailed && status.message !== STORAGE_FAILURE
   const configured = known && status.configured
+  useLayoutEffect(() => {
+    generation.current++
+    setRevealed('')
+    setBusy(false)
+  }, [modelContext])
+  useLayoutEffect(() => {
+    const intent = focusIntent.current
+    if (intent) {
+      const target = intent === 'remove' ? removeRef.current : headingRef.current
+      ;(target ?? headingRef.current)?.focus()
+      focusIntent.current = null
+    } else if (confirm) cancelRef.current?.focus()
+  }, [confirm, configured, notice])
   async function reveal() {
     const request = ++generation.current; setBusy(true); setError(''); setNotice('')
     try { const result = await api.revealResearchSearchKey(); if (generation.current === request) setRevealed(result.key) }
@@ -57,12 +71,12 @@ export function TavilyKeyCard({ client }: Props) {
   }
   async function remove() {
     hide(); setBusy(true); setError(''); setNotice('')
-    try { const removed = await api.removeResearchSearchKey(); setStatus(removed); setConfirm(false); setNotice('Local Tavily key removed. Revoke it in your Tavily account if needed.') }
+    try { const removed = await api.removeResearchSearchKey(); focusIntent.current = 'heading'; setStatus(removed); setConfirm(false); setNotice('Local Tavily key removed. Revoke it in your Tavily account if needed.') }
     catch { setError('Local Tavily key could not be removed. Try again.') }
     finally { setBusy(false) }
   }
   return <section className="settings-block tavily-key-card" aria-labelledby="tavily-key-title">
-    <div className="settings-block-heading"><span className="settings-block-icon"><KeyRound size={18} aria-hidden="true" /></span><div><h2 id="tavily-key-title">Search retired</h2><p>Tavily search is no longer available in CV Tailor.</p></div></div>
+    <div className="settings-block-heading"><span className="settings-block-icon"><KeyRound size={18} aria-hidden="true" /></span><div><h2 ref={headingRef} id="tavily-key-title" tabIndex={-1}>Search retired</h2><p>Tavily search is no longer available in CV Tailor.</p></div></div>
     <p className="settings-helper">No credential is sent to search, and no standing model consent is stored.</p>
     <TavilyKeySummary status={status} loadFailed={loadFailed} />
     {configured && <div className="tavily-stored-key" aria-label="Stored Tavily key">
@@ -78,7 +92,7 @@ export function TavilyKeyCard({ client }: Props) {
       {confirm && <div className="tavily-confirm" role="group" aria-labelledby="tavily-confirm-title" aria-describedby="tavily-confirm-description">
         <h3 id="tavily-confirm-title">Remove the local key?</h3>
         <p id="tavily-confirm-description">This removes the encrypted key from this device only. It does not revoke the key in your Tavily account.</p>
-        <div className="tavily-actions"><button ref={cancelRef} className="secondary-button" type="button" disabled={busy} onClick={() => { setConfirm(false); removeRef.current?.focus() }}>Cancel</button><button className="secondary-button tavily-danger" type="button" disabled={busy} onClick={() => void remove()}>{busy ? 'Removing…' : 'Confirm removal'}</button></div>
+        <div className="tavily-actions"><button ref={cancelRef} className="secondary-button" type="button" disabled={busy} onClick={() => { focusIntent.current = 'remove'; setConfirm(false) }}>Cancel</button><button className="secondary-button tavily-danger" type="button" disabled={busy} onClick={() => void remove()}>{busy ? 'Removing…' : 'Confirm removal'}</button></div>
       </div>}
       <p className="settings-helper">Copied key stays on your clipboard and may be read by other apps until replaced.</p>
     </div>}

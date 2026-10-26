@@ -29,6 +29,17 @@ describe('retired Tavily key recovery', () => {
     expect(text).toContain('An existing key may still be saved')
     expect(text).not.toContain('No Tavily key is saved')
   })
+  it('invalidates revealed plaintext on Pi model changes and restores focus after removal decisions', () => {
+    const source = readFileSync(new URL('../src/renderer/TavilyKeyCard.tsx', import.meta.url), 'utf8')
+    const settings = readFileSync(new URL('../src/renderer/PiSettings.tsx', import.meta.url), 'utf8')
+    expect(source).toContain('}, [modelContext])')
+    expect(source).toContain('generation.current++')
+    expect(source).toContain("focusIntent.current = 'remove'; setConfirm(false)")
+    expect(source).toContain("focusIntent.current = 'heading'; setStatus(removed)")
+    expect(source).toContain('(target ?? headingRef.current)?.focus()')
+    expect(source).toContain('id="tavily-key-title" tabIndex={-1}')
+    expect(settings).toContain('<TavilyKeyCard modelContext={`${reference}\\u0000${thinkingLevel}\\u0000${modelSaveEpoch}`} />')
+  })
   it('provides explicit recovery/removal only for an existing key', () => {
     const source = readFileSync(new URL('../src/renderer/TavilyKeyCard.tsx', import.meta.url), 'utf8')
     expect(source).toContain('Existing encrypted Tavily key')
