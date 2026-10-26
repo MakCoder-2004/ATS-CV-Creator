@@ -35,7 +35,7 @@ export function decideJobSourcePolicy(input: string): JobSourcePolicy {
   let url: URL
   try { url = new URL(input) } catch { return { status: 'unchanged' } }
   const host = url.hostname.toLowerCase().replace(/\.$/, '')
-  if (host === 'jobs.lever.co' || host === 'api.lever.co') return { status: 'paused', source: 'lever', reason: paused.lever }
+  if (host === 'jobs.lever.co' || host === 'api.lever.co' || host === 'jobs.eu.lever.co' || host === 'api.eu.lever.co') return { status: 'paused', source: 'lever', reason: paused.lever }
   if (host === 'boards.greenhouse.io' || host === 'job-boards.greenhouse.io' || host === 'boards-api.greenhouse.io') return { status: 'paused', source: 'greenhouse', reason: paused.greenhouse }
   if (host === 'linkedin.com' || host.endsWith('.linkedin.com')) return { status: 'paused', source: 'linkedin', reason: paused.linkedin }
   if (isIndeedHost(host)) return { status: 'paused', source: 'indeed', reason: paused.indeed }

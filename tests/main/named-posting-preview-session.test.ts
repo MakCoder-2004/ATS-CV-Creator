@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { createNamedPostingPreviewSession } from '../../src/main/named-posting-preview-session'
 import { decideJobSourcePolicy } from '../../src/shared/job-source-policy'
 import { fetchDirectJobResearch } from '../../src/main/job-research-fetch'
+import { fetchLeverPosting } from '../../src/main/safe-posting-fetch'
 
 const url = 'https://boards.greenhouse.io/acme/jobs/123'
 const response = () => ({ status: 200, headers: { 'content-type': 'application/json' }, body: Buffer.from(JSON.stringify({ id: 123, title: 'Synthetic engineer', company_name: 'Example Co', content: `<p>${'Build reliable systems and document decisions. '.repeat(5)}</p>`, updated_at: '2026-10-25T12:00:00Z' })) })
@@ -59,6 +60,16 @@ const deferred = <T,>() => { let resolve!: (value: T) => void; const promise = n
     lookup.mockClear()
     await expect(fetchDirectJobResearch(url, { lookup })).rejects.toThrow(/Greenhouse/i)
     expect(lookup).not.toHaveBeenCalled()
+  })
+  it('pauses both EU Lever hosts before DNS or requests and rejects EU named URLs', async () => {
+    const lookup = vi.fn(async () => [{ address: '8.8.8.8', family: 4 }]), request = vi.fn()
+    for (const input of ['https://jobs.eu.lever.co/acme/123', 'https://api.eu.lever.co/v0/postings/acme/123']) {
+      expect(decideJobSourcePolicy(input)).toMatchObject({ status: 'paused', source: 'lever' })
+      await expect(fetchDirectJobResearch(input, { lookup })).rejects.toThrow(/Lever/i)
+      await expect(fetchLeverPosting(input, { lookup, request: request as never })).rejects.toThrow(/Lever/i)
+    }
+    expect(() => createNamedPostingPreviewSession().start('https://jobs.eu.lever.co/acme/123', true)).toThrow(/Greenhouse/)
+    expect(lookup).not.toHaveBeenCalled(); expect(request).not.toHaveBeenCalled()
   })
   it('rejects a provider result with the wrong posting ID without exposing a candidate', async () => {
     const body = Buffer.from(JSON.stringify({ ...JSON.parse(response().body.toString()), id: 456 }))
