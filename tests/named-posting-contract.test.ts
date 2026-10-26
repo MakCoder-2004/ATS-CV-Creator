@@ -22,7 +22,7 @@ describe('named posting URL references (contract only; no network)', () => {
     expect(parseNamedPostingUrl(url)).toMatchObject({ source, board, postingId })
     expect(namedPostingReferenceSchema.safeParse({ ...parseNamedPostingUrl(url), submittedUrl: url }).success).toBe(true)
   })
-  it.each(['https://jobs.lever.co/acme/platform-1/apply', 'https://jobs.lever.co/acme/platform-1?source=x', 'https://jobs.lever.co/acme/platform-1#apply', 'https://evil.example/acme/platform-1', 'https://boards.greenhouse.io/acme/jobs/not-an-id', 'https://boards.greenhouse.io/acme/jobs/123?gh_src=x', 'http://jobs.lever.co/acme/platform-1', 'https://user@jobs.lever.co/acme/platform-1', 'https://jobs.lever.co/acme', 'https://jobs.lever.co/acme/platform-1/extra'])('fails closed on unsupported URL %s', url => expect(() => parseNamedPostingUrl(url)).toThrow())
+  it.each(['https://jobs.lever.co/acme/platform-1/apply', 'https://jobs.lever.co/acme/platform-1?source=x', 'https://jobs.lever.co/acme/platform-1#apply', 'https://jobs.lever.co/acme/platform-1?', 'https://jobs.lever.co/acme/platform-1#', 'https://evil.example/acme/platform-1', 'https://boards.greenhouse.io/acme/jobs/not-an-id', 'https://boards.greenhouse.io/acme/jobs/123?gh_src=x', 'http://jobs.lever.co/acme/platform-1', 'https://user@jobs.lever.co/acme/platform-1', 'https://jobs.lever.co/acme', 'https://jobs.lever.co/acme/platform-1/extra'])('fails closed on unsupported URL %s', url => expect(() => parseNamedPostingUrl(url)).toThrow())
   it('requires returned site and posting ID to match exactly (namesakes do not match)', () => {
     const { candidate } = fixture()
     expect(namedPostingCandidateSchema.safeParse({ ...candidate, returnedBoard: 'other' }).success).toBe(false)
@@ -62,6 +62,18 @@ describe('named posting URL references (contract only; no network)', () => {
     const failed = { ...temporaryAttempt, status: 'failed' as const, reason }
     expect(namedPostingAttemptSchema.safeParse(failed).success).toBe(true)
     expect(() => createNamedPostingAcceptance(candidate, failed, { exactRole: true, completeness: true }, now)).toThrow()
+  })
+  it('rejects a changed submitted URL despite the same canonical job and bounds review timing', () => {
+    const { attempt, candidate } = fixture('https://boards.greenhouse.io/acme/jobs/123/platform-engineer')
+    const other = { ...candidate, reference: { ...candidate.reference, submittedUrl: 'https://boards.greenhouse.io/acme/jobs/123/other-role' } }
+    expect(namedPostingCandidateSchema.safeParse(other).success).toBe(true)
+    const candidateHash = createHash('sha256').update(JSON.stringify(namedPostingCandidateSchema.parse(other))).digest('hex')
+    const review = { attemptId: attempt.id, candidateHash, reviewedAt: capturedAt, exactRole: true as const, completeness: true as const }
+    expect(() => createNamedPostingAcceptance(other, attempt, review, now)).toThrow(/bound/)
+    const originalHash = createHash('sha256').update(JSON.stringify(namedPostingCandidateSchema.parse(candidate))).digest('hex')
+    for (const reviewedAt of [new Date(now - 1).toISOString(), new Date(now + 1).toISOString()]) {
+      expect(() => createNamedPostingAcceptance(candidate, attempt, { ...review, candidateHash: originalHash, reviewedAt }, now)).toThrow(/timing/)
+    }
   })
   it('accepts only global Lever host and rejects unsafe URL decorations', () => {
     expect(() => parseNamedPostingUrl('https://boards.greenhouse.io/acme/jobs/123/other-role?gh_jid=456')).toThrow()

@@ -9,7 +9,7 @@ export type NamedPostingIdentity = { source: 'lever' | 'greenhouse'; board: stri
 
 /** Public board/page URL identity; deliberately excludes EU Lever and unknown variants. */
 export function parseNamedPostingUrl(input: string): NamedPostingIdentity {
-  if (typeof input !== 'string' || input.trim() !== input || /[\u0000-\u001f\u007f\\]/.test(input) || new TextEncoder().encode(input).byteLength > 2048) throw new Error('Unsupported named posting URL.')
+  if (typeof input !== 'string' || input.trim() !== input || /[\u0000-\u001f\u007f\\?#]/.test(input) || new TextEncoder().encode(input).byteLength > 2048) throw new Error('Unsupported named posting URL.')
   let url: URL
   try { url = new URL(input) } catch { throw new Error('Unsupported named posting URL.') }
   if (url.protocol !== 'https:' || url.username || url.password || url.port || url.search || url.hash) throw new Error('Unsupported named posting URL.')
