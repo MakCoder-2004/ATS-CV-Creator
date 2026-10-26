@@ -1,42 +1,30 @@
-# Issue 102 offline MCP lifecycle proof
+# Issue 102 offline MCP lifecycle experiment
 
-**Verdict: the isolated stdio lifecycle harness passes its synthetic cases. This is not production integration or a live-provider retest.** It demonstrates an app-owned one-operation boundary around pinned Pi Web Access `0.44.0`, plus child termination and temporary-root cleanup. No package, installed executable, application source, job data, or real network request was used.
+**Verdict: NOT VERIFIED. Do not use this script as an application adapter.** A pinned Pi Web Access `0.44.0` stdio child returned synthetic fetch and search results. The harness printed passing case labels, but independent review found that its failure and cleanup assertions do not establish a safe process lifecycle. No application source, real provider, real job posting, or packaged executable was involved.
 
-## Reproduction and bounds
+## What was observed
 
-Run from the repository with Node.js `>=22.19` and the locally installed package at `C:/Users/Makrious/.pi/agent/npm/node_modules/pi-web-access`:
+`scripts/issue-102-mcp-lifecycle.mjs` starts the installed package's MCP child with temporary Pi config and cache roots. Its child-only global `fetch` stub accepts a fixed RFC 2606 URL and a fixed Exa JSON-RPC URL. The script rejects a sample of invalid input shapes before launch. The focused offline run observed the stub receive those two requests, synthetic success and provider-error responses, an ordinary child exit, a forced child exit for one PID, and removal of the owned roots on healthy paths. No disk cache file appeared in the inspected successful cases. These observations do not establish all outbound destinations or other transports.
+
+The script uses only fixed public test inputs. It sets temporary `HOME`, `USERPROFILE`, `APPDATA`, `LOCALAPPDATA`, `HOMEDRIVE`, `HOMEPATH`, `USERNAME`, `PI_CODING_AGENT_DIR`, and `PI_WEB_ACCESS_CACHE_ROOT` values. The MCP SDK still adds other inherited Windows defaults, and the script does not set an isolated child working directory or all temp paths. The package's standalone MCP core stores fetched results in process memory on the inspected path; the Pi extension has a separate one-hour disk cache. Neither fact proves an app-owned deletion lifecycle.
+
+## Why the lifecycle gate failed review
+
+- `createClient()` can spawn a child and then reject during connection or tool listing without returning a handle to its caller. Later assertion failures can also skip child cleanup. A `Promise.race` timeout does not stop the underlying request or process.
+- The cache-tree helper treats any directory-read error as an empty tree. It cannot distinguish permission failures from absence. The cancelled case also converts read failures to an empty result.
+- The cleanup-failure test sets a blocked flag before injecting a throw. It does not prove that an actual failed deletion makes the next operation fail closed. The stale-root test writes its ownership marker after killing the child, and reconciliation deletes on any ownership-read or PID-check error, including errors other than a confirmed dead owner.
+- The SDK's line buffer limit and the script's post-response `JSON.stringify()` check do not cap a complete JSON-RPC response before parsing. Stderr and total operation time are not bounded across shutdown. The cancellation test treats a 250 ms pending call as proof that no later result can arrive.
+- Only one child PID is inspected. The global `fetch` stub does not intercept other socket, subprocess, proxy, or redirect paths. The synthetic provider response had no redirect. An app-owned egress policy and a physical Windows dependency layout were not tested.
+
+These are review findings about this test, not evidence of a live app data leak. The full independent review is recorded in the issue #102 work trail. Do not infer that the seven printed case labels pass the privacy or release gates.
+
+## Reproduction and next gate
 
 ```sh
 node --check scripts/issue-102-mcp-lifecycle.mjs
 node scripts/issue-102-mcp-lifecycle.mjs
 ```
 
-The harness runs the package's actual stdio MCP child. A child `--import` stub replaces `globalThis.fetch`, accepts only `GET https://www.rfc-editor.org/rfc/rfc2606.txt` and `POST https://mcp.exa.ai/mcp?tools=web_search_exa`, returns synthetic fixtures, and throws for every other fetch URL or method. The Exa response is synthetic JSON-RPC, not an Exa request. The response stub does not redirect. This proves only requests routed through that fetch seam, not every possible socket or transport a future package could use.
+The second command is offline with the pinned local package. It remains an exploratory test and can return a successful exit without proving cleanup on failed acquisition, true deletion failure, response overflow, or a redirect. Do not use its exit code as acceptance.
 
-The operation shape is one `search` with exact query and `provider: "exa"`, or one `fetch` with the exact RFC fixture URL. Extra keys, provider `auto`/`all`/arrays, query/url batches, `includeContent`, proxy options, and other URLs reject before child creation. The input cap is 512 bytes, the result cap is 16,384 bytes, the stderr cap is 8,192 bytes, and one shared 10-second deadline covers startup, tool listing, and a call. Child environment explicitly supplies isolated `APPDATA`, `LOCALAPPDATA`, `HOMEDRIVE`, `HOMEPATH`, `USERNAME`, `HOME`, `USERPROFILE`, `PI_CODING_AGENT_DIR`, and `PI_WEB_ACCESS_CACHE_ROOT` values.
-
-## Observed cases
-
-All seven cases passed in the focused run. Every case's full cache directory tree was inspected before cleanup and was empty. The synthetic fetched and search text therefore appeared only in MCP results and process memory in these observations. Successful and failed operations closed their children and removed their temporary roots. The forced-death case observed SIGKILL and a dead PID, then removed a stale root by its owner PID on next reconciliation. A deliberately injected cleanup deletion failure remained visible, blocked the next run, and was removed only by owned cleanup retry. The final run root was empty, with no fixture text left behind.
-
-| Case | Observed result |
-| --- | --- |
-| Fetch success | Exact fixture GET observed; synthetic RFC text returned; child exited normally. |
-| Search success | Exact Exa JSON-RPC URL observed; synthetic search result returned; child exited normally. |
-| Provider error | Synthetic provider error was returned as an MCP error; child exited normally. |
-| Cancel after request receipt | Stub receipt preceded forced child termination; exit and dead PID observed; no late result delivered. |
-| Normal close | Child exit and dead PID observed. |
-| Forced death and next-run reconciliation | SIGKILL and dead PID observed; stale owned root removed on reconciliation. |
-| Cleanup deletion failure | Failure surfaced; next operation failed closed; owned retry removed the root. |
-
-The harness also rejected invalid operation shapes before spawning any child. It inspected the full cache tree, not only JSON files. The observed cache trees were empty before owner cleanup, and all owned per-run roots were absent afterward.
-
-## What remains unproved
-
-- The proof is a standalone wrapper demonstration. No application code currently owns or invokes this wrapper, and no UI, IPC, model orchestration, credentials, or installed-app behavior was exercised.
-- The stub covers the Node global `fetch` path only. It does not establish an OS-level network allowlist or rule out another transport path. The synthetic redirect case is not exercised; the stub returns no redirects and rejects any destination other than the two exact targets.
-- The exact RFC fixture URL and query are deliberately fixed test inputs, not a general source-selection policy. One prior Exa dummy query is separate evidence; this run makes no live-provider, provider reliability, billing, authorization, or source-rights claim.
-- Empty cache-tree observations apply only to this synthetic run and package configuration. They do not guarantee persistence behavior across other package options or future versions.
-- Physical Windows packaging, transitive license/security review, production credential handling, and source-use/retention rights remain open gates. Do not enable a provider or package the MCP child based on this proof alone.
-
-This report adds lifecycle evidence to the earlier [keyless Exa probe](issue-102-exa-provider-probe-2026-10-26.md). It does not change that report's integration or release verdict.
+The maintainer paused further web integration work until source-rights issue #103 is resolved. Issue #102 stays open and blocks #97 through #99. Before restarting MCP engineering, use a dedicated app-owned private root, authenticate ownership before launch, abort and reap children on every failure, fail closed on ambiguous cleanup, bound ingress before JSON parsing, and verify physical Windows dependencies, license/security inventory, endpoint redirects, and installed-app behavior under separate approval. Preserve manual paste and the paused-source policy while these gates remain open.

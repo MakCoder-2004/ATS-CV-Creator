@@ -223,7 +223,7 @@ async function main() {
       const processEvidence = await closeAndWait(session);
       await removeOwned(session.caseRoot);
       await assert.rejects(access(session.caseRoot), { code: "ENOENT" });
-      results.push({ name, verdict: "PASS", receipts, cacheTreeBeforeCleanup: treeBefore, process: processEvidence, noLateResult: true, rootRemoved: true });
+      results.push({ name, observed: "synthetic response and ordinary cleanup", receipts, cacheTreeBeforeCleanup: treeBefore, process: processEvidence, rootRemoved: true });
     }
 
     await normalCase("fetch-success", { kind: "fetch", url: fixtureUrl }, "success");
@@ -241,7 +241,7 @@ async function main() {
     const cancelTree = await tree(cancel.cacheRoot);
     await removeOwned(cancel.caseRoot);
     assert.deepEqual(await tree(cancel.cacheRoot).catch(() => []), [], "cancelled run has no retained cache tree");
-    results.push({ name: "cancel-after-request", verdict: "PASS", receipts: receipt, childKilledAndExitObserved: true, noLateResult: true, cacheTreeBeforeCleanup: cancelTree, rootRemoved: true });
+    results.push({ name: "cancel-after-request", observed: "one child exited; no result within 250 ms", receipts: receipt, childKilledAndExitObserved: true, cacheTreeBeforeCleanup: cancelTree, rootRemoved: true });
 
     const normal = await createClient(runRoot, "normal-close", "normal");
     const normalClose = await closeAndWait(normal);
@@ -270,7 +270,7 @@ async function main() {
 
     const remaining = await readdir(runRoot);
     assert.deepEqual(remaining, [], "cleanup and restart leave no per-run root or unaccepted fixture text behind");
-    console.log(JSON.stringify({ verdict: "PASS", offline: true, package: packageJson.version, operationShape: "single search(provider=exa, exact query) | fetch(exact RFC fixture URL), strict keys, 512 input bytes, 16384 result bytes", bounds: { totalMs: TOTAL_MS, stderrBytes: MAX_STDERR_BYTES }, cases: results }, null, 2));
+    console.log(JSON.stringify({ verdict: "NOT_VERIFIED", offline: true, package: packageJson.version, operationShape: "fixed search or fetch only; checks 512 input bytes and serialized result size after parsing", bounds: { deadlineRaceMs: TOTAL_MS, attemptedStderrCapBytes: MAX_STDERR_BYTES, preParseIngressCap: false }, cases: results }, null, 2));
   } finally {
     await rm(runRoot, { recursive: true, force: true });
   }
