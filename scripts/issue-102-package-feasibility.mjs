@@ -7,15 +7,50 @@ const packageName = 'pi-web-access';
 const pinnedVersion = '0.44.0';
 const npmRegistry = 'https://registry.npmjs.org/';
 const repoRoot = path.resolve(import.meta.dirname, '..');
+const expectedIntegrity = 'sha512-8YK2Nb0P7ezRL0FS7P1cPYu7gDUOuhXWA3FOBev0bKsuPtG2QrDVm2GriKBgZI1Sq7SC8QRsfVFYYP8huUEo8w==';
 const tempParent = process.env.ISSUE_102_TEMP_ROOT || 'C:\\Temp';
 const tempRoot = await mkdtemp(path.join(tempParent, 'cv102-'));
+const nodeRoot = path.dirname(await realpath(process.execPath));
+const npmCli = path.join(nodeRoot, 'node_modules', 'npm', 'bin', 'npm-cli.js');
 
-function sanitizeNpmEnvironment() {
-  const env = { ...process.env };
-  for (const key of Object.keys(env)) {
-    if (/^(npm_config_|npm_config$|node_auth_token$|npm_token$)/i.test(key)) delete env[key];
+function buildNpmEnvironment(root, parentEnv = process.env) {
+  const env = {};
+  for (const key of ['SystemRoot', 'WINDIR']) {
+    if (parentEnv[key]) env[key] = parentEnv[key];
   }
+  for (const key of ['HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'TEMP', 'TMP']) {
+    env[key] = root;
+  }
+  if (process.platform === 'win32') {
+    env.HOMEDRIVE = path.parse(root).root.replace(/[\\/]+$/, '');
+    env.HOMEPATH = root.slice(env.HOMEDRIVE.length);
+  }
+  env.PATH = '';
+  env.NPM_CONFIG_USERCONFIG = path.join(root, 'npmrc');
+  env.NPM_CONFIG_GLOBALCONFIG = path.join(root, 'global-npmrc');
+  env.NPM_CONFIG_CACHE = path.join(root, 'cache');
+  env.NPM_CONFIG_REGISTRY = npmRegistry;
   return env;
+}
+
+function verifyEnvironmentIsolation(root) {
+  const parent = {
+    ...process.env,
+    PATH: 'ISSUE_102_PATH_CANARY',
+    ISSUE_102_CREDENTIAL_CANARY: 'ISSUE_102_CREDENTIAL_CANARY_VALUE',
+  };
+  const env = buildNpmEnvironment(root, parent);
+  const script = 'process.stdout.write(JSON.stringify({ path: process.env.PATH ?? null, credential: process.env.ISSUE_102_CREDENTIAL_CANARY ?? null }))';
+  const result = spawnSync(process.execPath, ['-e', script], {
+    cwd: root,
+    env,
+    encoding: 'utf8',
+    shell: false,
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), { path: '', credential: null });
+  assert.equal(parent.PATH, 'ISSUE_102_PATH_CANARY');
+  assert.equal(parent.ISSUE_102_CREDENTIAL_CANARY, 'ISSUE_102_CREDENTIAL_CANARY_VALUE');
 }
 
 function displayLicense(value) {
@@ -61,7 +96,7 @@ async function walkDependencyPackages(root) {
       try {
         manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
       } catch (error) {
-        if (error.code === 'ENOENT') continue;
+        if (error.code === 'ENOENT') throw new Error(`dependency manifest is missing: ${manifestPath}`);
         throw error;
       }
       const files = await readdir(entryPath);
@@ -82,11 +117,11 @@ async function walkDependencyPackages(root) {
 }
 
 function npm(args, stage, env) {
-  const result = spawnSync('npm', args, {
+  const result = spawnSync(process.execPath, [npmCli, ...args], {
     cwd: stage,
     env,
     encoding: 'utf8',
-    shell: process.platform === 'win32',
+    shell: false,
     maxBuffer: 10 * 1024 * 1024,
   });
   if (result.error) throw result.error;
@@ -97,7 +132,9 @@ function npm(args, stage, env) {
   return `${result.stdout || ''}${result.stderr || ''}`;
 }
 
+let report;
 try {
+  assert((await realpath(npmCli)).startsWith(nodeRoot + path.sep), 'npm CLI is outside the trusted Node install root');
   assert(!tempRoot.includes(' ') && tempRoot.length <= 24,
     `temporary path must be short and contain no spaces: ${tempRoot}`);
   const stage = path.join(tempRoot, 'stage');
@@ -113,17 +150,8 @@ try {
     dependencies: { [packageName]: pinnedVersion },
   }, null, 2));
 
-  const env = sanitizeNpmEnvironment();
-  Object.assign(env, {
-    NPM_CONFIG_USERCONFIG: config,
-    NPM_CONFIG_GLOBALCONFIG: globalConfig,
-    NPM_CONFIG_CACHE: cache,
-    NPM_CONFIG_REGISTRY: npmRegistry,
-    npm_config_userconfig: config,
-    npm_config_globalconfig: globalConfig,
-    npm_config_cache: cache,
-    npm_config_registry: npmRegistry,
-  });
+  const env = buildNpmEnvironment(tempRoot);
+  verifyEnvironmentIsolation(tempRoot);
   npm([
     'install', `${packageName}@${pinnedVersion}`,
     '--ignore-scripts', '--omit=dev', '--no-audit', '--no-fund',
@@ -147,7 +175,7 @@ try {
   const lockPackage = lock.packages?.[`node_modules/${packageName}`];
   assert.equal(lockPackage?.version, pinnedVersion);
   assert.match(lockPackage?.resolved || '', /^https:\/\/registry\.npmjs\.org\//);
-  assert.match(lockPackage?.integrity || '', /^sha512-/);
+  assert.equal(lockPackage?.integrity, expectedIntegrity, 'package tarball integrity differs from recorded evidence');
 
   const stageReal = await realpath(stage);
   await assertPhysicalTree(path.join(stage, 'node_modules'));
@@ -173,7 +201,7 @@ try {
   const builderExtraResources = currentManifest.build?.extraResources || [];
   const electronPackageSpec = currentManifest.devDependencies?.electron || null;
 
-  console.log(JSON.stringify({
+  report = {
     verdict: 'STATIC_PACKAGE_FEASIBILITY_ONLY',
     package: `${packageName}@${rootManifest.version}`,
     resolved: lockPackage.resolved,
@@ -182,11 +210,13 @@ try {
     runtimeMcpSdk: sdkVersion,
     currentNode: process.version,
     electronPackageSpec,
+    packagedElectronNodeRuntimeAsserted: false,
     packageFiles: { dist: true, mcpCli: true },
     stage: tempRoot,
     physicalNodeModules: dependencyReal,
     npmLs: 'passed',
-    runtimeDependencyCount: dependencyCount,
+    physicalInstalledManifestCount: dependencyCount,
+    lockfileTransitiveVersionsTrackedInRepository: false,
     license: {
       missingManifestLicenseCount: missingDeclaredLicense.length,
       missingLicenseFileCount: missingLicenseFile.length,
@@ -203,7 +233,7 @@ try {
     electronBuilderHasPackageResource: builderExtraResources.some((item) => String(item.from).includes(packageName)),
     installedOrPackagedExecutableLaunched: false,
     mcpServerStarted: false,
-  }, null, 2));
+  };
 } finally {
   await rm(tempRoot, { recursive: true, force: true });
   await lstat(tempRoot).then(
@@ -211,3 +241,4 @@ try {
     (error) => assert.equal(error.code, 'ENOENT'),
   );
 }
+console.log(JSON.stringify(report, null, 2));
