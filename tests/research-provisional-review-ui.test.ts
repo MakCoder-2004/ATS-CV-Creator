@@ -104,6 +104,7 @@ describe('temporary research review', () => {
     await session.inspect()
     const pending = session.authorizeAndStart()
     await vi.waitFor(() => expect(api.startResearchAnalysis).toHaveBeenCalledTimes(1))
+    expect(session.getSnapshot()).toMatchObject({ phase: 'running', message: 'Preparing analysis; a provider request may be sent and may incur charges.' })
     await session.cancel()
     deliver({ ...progress('complete'), result: { researchRunId: runId, analysisScope: 'provisional', evidence: [evidence], requirements: [], unknowns: [], humanReviewRequired: true } })
     await pending

@@ -96,7 +96,7 @@ export function createProvisionalReviewSession(api: AnalysisAPI, researchToken: 
         const consent = await api.consentResearchAnalysis(preview.token, true)
         if (!current(request)) return
         if (consent.status !== 'consented') throw new Error('Authorization was not recorded. Discard this review and start again.')
-        set({ phase: 'running', message: 'Analysis started. A provider request may be sent; cancellation may not prevent charges.' })
+        set({ phase: 'running', message: 'Preparing analysis; a provider request may be sent and may incur charges.' })
         dispatched = true
         const progress = await api.startResearchAnalysis(preview.token)
         if (current(request)) acceptProgress(progress, preview, outgoing)

@@ -136,7 +136,7 @@ export function WorkbenchStageLayout(props: Props) {
   const [exportMessage, setExportMessage] = useState('')
   const [exportBusy, setExportBusy] = useState(false)
   const [regenTarget, setRegenTarget] = useState<RegenerationTarget>({ kind: 'section', section: 'experience' })
-  const [regenPreview, setRegenPreview] = useState<Extract<OutboundConsentPreview, { ok: true }> | null>(null)
+  const [regenPreview, setRegenPreview] = useState<{ preview: Extract<OutboundConsentPreview, { ok: true }>; target: RegenerationTarget } | null>(null)
   const [regenBusy, setRegenBusy] = useState(false)
   const [regenMessage, setRegenMessage] = useState('')
   const [proposal, setProposal] = useState<RegenerationProposal | null>(null)
@@ -154,14 +154,17 @@ export function WorkbenchStageLayout(props: Props) {
   const reviewHeadingRef = useRef<HTMLHeadingElement>(null)
   async function prepareRegeneration(target?: RegenerationTarget) {
     if (!activeJob || !draft) return
-    if (target) setRegenTarget(target)
+    const requestedTarget = target ?? regenTarget
+    const stalePreview = regenPreview?.preview
+    setRegenPreview(null)
+    setRegenTarget(requestedTarget)
     setRegenBusy(true); setRegenMessage('Preparing the information you can review before sharing…')
-    try { const result = await window.workbench.prepareOutboundConsent(activeJob.id); if (!result.ok) { setRegenMessage(result.message); return }; setRegenPreview(result); setRegenMessage('') }
+    try { if (stalePreview) await window.workbench.cancelOutboundConsent(stalePreview.token); const result = await window.workbench.prepareOutboundConsent(activeJob.id); if (!result.ok) { setRegenMessage(result.message); return }; setRegenPreview({ preview: result, target: requestedTarget }); setRegenMessage('') }
     catch { setRegenMessage('The outgoing-data preview could not be prepared. Try again.') } finally { setRegenBusy(false) }
   }
   async function cancelRegeneration() {
     if (!regenPreview) return
-    await window.workbench.cancelOutboundConsent(regenPreview.token); setRegenPreview(null)
+    await window.workbench.cancelOutboundConsent(regenPreview.preview.token); setRegenPreview(null)
   }
   async function cancelActiveRegeneration() {
     if (!activeJob) return
@@ -172,7 +175,8 @@ export function WorkbenchStageLayout(props: Props) {
   async function runRegeneration() {
     if (!regenPreview || regenBusy) return
     setRegenBusy(true); setRegenMessage('Creating a suggestion. Your CV is unchanged…')
-    try { const authorized = await window.workbench.acceptOutboundConsent(regenPreview.token, true, true); if (!authorized.ok) { setRegenMessage(authorized.message); return }; const result = await window.workbench.regenerateDraft(regenPreview.token, regenTarget); if (!result.ok || !result.proposal) { setRegenMessage(result.message); return }; setProposal(result.proposal); setRegenMessage(result.message); setRegenPreview(null) }
+    const { preview, target } = regenPreview
+    try { const authorized = await window.workbench.acceptOutboundConsent(preview.token, true, true); if (!authorized.ok) { setRegenMessage(authorized.message); return }; const result = await window.workbench.regenerateDraft(preview.token, target); if (!result.ok || !result.proposal) { setRegenMessage(result.message); return }; setProposal(result.proposal); setRegenMessage(result.message); setRegenPreview(null) }
     catch (failure) { setRegenMessage(failure instanceof Error ? failure.message : 'Regeneration failed safely; the current draft was preserved.') } finally { setRegenBusy(false) }
   }
   async function resolveProposal(decision: 'accept' | 'reject') {
@@ -214,7 +218,7 @@ export function WorkbenchStageLayout(props: Props) {
   }) ?? []
   const reviewHasError = /could not|failed|blocked|unavailable|stale|too long|issues? need attention|invalid|not approved|cannot|can't|error|choose a destination|no file was written/i.test(draftError)
   const outgoing = review?.outgoing as unknown as OutboundPayload | undefined
-  const regenerationOutgoing = regenPreview?.outgoing as unknown as OutboundPayload | undefined
+  const regenerationOutgoing = regenPreview?.preview.outgoing as unknown as OutboundPayload | undefined
   const headings = ['Start with the right role.', 'Your data, before it leaves.', draftBusy ? 'Your CV is taking shape.' : 'Understand the role. Then tailor your CV.', 'Review your CV', 'Ready for your next application.']
   const descriptions = ['The posting sets the target. Your profile supplies the facts.', 'See what will be shared before you choose to continue.', 'Qualifications and keywords guide the wording—not invented experience.', 'Make it yours. Review the wording, check the fit, then approve.', 'A clean document, without review highlights or added-skill notices.']
 
@@ -294,7 +298,7 @@ export function WorkbenchStageLayout(props: Props) {
           <p className="review-limitation">Checks can miss mistakes. You make the final decision after reading your CV.</p>
           <div className="review-improve-heading"><h3>Change the wording</h3><p>Suggestions won't replace your CV until you accept them.</p><button type="button" className="secondary-button section-improve-toggle" aria-expanded={sectionToolsOpen} disabled={regenBusy} onClick={() => setSectionToolsOpen(open => !open)}>{sectionToolsOpen ? 'Hide section options' : 'Improve a whole section'}</button></div>
           {(sectionToolsOpen || regenPreview || proposal?.status === 'pending') && <section className="regeneration-controls" aria-label="Suggest new wording"><h4>Suggest new wording</h4><label>Section<select aria-label="Regeneration section" disabled={regenBusy || !!regenPreview} value={regenTarget.section} onChange={event => { const section = event.target.value as Section; setRegenTarget(regenTarget.kind === 'paragraph' ? { kind: 'paragraph', section, index: 0 } : { kind: 'section', section }) }}>{(['education', 'experience', 'projects', 'skills'] as const).map(section => <option key={section} value={section}>{section}</option>)}</select></label><label>Scope<select aria-label="Regeneration scope" disabled={regenBusy || !!regenPreview} value={regenTarget.kind} onChange={event => setRegenTarget(event.target.value === 'section' ? { kind: 'section', section: regenTarget.section } : { kind: 'paragraph', section: regenTarget.section, index: 0 })}><option value="section">Whole section</option><option value="paragraph">One paragraph</option></select></label>{regenTarget.kind === 'paragraph' && <label>Paragraph<select aria-label="Regeneration paragraph" disabled={regenBusy || !!regenPreview} value={regenTarget.index} onChange={event => setRegenTarget({ ...regenTarget, kind: 'paragraph', index: Number(event.target.value) })}>{draft.content[regenTarget.section].map((item, index) => <option key={index} value={index}>{index + 1}. {readableText('text' in item ? item.text : item.name).slice(0, 70) || 'Saved wording'}</option>)}</select></label>}<button type="button" className="secondary-button" disabled={regenBusy || !draft.content[regenTarget.section].length} onClick={() => void prepareRegeneration()}>{regenBusy ? 'Preparing…' : `Review data for ${regenTarget.kind} regeneration`}</button>
-            {regenPreview && regenerationOutgoing && <div className="regeneration-consent"><h4>What will be shared for this suggestion</h4><p>Destination: Pi · Provider: <strong>{regenerationOutgoing.model.providerId}</strong> · Model: <strong>{regenerationOutgoing.model.name}</strong> · Thinking level: <strong>{regenerationOutgoing.model.thinkingLevel}</strong></p><p>{regenPreview.warning}</p><p>{regenPreview.termsNotice}</p><IncludedContent outgoing={regenerationOutgoing} /><div><button type="button" className="secondary-button" disabled={regenBusy} onClick={() => void cancelRegeneration()}>Cancel</button><button type="button" className="primary-button" disabled={regenBusy} onClick={() => void runRegeneration()}>{regenBusy ? 'Regenerating…' : 'Authorize and propose'}</button>{regenBusy && <button type="button" className="secondary-button" onClick={() => void cancelActiveRegeneration()}>Cancel operation</button>}</div></div>}
+            {regenPreview && regenerationOutgoing && <div className="regeneration-consent"><h4>What will be shared for this suggestion</h4><p>Target: {regenPreview.target.section}{regenPreview.target.kind === 'paragraph' ? ` · paragraph ${regenPreview.target.index + 1}` : ' · whole section'}</p><p>Destination: Pi · Provider: <strong>{regenerationOutgoing.model.providerId}</strong> · Model: <strong>{regenerationOutgoing.model.name}</strong> · Thinking level: <strong>{regenerationOutgoing.model.thinkingLevel}</strong></p><p>{regenPreview.preview.warning}</p><p>{regenPreview.preview.termsNotice}</p><IncludedContent outgoing={regenerationOutgoing} /><div><button type="button" className="secondary-button" disabled={regenBusy} onClick={() => void cancelRegeneration()}>Cancel</button><button type="button" className="primary-button" disabled={regenBusy} onClick={() => void runRegeneration()}>{regenBusy ? 'Regenerating…' : 'Authorize and propose'}</button>{regenBusy && <button type="button" className="secondary-button" onClick={() => void cancelActiveRegeneration()}>Cancel operation</button>}</div></div>}
             {proposal && <section className="proposal-comparison" aria-label="Compare suggestion"><h4>Compare wording</h4><p>{proposal.status === 'pending' ? 'Your CV will not change until you accept this suggestion.' : proposal.status === 'accepted' ? 'This wording has been added to your CV. Review it again before approval.' : 'Your CV was not changed.'}</p><p className="regeneration-scope-note">{proposal.progress}</p>{proposal.proposed.map((item, index) => { const prior = proposal.before?.[index]; const beforeText = typeof prior === 'string' ? prior : prior?.text ?? ''; return <article key={index}><h5>Current</h5><p>{readableText(beforeText) || 'Saved wording'}</p><h5>Suggested</h5><p>{readableText(item.text) || 'Suggested wording unavailable'}</p><p>Sources: {item.citations.map(citation => sourceLabel(draft, citation.evidenceId, citation.revision)).join('; ')}</p>{readableText(item.rationale) && <p>{readableText(item.rationale)}</p>}</article>})}{proposal.status === 'pending' && <div><button type="button" className="secondary-button" disabled={regenBusy} onClick={() => void resolveProposal('reject')}>Reject proposal</button><button type="button" className="primary-button" disabled={regenBusy} onClick={() => void resolveProposal('accept')}>Accept replacement and recheck</button></div>}</section>}
             {regenMessage && <p className="regeneration-status" role="status">{regenMessage}</p>}
           </section>}
