@@ -245,7 +245,7 @@ async function run() {
         assert.deepEqual(unexpected, [], `${route}/${operation} contacted only observed destination`);
         if (operation === "fetch") assert.match(result.output, /Reserved Top Level DNS Names/i, `${route} fetch contains the expected harmless RFC text`);
         if (operation === "search") assert.match(result.output, /duckduckgo/i, `${route} search identifies selected provider`);
-        if (operation === "cancel") assert.match(result.outcome, /error|abort|cancel/i, `${route} cancellation is surfaced`);
+        if (operation === "cancel") assert.match(result.outcome, /abort|cancel/i, `${route} reports an abort or cancellation, not an unrelated error`);
         if (operation !== "cancel") assert.ok(result.visibleCharacters <= 2000, `${route}/${operation} visible output is bounded to 2000 characters`);
         const cleanup = cleanupCase(testCase);
         assert.equal(cleanup.deleted, true, `${route}/${operation} isolated cache removed by harness owner`);
