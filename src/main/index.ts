@@ -223,7 +223,17 @@ app.whenReady().then(() => {
         ? { outcome: 'full' as const, title: 'Synthetic Research Engineer', employer: 'Example Research', description: 'Build accessible TypeScript interfaces and test resilient desktop workflows. Document operational decisions, review privacy boundaries, collaborate with the engineering team, and maintain reliable services. Qualifications include TypeScript, careful written communication, and experience testing user-facing software.' }
         : { outcome: 'partial' as const, title: 'Synthetic Engineer', employer: 'Example Research', description: 'Review TypeScript systems and document operational decisions. This partial synthetic role wording omits the complete requirements.', reason: 'Full role wording was not available.' }
   } : undefined
+  const namedPreviewFixtureEnabled = !app.isPackaged && process.env.CV_TAILOR_TEST_NAMED_PREVIEW === '1'
+  const namedPreviewNoNetwork = namedPreviewFixtureEnabled ? {
+    lookup: async () => { throw new Error('Generic network is disabled in the named-preview UI fixture.') },
+    request: async () => { throw new Error('Generic network is disabled in the named-preview UI fixture.') },
+    research: {
+      lookup: async () => { throw new Error('Generic network is disabled in the named-preview UI fixture.') },
+      request: async () => { throw new Error('Generic network is disabled in the named-preview UI fixture.') },
+    }
+  } : undefined
   const postingFetchOptions: SafePostingFetchOptions & { research?: import('./job-research-fetch').JobResearchFetchOptions } = {
+    ...namedPreviewNoNetwork,
     ...scriptedPostingFetch,
     ...(scriptedResearch ? { research: scriptedResearch } : {}),
     ...(singleRequestReleaseCheck ? {
@@ -259,7 +269,25 @@ app.whenReady().then(() => {
       .then(({ ModelRuntime }) => ModelRuntime.create({ allowModelNetwork: false, refreshOnCreate: false }))
       .catch(() => null)
   workspace = createWorkbench(app.getPath('userData'), undefined, useScriptedPi ? undefined : scriptedAnalysis, undefined, postingFetchOptions, piRuntime)
-  namedPostingPreviews = createNamedPostingPreviewSession()
+  const namedPreviewFixture = namedPreviewFixtureEnabled ? {
+    lookup: async (host: string) => {
+      if (host !== 'boards-api.greenhouse.io') throw new Error('Unexpected named-preview fixture host.')
+      return [{ address: '8.8.8.8', family: 4 }]
+    },
+    request: async (url: URL, _address: { address: string; family: number }, signal: AbortSignal) => {
+      const expected = 'https://boards-api.greenhouse.io/v1/boards/acme/jobs/123'
+      if (url.href !== expected) throw new Error('Unexpected named-preview fixture route.')
+      appendFileSync(join(app.getPath('userData'), 'named-preview-request-count.log'), 'request\\n')
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => { signal.removeEventListener('abort', abort); resolve() }, 500)
+        const abort = () => { clearTimeout(timer); reject(new Error('Synthetic named-preview request cancelled.')) }
+        if (signal.aborted) abort()
+        else signal.addEventListener('abort', abort, { once: true })
+      })
+      return { status: 200, headers: { 'content-type': 'application/json' }, body: Buffer.from(JSON.stringify({ id: 123, title: 'Synthetic Reliability Engineer', company_name: 'Example Research', updated_at: '2026-10-25T12:00:00Z', content: `<p>${'Build and maintain synthetic systems, document decisions, collaborate with a fictional team, and review reliability outcomes. '.repeat(8)}</p>` })) }
+    }
+  } : undefined
+  namedPostingPreviews = createNamedPostingPreviewSession(namedPreviewFixture)
   app.on('before-quit', () => namedPostingPreviews?.close())
   const researchCredentials = createResearchSearchCredentials({
     credentialsDirectory: defaultResearchCredentialDirectory(app.getPath('appData'), app.getPath('userData')),
