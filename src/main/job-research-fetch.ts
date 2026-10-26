@@ -8,6 +8,7 @@ import { createBrotliDecompress, createGunzip, createInflate } from 'node:zlib'
 import type { IncomingHttpHeaders } from 'node:http'
 import { isPublicAddress, pinnedAddressLookup } from './safe-posting-fetch'
 import { jobResearchRunSchema, normalizeJobResearchUrl, type JobResearchIdentity, type JobResearchRun } from '../shared/job-research'
+import { decideJobSourcePolicy } from '../shared/job-source-policy'
 
 type Address = { address: string; family: number }
 type Response = { status: number; headers: IncomingHttpHeaders; body: Buffer }
@@ -71,6 +72,8 @@ const extractInWorker = (html: string, selected: JobResearchIdentity, signal: Ab
 
 /** A single user-initiated direct read. Search enrichment and persistence belong to separate adapters. */
 export async function fetchDirectJobResearch(input: string, options: JobResearchFetchOptions = {}): Promise<JobResearchRun> {
+  const policy = decideJobSourcePolicy(input)
+  if (policy.status === 'paused') throw new Error(policy.reason)
   const selected = normalizeJobResearchUrl(input)
   const startedAt = (options.now ?? (() => new Date()))().toISOString()
   const runId = randomUUID()

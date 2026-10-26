@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { jobResearchRunSchema, normalizeJobResearchUrl, promoteJobResearch, verifyReviewedJobResearch, type JobResearchRun, type ReviewedJobResearch } from '../shared/job-research'
+import { decideJobSourcePolicy } from '../shared/job-source-policy'
 import { researchStateSchema, type ResearchState } from '../shared/job-research-ipc'
 import { fetchDirectJobResearch, type JobResearchFetchOptions } from './job-research-fetch'
 import { createTavilyResearchSession, TavilySearchError, type TavilySearchResult } from './tavily-search'
@@ -69,6 +70,8 @@ export function createJobResearchSessions(options: ResearchSessionOptions) {
     if (sessions.size >= MAX_RUNS && ![...sessions.values()].some(session => session.state.status !== 'loading')) throw new Error('Temporary research is full. Wait for a read or cancel one before starting another.')
   }
   function acceptInitialDirectRun(input: JobResearchRun): { token: string } {
+    const policy = decideJobSourcePolicy(input.selected.canonicalUrl)
+    if (policy.status === 'paused') throw new Error(policy.reason)
     const run = jobResearchRunSchema.parse(input)
     assertCanAcceptInitialDirectRun()
     makeRoom()
@@ -79,6 +82,8 @@ export function createJobResearchSessions(options: ResearchSessionOptions) {
     return { token }
   }
   function startJobResearch(input: string): { token: string } {
+    const policy = decideJobSourcePolicy(input)
+    if (policy.status === 'paused') throw new Error(policy.reason)
     const selected = normalizeJobResearchUrl(input)
     makeRoom()
     const token = randomUUID()
@@ -106,6 +111,8 @@ export function createJobResearchSessions(options: ResearchSessionOptions) {
   function getJobResearch(token: string): ResearchState { return safeState(clone(get(token).state)) }
   async function searchJobResearch(token: string): Promise<ResearchState> {
     const session = get(token)
+    const policy = decideJobSourcePolicy(session.state.status === 'ready' ? session.state.run.selected.canonicalUrl : '')
+    if (policy.status === 'paused') throw new Error(policy.reason)
     if (session.state.status !== 'ready') throw new Error('Wait for the public read before requesting search.')
     if (session.state.run.status === 'full') throw new Error('The exact direct posting is already complete; no indexed search is needed.')
     if (session.searched) throw new Error('This research already used its one explicit search action. Start a new public read to try again.')

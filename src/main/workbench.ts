@@ -41,6 +41,7 @@ import { postingFetchStateSchema, postingPreviewEditSchema, postingReviewSchema,
 import { fetchLeverPosting, validateLeverPostingUrl, type SafePostingFetchOptions } from './safe-posting-fetch'
 import { fetchDirectJobResearch, type JobResearchFetchOptions } from './job-research-fetch'
 import { jobResearchRunSchema, normalizeJobResearchUrl, type JobResearchRun } from '../shared/job-research'
+import { decideJobSourcePolicy } from '../shared/job-source-policy'
 import { postingPreviewSchema, type PostingPreview } from '../shared/posting-import'
 
 type NestedInput = { id?: string; text: string }
@@ -972,6 +973,8 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       return tx()
     },
     async startPostingFetch(input: string) {
+      const sourcePolicy = decideJobSourcePolicy(input)
+      if (sourcePolicy.status === 'paused') throw new Error(sourcePolicy.reason)
       const lever = validateLeverPostingUrl(input)
       const selected = lever ? undefined : normalizeJobResearchUrl(input)
       if ([...postingFetches.values()].some(fetch => fetch.state.status === 'fetching')) throw new Error('A posting fetch is already active. Cancel it or wait for it to finish.')
@@ -1096,6 +1099,9 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
     },
     async acceptPostingImport(token: string, revision: number) {
       const checkedToken = uuidSchema.safeParse(token), pending = checkedToken.success ? livePostingFetch(checkedToken.data) : undefined
+      const candidateUrl = pending?.state.status === 'ready' || pending?.state.status === 'incomplete' ? pending.state.preview.submittedUrl : ''
+      const sourcePolicy = decideJobSourcePolicy(candidateUrl)
+      if (sourcePolicy.status === 'paused') return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: sourcePolicy.reason } })
       if (pending?.selected || (pending?.state.status === 'ready' || pending?.state.status === 'incomplete') && !isSaveablePostingSource(pending.state.preview.extractionMethod)) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'Review temporarily or paste text manually. This fetched source cannot be saved.' } })
       if (!pending || pending.revision !== revision || pending.reviewed?.revision !== revision || !pending.reviewed.review.completenessConfirmed) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'Review the current preview after your last edit before saving.' } })
       const pendingState = pending.state
@@ -1140,6 +1146,8 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
     async comparePostingRefresh(token: string, jobId: string, expectedUpdatedAt: string, expectedRevision: number) {
       const pending = livePostingFetch(token), row = db.prepare('SELECT data FROM jobs WHERE id = ?').get(jobId) as { data: string } | undefined
       const current = row ? jobRecordSchema.parse(JSON.parse(row.data)) : undefined
+      const refreshPolicy = current?.sourceSnapshot ? decideJobSourcePolicy(current.sourceSnapshot.finalUrl) : { status: 'unchanged' as const }
+      if (refreshPolicy.status === 'paused') return { ok: false, message: refreshPolicy.reason }
       if (pending?.selected || (pending?.state.status === 'ready' || pending?.state.status === 'incomplete') && !isSaveablePostingSource(pending.state.preview.extractionMethod) || current?.sourceSnapshot && !isSaveablePostingSource(current.sourceSnapshot.extractionMethod)) return { ok: false, message: 'Review temporarily or paste text manually. This fetched source cannot update a saved job.' }
       if (!pending || !current || pending.state.status !== 'ready' && pending.state.status !== 'incomplete') return { ok: false, message: 'This refresh preview or saved posting is unavailable.' }
       if (current.updatedAt !== expectedUpdatedAt || (current.revisions.at(-1)?.revision ?? 0) !== expectedRevision) return { ok: false, message: 'The saved posting changed while this refresh was being reviewed. Reopen it and compare again.' }
@@ -1151,6 +1159,9 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
     },
     async acceptPostingRefresh(token: string, revision: number, jobId: string, expectedUpdatedAt: string, expectedBaseRevision: number, choices: PostingRefreshChoice) {
       const invalid = (message: string) => jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message } })
+      const existingRow = db.prepare('SELECT data FROM jobs WHERE id = ?').get(jobId) as { data: string } | undefined
+      const existing = existingRow ? jobRecordSchema.parse(JSON.parse(existingRow.data)) : undefined
+      if (existing?.sourceSnapshot) { const policy = decideJobSourcePolicy(existing.sourceSnapshot.finalUrl); if (policy.status === 'paused') return invalid(policy.reason) }
       const checkedChoices = postingRefreshChoiceSchema.safeParse(choices), pending = livePostingFetch(token)
       if (pending?.selected || (pending?.state.status === 'ready' || pending?.state.status === 'incomplete') && !isSaveablePostingSource(pending.state.preview.extractionMethod)) return invalid('Review temporarily or paste text manually. This fetched source cannot update a saved job.')
       if (!checkedChoices.success || !pending || pending.revision !== revision || pending.reviewed?.revision !== revision || !pending.reviewed.review.completenessConfirmed || pending.state.status !== 'ready' && pending.state.status !== 'incomplete') return invalid('Review the current refresh and choose which source fields to accept before applying it.')

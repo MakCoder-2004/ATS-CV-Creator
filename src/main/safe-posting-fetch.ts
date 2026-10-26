@@ -7,6 +7,7 @@ import { Worker } from 'node:worker_threads'
 import { join } from 'node:path'
 import { URL } from 'node:url'
 import { isIP } from 'node:net'
+import { decideJobSourcePolicy } from '../shared/job-source-policy'
 
 export type PostingPreview = import('../shared/posting-import').PostingPreview
 export type Address = { address: string; family: number }
@@ -157,6 +158,8 @@ const defaultRequest: Request = (url, address, signal, headers) => new Promise((
 })
 
 export async function fetchLeverPosting(input: string, options: SafePostingFetchOptions & { signal?: AbortSignal } = {}): Promise<PostingPreview> {
+  const policy = decideJobSourcePolicy(input)
+  if (policy.status === 'paused') throw new Error(policy.reason)
   const { submitted, api, html, sourceRoute } = parseSubmitted(input)
   const controller = new AbortController()
   const abort = () => controller.abort(options.signal?.reason)
