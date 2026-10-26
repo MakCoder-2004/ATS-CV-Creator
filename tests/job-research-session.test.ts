@@ -5,7 +5,7 @@ import { fetchDirectJobResearch } from '../src/main/job-research-fetch'
 import { createTavilyResearchSession, TavilySearchError, type TavilyTransport } from '../src/main/tavily-search'
 import { normalizeJobResearchUrl, verifyReviewedJobResearch, type JobResearchRun } from '../src/shared/job-research'
 
-const URL = 'https://www.linkedin.com/jobs/view/4464025097/'
+const URL = 'https://jobs.example.org/role/4464025097'
 function synthetic(status: JobResearchRun['status'] = 'provisional'): JobResearchRun {
   const selected = normalizeJobResearchUrl(URL), id = randomUUID(), sourceId = randomUUID()
   const role = status === 'full' || status === 'provisional'
@@ -27,7 +27,7 @@ function fixture(url = URL, title = 'Synthetic Engineer — Invented Corp') {
         expect(parsed.max_results).toBe(5)
         expect(parsed.include_answer).toBe(false)
         expect(parsed.include_raw_content).toBe(false)
-        expect(parsed.query).toBe('job 4464025097 site:www.linkedin.com')
+        expect(parsed.query).toBe('job site:jobs.example.org')
         expect(JSON.stringify(parsed)).not.toMatch(/profile|contact|resume|curriculum|@|utm_/i)
       }
       return { status: 200, headers: { 'content-type': 'application/json' }, body: Buffer.from(JSON.stringify(method === 'GET'
@@ -107,7 +107,7 @@ describe('volatile public research session', () => {
 
   it('rejects a valid direct result for a different selected role before enabling search', async () => {
     const t = fixture(); let credentialChecks = 0
-    const wrongRole = { ...synthetic('none'), selected: normalizeJobResearchUrl('https://www.linkedin.com/jobs/view/4464025098/') }
+    const wrongRole = { ...synthetic('none'), selected: normalizeJobResearchUrl('https://jobs.example.org/role/4464025098') }
     const sessions = createJobResearchSessions({
       credentials: { ...t.credentials, status: async () => { credentialChecks++; return { configured: true, storageAvailable: true, message: '' } } },
       createSearch: t.createSearch, direct: async () => wrongRole,
@@ -209,7 +209,7 @@ describe('volatile public research session', () => {
     sessions.close()
   })
 
-  it.each(['blocked', 'none'] as const)('keeps an exact-ID indexed lead as provisional when fresh direct is %s', async outcome => {
+  it.each(['blocked', 'none'] as const)('keeps an exact-URL indexed lead as provisional when fresh direct is %s', async outcome => {
     const t = fixture(); let reads = 0
     const sessions = createJobResearchSessions({ credentials: t.credentials, createSearch: t.createSearch, direct: async () => ++reads === 1 ? synthetic('none') : synthetic(outcome) })
     const token = sessions.startJobResearch(URL).token; await tick()
@@ -264,8 +264,8 @@ describe('volatile public research session', () => {
     sessions.close()
   })
 
-  it('rejects a different LinkedIn role ID even with the same title and employer', async () => {
-    const t = fixture('https://www.linkedin.com/jobs/view/4464025098/')
+  it('rejects a different selected role URL even with the same title and employer', async () => {
+    const t = fixture('https://jobs.example.org/role/4464025098')
     let reads = 0
     const sessions = createJobResearchSessions({ credentials: t.credentials, createSearch: t.createSearch, direct: async () => synthetic(++reads === 1 ? 'none' : 'blocked') })
     const token = sessions.startJobResearch(URL).token; await tick()
@@ -354,8 +354,8 @@ describe('volatile public research session', () => {
           if (scenario === 'TLS') throw new Error('synthetic TLS certificate failure')
           if (scenario.startsWith('HTTP ')) return safeResponse(Number(scenario.slice(5)))
           const location = scenario === 'cross-origin' ? 'https://other.example.org/jobs/view/4464025097/'
-            : scenario === 'role redirect' ? 'https://www.linkedin.com/jobs/view/4464025098/'
-            : scenario === 'loop' ? URL : 'https://www.linkedin.com/login'
+            : scenario === 'role redirect' ? 'https://jobs.example.org/role/4464025098'
+            : scenario === 'loop' ? URL : 'https://jobs.example.org/login'
           return safeResponse(302, location)
         },
       })
