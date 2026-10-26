@@ -1,6 +1,6 @@
 # Job-posting source access and retention gates
 
-**Research date:** 2026-10-26. **Purpose:** Set source-specific gates for automatic retrieval and saved job postings. This is documentary research, not legal advice or an authorization to fetch, display, use, or retain any source content.
+**Research date:** 2026-10-26. **Purpose:** Set source-specific gates for automatic retrieval and saved job postings. This is documentary research, not legal advice or an authorization to fetch, display, use, or retain any source content. A later [personal-local maintainer policy](../decisions/personal-local-posting-source-policy.md) conditionally accepts Lever and Greenhouse for the maintainer's own future workflow without claiming the platforms granted new rights; the shipped source pause remains in force.
 
 ## Decision
 
