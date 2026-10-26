@@ -16,7 +16,7 @@ import { SavedJobs } from '../src/renderer/SavedJobs'
 
 const roots: string[] = []
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
-const url = 'https://www.linkedin.com/jobs/view/4464025097/'
+const url = 'https://careers.example.org/jobs/role-4464025097'
 const tick = () => new Promise(resolve => setTimeout(resolve, 0))
 
 test('Settings credential IPC and Saved jobs research use the same private key store; rendering and review do not search', async () => {
@@ -54,7 +54,7 @@ test('Settings credential IPC and Saved jobs research use the same private key s
     const reviewHtml = renderToStaticMarkup(React.createElement(JobResearchReview, { url }))
     expect(reviewHtml).toContain('Nothing is saved or analyzed here.')
     expect(reviewHtml).not.toContain('Analysis complete')
-    expect(buildJobResearchQuery(selected)).toBe('job 4464025097 site:www.linkedin.com')
+    expect(buildJobResearchQuery(selected)).toBe('job site:careers.example.org')
     const token = sessions.startJobResearch(url).token; await tick()
     const state = sessions.getJobResearch(token)
     expect(state.status).toBe('ready')
