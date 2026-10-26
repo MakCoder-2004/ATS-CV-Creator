@@ -2,22 +2,15 @@ import { afterEach, expect, test } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import Database from 'better-sqlite3'
 import { registerWorkspaceBackupRowSizer } from '../src/main/workspace-backup'
 import { runSourceLinkedGraph, CitationValidationError } from '../src/main/source-linked-generation'
 import { createWorkbench } from '../src/main/workbench'
 import type { AnalysisTransport } from '../src/main/posting-analysis'
-import type { PostingReview } from '../src/shared/posting-import'
+import { seedHistoricalJob } from './helpers/historical-job'
 
 const dirs: string[] = [], opened: Array<ReturnType<typeof createWorkbench>> = []
-async function acceptImportedPosting(api: ReturnType<typeof createWorkbench>['api'], token: string, input: import('../src/shared/posting-import').PostingPreview, completenessConfirmed = true) {
-  const edited = await api.updatePostingPreview(token, 0, { title: input.title, company: input.company ?? '', description: input.description, optionalDetails: input.optionalDetails })
-  if (!edited.ok || edited.revision === undefined) throw new Error(edited.message ?? 'Posting preview edit failed.')
-  const reviewed = await api.reviewPostingPreview(token, edited.revision, { completenessConfirmed, conflictResolutions: {} } satisfies PostingReview)
-  if (!reviewed.ok) throw new Error(reviewed.message ?? 'Posting review failed.')
-  return api.acceptPostingImport(token, edited.revision)
-}
 afterEach(() => { for (const item of opened.splice(0)) item.close(); for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
 
 test('cross-category model citations get one bounded correction request without weakening citation checks', async () => {
@@ -99,7 +92,7 @@ test('posting analysis restores a display copy while cached and generated provid
   expect(requests.join('\n')).not.toContain('Google')
 })
 
-test('shortened working posting scope persists through import, generation, reopen, and regeneration without source-text dispatch', async () => {
+test('generation uses shortened working wording, not historical source-only text', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'shortened-working-posting-scope-')); dirs.push(dir)
   const modelPrompts: string[] = []
   const transport: AnalysisTransport = { async generate({ prompt }) {
@@ -119,23 +112,15 @@ test('shortened working posting scope persists through import, generation, reope
     return JSON.stringify({ headline: 'Engineer', summary: { text: 'Engineer with TypeScript experience.', evidence: [(experience[0] ?? selected[0]).index], rationale: 'Selected saved evidence.' }, education: [], experience: experience.map((item: { index: number; text: string }) => ({ text: item.text, evidence: [item.index], rationale: 'Selected saved evidence.' })), projects: [], skills: selected.filter((item: { category: string }) => item.category === 'skills').map((item: { index: number; text: string }) => ({ name: JSON.parse(item.text).name, evidence: [item.index], rationale: 'Selected saved skill.' })), certificates: [] })
   } }
   const sourceDescription = `SOURCE_ONLY_REQUIREMENT_CANARY\nResponsibilities\n${'The role owns fictional services and documents operational controls. '.repeat(500)}\nRequirements\nTypeScript is required.`
-  const body = JSON.stringify({ id: 'scope-long-role', text: 'Synthetic Application Engineer', company: 'Example Systems', descriptionPlain: sourceDescription, opening: '<p>Opening information for the fictional role.</p>', lists: [{ text: 'Requirements', content: '<li>TypeScript is required.</li>' }] })
-  const fetchOptions = { lookup: async () => [{ address: '8.8.8.8', family: 4 }], request: async () => ({ status: 200, headers: { 'content-type': 'application/json' }, body: Buffer.from(body) }) }
-  let wb = createWorkbench(dir, undefined, transport, undefined, fetchOptions); opened.push(wb)
+  let wb = createWorkbench(dir, undefined, transport); opened.push(wb)
 
   const savedRole = await wb.api.saveExperience({ kind: 'employment', title: 'Developer', organization: 'Example Employer', description: 'Built dependable TypeScript services.' })
   const savedSkill = await wb.api.saveSkill({ name: 'TypeScript', category: 'Programming' })
-  if (!savedRole.ok || !savedSkill.ok) throw new Error('Profile fixture failed')
-
-  const { token: fetchToken } = await wb.api.startPostingFetch('https://api.lever.co/v0/postings/example-board/scope-long-role')
-  let fetched = await wb.api.readPostingPreview(fetchToken)
-  for (let attempt = 0; attempt < 300 && fetched.status === 'fetching'; attempt++) { await new Promise(resolve => setTimeout(resolve, 10)); fetched = await wb.api.readPostingPreview(fetchToken) }
-  if (fetched.status !== 'ready') throw new Error(`Long imported source fixture was not ready: ${JSON.stringify(fetched)}`)
-  expect(Array.from(fetched.preview.description).length).toBeGreaterThan(30_000)
-  expect(fetched.preview.description).toContain('SOURCE_ONLY_REQUIREMENT_CANARY')
-  const imported = await acceptImportedPosting(wb.api, fetchToken, { ...fetched.preview, company: fetched.preview.company ?? '' })
-  if (!imported.ok || !imported.value.sourceSnapshot) throw new Error(imported.ok ? 'Source snapshot was missing.' : imported.error.message)
-  const sourceSnapshot = imported.value.sourceSnapshot
+  const imported = await wb.api.saveJob({ title: 'Synthetic Application Engineer', company: 'Example Systems', description: sourceDescription })
+  if (!savedRole.ok || !savedSkill.ok || !imported.ok) throw new Error('Historical posting/profile fixture failed')
+  const seeded = seedHistoricalJob(dir, imported.value.id, { title: imported.value.title, company: imported.value.company, description: sourceDescription })
+  if (!seeded.sourceSnapshot) throw new Error('Historical source snapshot was not retained.')
+  const sourceSnapshot = seeded.sourceSnapshot
   const workingText = 'WORKING_TEXT_CANARY\nRequirements\nTypeScript is required.'
   const shortened = await wb.api.saveJob({ id: imported.value.id, title: imported.value.title, company: imported.value.company, description: workingText })
   if (!shortened.ok) throw new Error(shortened.error.message)
@@ -169,7 +154,7 @@ test('shortened working posting scope persists through import, generation, reope
   expect(modelPrompts.at(-1)).not.toContain('SOURCE_ONLY_REQUIREMENT_CANARY')
 
   wb.close(); opened.pop()
-  wb = createWorkbench(dir, undefined, transport, undefined, fetchOptions); opened.push(wb)
+  wb = createWorkbench(dir, undefined, transport); opened.push(wb)
   expect((await wb.api.openJob(imported.value.id))?.sourceSnapshot?.description).toBe(sourceSnapshot.description)
   expect((await wb.api.getDraft(imported.value.id))?.progress).toContain('source snapshot differs')
   const restoredProposal = await wb.api.getRegenerationProposal(imported.value.id)
@@ -258,20 +243,14 @@ test('full-source proposal does not gain a shortened-scope label after later pos
     return JSON.stringify({ headline: 'Engineer', summary: { text: 'Engineer with TypeScript experience.', evidence: [selected[0].index], rationale: 'Selected saved evidence.' }, education: [], experience: [], projects: [], skills: selected.filter((item: { category: string }) => item.category === 'skills').map((item: { index: number; text: string }) => ({ name: JSON.parse(item.text).name, evidence: [item.index], rationale: 'Selected saved skill.' })), certificates: [] })
   } }
   const sourceDescription = `SOURCE_ONLY_REQUIREMENT_CANARY\nResponsibilities\n${'The role owns fictional services and documents operational controls. '.repeat(500)}\nRequirements\nTypeScript is required.`
-  const body = JSON.stringify({ id: 'scope-long-role', text: 'Synthetic Engineer', company: 'Example Systems', descriptionPlain: sourceDescription, opening: '<p>Opening information for the fictional role.</p>', lists: [{ text: 'Requirements', content: '<li>TypeScript is required.</li>' }] })
-  const fetchOptions = { lookup: async () => [{ address: '8.8.8.8', family: 4 }], request: async () => ({ status: 200, headers: { 'content-type': 'application/json' }, body: Buffer.from(body) }) }
-  let wb = createWorkbench(dir, undefined, transport, undefined, fetchOptions); opened.push(wb)
+  let wb = createWorkbench(dir, undefined, transport); opened.push(wb)
 
   await wb.api.saveSkill({ name: 'TypeScript', category: 'Programming' })
-  const { token: fetchToken } = await wb.api.startPostingFetch('https://api.lever.co/v0/postings/example-board/scope-long-role')
-  let fetchState = await wb.api.readPostingPreview(fetchToken)
-  for (let attempt = 0; attempt < 300 && fetchState.status === 'fetching'; attempt++) { await new Promise(resolve => setTimeout(resolve, 10)); fetchState = await wb.api.readPostingPreview(fetchToken) }
-  if (fetchState.status !== 'ready') throw new Error(`Long imported source fixture was not ready: ${JSON.stringify(fetchState)}`)
-  expect(Array.from(fetchState.preview.description).length).toBeGreaterThan(30_000)
-  const imported = await acceptImportedPosting(wb.api, fetchToken, { ...fetchState.preview, company: fetchState.preview.company ?? '' })
+  const imported = await wb.api.saveJob({ title: 'Synthetic Engineer', company: 'Example Systems', description: sourceDescription })
   if (!imported.ok) throw new Error(imported.error.message)
-  const sourceSnapshot = imported.value.sourceSnapshot
-  if (!sourceSnapshot) throw new Error('Imported source snapshot was not retained')
+  const seeded = seedHistoricalJob(dir, imported.value.id, { title: imported.value.title, company: imported.value.company, description: sourceDescription })
+  const sourceSnapshot = seeded.sourceSnapshot
+  if (!sourceSnapshot) throw new Error('Historical source snapshot was not retained')
   const workingText = sourceSnapshot.description
   const unchangedWorking = await wb.api.saveJob({ id: imported.value.id, title: imported.value.title, company: imported.value.company, description: workingText })
   if (!unchangedWorking.ok) throw new Error(unchangedWorking.error.message)
@@ -318,11 +297,30 @@ test('full-source proposal does not gain a shortened-scope label after later pos
   expect(JSON.parse(stored.data).postingScopeNote).toBeUndefined()
 
   wb.close(); opened.pop()
-  wb = createWorkbench(dir, undefined, transport, undefined, fetchOptions); opened.push(wb)
+  wb = createWorkbench(dir, undefined, transport); opened.push(wb)
   expect((await wb.api.openJob(imported.value.id))?.sourceSnapshot?.description).toBe(sourceSnapshot.description)
   expect((await wb.api.getDraft(imported.value.id))?.progress).not.toContain('source snapshot differs')
   expect(await wb.api.getRegenerationProposal(imported.value.id)).toBeNull()
   expect(modelPrompts).toHaveLength(promptCountBeforeRegeneration + 1)
+
+  expect(modelPrompts).toHaveLength(promptCountBeforeRegeneration + 1)
+  const currentConsent = await authorize()
+  expect(await wb.api.startAnalysis(currentConsent)).toMatchObject({ status: 'complete' })
+  const currentDraft = await wb.api.generateDraft(currentConsent)
+  if (!currentDraft.ok || !currentDraft.draft) throw new Error(`Current historical posting draft failed: ${currentDraft.message}`)
+  expect(await wb.api.checkDraft(imported.value.id)).toMatchObject({ passed: true })
+  const document = await wb.api.getCanonicalDocument(imported.value.id)
+  if (!document) throw new Error('Historical posting draft document was not available.')
+  await wb.api.saveDocumentFitReport(imported.value.id, { documentHash: createHash('sha256').update(JSON.stringify(document)).digest('hex'), targetPages: document.targetPages, actualPages: document.targetPages, extractedText: ['CV'], linkTargets: [], links: [], overflow: false, proposedCuts: [], measuredAt: new Date().toISOString() })
+  expect(await wb.api.approveDraft(imported.value.id)).toMatchObject({ ok: true })
+  const approvedDraft = await wb.api.getDraft(imported.value.id)
+  const callsBeforeEdit = modelPrompts.length
+  const changedPosting = await wb.api.saveJob({ id: imported.value.id, title: imported.value.title, company: imported.value.company, description: 'A later user edit to the historical working posting.' })
+  if (!changedPosting.ok) throw new Error(changedPosting.error.message)
+  expect(await wb.api.getAnalysis(imported.value.id)).toMatchObject({ status: 'stale' })
+  expect(await wb.api.getDraft(imported.value.id)).toMatchObject({ id: approvedDraft?.id, approved: true, coverage: { stale: true } })
+  expect(await wb.api.assertDraftExportable(imported.value.id)).toMatchObject({ ok: false, message: expect.stringMatching(/earlier job posting/i) })
+  expect(modelPrompts).toHaveLength(callsBeforeEdit)
 })
 
 test('accepted frozen consent generates a batched source-linked draft that reopens offline with stable identity', async () => {

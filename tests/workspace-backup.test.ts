@@ -6,6 +6,7 @@ import { createHash } from 'node:crypto'
 import { createWorkbench } from '../src/main/workbench'
 import Database from 'better-sqlite3'
 import type { AnalysisTransport } from '../src/main/posting-analysis'
+import { seedHistoricalJob } from './helpers/historical-job'
 import { MAX_WORKSPACE_BACKUP_BYTES, MAX_WORKSPACE_BACKUP_POSTING_REVISIONS, MAX_WORKSPACE_BACKUP_ROW_BYTES, WORKSPACE_BACKUP_TABLE_ROW_LIMITS } from '../src/shared/workspace-backup'
 
 const directories: string[] = []
@@ -153,47 +154,25 @@ test('released version-2 backups upgrade optional posting details to honest unkn
   expect(restored?.revisions[0].optionalDetails.compensation).toMatchObject({ value: null, origin: 'unknown' })
 })
 
-test('released v2 backups retain JSON and both HTML extraction provenance routes through v3 restore', async () => {
-  const { dir } = fixture()
-  const fullText = `Responsibilities\n${'Build reliable fictional services with careful collaboration and clear operational practices. '.repeat(4)}\nRequirements\n• Testing experience.\n• Clear written communication.`
-  const conflictHtml = readFileSync(join(process.cwd(), 'tests/fixtures/posting-import-feasibility/lever-hosted-html-conflict.synthetic.html'), 'utf8')
-  const staticHtml = readFileSync(join(process.cwd(), 'tests/fixtures/posting-import-feasibility/lever-hosted-html-static-complete.synthetic.html'), 'utf8')
-  const wb = createWorkbench(dir, undefined, undefined, undefined, {
-    lookup: async () => [{ address: '8.8.8.8', family: 4 }], wait: async () => {}, now: (() => { let value = 100_000; return () => value += 2_000 })(),
-    request: async url => {
-      const id = url.pathname.split('/').at(-1)
-      if (url.hostname === 'jobs.lever.co' && id === 'html-jsonld') return { status: 200, headers: { 'content-type': 'text/html' }, body: Buffer.from(conflictHtml) }
-      if (url.hostname === 'jobs.lever.co' && id === 'html-static') return { status: 200, headers: { 'content-type': 'text/html' }, body: Buffer.from(staticHtml) }
-      return { status: 200, headers: { 'content-type': 'application/json' }, body: Buffer.from(JSON.stringify({ id, text: 'JSON Systems Engineer', company: 'Example JSON Employer', descriptionPlain: fullText, lists: [{ text: 'Requirements', content: '<li>Testing experience.</li>' }] })) }
-    }
-  })
+test('released v2 backups retain historical JSON and HTML provenance through v3 restore without fetching', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cv-tailor-historical-backup-'))
+  directories.push(dir)
+  let requests = 0
+  const wb = createWorkbench(dir, undefined, scripted, undefined, { lookup: async () => [{ address: '8.8.8.8', family: 4 }], request: async () => { requests++; return { status: 200, headers: {}, body: Buffer.alloc(0) } } })
   instances.push(wb)
   const records: Array<{ id: string; method: string; sourceHash: string; workingHash: string; sourceText: string; workingText: string }> = []
   try {
-    for (const [route, id, expectedMethod] of [
-      ['api', 'json-detail', 'lever-json-v1'],
-      ['html', 'html-jsonld', 'lever-html-jsonld-v1'],
-      ['html', 'html-static', 'lever-html-static-v1']
+    for (const [method, title] of [
+      ['lever-json-v1', 'JSON Systems Engineer'],
+      ['lever-html-jsonld-v1', 'HTML JSON-LD Engineer'],
+      ['lever-html-static-v1', 'HTML Static Engineer']
     ] as const) {
-      const url = route === 'api' ? `https://api.lever.co/v0/postings/example-board/${id}` : `https://jobs.lever.co/example-board/${id}`
-      const { token } = await wb.api.startPostingFetch(url)
-      let state = await wb.api.readPostingPreview(token)
-      for (let attempt = 0; attempt < 300 && state.status === 'fetching'; attempt++) { await new Promise(resolve => setTimeout(resolve, 10)); state = await wb.api.readPostingPreview(token) }
-      if (state.status !== 'ready' && state.status !== 'incomplete') throw new Error(`No preview for ${id}: ${JSON.stringify(state)}`)
-      expect(state.preview.extractionMethod).toBe(expectedMethod)
-      const input = { title: state.preview.title, company: state.preview.company ?? 'Reviewed employer', description: state.preview.description, optionalDetails: state.preview.optionalDetails }
-      const edited = await wb.api.updatePostingPreview(token, 0, input)
-      if (!edited.ok || edited.revision === undefined) throw new Error(edited.message ?? 'Preview edit failed.')
-      const conflictResolutions = Object.fromEntries(state.preview.conflicts.map(conflict => {
-        const selected = conflict.field === 'title' ? input.title : conflict.field === 'company' ? input.company : conflict.field === 'description' ? input.description : input.optionalDetails[conflict.field].value
-        const candidate = conflict.values.find(value => value.value === selected)
-        if (!candidate) throw new Error(`No source value matches selected ${conflict.field} for ${id}.`)
-        return [conflict.id, candidate.value]
-      }))
-      expect(await wb.api.reviewPostingPreview(token, edited.revision, { completenessConfirmed: true, conflictResolutions })).toMatchObject({ ok: true })
-      const saved = await wb.api.acceptPostingImport(token, edited.revision)
+      const sourceText = `Historical ${title} posting wording.`
+      const workingText = `Reviewed working wording for ${title}.`
+      const saved = await wb.api.saveJob({ title, company: 'Synthetic Employer', description: workingText })
       if (!saved.ok) throw new Error(saved.error.message)
-      records.push({ id: saved.value.id, method: expectedMethod, sourceHash: saved.value.sourceSnapshot!.hashes.description, workingHash: createHash('sha256').update(saved.value.description).digest('hex'), sourceText: saved.value.sourceSnapshot!.description, workingText: saved.value.description })
+      const historic = seedHistoricalJob(dir, saved.value.id, { title, company: 'Synthetic Employer', description: sourceText, extractionMethod: method })
+      records.push({ id: historic.id, method, sourceHash: historic.sourceSnapshot!.hashes.description, workingHash: createHash('sha256').update(workingText, 'utf8').digest('hex'), sourceText, workingText })
     }
     const v3 = JSON.parse(wb.backup.createBackup())
     const v2 = structuredClone(v3)
@@ -217,8 +196,13 @@ test('released v2 backups retain JSON and both HTML extraction provenance routes
       expect(restored?.sourceSnapshot?.description).toBe(record.sourceText)
       expect(restored?.sourceSnapshot?.hashes.description).toBe(record.sourceHash)
       expect(restored?.description).toBe(record.workingText)
-      expect(createHash('sha256').update(restored!.description).digest('hex')).toBe(record.workingHash)
+      expect(createHash('sha256').update(restored!.description, 'utf8').digest('hex')).toBe(record.workingHash)
     }
+    expect(requests).toBe(0)
+    wb.close(); instances.pop()
+    const reopened = open(dir)
+    for (const record of records) expect(await reopened.api.openJob(record.id)).toMatchObject({ sourceSnapshot: { extractionMethod: record.method, description: record.sourceText, hashes: { description: record.sourceHash } }, description: record.workingText })
+    expect(requests).toBe(0)
   } finally { wb.close() }
 }, 30_000)
 
