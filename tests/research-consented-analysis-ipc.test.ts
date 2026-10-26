@@ -21,8 +21,7 @@ const selection = { providerId: 'fake', modelId: 'synthetic', thinkingLevel: 'lo
 async function connected() {
   let clock = 0
   const now = () => Date.parse(stamp) + clock
-  const sessions = createJobResearchSessions({ credentials: { status: async () => ({ configured: false, storageAvailable: false, message: '' }), withKey: async () => { throw Error('No search') } } as never,
-    direct: async () => structuredClone(fixture), now })
+  const sessions = createJobResearchSessions({ direct: async () => structuredClone(fixture), now })
   const { token } = sessions.startJobResearch(url)
   await vi.waitFor(() => expect(sessions.getJobResearch(token).status).toBe('ready'))
   let choice: PiModelSelection = { ...selection }, epoch = 0

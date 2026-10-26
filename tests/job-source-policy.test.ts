@@ -48,18 +48,17 @@ describe('paused job source policy', () => {
     expect(request).not.toHaveBeenCalled()
   })
 
-  it('blocks legacy regional Indeed research before review, search, or Tavily dispatch', async () => {
+  it('blocks legacy regional Indeed research before review or search dispatch', async () => {
     const url = 'https://www.indeed.co.uk/viewjob?jk=abcdefgh'
     const selected = normalizeJobResearchUrl(url), runId = '00000000-0000-4000-8000-000000000001', sourceId = '00000000-0000-4000-8000-000000000002', findingId = '00000000-0000-4000-8000-000000000003'
     const run: JobResearchRun = { version: 1, id: runId, selected, startedAt: new Date().toISOString(), completedAt: new Date().toISOString(), status: 'full', sources: [{ version: 1, id: sourceId, url: selected.canonicalUrl, capturedAt: new Date().toISOString(), method: 'direct-html', identity: 'exact-role', title: 'Synthetic role', employer: 'Example', employerIdentityUrl: null }], findings: [{ version: 1, id: findingId, sourceId, kind: 'direct-role-text', text: 'A sufficiently detailed synthetic role description with responsibilities and qualifications that is long enough to satisfy the full posting schema.', completeness: 'full' }], unknowns: [] }
-    const direct = vi.fn(async () => run), credentialChecks = vi.fn(async () => ({ configured: true, storageAvailable: true, message: '' }))
-    const sessions = createJobResearchSessions({ credentials: { status: credentialChecks, withKey: async <T>(use: (key: string) => Promise<T>) => use('synthetic') }, direct })
+    const direct = vi.fn(async () => run)
+    const sessions = createJobResearchSessions({ direct })
     try {
       expect(() => sessions.startJobResearch(url)).toThrow(/Indeed reads.*paused/)
       expect(() => sessions.acceptInitialDirectRun(run)).toThrow(/Indeed reads.*paused/)
       await expect(sessions.searchJobResearch(runId)).rejects.toThrow()
       expect(direct).not.toHaveBeenCalled()
-      expect(credentialChecks).not.toHaveBeenCalled()
     } finally { sessions.close() }
   })
 })
