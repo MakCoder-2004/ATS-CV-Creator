@@ -2,10 +2,8 @@ import { describe, expect, it, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { cancelPostingCaptureForManual, classifySearchKeyStatus, JobResearchFindings, JobResearchReview, searchKeyStatusMessage, searchOutcomeNotice, shouldOfferIndexedSearch, startJobResearchFromIntake, startResearchWithCaptureLifecycle, transitionCapturedRead } from '../src/renderer/JobResearchReview'
-import type { ResearchSearchKeyStatus } from '../src/shared/research-search-settings'
+import { cancelPostingCaptureForManual, JobResearchFindings, JobResearchReview, startJobResearchFromIntake, startResearchWithCaptureLifecycle, transitionCapturedRead } from '../src/renderer/JobResearchReview'
 import type { JobResearchRun } from '../src/shared/job-research-schema'
-import { buildJobResearchQuery } from '../src/shared/job-research-search-query'
 import { SavedJobs, temporaryDirectNotice } from '../src/renderer/SavedJobs'
 import { createProvisionalReviewSession } from '../src/renderer/ProvisionalResearchAnalysis'
 
@@ -56,37 +54,17 @@ describe('universal research intake', () => {
     expect(html).not.toContain('<a ')
     expect((html.match(/type="checkbox"/g) ?? [])).toHaveLength(1)
   })
-  it('does not offer indexed search for an unsafe source identity', () => {
+  it('retains direct review without search-key inspection', () => {
     const run: JobResearchRun = {
       version: 1, id: 'unsafe-run', selected: { canonicalUrl: 'https://jobs.example.org/roles/123', host: 'jobs.example.org', provider: 'generic', roleId: null },
       startedAt: '2026-01-01T00:00:00Z', completedAt: '2026-01-01T00:01:00Z', status: 'blocked', accessFailure: 'unsafe', sources: [], findings: [], unknowns: ['Source identity was unsafe']
     }
-    expect(shouldOfferIndexedSearch(run)).toBe(false)
-    const inspectionFailure: ResearchSearchKeyStatus = { configured: false, storageAvailable: false, message: 'Search key storage failed. The existing key was not replaced.' }
-    expect(classifySearchKeyStatus(inspectionFailure)).toBe('unknown')
-    expect(searchKeyStatusMessage(classifySearchKeyStatus(inspectionFailure))).toContain('may be present or absent')
-    expect(searchKeyStatusMessage(classifySearchKeyStatus(inspectionFailure))).not.toContain('No search key is stored')
-    expect(classifySearchKeyStatus({ configured: false, storageAvailable: false, message: 'Device encryption is unavailable. No search key was saved.' })).toBe('storage-unavailable')
-    expect(classifySearchKeyStatus({ configured: true, storageAvailable: true, message: 'Search is available only after a key is stored on this device.' })).toBe('configured')
-    expect(classifySearchKeyStatus({ configured: false, storageAvailable: true, message: 'Search is available only after a key is stored on this device.' })).toBe('absent')
-    expect(searchKeyStatusMessage('unknown')).toContain('may be present or absent')
-    expect(searchKeyStatusMessage('storage-unavailable')).toContain('unavailable')
-    expect(searchOutcomeNotice('one-credit-reported', { findings: [] })).toContain('No exact-role findings were found')
-    expect(searchOutcomeNotice('one-credit-reported', { findings: [{ kind: 'indexed-role-claim' } as JobResearchRun['findings'][number]] })).toContain('Partial exact-role findings were returned')
-    expect(searchOutcomeNotice('one-credit-reported', { findings: [{ kind: 'direct-role-text', completeness: 'full' } as JobResearchRun['findings'][number]] })).toContain('Full exact-role findings were returned')
-    expect(searchOutcomeNotice('one-credit-reported')).toContain('one free credit used')
-    expect(searchOutcomeNotice('not-sent')).toContain('/usage preflight may have occurred')
-    expect(searchOutcomeNotice('charge-uncertain')).toContain('Do not retry')
-    expect(searchOutcomeNotice(undefined)).toBeUndefined()
     const html = renderToStaticMarkup(React.createElement(JobResearchReview, { url: run.selected.canonicalUrl }))
     expect(html).not.toContain('Search indexed details')
-    expect(html).not.toContain('Tavily key')
-  })
-  it('discloses the exact metadata query and blocks unusable host or role identifiers', () => {
-    expect(buildJobResearchQuery({ host: 'jobs.example.org', roleId: '4464025097' })).toBe('job 4464025097 site:jobs.example.org')
-    expect(buildJobResearchQuery({ host: 'jobs.example.org', roleId: null })).toBe('job site:jobs.example.org')
-    expect(buildJobResearchQuery({ host: '', roleId: null })).toBeUndefined()
-    expect(buildJobResearchQuery({ host: 'jobs.example.org', roleId: '' })).toBeUndefined()
+    expect(html).not.toContain('Tavily')
+    expect(html).not.toContain('credit')
+    expect(html).toContain('Research this exact role')
+
   })
   it('hands the first posting token to research instead of starting a duplicate public read', async () => {
     const calls: string[] = []
@@ -138,9 +116,9 @@ describe('universal research intake', () => {
   })
   it('does not search on mount, identifies the optional separate search, and does not claim analysis ran', () => {
     const html = renderToStaticMarkup(React.createElement(JobResearchReview, { url: 'https://www.linkedin.com/jobs/view/1234567890/' }))
-    expect(html).toContain('Research indexed details')
+    expect(html).toContain('Research this exact role')
     expect(html).toContain('fresh public read of the selected job')
-    expect(html).toContain('Indexed search is a separate, optional decision')
+    expect(html).not.toContain('indexed search')
     expect(html).not.toContain('Searching will read the public source again, then run')
     expect(html).not.toContain('Configure a free Tavily Researcher key in Settings')
     expect(html).not.toContain('Search query:')

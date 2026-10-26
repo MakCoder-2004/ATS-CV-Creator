@@ -84,19 +84,13 @@ test('visible public link → partial review → exact outgoing consent → sour
     expect(await page.evaluate(() => window.workbench.listJobs())).toHaveLength(0)
     await expect(page.getByRole('button', { name: 'Export PDF' })).toHaveCount(0)
 
-    // Missing local key is reported without suggesting that status check itself searches.
-    await expect(page.getByText('No search key is stored on this device.', { exact: false })).toBeVisible()
-    // Starting another search revokes the reviewed authority before any result is available.
-    await page.getByRole('button', { name: 'Search indexed details' }).click()
-    await expect(page.getByRole('region', { name: 'Analysis suggestions' })).toHaveCount(0)
-    await expect(page.getByRole('button', { name: 'Inspect outgoing data' })).toHaveCount(0)
-    await expect(page.getByRole('checkbox', { name: 'Include this role finding in review' })).not.toBeChecked()
+    // Indexed search and key-status inspection are retired from the renderer.
+    await expect(page.getByRole('button', { name: 'Search indexed details' })).toHaveCount(0)
+    await expect(page.getByText(/search key is stored|no search key is stored/i)).toHaveCount(0)
     expect(count()).toBe(1)
     expect(await page.evaluate(() => window.workbench.listJobs())).toHaveLength(0)
     expect(await page.evaluate(() => window.workbench.getWorkspaceBackupStatus())).toEqual(backupStatus)
-    await expect(page.getByRole('alert')).toBeVisible()
-    await expect(page.getByLabel('Exact outgoing analysis data')).toHaveCount(0)
-    expect(await page.evaluate(() => window.workbench.listJobs())).toHaveLength(0)
+    await expect(page.getByLabel('Exact outgoing analysis data')).toBeVisible()
   } finally {
     await app?.close().catch(() => {})
     await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 })
