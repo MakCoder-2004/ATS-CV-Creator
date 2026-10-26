@@ -1,6 +1,7 @@
-export type JobSourcePolicy = { status: 'paused'; source: 'lever' | 'linkedin' | 'indeed'; reason: string } | { status: 'unchanged' }
+export type JobSourcePolicy = { status: 'paused'; source: 'lever' | 'linkedin' | 'indeed' | 'greenhouse'; reason: string } | { status: 'unchanged' }
 
 const paused = {
+  greenhouse: 'Generic Greenhouse direct reads are unavailable. Use the explicit named Greenhouse preview or paste the posting text.',
   lever: 'Automatic Lever fetching, saving, and refresh stay paused until the named-posting adapter and review flow pass safety checks. Paste the posting text instead.',
   linkedin: 'Automatic LinkedIn reads remain paused without an approved selected-job route. Paste the posting text instead.',
   indeed: 'Automatic Indeed reads remain paused without an approved selected-job route. Paste the posting text instead.'
@@ -34,7 +35,8 @@ export function decideJobSourcePolicy(input: string): JobSourcePolicy {
   let url: URL
   try { url = new URL(input) } catch { return { status: 'unchanged' } }
   const host = url.hostname.toLowerCase().replace(/\.$/, '')
-  if (host === 'jobs.lever.co' || host === 'api.lever.co') return { status: 'paused', source: 'lever', reason: paused.lever }
+  if (host === 'jobs.lever.co' || host === 'api.lever.co' || host === 'jobs.eu.lever.co' || host === 'api.eu.lever.co') return { status: 'paused', source: 'lever', reason: paused.lever }
+  if (host === 'boards.greenhouse.io' || host === 'job-boards.greenhouse.io' || host === 'boards-api.greenhouse.io') return { status: 'paused', source: 'greenhouse', reason: paused.greenhouse }
   if (host === 'linkedin.com' || host.endsWith('.linkedin.com')) return { status: 'paused', source: 'linkedin', reason: paused.linkedin }
   if (isIndeedHost(host)) return { status: 'paused', source: 'indeed', reason: paused.indeed }
   return { status: 'unchanged' }
