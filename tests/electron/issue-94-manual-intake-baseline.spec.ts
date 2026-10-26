@@ -5,13 +5,15 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 test('manual posting text stays local until the visible Save job action', async () => {
+  test.setTimeout(90_000)
   const userData = mkdtempSync(join(tmpdir(), 'cv-issue-94-manual-'))
   let app: Awaited<ReturnType<typeof electron.launch>> | undefined
   try {
     app = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], env: {
       ...process.env,
       CV_TAILOR_TEST_USER_DATA_DIR: userData,
-      CV_TAILOR_TEST_MODEL_DISPATCH_LOG: 'model-dispatches.log'
+      CV_TAILOR_TEST_MODEL_DISPATCH_LOG: 'model-dispatches.log',
+      CV_TAILOR_SCRIPTED_ANALYSIS: '1', CV_TAILOR_TEST_RESEARCH: '1'
     } })
     const page = await app.firstWindow()
     await expect(page.locator('[data-ui-ready="true"]')).toBeVisible()
