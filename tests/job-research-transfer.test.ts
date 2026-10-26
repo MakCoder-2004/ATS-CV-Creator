@@ -3,13 +3,11 @@ import { mkdtempSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import Database from 'better-sqlite3'
-import { registerWorkspaceBackupRowSizer } from '../src/main/workspace-backup'
 import { createWorkbench } from '../src/main/workbench'
 import { createJobResearchSessions } from '../src/main/job-research-session'
 import { fetchDirectJobResearch } from '../src/main/job-research-fetch'
 
-const url = 'https://www.linkedin.com/jobs/view/4464025097/'
+const url = 'https://careers.fictional.org/jobs/role-4'
 const folders: string[] = []
 afterEach(async () => { for (const path of folders.splice(0)) await rm(path, { recursive: true, force: true }) })
 function fixture() {
@@ -17,7 +15,7 @@ function fixture() {
   let calls = 0
   const transport = {
     lookup: async () => [{ address: '8.8.8.8', family: 4 as const }],
-    request: async (destination: URL) => { expect([url, 'https://careers.fictional.org/jobs/role-4']).toContain(destination.href); calls++; return { status: 200, headers: { 'content-type': 'text/html' }, body: Buffer.from('<html>synthetic role</html>') } },
+    request: async (destination: URL) => { expect(destination.href).toBe(url); calls++; return { status: 200, headers: { 'content-type': 'text/html' }, body: Buffer.from('<html>synthetic role</html>') } },
     extract: async () => ({ outcome: 'partial' as const, title: 'Synthetic Engineer', employer: 'Invented Corp', description: 'Original direct partial requirement.', reason: 'Description truncated.' }),
   }
   const wb = createWorkbench(folder, undefined, undefined, undefined, { research: transport })
@@ -98,56 +96,6 @@ test('cancel, replacement source and invalid token cannot transfer stale evidenc
     expect(t.calls).toBe(3)
   } finally { t.sessions.close(); t.wb.close() }
 })
-test('a completed Lever source remains saveable but cannot transfer as temporary third-party research', async () => {
-  const folder = mkdtempSync(join(tmpdir(), 'cv-lever-transfer-')); folders.push(folder)
-  const wb = createWorkbench(folder, undefined, undefined, undefined, {
-    lookup: async () => [{ address: '8.8.8.8', family: 4 }],
-    request: async () => ({ status: 200, headers: { 'content-type': 'application/json' }, body: Buffer.from(JSON.stringify({ id: 'role', text: 'Synthetic Engineer', company: 'Invented Corp', descriptionPlain: `Responsibilities\n• ${'Build dependable fictional systems with careful engineering and collaborative reviews. '.repeat(4)}\n\nRequirements\n• TypeScript and tests.` })) }),
-  })
-  try {
-    const token = (await wb.api.startPostingFetch('https://api.lever.co/v0/postings/example/role')).token
-    expect(await notice(wb, token)).toMatchObject({ status: 'ready' })
-    expect(() => wb.api.takePostingResearchRun(token)).toThrow(/unavailable/)
-    expect(await wb.api.reviewPostingPreview(token, 0, { completenessConfirmed: true, conflictResolutions: {} })).toMatchObject({ ok: true })
-    expect(await wb.api.acceptPostingImport(token, 0)).toMatchObject({ ok: true, value: { sourceSnapshot: { extractionMethod: 'lever-json-v1' } } })
-  } finally { wb.close() }
-})
-
-test('historical non-Lever snapshots remain readable and backed up but cannot refresh through a Lever token', async () => {
-  const folder = mkdtempSync(join(tmpdir(), 'cv-historical-public-')); folders.push(folder)
-  const sourceUrl = 'https://api.lever.co/v0/postings/example/role'
-  const wb = createWorkbench(folder, undefined, undefined, undefined, {
-    lookup: async () => [{ address: '8.8.8.8', family: 4 }],
-    request: async () => ({ status: 200, headers: { 'content-type': 'application/json' }, body: Buffer.from(JSON.stringify({ id: 'role', text: 'Synthetic Engineer', company: 'Invented Corp', descriptionPlain: `Responsibilities\n• ${'Build dependable fictional systems with careful engineering and collaborative reviews. '.repeat(4)}\n\nRequirements\n• TypeScript and tests.` })) }),
-  })
-  try {
-    const first = (await wb.api.startPostingFetch(sourceUrl)).token
-    expect(await notice(wb, first)).toMatchObject({ status: 'ready' })
-    expect(await wb.api.reviewPostingPreview(first, 0, { completenessConfirmed: true, conflictResolutions: {} })).toMatchObject({ ok: true })
-    const saved = await wb.api.acceptPostingImport(first, 0)
-    if (!saved.ok) throw Error('Lever setup did not save')
-    // Represent a previously persisted public snapshot without granting it new save rights.
-    const db = new Database(join(folder, 'workbench.sqlite'))
-    registerWorkspaceBackupRowSizer(db)
-    try {
-      const row = db.prepare('SELECT data FROM jobs WHERE id = ?').get(saved.value.id) as { data: string }
-      const historical = JSON.parse(row.data)
-      historical.sourceSnapshot.extractionMethod = 'public-jsonld-v1'
-      db.prepare('UPDATE jobs SET data = ? WHERE id = ?').run(JSON.stringify(historical), saved.value.id)
-    } finally { db.close() }
-    expect((await wb.api.listJobs())[0].sourceSnapshot?.extractionMethod).toBe('public-jsonld-v1')
-    const before = wb.backup.createBackup()
-    expect(before).toContain('public-jsonld-v1')
-    const refresh = (await wb.api.startPostingFetch(sourceUrl)).token
-    expect(await notice(wb, refresh)).toMatchObject({ status: 'ready' })
-    expect(await wb.api.reviewPostingPreview(refresh, 0, { completenessConfirmed: true, conflictResolutions: {} })).toMatchObject({ ok: true })
-    expect(await wb.api.comparePostingRefresh(refresh, saved.value.id, saved.value.updatedAt, 1)).toMatchObject({ ok: false, message: expect.stringMatching(/cannot update/) })
-    expect(await wb.api.acceptPostingRefresh(refresh, 0, saved.value.id, saved.value.updatedAt, 1, { title: 'source', company: 'source', description: 'source', optionalDetails: {} })).toMatchObject({ ok: false, error: { message: expect.stringMatching(/cannot be refreshed/) } })
-    expect(JSON.parse(wb.backup.createBackup()).tables).toEqual(JSON.parse(before).tables)
-    expect((await wb.api.listJobs())[0].revisions).toHaveLength(1)
-  } finally { wb.close() }
-})
-
 test('failed direct transport has no transferable result', async () => {
   const folder = mkdtempSync(join(tmpdir(), 'cv-failed-transfer-')); folders.push(folder)
   const wb = createWorkbench(folder, undefined, undefined, undefined, { research: {

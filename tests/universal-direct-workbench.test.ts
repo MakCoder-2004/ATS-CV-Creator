@@ -12,8 +12,8 @@ import { createJobResearchSessions } from '../src/main/job-research-session'
 
 const folders: string[] = []
 afterEach(async () => { for (const folder of folders.splice(0)) await rm(folder, { recursive: true, force: true }) })
-const selected = 'https://www.linkedin.com/jobs/search/?currentJobId=4464025097&utm_source=mail'
-const canonical = 'https://www.linkedin.com/jobs/view/4464025097/'
+const selected = 'https://careers.fictional.org/jobs/role-4?utm_source=mail'
+const canonical = 'https://careers.fictional.org/jobs/role-4'
 const body = 'Responsibilities\n• Design synthetic systems with a team and document decisions.\n\nRequirements\n• TypeScript and testing for reliable synthetic systems. '.repeat(3)
 function open(request: (url: URL) => { status: number; headers: Record<string, string>; body: Buffer }, transport?: { generate: (input: { prompt: string }) => Promise<string> }) {
   const folder = mkdtempSync(join(tmpdir(), 'cv-universal-direct-')); folders.push(folder)
@@ -30,7 +30,7 @@ async function settled(wb: ReturnType<typeof createWorkbench>, token: string) {
   for (let i = 0; i < 300 && state.status === 'fetching'; i++) { await new Promise(resolve => setTimeout(resolve, 10)); state = await wb.api.readPostingPreview(token) }
   return state
 }
-test('selected full LinkedIn text is inspectable and transfers exactly once to full temporary research, never a saved job', async () => {
+test('selected synthetic role text is inspectable and transfers exactly once to full temporary research, never a saved job', async () => {
   let modelCalls = 0, searchCalls = 0
   const { wb, requested, folder } = open(() => ({ status: 200, headers: { 'content-type': 'text/html' }, body: Buffer.from('<html><body>synthetic posting</body></html>') }), { async generate() { modelCalls++; throw Error('No model request before consent') } })
   const sessions = createJobResearchSessions({
@@ -42,7 +42,7 @@ test('selected full LinkedIn text is inspectable and transfers exactly once to f
     const { token } = await wb.api.startPostingFetch(selected)
     const state = await settled(wb, token)
     expect(requested).toEqual([canonical])
-    expect(state).toMatchObject({ status: 'ready', preview: { submittedUrl: canonical, finalUrl: canonical, title: 'Synthetic Engineer', company: 'Fictional Employer', description: body.trim(), extractionMethod: 'linkedin-public-html-v1', notices: [expect.stringContaining('Nothing was saved to jobs or backups.')] } })
+    expect(state).toMatchObject({ status: 'ready', preview: { submittedUrl: canonical, finalUrl: canonical, title: 'Synthetic Engineer', company: 'Fictional Employer', description: body.trim(), extractionMethod: 'public-jsonld-v1', notices: [expect.stringContaining('Nothing was saved to jobs or backups.')] } })
     expect(state.status === 'ready' && state.preview.notices[0]).toContain('Review temporary role source before analysis.')
     if (state.status !== 'ready') throw Error('Full direct source was not reviewable')
     expect(await wb.api.acceptPostingImport(token, 0)).toMatchObject({ ok: false, error: { message: expect.stringMatching(/Review temporarily or paste text manually/) } })
@@ -54,7 +54,7 @@ test('selected full LinkedIn text is inspectable and transfers exactly once to f
     expect(await wb.api.listJobs()).toEqual([])
     const backup = wb.backup.createBackup()
     expect(backup).not.toContain(body.trim())
-    expect(backup).not.toContain('linkedin-public-html-v1')
+    expect(backup).not.toContain('public-jsonld-v1')
     const captured = wb.api.takePostingResearchRun(token)
     expect(captured).toMatchObject({ status: 'full', selected: { canonicalUrl: canonical }, findings: [{ kind: 'direct-role-text', text: body.trim(), completeness: 'full' }] })
     expect(() => wb.api.takePostingResearchRun(token)).toThrow(/unavailable/)
@@ -83,7 +83,7 @@ test('selected full LinkedIn text is inspectable and transfers exactly once to f
     } finally { db.close() }
   } finally { sessions.close(); wb.close() }
 })
-test('incomplete and blocked public sources cannot become a saved source, with no provider dispatch', async () => {
+test('incomplete and blocked synthetic sources cannot become a saved source, with no provider dispatch', async () => {
   for (const request of [
     () => ({ status: 307, headers: { location: 'https://www.linkedin.com/login' }, body: Buffer.alloc(0) }),
     () => ({ status: 403, headers: {}, body: Buffer.alloc(0) }),
@@ -100,7 +100,7 @@ test('incomplete and blocked public sources cannot become a saved source, with n
   }
   expect(() => normalizeJobResearchUrl('https://www.linkedin.com/jobs/view/4464025097/?currentJobId=4464025098')).toThrow(/conflicting/i)
 })
-test('full text without a source employer remains an unsaveable research notice', async () => {
+test('full synthetic text without a source employer remains an unsaveable research notice', async () => {
   const folder = mkdtempSync(join(tmpdir(), 'cv-direct-employer-')); folders.push(folder)
   const wb = createWorkbench(folder, undefined, undefined, undefined, { research: {
     lookup: async () => [{ address: '8.8.8.8', family: 4 }],
@@ -116,7 +116,22 @@ test('full text without a source employer remains an unsaveable research notice'
   } finally { wb.close() }
 })
 
-test('full public preview expires and discards captured text without another API call', async () => {
+test('paused LinkedIn, Indeed, and Lever sources make no injected request and save no job', async () => {
+  for (const url of [
+    'https://www.linkedin.com/jobs/view/4464025097/',
+    'https://www.indeed.com/viewjob?jk=synthetic-role',
+    'https://api.lever.co/v0/postings/example/role',
+  ]) {
+    const { wb, requested } = open(() => ({ status: 200, headers: { 'content-type': 'text/html' }, body: Buffer.from('<html>should not be requested</html>') }))
+    try {
+      await expect(wb.api.startPostingFetch(url)).rejects.toThrow(/paused/i)
+      expect(requested).toEqual([])
+      expect(await wb.api.listJobs()).toEqual([])
+    } finally { wb.close() }
+  }
+})
+
+test('full synthetic preview expires and discards captured text without another API call', async () => {
   vi.useFakeTimers()
   const { wb } = open(() => ({ status: 200, headers: { 'content-type': 'text/html' }, body: Buffer.from('<html>synthetic</html>') }))
   try {
@@ -130,7 +145,7 @@ test('full public preview expires and discards captured text without another API
   } finally { wb.close(); vi.useRealTimers() }
 })
 
-test('a delayed full public read carries its fetch-start deadline, and a past-deadline read refuses the source', async () => {
+test('a delayed full synthetic read carries its fetch-start deadline, and a past-deadline read refuses the source', async () => {
   vi.useFakeTimers()
   const folder = mkdtempSync(join(tmpdir(), 'cv-direct-deadline-')); folders.push(folder)
   let release!: (value: { status: number; headers: Record<string, string>; body: Buffer }) => void
@@ -156,7 +171,7 @@ test('a delayed full public read carries its fetch-start deadline, and a past-de
   } finally { wb.close(); vi.useRealTimers() }
 })
 
-test('handoff clears the posting expiry timer and removes the public preview immediately', async () => {
+test('handoff clears the synthetic posting expiry timer and removes the preview immediately', async () => {
   vi.useFakeTimers()
   const { wb } = open(() => ({ status: 200, headers: { 'content-type': 'text/html' }, body: Buffer.from('<html>synthetic</html>') }))
   try {
