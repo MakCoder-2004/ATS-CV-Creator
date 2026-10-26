@@ -1,6 +1,6 @@
 # Job-posting source access and retention gates
 
-**Research date:** 2026-10-26. **Purpose:** Set source-specific gates for automatic retrieval and saved job postings. This is documentary research, not legal advice or an authorization to fetch, display, use, or retain any source content.
+**Research date:** 2026-10-26. **Purpose:** Set source-specific gates for automatic retrieval and saved job postings. This is documentary research, not legal advice or an authorization to fetch, display, use, or retain any source content. A later [personal-local maintainer policy](../decisions/personal-local-posting-source-policy.md) conditionally accepts Lever and Greenhouse for the maintainer's own future workflow without claiming the platforms granted new rights; the shipped source pause remains in force.
 
 ## Decision
 
@@ -37,7 +37,7 @@ The current app accepts manually entered job-posting text and saves it on device
 
 ## Conditions for any future accepted source
 
-As CV Tailor's product signoff policy, a source can move to **ENABLED** only after its applicable official terms or a written permission/agreement establish the named route, selected-job scope, full-text retrieval, display to the user, use as input to CV tailoring, and storage in the workspace and backups. This is a conservative release condition, not a claim that every public endpoint legally requires a separate written license. Record the applicable account, approval, API scope, permitted fields, frequency or rate limits, attribution, and any charges. Re-review if the integration, source terms, data use, or storage policy changes.
+As CV Tailor's product signoff policy at the time of this research, a source could move to **ENABLED** only after its applicable official terms or a written permission/agreement established the named route, selected-job scope, full-text retrieval, display to the user, use as input to CV tailoring, and storage in the workspace and backups. This was a conservative release condition, not a claim that every public endpoint legally requires a separate written license. The later [#103 personal-local decision](../decisions/personal-local-posting-source-policy.md) supersedes that written-rights signoff prerequisite **only** for the maintainer's local Lever/Greenhouse exact-posting workflow; the research verdicts remain INCONCLUSIVE, no platform permission or general ENABLED classification follows, and all source-safety and implementation gates still apply. Record the applicable account, approval, API scope, permitted fields, frequency or rate limits, attribution, and any charges. Re-review if the integration, source terms, data use, or storage policy changes.
 
 If a source passes that gate, each posting source snapshot must retain provenance separate from the user's working posting and corrections. Store the canonical source URL, provider and route, source posting ID, retrieval timestamp, source-reported update/publication dates when supplied, parser/version, and content hash. Display retrieval time and source identity. Refresh only on explicit user action through the same approved route. Never label captured text current solely because it was once fetched. Let users inspect captured wording against their working posting and accept or reject corrections without rewriting the snapshot.
 
