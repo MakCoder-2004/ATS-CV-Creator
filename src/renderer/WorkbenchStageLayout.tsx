@@ -138,6 +138,7 @@ export function WorkbenchStageLayout(props: Props) {
   const [regenTarget, setRegenTarget] = useState<RegenerationTarget>({ kind: 'section', section: 'experience' })
   const [regenPreview, setRegenPreview] = useState<{ preview: Extract<OutboundConsentPreview, { ok: true }>; target: RegenerationTarget } | null>(null)
   const [regenBusy, setRegenBusy] = useState(false)
+  const cancelingRegeneration = useRef(false)
   const [regenMessage, setRegenMessage] = useState('')
   const [proposal, setProposal] = useState<RegenerationProposal | null>(null)
   const [selectedItem, setSelectedItem] = useState<{ section: Section; index: number } | null>(null)
@@ -159,12 +160,22 @@ export function WorkbenchStageLayout(props: Props) {
     setRegenPreview(null)
     setRegenTarget(requestedTarget)
     setRegenBusy(true); setRegenMessage('Preparing the information you can review before sharing…')
-    try { if (stalePreview) await window.workbench.cancelOutboundConsent(stalePreview.token); const result = await window.workbench.prepareOutboundConsent(activeJob.id); if (!result.ok) { setRegenMessage(result.message); return }; setRegenPreview({ preview: result, target: requestedTarget }); setRegenMessage('') }
+    try { if (stalePreview) await window.workbench.cancelOutboundConsent(stalePreview.token); const result = await window.workbench.prepareOutboundConsent(activeJob.id); if (!result.ok) { setRegenMessage(result.message); return }; cancelingRegeneration.current = false; setRegenPreview({ preview: result, target: requestedTarget }); setRegenMessage('') }
     catch { setRegenMessage('The outgoing-data preview could not be prepared. Try again.') } finally { setRegenBusy(false) }
   }
   async function cancelRegeneration() {
-    if (!regenPreview) return
-    await window.workbench.cancelOutboundConsent(regenPreview.preview.token); setRegenPreview(null)
+    if (!regenPreview || regenBusy) return
+    const { preview } = regenPreview
+    cancelingRegeneration.current = true
+    setRegenPreview(null)
+    setRegenBusy(true)
+    setRegenMessage('Cancelling this authorization…')
+    try {
+      const result = await window.workbench.cancelOutboundConsent(preview.token)
+      setRegenMessage(result.ok ? 'Authorization cancelled. Review a fresh preview before proposing wording.' : 'The authorization could not be cancelled. It is no longer available here. Review a fresh preview before proposing wording.')
+    } catch {
+      setRegenMessage('The authorization could not be cancelled. It is no longer available here. Review a fresh preview before proposing wording.')
+    } finally { setRegenBusy(false) }
   }
   async function cancelActiveRegeneration() {
     if (!activeJob) return
@@ -173,7 +184,7 @@ export function WorkbenchStageLayout(props: Props) {
     setRegenMessage(result.progress || 'Regeneration cancelled. The draft remains unchanged.')
   }
   async function runRegeneration() {
-    if (!regenPreview || regenBusy) return
+    if (!regenPreview || regenBusy || cancelingRegeneration.current) return
     setRegenBusy(true); setRegenMessage('Creating a suggestion. Your CV is unchanged…')
     const { preview, target } = regenPreview
     try { const authorized = await window.workbench.acceptOutboundConsent(preview.token, true, true); if (!authorized.ok) { setRegenMessage(authorized.message); return }; const result = await window.workbench.regenerateDraft(preview.token, target); if (!result.ok || !result.proposal) { setRegenMessage(result.message); return }; setProposal(result.proposal); setRegenMessage(result.message); setRegenPreview(null) }
