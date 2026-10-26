@@ -12,7 +12,6 @@ export function PiSettingsPanel() {
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
-  const [modelSaveEpoch, setModelSaveEpoch] = useState(0)
 
   useEffect(() => {
     window.workbench.getSettings().then(value => {
@@ -32,7 +31,6 @@ export function PiSettingsPanel() {
       const saved = await window.workbench.setPiModel({ reference, thinkingLevel })
       setSelection(saved.pi)
       setReference(saved.pi ? `${saved.pi.providerId}/${saved.pi.modelId}` : reference)
-      setModelSaveEpoch(epoch => epoch + 1)
       setMessage('Pi model preference saved.')
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Pi model preference was not saved. Check the model reference and try again.')
@@ -52,7 +50,7 @@ export function PiSettingsPanel() {
           <div className="form-actions"><button className="primary-button" type="submit" disabled={busy || !loaded || !reference.trim() || (reference === (selection ? `${selection.providerId}/${selection.modelId}` : '') && thinkingLevel === selection?.thinkingLevel)}>{busy ? 'Saving…' : 'Save Pi model'}</button></div>
         </form>
       </section>
-      <TavilyKeyCard modelContext={`${reference}\u0000${thinkingLevel}\u0000${modelSaveEpoch}`} />
+      <TavilyKeyCard />
     </div>
     {error && <p className="profile-message error" role="alert">{error}</p>}{message && <p className="profile-message success" role="status">{message}</p>}
   </section>

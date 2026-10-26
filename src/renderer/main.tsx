@@ -110,7 +110,7 @@ function App() {
         <button type="button" className="secondary-button" onClick={() => navigate('Saved jobs')}>Review saved postings</button>
       </aside>}
       <main id="content" ref={contentRef} tabIndex={-1}>
-        {(page === 'My profile' || page === 'Settings') && <div className="title"><span className="context">Personal workspace</span><h1>{page}</h1><p>{page === 'My profile' ? 'Keep the career facts that support your CV in one place.' : 'Choose a Pi model and manage your Tavily search key.'}</p></div>}
+        {(page === 'My profile' || page === 'Settings') && <div className="title"><span className="context">Personal workspace</span><h1>{page}</h1><p>{page === 'My profile' ? 'Keep the career facts that support your CV in one place.' : 'Choose a Pi model and manage local app settings.'}</p></div>}
         {page === 'Tailor CV' ? <WorkbenchStart key={workspaceRevision} activeJob={activeJob} onNavigate={navigate} /> : page === 'My profile' ? <ProfileEditor key={workspaceRevision} /> : page === 'Saved jobs' ? <SavedJobs key={workspaceRevision} jobs={jobs} activeJob={activeJob} onSaved={keepJob} onOpened={keepJob} onDeleted={afterJobsDeleted} onNavigate={navigate} reviewedResearch={reviewedResearch} onReviewedResearch={(token, reviewed) => { if (pageRef.current === 'Saved jobs') setReviewedResearch({ token, reviewed }) }} onDiscardReviewedResearch={() => setReviewedResearch(null)} /> : <div className="settings-page"><PiSettingsPanel key={workspaceRevision} /><WorkspaceBackup onRestored={afterWorkspaceRestore} /></div>}
       </main>
     </div>
