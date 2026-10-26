@@ -2,6 +2,7 @@ import { lookup as dnsLookup } from 'node:dns/promises'
 import { request as httpsRequest } from 'node:https'
 import { randomUUID } from 'node:crypto'
 import type { IncomingHttpHeaders } from 'node:http'
+import * as parse5 from 'parse5'
 import { isPublicAddress, pinnedAddressLookup } from './safe-posting-fetch'
 import { namedPostingReferenceSchema, namedPostingAttemptSchema, namedPostingCandidateSchema, type NamedPostingReference, type NamedPostingAttempt, type NamedPostingCandidate } from '../shared/named-posting-contract'
 
@@ -22,9 +23,9 @@ const defaultLookup = async (host: string): Promise<Address[]> => (await dnsLook
 const headers = Object.freeze({ Accept: 'application/json', 'Accept-Encoding': 'identity', 'User-Agent': 'CV-Tailor/1.0' })
 const abortable = <T>(operation: Promise<T>, signal: AbortSignal): Promise<T> => new Promise((resolve, reject) => {
   const cancel = () => reject(signal.reason ?? new Error('cancelled'))
-  if (signal.aborted) return cancel()
+  operation.then(value => { signal.removeEventListener('abort', cancel); resolve(value) }, error => { signal.removeEventListener('abort', cancel); reject(error) })
+  if (signal.aborted) { cancel(); return }
   signal.addEventListener('abort', cancel, { once: true })
-  operation.then(resolve, reject).finally(() => signal.removeEventListener('abort', cancel))
 })
 const defaultRequest = (url: URL, address: Address, signal: AbortSignal, requestHeaders: Readonly<Record<string, string>>): Promise<Response> => new Promise((resolve, reject) => {
   const req = httpsRequest(url, { method: 'GET', headers: requestHeaders, signal, servername: url.hostname, rejectUnauthorized: true, agent: false, lookup: pinnedAddressLookup(address) }, res => {
@@ -36,7 +37,40 @@ const defaultRequest = (url: URL, address: Address, signal: AbortSignal, request
   req.setTimeout(timeout, () => req.destroy(new Error('deadline')))
   req.once('error', reject); req.end()
 })
-const cleanHtml = (html: string) => html.replace(/<(script|style|noscript|svg|iframe)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, ' ').replace(/<br\s*\/?>|<\/(p|div|li|h[1-6])\s*>/gi, '\n').replace(/<[^>]*>/g, ' ').replace(/&nbsp;|&#160;/gi, ' ').replace(/&amp;/gi, '&').replace(/&lt;/gi, '<').replace(/&gt;/gi, '>').replace(/&quot;/gi, '"').replace(/&#39;|&apos;/gi, "'").replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n))).replace(/[ \t]+/g, ' ').replace(/\n\s+/g, '\n').replace(/\n{3,}/g, '\n\n').trim()
+const SKIP_TAGS = new Set(['script','style','noscript','iframe','svg','template'])
+function cleanHtml(html: string): string {
+  if (Buffer.byteLength(html, 'utf8') > MAX_BYTES) throw new Error('HTML source exceeds the parsing limit.')
+  const parseErrors: unknown[] = []
+  const root = parse5.parseFragment(html, { onParseError: error => parseErrors.push(error) })
+  if (parseErrors.length) throw new Error('HTML structure is malformed; completeness cannot be established.')
+  const parts: string[] = [], stack: Array<{node:any;depth:number}> = [{ node:root, depth:0 }]; let nodes = 0
+  while (stack.length) {
+    const {node,depth} = stack.pop()!
+    if (++nodes > 100_000 || depth > 128) throw new Error('HTML structure exceeds safe parsing limits.')
+    if (node.nodeName === '#text') { parts.push(node.value); continue }
+    if (SKIP_TAGS.has(node.tagName)) continue
+    if (['br','p','div','li','h1','h2','h3','h4','h5','h6','section','article'].includes(node.tagName)) parts.push('\n')
+    for (let i=(node.childNodes ?? []).length-1;i>=0;i--) stack.push({node:node.childNodes[i],depth:depth+1})
+  }
+  return parts.join('').replace(/[ \t]+/g,' ').replace(/\n\s+/g,'\n').replace(/\n{3,}/g,'\n\n').trim()
+}
+function leverText(value: any): string {
+  const pieces: string[] = []
+  if (typeof value.descriptionPlain === 'string' && value.descriptionPlain.trim()) pieces.push(value.descriptionPlain.trim())
+  else if (typeof value.description === 'string' && value.description.trim()) pieces.push(cleanHtml(value.description))
+  if (value.lists !== undefined) {
+    if (!Array.isArray(value.lists) || value.lists.length > 100) throw new Error('Lever section format is ambiguous.')
+    for (const list of value.lists) {
+      if (!list || typeof list !== 'object' || typeof list.text !== 'string' || typeof list.content !== 'string') throw new Error('Lever section format is ambiguous.')
+      pieces.push(list.text.trim(), cleanHtml(list.content))
+    }
+  }
+  if (value.additionalPlain !== undefined) {
+    if (typeof value.additionalPlain !== 'string') throw new Error('Lever additional text format is ambiguous.')
+    if (value.additionalPlain.trim()) pieces.push(value.additionalPlain.trim())
+  }
+  return pieces.filter(Boolean).join('\n\n')
+}
 
 /** Inert exact-detail API adapter. It performs no policy decision, IPC, persistence, or source activation. */
 export async function fetchNamedPostingApi(input: unknown, options: NamedPostingApiOptions = {}): Promise<{ attempt: NamedPostingAttempt; candidate?: NamedPostingCandidate }> {
@@ -44,7 +78,8 @@ export async function fetchNamedPostingApi(input: unknown, options: NamedPosting
   const started = (options.now ?? Date.now)(), startedAt = new Date(started).toISOString(), id = randomUUID()
   const failed = (reason: Extract<NamedPostingAttempt, {status:'failed'}>['reason']) => ({ attempt: namedPostingAttemptSchema.parse({ id, reference, startedAt, status: 'failed', reason }) as NamedPostingAttempt })
   const grant = options.eligibility
-  if (!grant || grant.personalLocalOptIn !== true || grant.source !== reference.source || grant.scope !== 'personal-local' || Date.parse(grant.optedInAt) >= started) return failed('opt-in-required')
+  const optedInAt = grant && typeof grant.optedInAt === 'string' ? Date.parse(grant.optedInAt) : Number.NaN
+  if (!grant || grant.personalLocalOptIn !== true || grant.source !== reference.source || grant.scope !== 'personal-local' || !Number.isFinite(optedInAt) || optedInAt >= started) return failed('opt-in-required')
   const api = reference.source === 'lever' ? new URL(`https://api.lever.co/v0/postings/${reference.board}/${reference.postingId}`) : new URL(`https://boards-api.greenhouse.io/v1/boards/${reference.board}/jobs/${reference.postingId}`)
   const controller = new AbortController(); const abort = () => controller.abort(options.signal?.reason)
   options.signal?.addEventListener('abort', abort, { once: true })
@@ -58,32 +93,34 @@ export async function fetchNamedPostingApi(input: unknown, options: NamedPosting
     if (response.body.length > MAX_BYTES) return failed('source-error')
     if ([301,302,303,307,308].includes(response.status)) return failed('unsafe-redirect')
     if (response.status === 404 || response.status === 410) return failed('not-found')
-    if ([401,403,429].includes(response.status)) return failed('login-required')
+    if ([401,403].includes(response.status)) return failed('login-required')
+    if (response.status === 429) return failed('source-error')
     if (response.status !== 200) return failed('source-error')
     if (!String(response.headers['content-type'] ?? '').toLowerCase().includes('json') || String(response.headers['content-encoding'] ?? 'identity').toLowerCase() !== 'identity') return failed('incomplete')
     let value: any
     try { value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(response.body)) } catch { return failed('incomplete') }
     if (!value || typeof value !== 'object' || Array.isArray(value)) return failed('incomplete')
-    let returnedBoard: string, returnedPostingId: string, title: string, employer: string, text: string, sourceUpdatedAt: string | null = null, hostedUrl: string | undefined
+    let returnedBoard: string | null, returnedPostingId: string, title: string, employer: string, text: string, sourceUpdatedAt: string | null = null
     if (reference.source === 'lever') {
-      returnedBoard = typeof value.hostedUrl === 'string' ? new URL(value.hostedUrl).pathname.split('/')[1] : ''
+      let hosted: URL
+      try { hosted = new URL(typeof value.hostedUrl === 'string' ? value.hostedUrl : '') } catch { return failed('incomplete') }
+      returnedBoard = hosted.pathname.split('/')[1] ?? ''
       returnedPostingId = value.id
       title = value.text; employer = value.categories?.team ?? value.categories?.department ?? reference.board
-      text = typeof value.descriptionPlain === 'string' && value.descriptionPlain.trim() ? value.descriptionPlain : cleanHtml(String(value.description ?? ''))
-      hostedUrl = value.hostedUrl
+      text = leverText(value)
+      if (hosted.protocol !== 'https:' || hosted.hostname !== 'jobs.lever.co' || hosted.username || hosted.password || hosted.port || hosted.search || hosted.hash || hosted.pathname !== `/${reference.board}/${reference.postingId}`) return failed('ambiguous')
     } else {
-      returnedBoard = value.board_token ?? reference.board
+      returnedBoard = null
       returnedPostingId = String(value.id ?? ''); title = value.title; employer = value.company_name
-      text = cleanHtml(String(value.content ?? '')); hostedUrl = value.absolute_url
-      if (typeof value.updated_at === 'string' && Number.isFinite(Date.parse(value.updated_at))) sourceUpdatedAt = new Date(value.updated_at).toISOString()
+      text = cleanHtml(String(value.content ?? ''))
+      if (value.gh_jid !== undefined && String(value.gh_jid) !== reference.postingId) return failed('ambiguous')
+      if (typeof value.updated_at === 'string') {
+        const update = Date.parse(value.updated_at)
+        if (!Number.isFinite(update)) return failed('incomplete')
+        sourceUpdatedAt = new Date(update).toISOString()
+      }
     }
-    let hostUrl: URL
-    try { hostUrl = new URL(hostedUrl ?? '') } catch { return failed('incomplete') }
-    const expectedHost = reference.source === 'lever' ? 'jobs.lever.co' : ['boards.greenhouse.io','job-boards.greenhouse.io'].includes(hostUrl.hostname) ? hostUrl.hostname : ''
-    const pathMatches = reference.source === 'lever'
-      ? hostUrl.pathname === `/${reference.board}/${reference.postingId}`
-      : hostUrl.pathname === `/${reference.board}/jobs/${reference.postingId}`
-    if (hostUrl.protocol !== 'https:' || hostUrl.hostname !== expectedHost || hostUrl.username || hostUrl.password || hostUrl.port || hostUrl.search || hostUrl.hash || !pathMatches || returnedBoard !== reference.board || String(returnedPostingId) !== reference.postingId) return failed('ambiguous')
+    if (String(returnedPostingId) !== reference.postingId || reference.source === 'lever' && returnedBoard !== reference.board) return failed('ambiguous')
     text = text.replace(/\u0000/g, '').trim()
     if (typeof title !== 'string' || typeof employer !== 'string' || title.trim().length === 0 || employer.trim().length === 0 || text.length < 80 || text.length > MAX_TEXT) return failed('incomplete')
     const capturedAt = new Date((options.now ?? Date.now)()).toISOString()

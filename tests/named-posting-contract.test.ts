@@ -9,7 +9,7 @@ function fixture(url = 'https://jobs.lever.co/acme/platform-1') {
   const reference = { ...parsed, submittedUrl: url }
   const attempt = { id, reference, startedAt: capturedAt, status: 'retrieved' as const, expiresAt: new Date(now + 60_000).toISOString(), eligibility: { personalLocalOptIn: true as const, source: parsed.source, scope: 'personal-local' as const, optedInAt } }
   const route = parsed.source === 'lever' ? { retrievalMethod: 'lever-postings-api-v0' as const, retrievalUrl: `https://api.lever.co/v0/postings/${parsed.board}/${parsed.postingId}` } : { retrievalMethod: 'greenhouse-job-board-api-v1' as const, retrievalUrl: `https://boards-api.greenhouse.io/v1/boards/${parsed.board}/jobs/${parsed.postingId}` }
-  const candidate = { version: 1 as const, attemptId: id, reference, returnedBoard: parsed.board, returnedPostingId: parsed.postingId, title: 'Platform Engineer', employer: 'Acme', text: longText, completeness: 'full' as const, capturedAt, sourceUpdatedAt: capturedAt, ...route }
+  const candidate = { version: 1 as const, attemptId: id, reference, returnedBoard: parsed.source === 'lever' ? parsed.board : null, returnedPostingId: parsed.postingId, title: 'Platform Engineer', employer: 'Acme', text: longText, completeness: 'full' as const, capturedAt, sourceUpdatedAt: capturedAt, ...route }
   return { attempt, candidate }
 }
 
