@@ -151,6 +151,9 @@ const api: WorkbenchAPI = Object.freeze({
   async acceptPostingRefresh(token: string, revision: number, jobId: string, expectedUpdatedAt: string, expectedBaseRevision: number, choices: import('../shared/jobs').PostingRefreshChoice) { return jobSaveResultSchema.parse(await ipcRenderer.invoke('posting-refresh:accept', uuidSchema.parse(token), revision, uuidSchema.parse(jobId), expectedUpdatedAt, expectedBaseRevision, postingRefreshChoiceSchema.parse(choices))) },
   async readPostingPreview(token: string) { return postingFetchStateSchema.parse(await ipcRenderer.invoke('posting-import:read', uuidSchema.parse(token))) },
   async cancelPostingFetch(token: string) { return z.object({ ok: z.boolean() }).strict().parse(await ipcRenderer.invoke('posting-import:cancel', uuidSchema.parse(token))) },
+  async startNamedPostingPreview(url: string, personalLocalOptIn: boolean) { if (typeof url !== 'string' || typeof personalLocalOptIn !== 'boolean') throw new Error('Choose a Greenhouse link and personal-local notice.'); return await ipcRenderer.invoke('named-posting-preview:start', url, personalLocalOptIn) },
+  async readNamedPostingPreview(token: string) { return await ipcRenderer.invoke('named-posting-preview:read', uuidSchema.parse(token)) },
+  async cancelNamedPostingPreview(token: string) { return await ipcRenderer.invoke('named-posting-preview:cancel', uuidSchema.parse(token)) },
   async openPostingSource(url: string) { return z.object({ ok: z.boolean(), message: z.string() }).strict().parse(await ipcRenderer.invoke('posting-import:open-source', url)) },
   async prepareOutboundConsent(jobId: string) {
     return outboundConsentPreviewSchema.parse(await ipcRenderer.invoke('consent:outbound:preview', uuidSchema.parse(jobId)))

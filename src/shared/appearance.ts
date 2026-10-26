@@ -98,6 +98,9 @@ export interface WorkbenchAPI {
   startPostingFetch(url: string): Promise<{ token: string }>
   readPostingPreview(token: string): Promise<PostingFetchState>
   cancelPostingFetch(token: string): Promise<{ ok: boolean }>
+  startNamedPostingPreview(url: string, personalLocalOptIn: boolean): Promise<{ token: string; attempt: import('./named-posting-contract').NamedPostingAttempt; reason?: string }>
+  readNamedPostingPreview(token: string): Promise<{ status: 'ready' | 'failed' | 'expired'; attempt?: import('./named-posting-contract').NamedPostingAttempt; candidate?: import('./named-posting-contract').NamedPostingCandidate }>
+  cancelNamedPostingPreview(token: string): Promise<{ ok: true }>
   openPostingSource(url: string): Promise<{ ok: boolean; message: string }>
   prepareOutboundConsent(jobId: string): Promise<OutboundConsentPreview>
   acceptOutboundConsent(token: string, accepted: boolean, privacyAcknowledged: boolean): Promise<OutboundConsentAction>
@@ -131,7 +134,7 @@ export interface WorkbenchAPI {
   acceptDocumentCuts(jobId: string, documentHash: string, entryIds: string[]): Promise<{ ok: boolean; message: string; draft?: DraftRevision }>
 }
 
-export type WorkbenchStorageAPI = Omit<WorkbenchAPI, 'getResearchSearchKeyStatus' | 'removeResearchSearchKey' | 'revealResearchSearchKey' | 'copyResearchSearchKey' | 'exportProfile' | 'previewProfileImport' | 'applyProfileImport' | 'cancelProfileImport' | 'previewProfilePdfImport' | 'cancelProfilePdfImport' | 'rebaseProfilePdfImport' | 'applyProfilePdfImport' | 'previewProfileDocxImport' | 'cancelProfileDocxImport' | 'rebaseProfileDocxImport' | 'applyProfileDocxImport' | 'previewProfileAiStructuring' | 'consentProfileAiStructuring' | 'runProfileAiStructuring' | 'cancelProfileAiStructuring' | 'exportWorkspaceBackup' | 'previewWorkspaceRestore' | 'applyWorkspaceRestore' | 'cancelWorkspaceRestore' | 'measureDocument' | 'getDocumentPdf' | 'exportApprovedPdf' | 'exportDraftDocx' | 'openPostingSource' | 'startJobResearch' | 'startJobResearchFromPosting' | 'getJobResearch' | 'searchJobResearch' | 'reviewJobResearch' | 'cancelJobResearch' | 'previewResearchAnalysis' | 'consentResearchAnalysis' | 'startResearchAnalysis' | 'readResearchAnalysis' | 'cancelResearchAnalysis' | 'discardResearchAnalysis'> & {
+export type WorkbenchStorageAPI = Omit<WorkbenchAPI, 'getResearchSearchKeyStatus' | 'removeResearchSearchKey' | 'revealResearchSearchKey' | 'copyResearchSearchKey' | 'exportProfile' | 'previewProfileImport' | 'applyProfileImport' | 'cancelProfileImport' | 'previewProfilePdfImport' | 'cancelProfilePdfImport' | 'rebaseProfilePdfImport' | 'applyProfilePdfImport' | 'previewProfileDocxImport' | 'cancelProfileDocxImport' | 'rebaseProfileDocxImport' | 'applyProfileDocxImport' | 'previewProfileAiStructuring' | 'consentProfileAiStructuring' | 'runProfileAiStructuring' | 'cancelProfileAiStructuring' | 'exportWorkspaceBackup' | 'previewWorkspaceRestore' | 'applyWorkspaceRestore' | 'cancelWorkspaceRestore' | 'measureDocument' | 'getDocumentPdf' | 'exportApprovedPdf' | 'exportDraftDocx' | 'openPostingSource' | 'startJobResearch' | 'startJobResearchFromPosting' | 'getJobResearch' | 'searchJobResearch' | 'reviewJobResearch' | 'cancelJobResearch' | 'previewResearchAnalysis' | 'consentResearchAnalysis' | 'startResearchAnalysis' | 'readResearchAnalysis' | 'cancelResearchAnalysis' | 'discardResearchAnalysis' | 'startNamedPostingPreview' | 'readNamedPostingPreview' | 'cancelNamedPostingPreview'> & {
   takePostingResearchRun(token: string): JobResearchRun
   saveDocumentFitReport(jobId: string, report: DocumentFitReport): Promise<DocumentFitReport>
   validateProfileImport(input: string): Promise<{ ok: boolean; message: string }>

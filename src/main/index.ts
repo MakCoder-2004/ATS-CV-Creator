@@ -39,11 +39,14 @@ import { createVolatileResearchAnalysis } from './research-volatile-analysis'
 import { researchAnalysisTokenSchema, researchAnalysisConsentSchema, researchAnalysisPreviewReplySchema, researchAnalysisProgressReplySchema, researchAnalysisDiscardReplySchema } from '../shared/research-volatile-analysis-ipc'
 import type { PiModelSelection } from '../shared/pi-model'
 import { postingPreviewEditSchema, postingReviewSchema } from '../shared/posting-import'
+import { createNamedPostingPreviewSession } from './named-posting-preview-session'
+import { decideJobSourcePolicy } from '../shared/job-source-policy'
 
 let window: BrowserWindow | undefined
 let workspace: ReturnType<typeof createWorkbench> | undefined
 let research: ReturnType<typeof createJobResearchSessions> | undefined
 let researchAnalysis: ReturnType<typeof createVolatileResearchAnalysis> | undefined
+let namedPostingPreviews: ReturnType<typeof createNamedPostingPreviewSession> | undefined
 
 function invalidProfileInput(error: ZodError, kind: string) {
   const fieldErrors: Record<string, string> = {}
@@ -256,6 +259,8 @@ app.whenReady().then(() => {
       .then(({ ModelRuntime }) => ModelRuntime.create({ allowModelNetwork: false, refreshOnCreate: false }))
       .catch(() => null)
   workspace = createWorkbench(app.getPath('userData'), undefined, useScriptedPi ? undefined : scriptedAnalysis, undefined, postingFetchOptions, piRuntime)
+  namedPostingPreviews = createNamedPostingPreviewSession()
+  app.on('before-quit', () => namedPostingPreviews?.close())
   const researchCredentials = createResearchSearchCredentials({
     credentialsDirectory: defaultResearchCredentialDirectory(app.getPath('appData'), app.getPath('userData')),
     workspaceDirectory: app.getPath('userData'), encryption: safeStorage
@@ -535,6 +540,13 @@ app.whenReady().then(() => {
     trusted(event); if (args.length !== 1) throw new Error('Expected fetch token')
     return await workspace!.api.cancelPostingFetch(uuidSchema.parse(args[0]))
   })
+  ipcMain.handle('named-posting-preview:start', async (event, ...args: unknown[]) => {
+    trusted(event); if (args.length !== 2 || typeof args[0] !== 'string' || typeof args[1] !== 'boolean') throw new Error('Expected Greenhouse link and personal-local opt-in.')
+    const policy = decideJobSourcePolicy(args[0]); if (policy.status === 'paused') return { token: randomUUID(), attempt: { id: randomUUID(), reference: { source: 'lever', board: 'paused', postingId: 'paused', canonicalUrl: 'https://jobs.lever.co/paused/paused' }, startedAt: new Date().toISOString(), status: 'failed', reason: 'opt-in-required' }, reason: policy.reason }
+    return await namedPostingPreviews!.start(args[0], args[1])
+  })
+  ipcMain.handle('named-posting-preview:read', (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected preview token.'); return namedPostingPreviews!.read(uuidSchema.parse(args[0])) })
+  ipcMain.handle('named-posting-preview:cancel', (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected preview token.'); return namedPostingPreviews!.cancel(uuidSchema.parse(args[0])) })
   ipcMain.handle('posting-import:open-source', async (event, ...args: unknown[]) => {
     trusted(event); if (args.length !== 1 || typeof args[0] !== 'string') throw new Error('Expected a public posting link.')
     const selected = validateLeverPostingUrl(args[0]) ? args[0] : normalizeJobResearchUrl(args[0]).canonicalUrl
