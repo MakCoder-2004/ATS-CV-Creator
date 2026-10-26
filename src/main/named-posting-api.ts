@@ -65,10 +65,9 @@ async function leverText(value: any, signal: AbortSignal): Promise<string> {
       htmlIndexes.push(pieces.length); pieces.push(list.content)
     }
   }
-  if (value.additionalPlain !== undefined) {
-    if (typeof value.additionalPlain !== 'string') throw new Error('Lever additional text format is ambiguous.')
-    if (value.additionalPlain.trim()) pieces.push(value.additionalPlain.trim())
-  } else if (value.additional !== undefined) {
+  if (value.additionalPlain !== undefined && typeof value.additionalPlain !== 'string') throw new Error('Lever additional text format is ambiguous.')
+  if (typeof value.additionalPlain === 'string' && value.additionalPlain.trim()) pieces.push(value.additionalPlain.trim())
+  else if (value.additional !== undefined) {
     if (typeof value.additional !== 'string') throw new Error('Lever additional HTML format is ambiguous.')
     if (value.additional.trim()) { htmlIndexes.push(pieces.length); pieces.push(value.additional) }
   }

@@ -47,6 +47,9 @@ describe('inert named public API adapter', () => {
     expect(result.candidate?.text).toContain('<React> skills')
     expect(result.candidate?.text).toContain('Additional <React> examples are welcome.')
     expect(result.candidate?.text).toContain('Build reliable applications.')
+    const closing = await run('lever', { ...lever(), additionalPlain: ' ', additional: '<p>Additional closing requirements.</p>' })
+    expect(closing.attempt.status).toBe('retrieved')
+    expect(closing.candidate?.text).toContain('Additional closing requirements.')
     expect((await run('lever', { ...lever(), lists: [{ text: '', content: '<p>Hidden requirement</p>' }] })).attempt.status).toBe('failed')
   })
   it('sanitizes HTML text and rejects unsafe or over-complex hidden suffixes', async () => {
