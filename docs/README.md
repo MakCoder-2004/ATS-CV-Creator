@@ -83,6 +83,7 @@ These reports record tests, artifacts, and claims at the stated version or issue
 | [Installed Settings 0.6.1](validation/settings-installed-0.6.1.md) | Actual per-user installation, isolated SQLite reopen and two-card layout checks; encrypted-key/clipboard, legacy semantic and real-provider gates remain open. |
 | [Installed PDF and search safety 0.6.2](validation/installed-pdf-tavily-safety-0.6.2.md) | Actual per-user installation, isolated native SQLite reopen and synthetic PDF/DOCX export; user-approved unpacked PDF layout, with real Pi/Tavily and key/recovery gates still open. |
 | [Issue 94 link-intake and authorization baseline](validation/issue-94-link-intake-authorization-baseline.md) | Synthetic visible and domain-test evidence for direct/manual intake, research, consent, profile import and paragraph regeneration; the visible Tavily search uses a fake key/transport, and no live-provider behavior or fixed Tailor CV graph-call totals are claimed. |
+| [Issue 97 reviewed named-posting contract](validation/issue-97-reviewed-posting-contract.md) | Contract-only Lever/Greenhouse posting identities and synthetic tests; explicitly NOT ENABLED and not proof of live provider behavior. |
 
 ## Prototype design evidence
 
