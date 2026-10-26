@@ -102,6 +102,14 @@ app.whenReady().then(() => {
   let recoveryFailureSent = false
   const scriptedAnalysis: AnalysisTransport | undefined = !app.isPackaged && ['1', 'retry', 'generation', 'factual', 'invalid', 'foreign-citation', 'recovery', 'delayed', 'tailored-flow', 'profile-ai', 'profile-ai-delayed', 'profile-ai-wrong-fact', 'profile-ai-late', 'profile-ai-malformed', 'profile-ai-provider-failure'].includes(process.env.CV_TAILOR_SCRIPTED_ANALYSIS ?? '') ? { generate: async ({ prompt, signal }) => {
     scriptedAttempts++
+    if (process.env.CV_TAILOR_TEST_MODEL_DISPATCH_LOG) {
+      const operation = prompt.startsWith('Organize only facts') ? 'profile-import'
+        : prompt.startsWith('Score these numbered') ? 'posting-analysis'
+          : prompt.startsWith('Propose conservative replacement wording') ? 'regeneration'
+            : prompt.startsWith('Factual repair cycle') ? 'factual-repair'
+              : /^Write (?:conservative|concise)/.test(prompt) ? 'generation' : 'other'
+      appendFileSync(join(app.getPath('userData'), process.env.CV_TAILOR_TEST_MODEL_DISPATCH_LOG), `${operation}\n`)
+    }
     const isTailoring = /^Write (?:conservative|concise)/.test(prompt)
     if (process.env.CV_TAILOR_SCRIPTED_ANALYSIS === 'profile-ai-delayed' && prompt.startsWith('Organize only facts')) return await new Promise<string>((_resolve, reject) => signal.addEventListener('abort', () => reject(Object.assign(new Error('scripted request cancelled'), { code: 'ECONNRESET' })), { once: true }))
     if (process.env.CV_TAILOR_SCRIPTED_ANALYSIS === 'profile-ai-malformed' && prompt.startsWith('Organize only facts')) return '{not-json'

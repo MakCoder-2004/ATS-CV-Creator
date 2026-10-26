@@ -1,5 +1,5 @@
 import { expect, test, _electron as electron, type ElectronApplication } from '@playwright/test'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -24,7 +24,7 @@ test('requires run-specific consent for the frozen minimized CV text and returns
   writeFileSync(sourceFile, makePdf(['NAME: Ada Example', 'EMAIL: ada@example.test', 'PHONE: +1 555 123 4567', 'SKILLS: Python', 'A long enough supporting paragraph ensures this synthetic PDF meets the local text extraction threshold.']))
   let running: ElectronApplication | undefined
   try {
-    running = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData, CV_TAILOR_SCRIPTED_ANALYSIS: 'profile-ai', CV_TAILOR_SCRIPTED_PI_MODEL: '1' } })
+    running = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData, CV_TAILOR_TEST_MODEL_DISPATCH_LOG: 'model-dispatches.log', CV_TAILOR_SCRIPTED_ANALYSIS: 'profile-ai', CV_TAILOR_SCRIPTED_PI_MODEL: '1' } })
     const page = await running.firstWindow()
     await expect(page.locator('[data-ui-ready="true"]')).toBeVisible({ timeout: 15_000 })
     await selectScriptedPiModel(page)
@@ -76,6 +76,8 @@ test('requires run-specific consent for the frozen minimized CV text and returns
     await consent.getByRole('button', { name: 'Send text and structure' }).click()
     await expect(consent).toHaveCount(0)
     await expect(page.getByRole('status')).toContainText('AI suggestions are ready')
+    const modelDispatches = readFileSync(join(userData, 'model-dispatches.log'), 'utf8').trim().split(String.fromCharCode(10))
+    expect(modelDispatches).toEqual(['profile-import'])
     await expect(review.getByRole('group', { name: 'Skill 1' }).getByLabel('Skill name')).toHaveValue('Python')
     expect(await page.evaluate(() => window.workbench.getProfile())).toMatchObject({ contact: null, skills: [] })
     await review.getByRole('button', { name: 'Apply accepted details' }).click()
