@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { randomUUID } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import { createJobResearchSessions } from '../src/main/job-research-session'
 import { normalizeJobResearchUrl, verifyReviewedJobResearch, type JobResearchRun } from '../src/shared/job-research'
 
@@ -26,22 +27,51 @@ describe('volatile public research session', () => {
     } finally { vi.useRealTimers() }
   })
 
-  it('never dispatches indexed search or reads credentials, including for generic hosts', async () => {
-    const status = vi.fn(async () => ({ configured: true, storageAvailable: true, message: '' }))
-    const withKey = vi.fn(async <T>(use: (key: string) => Promise<T>) => use('must-not-be-read'))
-    const providerDispatch = vi.fn()
+  it('fails stale generic-host search to manual paste without dispatch or changing reviewed state', async () => {
+    const genericUrl = 'https://careers.example.net/openings/77'
     let directReads = 0
-    const sessions = createJobResearchSessions({ credentials: { status, withKey }, createSearch: providerDispatch, direct: async () => { directReads++; return synthetic('provisional', 'https://careers.example.net/openings/77') } } as never)
-    const token = sessions.startJobResearch('https://careers.example.net/openings/77').token
+    const sessions = createJobResearchSessions({ direct: async () => { directReads++; return synthetic('provisional', genericUrl) } })
+    const token = sessions.startJobResearch(genericUrl).token
     await tick()
+    const ready = sessions.getJobResearch(token)
+    expect(ready.status).toBe('ready')
+    if (ready.status !== 'ready') return
+    const reviewed = sessions.reviewJobResearch(token, [ready.run.findings[0].id], true)
     const outcome = await sessions.searchJobResearch(token)
     expect(outcome).toMatchObject({ status: 'unavailable', settingsAction: false, searchOutcome: 'not-sent', message: expect.stringMatching(/manual paste.*no search request/i) })
     expect(directReads).toBe(1)
-    expect(status).not.toHaveBeenCalled()
-    expect(withKey).not.toHaveBeenCalled()
-    expect(providerDispatch).not.toHaveBeenCalled()
-    expect(sessions.getJobResearch(token)).toMatchObject({ status: 'ready', run: { status: 'provisional' } })
+    expect(sessions.getJobResearch(token)).toEqual(ready)
+    expect(sessions.verifyAppHeldReview(token, reviewed)).toEqual(reviewed)
+
+    // Guard the active dispatch graph: a stale IPC action cannot reach either provider module.
+    const sessionSource = readFileSync(new globalThis.URL('../src/main/job-research-session.ts', import.meta.url), 'utf8')
+    const mainSource = readFileSync(new globalThis.URL('../src/main/index.ts', import.meta.url), 'utf8')
+    expect(sessionSource).not.toMatch(/tavily-search|createTavilyResearchSession|ResearchSearchCredentials/)
+    expect(mainSource).not.toMatch(/tavily-search|createTavilyResearchSession|CV_TAILOR_TEST_TAVILY/)
     sessions.close()
+  })
+
+  it('does not dispatch for invalid, loading, cancelled, or expired search tokens', async () => {
+    let finish!: (run: JobResearchRun) => void, directReads = 0
+    const sessions = createJobResearchSessions({ direct: () => { directReads++; return new Promise(resolve => { finish = resolve }) } })
+    await expect(sessions.searchJobResearch('not-a-token')).rejects.toThrow(/expired/)
+    const loadingToken = sessions.startJobResearch(URL).token
+    expect(await sessions.searchJobResearch(loadingToken)).toMatchObject({ status: 'unavailable', searchOutcome: 'not-sent' })
+    expect(directReads).toBe(1)
+    sessions.cancelJobResearch(loadingToken)
+    await expect(sessions.searchJobResearch(loadingToken)).rejects.toThrow(/expired/)
+    finish(synthetic())
+    sessions.close()
+
+    vi.useFakeTimers()
+    try {
+      const expired = createJobResearchSessions({ direct: async () => synthetic('full') })
+      const token = expired.startJobResearch(URL).token
+      await vi.advanceTimersByTimeAsync(0)
+      await vi.advanceTimersByTimeAsync(15 * 60_000)
+      await expect(expired.searchJobResearch(token)).rejects.toThrow(/expired/)
+      expired.close()
+    } finally { vi.useRealTimers() }
   })
 
   it('preserves direct research and app-held review independently of search', async () => {
