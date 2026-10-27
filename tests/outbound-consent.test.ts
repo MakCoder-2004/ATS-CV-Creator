@@ -18,10 +18,10 @@ const source: ConsentSource = {
 
 describe('outbound consent public contract', () => {
   it('minimizes free text, substitutes stable placeholders and excludes local-only fields including saved-job contacts', () => {
-    const jobWithContact = { ...source.job, contacts: [{ id: 'contact-1', name: 'Morgan Recruiter', role: 'HR', profileUrl: 'https://example.test/morgan' }] }
+    const jobWithContact = { ...source.job, contacts: [{ id: 'contact-1', name: 'Morgan Recruiter', role: 'HR', profileUrl: 'https://example.com/morgan' }] }
     const bundle = prepareOutboundBundle({ ...source, job: jobWithContact })
     const wire = JSON.stringify(bundle.outgoing)
-    for (const secret of ['Ada Lovelace', 'Northstar Labs', 'Orion Ledger', 'Westbridge University', 'ada.private@example.test', '555-0199', 'London', 'jobs@northstar.example', '555-013-0022', '2022-06', '2019-01', '2022-05', 'SECRET SUMMARY', 'Secret language', 'Secret extra', 'private.example.test', 'Morgan Recruiter', 'https://example.test/morgan']) expect(wire).not.toContain(secret)
+    for (const secret of ['Ada Lovelace', 'Northstar Labs', 'Orion Ledger', 'Westbridge University', 'ada.private@example.test', '555-0199', 'London', 'jobs@northstar.example', '555-013-0022', '2022-06', '2019-01', '2022-05', 'SECRET SUMMARY', 'Secret language', 'Secret extra', 'private.example.test', 'Morgan Recruiter', 'https://example.com/morgan']) expect(wire).not.toContain(secret)
     expect(wire).toContain('[[EMPLOYER_1]]')
     expect(wire).toContain('[[PERSON_1]]')
     expect(wire).toContain('[[PROJECT_1]]')

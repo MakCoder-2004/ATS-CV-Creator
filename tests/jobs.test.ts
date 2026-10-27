@@ -9,7 +9,7 @@ import { createWorkbench } from '../src/main/workbench'
 import { createWorkspaceBackupEngine, registerWorkspaceBackupRowSizer } from '../src/main/workspace-backup'
 import { seedHistoricalJob } from './helpers/historical-job'
 import type { AnalysisTransport } from '../src/main/posting-analysis'
-import { jobContactSchema, jobRecordSchema } from '../src/shared/jobs'
+import { jobContactSchema, jobContactsSchema, jobRecordSchema, jobSaveInputSchema } from '../src/shared/jobs'
 
 const directories: string[] = []
 afterEach(async () => { for (const directory of directories.splice(0)) await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) }, 30_000)
@@ -20,9 +20,16 @@ function open(transport?: Parameters<typeof createWorkbench>[2]) {
 }
 test('job contacts are bounded HTTPS-only record data and legacy records receive an empty contact list', () => {
   const id = 'f290c2ee-b6d6-40f1-a039-e7c589db47a8'
-  expect(jobContactSchema.parse({ id, name: 'Sam Recruiter', role: 'Recruiter', profileUrl: 'https://example.test/in/sam' })).toMatchObject({ id, name: 'Sam Recruiter' })
+  expect(jobContactSchema.parse({ id, name: 'Sam Recruiter', role: 'Recruiter', profileUrl: 'https://example.com/in/sam' })).toMatchObject({ id, name: 'Sam Recruiter' })
+  expect(jobContactSchema.safeParse({ id, name: 'IPv6 contact', role: 'Other', profileUrl: 'https://[2606:4700:4700::1111]/profile' }).success).toBe(true)
   expect(jobContactSchema.safeParse({ id, name: 'Sam', role: 'HR', profileUrl: 'http://example.test/profile' }).success).toBe(false)
-  expect(jobContactSchema.safeParse({ id, name: 'Sam', role: 'HR', profileUrl: 'https://user:secret@example.test/profile' }).success).toBe(false)
+  expect(jobContactSchema.safeParse({ id, name: 'Sam', role: 'HR', profileUrl: 'https://user:secret@example.com/profile' }).success).toBe(false)
+  for (const profileUrl of ['https://localhost/profile', 'https://intranet/profile', 'https://127.0.0.1/profile', 'https://10.0.0.8/profile', 'https://192.168.1.20/profile', 'https://router.local/profile', 'https://[::1]/profile', 'https://[fe80::1]/profile']) expect(jobContactSchema.safeParse({ id, name: 'Sam', role: 'HR', profileUrl }).success).toBe(false)
+  const duplicateId = jobContactsSchema.safeParse([{ id, name: 'Sam', role: 'HR', profileUrl: 'https://example.com/sam' }, { id, name: 'Pat', role: 'Other', profileUrl: null }])
+  expect(duplicateId.success).toBe(false)
+  const invalidInput = jobSaveInputSchema.safeParse({ title: 'Engineer', company: 'Example', description: 'Posting text', contacts: [{ id, name: '', role: '', profileUrl: 'http://localhost/' }] })
+  expect(invalidInput.success).toBe(false)
+  if (!invalidInput.success) expect(invalidInput.error.issues.map(issue => issue.path.join('.'))).toEqual(expect.arrayContaining(['contacts.0.name', 'contacts.0.role', 'contacts.0.profileUrl']))
   const legacy = jobRecordSchema.parse({ id, title: 'Engineer', company: 'Example', description: 'Manual posting.', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), provenance: 'manual', sourceSnapshot: null, sourceHistory: [], revisions: [] })
   expect(legacy.contacts).toEqual([])
 })
@@ -31,14 +38,18 @@ test('manual contacts save on the current job only, do not create posting revisi
   const { directory, workbench } = open()
   const saved = await workbench.api.saveJob({ title: 'Engineer', company: 'Example', description: 'Complete manual posting text.' })
   if (!saved.ok) throw new Error(saved.error.message)
-  const contact = { id: 'b09b9005-0c8f-4a92-9e7e-7a89abfacb93', name: 'Alex Recruiter', role: 'Recruiter', profileUrl: 'https://example.test/in/alex' }
+  const contact = { id: 'b09b9005-0c8f-4a92-9e7e-7a89abfacb93', name: 'Alex Recruiter', role: 'Recruiter', profileUrl: 'https://example.com/in/alex' }
   const withContact = await workbench.api.saveJob({ id: saved.value.id, title: saved.value.title, company: saved.value.company, description: saved.value.description, contacts: [contact] })
   expect(withContact).toMatchObject({ ok: true, value: { contacts: [contact], revisions: saved.value.revisions, updatedAt: saved.value.updatedAt } })
+  const postingUpdate = await workbench.api.saveJob({ id: saved.value.id, title: 'Senior Engineer', company: saved.value.company, description: 'Updated accepted posting text.' })
+  if (!postingUpdate.ok) throw new Error(postingUpdate.error.message)
+  expect(postingUpdate.value).toMatchObject({ contacts: [contact], revisions: [...saved.value.revisions, { title: 'Senior Engineer', company: saved.value.company, description: 'Updated accepted posting text.', revision: 2, provenance: 'manual' }] })
+  expect(postingUpdate.value.updatedAt).not.toBe(saved.value.updatedAt)
   const backup = workbench.backup.createBackup()
   expect(backup).toContain(contact.name)
   workbench.close()
   const reopened = createWorkbench(directory)
-  expect(await reopened.api.openJob(saved.value.id)).toMatchObject({ contacts: [contact], revisions: saved.value.revisions })
+  expect(await reopened.api.openJob(saved.value.id)).toMatchObject({ contacts: [contact], revisions: postingUpdate.value.revisions })
   const restored = reopened.backup.previewRestore(backup)
   reopened.backup.applyRestore(restored.token, value => value)
   expect(await reopened.api.openJob(saved.value.id)).toMatchObject({ contacts: [contact] })

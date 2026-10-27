@@ -68,7 +68,7 @@ export interface WorkbenchAPI {
   saveProject(input: ProjectInput & { id?: string }): Promise<ExperienceMutationResult>
   deleteProject(id: string): Promise<ExperienceMutationResult>
   saveJob(input: JobSaveInput): Promise<JobSaveResult>
-  openContactProfile(url: string): Promise<{ ok: boolean; message: string }>
+  openContactProfile(jobId: string, contactId: string): Promise<{ ok: boolean; message: string }>
   listJobs(): Promise<JobRecord[]>
   previewJobDeletion(jobIds: string[]): Promise<JobDeletionPreview>
   executeJobDeletion(token: string, jobIds: string[]): Promise<JobDeletionResult>

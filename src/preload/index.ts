@@ -103,8 +103,9 @@ const api: WorkbenchAPI = Object.freeze({
   async saveJob(input: JobSaveInput) {
     return jobSaveResultSchema.parse(await ipcRenderer.invoke('jobs:save', input))
   },
-  async openContactProfile(url: string) {
-    return z.object({ ok: z.boolean(), message: z.string() }).strict().parse(await ipcRenderer.invoke('contacts:open-profile', url))
+  async openContactProfile(jobId: string, contactId: string) {
+    if (typeof navigator === 'undefined' || !navigator.userActivation?.isActive) throw new Error('Select the saved contact profile button to open it.')
+    return z.object({ ok: z.boolean(), message: z.string() }).strict().parse(await ipcRenderer.invoke('contacts:open-profile', uuidSchema.parse(jobId), uuidSchema.parse(contactId)))
   },
   async listJobs() {
     return jobRecordSchema.array().parse(await ipcRenderer.invoke('jobs:list'))

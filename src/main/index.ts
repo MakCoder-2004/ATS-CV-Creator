@@ -301,15 +301,19 @@ app.whenReady().then(() => {
     if (!input.success) {
       const fieldErrors: Record<string, string> = {}
       for (const issue of input.error.issues) fieldErrors[issue.path.length ? issue.path.join('.') : '_'] = issue.message
-      return jobSaveResultSchema.parse({ ok: false, error: { code: 'VALIDATION_ERROR', message: 'Enter a title, company, and job description.', fieldErrors } })
+      return jobSaveResultSchema.parse({ ok: false, error: { code: 'VALIDATION_ERROR', message: 'Check the highlighted job and contact fields.', fieldErrors } })
     }
     return jobSaveResultSchema.parse(await workspace!.api.saveJob(input.data))
   })
   ipcMain.handle('contacts:open-profile', async (event, ...args: unknown[]) => {
-    trusted(event); if (args.length !== 1) throw new Error('Expected one contact profile URL')
-    const url = httpsProfileUrlSchema.parse(args[0])
+    trusted(event); if (args.length !== 2) throw new Error('Choose a saved job contact profile to open.')
+    const jobId = uuidSchema.parse(args[0]), contactId = uuidSchema.parse(args[1])
+    const job = await workspace!.api.openJob(jobId)
+    const contact = job?.contacts.find(item => item.id === contactId)
+    if (!contact?.profileUrl) return { ok: false, message: 'This contact no longer has a saved profile link.' }
+    const url = httpsProfileUrlSchema.parse(contact.profileUrl)
     await shell.openExternal(url)
-    return { ok: true, message: 'Opened the contact profile in your default browser.' }
+    return { ok: true, message: 'Opened the saved contact profile in your default browser.' }
   })
   ipcMain.handle('jobs:delete:preview', async (event, ...args: unknown[]) => {
     trusted(event); if (args.length !== 1) throw new Error('Expected saved job selection')

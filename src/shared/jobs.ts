@@ -46,17 +46,40 @@ export const postingSourceSnapshotSchema = z.object({
   hashes: z.object({ title: z.string().length(64), company: z.string().length(64).nullable(), description: z.string().length(64) }).strict(),
   fieldOrigins: z.object({ title: z.enum(['source', 'user-correction']), company: z.enum(['source', 'user-correction']), description: z.enum(['source', 'user-correction']), optionalDetails: postingOptionalOriginsSchema }).strict()
 }).strict()
+function isPrivateOrIntranetProfileHost(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/\.$/, '')
+  if (!host) return true
+  const ipv6 = host.replace(/^\[|\]$/g, '')
+  if (ipv6.includes(':')) {
+    // Only global-unicast IPv6 addresses (2000::/3) are accepted; loopback,
+    // link-local, unique-local, multicast and IPv4-mapped forms are rejected.
+    return !/^2[0-9a-f]{3}:|^3[0-9a-f]{3}:/i.test(ipv6) || ipv6.toLowerCase().startsWith('2001:db8:')
+  }
+  if (!host.includes('.') || /(?:^|\.)(?:localhost|local|localdomain|internal|intranet|lan|home|corp|test|invalid|onion)$/.test(host)) return true
+  const octets = host.split('.').map(Number)
+  if (octets.length !== 4 || octets.some(part => !Number.isInteger(part) || part < 0 || part > 255)) return false
+  const [a, b] = octets
+  return a === 0 || a === 10 || a === 127 || a >= 224 || (a === 100 && b >= 64 && b <= 127) ||
+    (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && (b === 0 || b === 168)) || (a === 198 && (b === 18 || b === 19))
+}
 export const httpsProfileUrlSchema = z.string().max(2048).url().refine(value => {
-  try { const url = new URL(value); return url.protocol === 'https:' && !url.username && !url.password }
+  try { const url = new URL(value); return url.protocol === 'https:' && !url.username && !url.password && !isPrivateOrIntranetProfileHost(url.hostname) }
   catch { return false }
-}, 'Profile links must use HTTPS and cannot contain credentials.')
+}, 'Use a public HTTPS profile URL without credentials or a local/private hostname.')
 export const jobContactSchema = z.object({
   id: z.string().uuid(),
   name: requiredText(120),
   role: requiredText(80),
   profileUrl: httpsProfileUrlSchema.nullable().default(null),
 }).strict()
-export const jobContactsSchema = z.array(jobContactSchema).max(20, 'A saved job can have at most 20 contacts.')
+export const jobContactsSchema = z.array(jobContactSchema).max(20, 'A saved job can have at most 20 contacts.').superRefine((contacts, context) => {
+  const seen = new Set<string>()
+  contacts.forEach((contact, index) => {
+    if (seen.has(contact.id)) context.addIssue({ code: 'custom', message: 'Each contact must have a unique record ID.', path: [index, 'id'] })
+    seen.add(contact.id)
+  })
+})
 export const jobSaveInputSchema = jobInputSchema.extend({ id: z.string().uuid().optional(), contacts: jobContactsSchema.optional() }).strict()
 export type JobContact = z.infer<typeof jobContactSchema>
 export type JobSaveInput = z.infer<typeof jobSaveInputSchema>
