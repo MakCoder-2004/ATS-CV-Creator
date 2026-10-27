@@ -3,9 +3,11 @@ import { request as httpsRequest } from 'node:https'
 import { randomUUID } from 'node:crypto'
 import type { IncomingHttpHeaders } from 'node:http'
 import { Worker } from 'node:worker_threads'
+import { z } from 'zod'
 import { join } from 'node:path'
 import { isPublicAddress, pinnedAddressLookup } from './safe-posting-fetch'
 import { namedPostingReferenceSchema, namedPostingAttemptSchema, namedPostingCandidateSchema, type NamedPostingReference, type NamedPostingAttempt, type NamedPostingCandidate } from '../shared/named-posting-contract'
+import { wuzzufFailureDiagnosticSchema, type WuzzufFailureDiagnostic } from '../shared/named-posting-schema'
 
 type Address = { address: string; family: number }
 type Response = { status: number; headers: IncomingHttpHeaders; body: Buffer }
@@ -98,7 +100,12 @@ async function leverText(value: any, signal: AbortSignal, options: NamedPostingA
   return pieces.filter(Boolean).join('\n\n')
 }
 
-async function fetchWuzzuf(reference: NamedPostingReference, id: string, started: number, startedAt: string, retrieved: import('../shared/named-posting-schema').NamedPostingAttempt, failed: (reason: Extract<NamedPostingAttempt, {status:'failed'}>['reason']) => { attempt: NamedPostingAttempt }, options: NamedPostingApiOptions) {
+const wuzzufWorkerReplySchema = z.discriminatedUnion('ok', [
+  z.object({ ok:z.literal(true), title:z.string().trim().min(1).max(200), employer:z.string().trim().min(1).max(200), text:z.string().trim().min(1).max(MAX_TEXT), canonicalUrl:z.string().url().max(2048) }).strict(),
+  z.object({ ok:z.literal(false), diagnostic:wuzzufFailureDiagnosticSchema }).strict(),
+])
+const ambiguousWuzzufDiagnostics = new Set<WuzzufFailureDiagnostic>(['canonical-missing','canonical-multiple','canonical-malformed','canonical-mismatch','structured-data-missing','multiple-job-postings','title-missing','title-hidden','multiple-title-candidates','employer-missing','employer-hidden','multiple-employer-candidates','title-mismatch','employer-mismatch'])
+async function fetchWuzzuf(reference: NamedPostingReference, id: string, started: number, startedAt: string, retrieved: import('../shared/named-posting-schema').NamedPostingAttempt, failed: (reason: Extract<NamedPostingAttempt, {status:'failed'}>['reason'], diagnostic?: WuzzufFailureDiagnostic) => { attempt: NamedPostingAttempt }, options: NamedPostingApiOptions) {
   const url = new URL(reference.canonicalUrl)
   const controller = new AbortController(), relay = () => controller.abort(options.signal?.reason)
   options.signal?.addEventListener('abort', relay, { once: true })
@@ -115,20 +122,24 @@ async function fetchWuzzuf(reference: NamedPostingReference, id: string, started
     if (response.status !== 200 || !String(response.headers['content-type'] ?? '').toLowerCase().includes('html') || String(response.headers['content-encoding'] ?? 'identity').toLowerCase() !== 'identity') return failed('incomplete')
     const html = new TextDecoder('utf-8', { fatal: true }).decode(response.body)
     const worker = new Worker(join(__dirname, 'wuzzuf-posting-worker.cjs'), { workerData: { html, url: url.href, canonicalUrl: reference.canonicalUrl }, resourceLimits: { maxOldGenerationSizeMb: 48, maxYoungGenerationSizeMb: 16, stackSizeMb: 2 } })
-    const data = await new Promise<{title:string; employer:string; text:string}>( (resolve, reject) => {
+    const workerReply = await new Promise<unknown>( (resolve, reject) => {
       let settled = false
       const finish = (action: () => void) => { if (settled) return; settled = true; clearTimeout(parseTimer); controller.signal.removeEventListener('abort', cancel); void worker.terminate(); action() }
       const parseTimer = setTimeout(() => finish(() => reject(new Error('deadline'))), 2_000)
       const cancel = () => finish(() => reject(new Error('cancelled')))
       if (controller.signal.aborted) return cancel()
       controller.signal.addEventListener('abort', cancel, { once: true })
-      worker.once('message', (result: any) => finish(() => result.error ? reject(new Error(result.error)) : resolve(result)))
+      worker.once('message', result => finish(() => resolve(result)))
       worker.once('error', error => finish(() => reject(error)))
     })
-    if (data.text.length > MAX_TEXT) return failed('incomplete')
+    const parsedWorkerReply = wuzzufWorkerReplySchema.safeParse(workerReply)
+    if (!parsedWorkerReply.success) return failed('incomplete', 'html-invalid')
+    if (!parsedWorkerReply.data.ok) return failed(ambiguousWuzzufDiagnostics.has(parsedWorkerReply.data.diagnostic) ? 'ambiguous' : 'incomplete', parsedWorkerReply.data.diagnostic)
+    const data = parsedWorkerReply.data
+    if (data.canonicalUrl !== reference.canonicalUrl) return failed('ambiguous', 'canonical-mismatch')
     const candidate = namedPostingCandidateSchema.parse({ version: 1, attemptId: id, reference, returnedBoard: null, returnedPostingId: reference.postingId, title: data.title, employer: data.employer, text: data.text, completeness: 'full', capturedAt: new Date((options.now ?? Date.now)()).toISOString(), sourceUpdatedAt: null, retrievalMethod: 'wuzzuf-public-jobposting-v1', retrievalUrl: reference.canonicalUrl })
     return { attempt: retrieved, candidate }
-  } catch (error) { return failed(options.signal?.aborted ? 'cancelled' : controller.signal.aborted ? 'deadline' : error instanceof Error && /identity|match|ambiguous/i.test(error.message) ? 'ambiguous' : error instanceof Error && /partial|missing|limit/i.test(error.message) ? 'incomplete' : 'source-error') }
+  } catch { return failed(options.signal?.aborted ? 'cancelled' : controller.signal.aborted ? 'deadline' : 'source-error', controller.signal.aborted ? undefined : 'html-invalid') }
   finally { clearTimeout(timer); options.signal?.removeEventListener('abort', relay) }
 }
 
@@ -136,7 +147,7 @@ async function fetchWuzzuf(reference: NamedPostingReference, id: string, started
 export async function fetchNamedPostingApi(input: unknown, options: NamedPostingApiOptions = {}): Promise<{ attempt: NamedPostingAttempt; candidate?: NamedPostingCandidate }> {
   const reference = namedPostingReferenceSchema.parse(input)
   const started = (options.now ?? Date.now)(), startedAt = new Date(started).toISOString(), id = randomUUID()
-  const failed = (reason: Extract<NamedPostingAttempt, {status:'failed'}>['reason']) => ({ attempt: namedPostingAttemptSchema.parse({ id, reference, startedAt, status: 'failed', reason }) as NamedPostingAttempt })
+  const failed = (reason: Extract<NamedPostingAttempt, {status:'failed'}>['reason'], diagnostic?: WuzzufFailureDiagnostic) => ({ attempt: namedPostingAttemptSchema.parse({ id, reference, startedAt, status: 'failed', reason, ...(diagnostic ? { diagnostic } : {}) }) as NamedPostingAttempt })
   const preflight = namedPostingAttemptSchema.safeParse({ id, reference, startedAt, status: 'retrieved', expiresAt: new Date(started + 600_000).toISOString(), eligibility: options.eligibility })
   if (!preflight.success || preflight.data.status !== 'retrieved') return failed('opt-in-required')
   if (reference.source === 'wuzzuf') return fetchWuzzuf(reference, id, started, startedAt, preflight.data, failed, options)
