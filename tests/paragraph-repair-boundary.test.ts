@@ -42,7 +42,18 @@ async function runCase(mode: 'coverage' | 'factual', correction: string) {
   expect((await wb.api.acceptOutboundConsent(preview.token, true, true)).ok).toBe(true)
   expect((await wb.api.startAnalysis(preview.token)).status).toBe('complete')
   const generated = await wb.api.generateDraft(preview.token)
-  expect(generated.ok).toBe(true)
+  const safeText = (value: string | undefined) => (value ?? '')
+    .replaceAll(sixtyWords, '[long evidence omitted]')
+    .replaceAll('TypeScript', '[skill]')
+    .replaceAll('Built 12 stable systems.', '[source wording omitted]')
+    .replaceAll('Built 99 stable systems.', '[generated wording omitted]')
+    .replaceAll('Engineer', '[role]')
+    .replaceAll('Sample', '[organization]')
+    .replaceAll('Target', '[target]')
+    .replace(/[\r\n]+/g, ' ')
+    .slice(0, 300)
+  const diagnostic = JSON.stringify({ message: safeText(generated.message), status: generated.draft?.status ?? 'no-draft', progress: safeText(generated.draft?.progress), factualRepairRequests: requests.filter(prompt => prompt.startsWith('Factual repair cycle')).length, coverageRepairRequests: requests.filter(prompt => prompt.startsWith('Supported-keyword coverage repair')).length }).slice(0, 1200)
+  expect(generated.ok, `Bounded scripted generation diagnostic: ${diagnostic}`).toBe(true)
   return { generated, requests, jobId: job.value.id, wb }
 }
 
