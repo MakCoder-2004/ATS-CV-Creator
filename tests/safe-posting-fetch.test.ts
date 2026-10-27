@@ -28,9 +28,9 @@ describe('paused Lever posting fetch', () => {
       expect(connections).toBe(1)
     } finally { await new Promise<void>(resolve => server.close(() => resolve())) }
   })
-  it('refuses before DNS lookup or request dispatch', async () => {
+  it('refuses generic and former hosted Lever routes before DNS lookup or request dispatch', async () => {
     const dns = vi.fn(lookup), request = vi.fn()
-    await expect(fetchLeverPosting(url, { lookup: dns, request })).rejects.toThrow(/Lever.*paused/i)
+    for (const input of [url, 'https://jobs.lever.co/acme/role-123']) await expect(fetchLeverPosting(input, { lookup: dns, request })).rejects.toThrow(/Lever.*paused/i)
     expect(dns).not.toHaveBeenCalled()
     expect(request).not.toHaveBeenCalled()
   })

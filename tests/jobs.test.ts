@@ -10,6 +10,7 @@ import { createWorkspaceBackupEngine, registerWorkspaceBackupRowSizer } from '..
 import { seedHistoricalJob } from './helpers/historical-job'
 import type { AnalysisTransport } from '../src/main/posting-analysis'
 import { normalizePostingUrl, samePostingSource } from '../src/shared/posting-identity'
+import { createNamedPostingPreviewSession } from '../src/main/named-posting-preview-session'
 
 const directories: string[] = []
 async function readReady(api: ReturnType<typeof createWorkbench>['api'], token: string) {
@@ -76,6 +77,47 @@ test('saved jobs preserve original posting text, have stable IDs, and reopen aft
   reopened.close()
 })
 
+
+test('named Greenhouse Save requires app-held review, preserves source separately, backs up, deletes, and reopens', async () => {
+  const { directory, workbench } = open()
+  const originalText = `Responsibilities\n${'Build reliable systems and document decisions with product and engineering partners.\n'.repeat(5)}`.trimEnd()
+  const fetchResponse = { status: 200, headers: { 'content-type': 'application/json' }, body: Buffer.from(JSON.stringify({ id: 123, title: 'Synthetic engineer', company_name: 'Example Co', content: `<p>${originalText}</p>`, updated_at: new Date(Date.now() - 60_000).toISOString(), absolute_url: 'https://boards.greenhouse.io/acme/jobs/123' })) }
+  const session = createNamedPostingPreviewSession({ lookup: async () => [{ address: '8.8.8.8', family: 4 }], request: async () => fetchResponse })
+  const { token } = session.start('https://boards.greenhouse.io/acme/jobs/123', true)
+  let state = session.read(token)
+  for (let attempt = 0; attempt < 100 && state.status === 'loading'; attempt++) { await new Promise(resolve => setTimeout(resolve, 10)); state = session.read(token) }
+  expect(state.status).toBe('ready')
+  await expect(session.save(token, '00000000-0000-4000-8000-000000000000', { title: 'x', company: 'y', description: 'z' }, (acceptance, working) => workbench.api.saveNamedPostingAcceptance(acceptance, working), result => result.ok)).rejects.toThrow(/review/i)
+  expect(() => session.review(token, false, true)).toThrow(/exact role/i)
+  const review = session.review(token, true, true)
+  const working = { title: 'Platform engineer', company: 'Example Co', description: 'Corrected working text for this saved posting.' }
+  const saved = await session.save(token, review.reviewToken, working, (acceptance, values) => workbench.api.saveNamedPostingAcceptance(acceptance, values), result => result.ok)
+  expect(saved).toMatchObject({ ok: true, value: { title: working.title, description: working.description, sourceSnapshot: { title: 'Synthetic engineer', description: originalText, extractionMethod: 'greenhouse-job-board-api-v1', retrievalMethod: 'greenhouse-job-board-api-v1', sourceUpdatedAt: expect.any(String), sourceIdentity: 'greenhouse:acme/123', fieldOrigins: { title: 'user-correction', description: 'user-correction' } } } })
+  if (!saved.ok) throw new Error(saved.error.message)
+  const duplicateAttempt = session.start('https://boards.greenhouse.io/acme/jobs/123', true)
+  let duplicateState = session.read(duplicateAttempt.token)
+  for (let attempt = 0; attempt < 100 && duplicateState.status === 'loading'; attempt++) { await new Promise(resolve => setTimeout(resolve, 10)); duplicateState = session.read(duplicateAttempt.token) }
+  expect(duplicateState.status).toBe('ready')
+  const duplicateReview = session.review(duplicateAttempt.token, true, true)
+  expect(await session.save(duplicateAttempt.token, duplicateReview.reviewToken, working, (acceptance, values) => workbench.api.saveNamedPostingAcceptance(acceptance, values), result => result.ok)).toMatchObject({ ok: false, error: { code: 'DUPLICATE_SOURCE' } })
+  session.cancel(duplicateAttempt.token)
+  const backup = workbench.backup.createBackup()
+  const backedUpJob = JSON.parse((JSON.parse(backup) as { tables: { jobs: { rows: Array<{ data: string }> } } }).tables.jobs.rows[0].data)
+  expect(backedUpJob.sourceSnapshot.description).toBe(originalText)
+  expect(await workbench.api.listJobs()).toHaveLength(1)
+  const deletePreview = await workbench.api.previewJobDeletion([saved.value.id])
+  expect(deletePreview).toMatchObject({ ok: true, jobs: [{ title: working.title }] })
+  if (!deletePreview.ok || !deletePreview.token) throw new Error('Expected deletion preview')
+  expect(await workbench.api.executeJobDeletion(deletePreview.token, [saved.value.id])).toMatchObject({ ok: true, deletedCount: 1 })
+  expect(await workbench.api.listJobs()).toEqual([])
+  workbench.close()
+  const reopened = createWorkbench(directory)
+  expect(await reopened.api.listJobs()).toEqual([])
+  const restore = reopened.backup.previewRestore(backup)
+  reopened.backup.applyRestore(restore.token, value => value)
+  expect(await reopened.api.openJob(saved.value.id)).toMatchObject({ title: working.title, sourceSnapshot: { description: originalText } })
+  reopened.close()
+})
 
 test('historical imported posting snapshot and revisions remain backupable, editable, and readable offline', async () => {
   const { directory, workbench } = open()

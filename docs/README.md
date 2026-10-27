@@ -86,7 +86,8 @@ These reports record tests, artifacts, and claims at the stated version or issue
 | [Issue 97 reviewed named-posting contract](validation/issue-97-reviewed-posting-contract.md) | Contract-only Lever/Greenhouse posting identities and synthetic tests; explicitly NOT ENABLED and not proof of live provider behavior. |
 | [Issue 98 named API adapter](validation/issue-98-named-api-adapter-2026-10-26.md) | Inert main-process named API adapter and deterministic fake tests; explicitly NOT ENABLED, with no IPC/renderer path or live provider behavior. |
 | [Issue 98 named API and search retirement](validation/issue-98-named-api-and-search-retirement.md) | Historical foundation check: the adapter was inert then, Tavily dispatch retired and a synthetic legacy key was verified. |
-| [Issue 98 temporary Greenhouse preview](validation/issue-98-temporary-greenhouse-preview.md) | Personal-local opt-in for a read-only, volatile exact-job preview; synthetic visible checks passed, no Save, Lever/LinkedIn/Indeed still paused. |
+| [Issue 98 temporary Greenhouse preview](validation/issue-98-temporary-greenhouse-preview.md) | Historical evidence for the read-only, volatile preview before #99's reviewed Save flow. |
+| [Issue 99 named posting Save](validation/issue-99-reviewed-save-2026-10-27.md) | Development implementation and synthetic verification for named Greenhouse/Lever; generic Lever, LinkedIn, and Indeed routes remain paused, with #101 integration/installed gates open. |
 
 ## Prototype design evidence
 

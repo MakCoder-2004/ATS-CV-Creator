@@ -42,6 +42,7 @@ import { fetchLeverPosting, validateLeverPostingUrl, type SafePostingFetchOption
 import { fetchDirectJobResearch, type JobResearchFetchOptions } from './job-research-fetch'
 import { jobResearchRunSchema, normalizeJobResearchUrl, type JobResearchRun } from '../shared/job-research'
 import { decideJobSourcePolicy } from '../shared/job-source-policy'
+import { namedPostingAcceptanceSchema, type NamedPostingAcceptance } from '../shared/named-posting-schema'
 import { postingPreviewSchema, type PostingPreview } from '../shared/posting-import'
 
 type NestedInput = { id?: string; text: string }
@@ -1104,6 +1105,44 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       if (companyOnlyIncomplete && (parsed.data.title !== source.title || parsed.data.description !== source.description)) return { ok: false, message: 'The source only permits a company correction; incomplete posting text cannot be replaced here.' }
       pending.reviewed = { revision, input: parsed.data, review: checkedReview.data }
       return { ok: true }
+    },
+    async saveNamedPostingAcceptance(input: NamedPostingAcceptance, workingInput: import('../shared/jobs').JobInput) {
+      const checked = namedPostingAcceptanceSchema.safeParse(input)
+      if (!checked.success) return jobSaveResultSchema.parse({ ok: false, error: { code: 'VALIDATION_ERROR', message: 'The reviewed named posting is invalid. Review it again before saving.' } })
+      const accepted = checked.data
+      const working = jobInputSchema.safeParse({ ...workingInput, optionalDetails: emptyPostingOptionalDetails() })
+      if (!working.success) return jobSaveResultSchema.parse({ ok: false, error: { code: 'VALIDATION_ERROR', message: 'Correct the working title, employer, and complete posting text before saving.', fieldErrors: Object.fromEntries(working.error.issues.map(issue => [String(issue.path[0] ?? '_'), issue.message])) } })
+      const values = working.data
+      const identity = `${accepted.source}:${accepted.board}/${accepted.postingId}`
+      const sourceIdentity = identity
+      const known = (db.prepare('SELECT data FROM jobs').all() as { data: string }[]).map(row => jobRecordSchema.parse(JSON.parse(row.data)))
+      if (known.some(job => job.sourceSnapshot && (job.sourceSnapshot.sourceIdentity === identity || samePostingSource(job.sourceSnapshot, { submittedUrl: accepted.provenanceUrl, finalUrl: accepted.provenanceUrl })))) return jobSaveResultSchema.parse({ ok: false, error: { code: 'DUPLICATE_SOURCE', message: 'This exact posting is already saved. Open the existing job instead; no duplicate was created.' } })
+      const now = accepted.acceptedAt
+      const hash = (value: string) => createHash('sha256').update(value, 'utf8').digest('hex')
+      const optionalDetails = emptyPostingOptionalDetails()
+      const snapshot = {
+        title: accepted.title, company: accepted.employer, description: accepted.text, optionalDetails, conflicts: [],
+        submittedUrl: accepted.provenanceUrl, finalUrl: accepted.provenanceUrl, sourceIdentity, capturedAt: accepted.capturedAt,
+        sourceUpdatedAt: accepted.sourceUpdatedAt, retrievalUrl: accepted.retrievalUrl, retrievalMethod: accepted.retrievalMethod,
+        extractionMethod: accepted.retrievalMethod, extractionVersion: 1 as const,
+        hashes: { title: hash(accepted.title), company: hash(accepted.employer), description: hash(accepted.text) },
+        fieldOrigins: { title: values.title === accepted.title ? 'source' as const : 'user-correction' as const, company: values.company === accepted.employer ? 'source' as const : 'user-correction' as const, description: values.description === accepted.text ? 'source' as const : 'user-correction' as const, optionalDetails: Object.fromEntries(Object.keys(optionalDetails).map(field => [field, 'unknown'])) }
+      }
+      const id = randomUUID()
+      const record = jobRecordSchema.parse({ ...values, optionalDetails, id, createdAt: now, updatedAt: now, provenance: 'imported', sourceSnapshot: snapshot, sourceHistory: [], revisions: [{ ...values, optionalDetails, revision: 1, acceptedAt: now, provenance: 'imported' }] })
+      try {
+        const tx = db.transaction(() => {
+          const latest = (db.prepare('SELECT data FROM jobs').all() as { data: string }[]).map(row => jobRecordSchema.parse(JSON.parse(row.data)))
+          if (latest.some(job => job.sourceSnapshot && (job.sourceSnapshot.sourceIdentity === identity || samePostingSource(job.sourceSnapshot, { submittedUrl: accepted.provenanceUrl, finalUrl: accepted.provenanceUrl })))) throw new Error('DUPLICATE_SOURCE')
+          if ((db.prepare('SELECT COUNT(*) AS count FROM jobs').get() as { count: number }).count >= 5_000) throw new Error('JOB_LIMIT')
+          if ((db.prepare('SELECT 1 FROM jobs WHERE id = ?').get(id))) throw new Error('ID_COLLISION')
+          db.prepare('INSERT INTO jobs (id, created_at, updated_at, data) VALUES (?, ?, ?, ?)').run(id, now, now, JSON.stringify(record))
+        })
+        tx()
+        return jobSaveResultSchema.parse({ ok: true, value: record })
+      } catch (error) {
+        return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: error instanceof Error && error.message === 'JOB_LIMIT' ? 'The saved-job limit was reached. Nothing was saved.' : error instanceof Error && error.message === 'DUPLICATE_SOURCE' ? 'This exact posting is already saved. Open the existing job instead; no duplicate was created.' : 'The reviewed posting could not be saved. No partial history was retained.' } })
+      }
     },
     async acceptPostingImport(token: string, revision: number) {
       const checkedToken = uuidSchema.safeParse(token), pending = checkedToken.success ? livePostingFetch(checkedToken.data) : undefined

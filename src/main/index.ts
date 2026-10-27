@@ -271,12 +271,16 @@ app.whenReady().then(() => {
   workspace = createWorkbench(app.getPath('userData'), undefined, useScriptedPi ? undefined : scriptedAnalysis, undefined, postingFetchOptions, piRuntime)
   const namedPreviewFixture = namedPreviewFixtureEnabled ? {
     lookup: async (host: string) => {
-      if (host !== 'boards-api.greenhouse.io') throw new Error('Unexpected named-preview fixture host.')
+      if (!['boards-api.greenhouse.io', 'api.lever.co'].includes(host)) throw new Error('Unexpected named-preview fixture host.')
       return [{ address: '8.8.8.8', family: 4 }]
     },
     request: async (url: URL, _address: { address: string; family: number }, signal: AbortSignal) => {
-      const expected = 'https://boards-api.greenhouse.io/v1/boards/acme/jobs/123'
-      if (url.href !== expected) throw new Error('Unexpected named-preview fixture route.')
+      const responses: Record<string, unknown> = {
+        'https://boards-api.greenhouse.io/v1/boards/acme/jobs/123': { id: 123, title: 'Synthetic Reliability Engineer', company_name: 'Example Research', updated_at: '2026-10-25T12:00:00Z', content: `<p>${'Build and maintain synthetic systems, document decisions, collaborate with a fictional team, and review reliability outcomes. '.repeat(8)}</p>` },
+        'https://api.lever.co/v0/postings/acme/role1': { id: 'role1', text: 'Synthetic Reliability Engineer', categories: { team: 'Example Research' }, descriptionPlain: `${'Build and maintain synthetic systems, document decisions, collaborate with a fictional team, and review reliability outcomes. '.repeat(8)}`, hostedUrl: 'https://jobs.lever.co/acme/role1' }
+      }
+      const body = responses[url.href]
+      if (!body) throw new Error('Unexpected named-preview fixture route.')
       appendFileSync(join(app.getPath('userData'), 'named-preview-request-count.log'), 'request\n')
       await new Promise<void>((resolve, reject) => {
         const timer = setTimeout(() => { signal.removeEventListener('abort', abort); resolve() }, 500)
@@ -284,7 +288,7 @@ app.whenReady().then(() => {
         if (signal.aborted) abort()
         else signal.addEventListener('abort', abort, { once: true })
       })
-      return { status: 200, headers: { 'content-type': 'application/json' }, body: Buffer.from(JSON.stringify({ id: 123, title: 'Synthetic Reliability Engineer', company_name: 'Example Research', updated_at: '2026-10-25T12:00:00Z', content: `<p>${'Build and maintain synthetic systems, document decisions, collaborate with a fictional team, and review reliability outcomes. '.repeat(8)}</p>` })) }
+      return { status: 200, headers: { 'content-type': 'application/json' }, body: Buffer.from(JSON.stringify(body)) }
     }
   } : undefined
   namedPostingPreviews = createNamedPostingPreviewSession(namedPreviewFixture)
@@ -575,6 +579,15 @@ app.whenReady().then(() => {
   })
   ipcMain.handle('named-posting-preview:read', (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected preview token.'); return namedPostingPreviews!.read(uuidSchema.parse(args[0])) })
   ipcMain.handle('named-posting-preview:cancel', (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected preview token.'); return namedPostingPreviews!.cancel(uuidSchema.parse(args[0])) })
+  ipcMain.handle('named-posting-preview:review', (event, ...args: unknown[]) => {
+    trusted(event); if (args.length !== 3 || typeof args[1] !== 'boolean' || typeof args[2] !== 'boolean') throw new Error('Review the exact role and complete posting before saving.')
+    return namedPostingPreviews!.review(uuidSchema.parse(args[0]), args[1], args[2])
+  })
+  ipcMain.handle('named-posting-preview:save', async (event, ...args: unknown[]) => {
+    trusted(event); if (args.length !== 3) throw new Error('Review the current preview before saving.')
+    const working = jobInputSchema.safeParse(args[2]); if (!working.success) throw new Error('Correct the working posting fields before saving.')
+    return jobSaveResultSchema.parse(await namedPostingPreviews!.save(uuidSchema.parse(args[0]), uuidSchema.parse(args[1]), working.data, (acceptance, values) => workspace!.api.saveNamedPostingAcceptance(acceptance, values), result => result.ok))
+  })
   ipcMain.handle('posting-import:open-source', async (event, ...args: unknown[]) => {
     trusted(event); if (args.length !== 1 || typeof args[0] !== 'string') throw new Error('Expected a public posting link.')
     const selected = validateLeverPostingUrl(args[0]) ? args[0] : normalizeJobResearchUrl(args[0]).canonicalUrl

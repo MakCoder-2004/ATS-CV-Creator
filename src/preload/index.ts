@@ -155,6 +155,11 @@ const api: WorkbenchAPI = Object.freeze({
   async startNamedPostingPreview(url: string, personalLocalOptIn: boolean) { if (typeof url !== 'string' || typeof personalLocalOptIn !== 'boolean') throw new Error('Choose a Greenhouse link and personal-local notice.'); return z.object({ token: uuidSchema }).strict().parse(await ipcRenderer.invoke('named-posting-preview:start', url, personalLocalOptIn)) },
   async readNamedPostingPreview(token: string) { return namedPostingPreviewReplySchema.parse(await ipcRenderer.invoke('named-posting-preview:read', uuidSchema.parse(token))) },
   async cancelNamedPostingPreview(token: string) { return z.object({ ok: z.literal(true) }).strict().parse(await ipcRenderer.invoke('named-posting-preview:cancel', uuidSchema.parse(token))) },
+  async reviewNamedPostingPreview(token: string, exactRole: boolean, completeness: boolean) {
+    if (typeof exactRole !== 'boolean' || typeof completeness !== 'boolean') throw new Error('Review the exact role and complete posting.')
+    return z.object({ reviewToken: uuidSchema, reviewedAt: z.string().datetime({ offset: true }) }).strict().parse(await ipcRenderer.invoke('named-posting-preview:review', uuidSchema.parse(token), exactRole, completeness))
+  },
+  async saveNamedPostingPreview(token: string, reviewToken: string, working: JobInput) { return jobSaveResultSchema.parse(await ipcRenderer.invoke('named-posting-preview:save', uuidSchema.parse(token), uuidSchema.parse(reviewToken), jobInputSchema.parse(working))) },
   async openPostingSource(url: string) { return z.object({ ok: z.boolean(), message: z.string() }).strict().parse(await ipcRenderer.invoke('posting-import:open-source', url)) },
   async prepareOutboundConsent(jobId: string) {
     return outboundConsentPreviewSchema.parse(await ipcRenderer.invoke('consent:outbound:preview', uuidSchema.parse(jobId)))

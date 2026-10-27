@@ -16,10 +16,15 @@ export type NamedPostingApiOptions = {
   signal?: AbortSignal
   /** Must come from trusted main-process settings; renderer input is never a grant. */
   eligibility?: { personalLocalOptIn: true; source: 'lever' | 'greenhouse'; scope: 'personal-local'; optedInAt: string } | null
+  /** Deterministic adapter seam; production uses the bounded worker and fixed deadline. */
+  extractHtml?: (sections: string[], signal: AbortSignal) => Promise<string[]>
+  /** Test seam only. Production extraction stays at the 2-second worker deadline. */
+  extractionTimeoutMs?: number
 }
 const MAX_BYTES = 2 *  1024 * 1024
 const MAX_TEXT = 100_000
 const timeout = 15_000
+const extractionTimeout = 2_000
 const defaultLookup = async (host: string): Promise<Address[]> => (await dnsLookup(host, { all: true, verbatim: true })).map(({ address, family }) => ({ address, family }))
 const headers = Object.freeze({ Accept: 'application/json', 'Accept-Encoding': 'identity', 'User-Agent': 'CV-Tailor/1.0' })
 const abortable = <T>(operation: Promise<T>, signal: AbortSignal): Promise<T> => new Promise((resolve, reject) => {
@@ -38,13 +43,13 @@ const defaultRequest = (url: URL, address: Address, signal: AbortSignal, request
   req.setTimeout(timeout, () => req.destroy(new Error('deadline')))
   req.once('error', reject); req.end()
 })
-function extractHtmlSections(sections: string[], signal: AbortSignal): Promise<string[]> {
+function extractHtmlSections(sections: string[], signal: AbortSignal, budgetMs = extractionTimeout): Promise<string[]> {
   if (sections.length > 202 || sections.reduce((size, section) => size + Buffer.byteLength(section, 'utf8'), 0) > 512 * 1024) return Promise.reject(new Error('HTML sections exceed the bounded parsing input.'))
   const worker = new Worker(join(__dirname, 'named-posting-html-worker.cjs'), { workerData: { sections }, resourceLimits: { maxOldGenerationSizeMb: 48, maxYoungGenerationSizeMb: 16, stackSizeMb: 2 } })
   return new Promise((resolve, reject) => {
     let settled = false
     const finish = (action: () => void) => { if (settled) return; settled = true; clearTimeout(timer); signal.removeEventListener('abort', cancel); void worker.terminate(); action() }
-    const timer = setTimeout(() => finish(() => reject(new Error('HTML parsing exceeded its 3-second budget.'))), 3_000)
+    const timer = setTimeout(() => finish(() => reject(new Error('HTML parsing exceeded its 2-second budget.'))), budgetMs)
     const cancel = () => finish(() => reject(new Error('HTML parsing cancelled.')))
     if (signal.aborted) return cancel()
     signal.addEventListener('abort', cancel, { once: true })
@@ -53,7 +58,23 @@ function extractHtmlSections(sections: string[], signal: AbortSignal): Promise<s
     worker.once('exit', code => { if (code !== 0) finish(() => reject(new Error('HTML parser worker exited unexpectedly.'))) })
   })
 }
-async function leverText(value: any, signal: AbortSignal): Promise<string> {
+function extractBounded(sections: string[], signal: AbortSignal, options: NamedPostingApiOptions): Promise<string[]> {
+  const budget = options.extractionTimeoutMs ?? extractionTimeout
+  const extractionController = new AbortController()
+  const relayAbort = () => extractionController.abort(signal.reason)
+  if (signal.aborted) relayAbort()
+  else signal.addEventListener('abort', relayAbort, { once: true })
+  const extract = options.extractHtml ?? extractHtmlSections
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => { extractionController.abort(new Error('HTML parsing exceeded its bounded deadline.')); reject(new Error('HTML parsing exceeded its bounded deadline.')) }, budget)
+  })
+  return Promise.race([extract(sections, extractionController.signal, budget), deadline]).finally(() => {
+    if (timer) clearTimeout(timer)
+    signal.removeEventListener('abort', relayAbort)
+  })
+}
+async function leverText(value: any, signal: AbortSignal, options: NamedPostingApiOptions): Promise<string> {
   const pieces: string[] = [], htmlIndexes: number[] = []
   if (typeof value.descriptionPlain === 'string' && value.descriptionPlain.trim()) pieces.push(value.descriptionPlain.trim())
   else if (typeof value.description === 'string' && value.description.trim()) { htmlIndexes.push(pieces.length); pieces.push(value.description) }
@@ -71,7 +92,7 @@ async function leverText(value: any, signal: AbortSignal): Promise<string> {
     if (typeof value.additional !== 'string') throw new Error('Lever additional HTML format is ambiguous.')
     if (value.additional.trim()) { htmlIndexes.push(pieces.length); pieces.push(value.additional) }
   }
-  const extracted = htmlIndexes.length ? await extractHtmlSections(htmlIndexes.map(index => pieces[index]), signal) : []
+  const extracted = htmlIndexes.length ? await extractBounded(htmlIndexes.map(index => pieces[index]), signal, options) : []
   htmlIndexes.forEach((index, i) => { pieces[index] = extracted[i] })
   return pieces.filter(Boolean).join('\n\n')
 }
@@ -109,13 +130,13 @@ export async function fetchNamedPostingApi(input: unknown, options: NamedPosting
       try { hosted = new URL(typeof value.hostedUrl === 'string' ? value.hostedUrl : '') } catch { return failed('incomplete') }
       returnedBoard = hosted.pathname.split('/')[1] ?? ''
       returnedPostingId = value.id
-      title = value.text; employer = value.categories?.team ?? value.categories?.department ?? reference.board
-      text = await leverText(value, controller.signal)
+      title = value.text; employer = value.categories?.team ?? value.categories?.department
+      text = await leverText(value, controller.signal, options)
       if (hosted.protocol !== 'https:' || hosted.hostname !== 'jobs.lever.co' || hosted.username || hosted.password || hosted.port || hosted.search || hosted.hash || hosted.pathname !== `/${reference.board}/${reference.postingId}`) return failed('ambiguous')
     } else {
       returnedBoard = null
       returnedPostingId = String(value.id ?? ''); title = value.title; employer = value.company_name
-      text = (await extractHtmlSections([String(value.content ?? '')], controller.signal))[0]
+      text = (await extractBounded([String(value.content ?? '')], controller.signal, options))[0]
       if (value.gh_jid !== undefined && String(value.gh_jid) !== reference.postingId) return failed('ambiguous')
       if (value.absolute_url !== undefined) {
         if (typeof value.absolute_url !== 'string' || value.absolute_url.length > 2048) return failed('ambiguous')
