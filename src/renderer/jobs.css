@@ -5,23 +5,28 @@
 .saved-jobs-page-header p:not(.context) { margin-top: 8px; color: var(--muted); font-size: 13px; }
 .saved-jobs-page-header > button, .saved-job-actions button { min-height: 44px; }
 .saved-jobs-table { width: 100%; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); border-collapse: separate; border-spacing: 0; table-layout: fixed; overflow: hidden; }
-.saved-jobs-table th, .saved-jobs-table td { padding: 16px 20px; text-align: left; vertical-align: middle; }
+.saved-jobs-table th, .saved-jobs-table td { padding: 16px 20px; text-align: left; vertical-align: top; }
 .saved-jobs-table th { background: var(--raised); color: var(--muted); font-size: 12px; font-weight: 650; }
 .saved-jobs-table th:first-child { width: auto; }
 .saved-jobs-table th:nth-child(2) { width: 160px; }
 .saved-jobs-table th:nth-child(3) { width: 360px; }
-.saved-jobs-table td > strong, .saved-jobs-table td > span { display: block; overflow-wrap: anywhere; }
-.saved-job-select { display: inline-grid; width: 32px; min-height: 40px; margin-right: 8px; vertical-align: middle; justify-items: center; align-content: center; }
+.saved-job-posting { display: grid; grid-template-columns: 32px minmax(0, 1fr); align-items: start; gap: 8px; min-width: 0; }
+.saved-job-posting-copy { display: grid; align-content: start; min-width: 0; line-height: 1.55; }
+.saved-job-posting-copy strong, .saved-job-posting-copy span { display: block; min-width: 0; overflow-wrap: anywhere; }
+.saved-job-posting-copy strong { box-sizing: border-box; min-height: 44px; padding-top: 11px; line-height: 22px; }
+.saved-job-select { display: grid; width: 32px; min-height: 44px; justify-items: center; align-content: center; }
 .saved-job-select input, .saved-jobs-selection input { width: 18px; height: 18px; margin: 0; accent-color: var(--blue); }
 .saved-jobs-selection { display: flex; align-items: center; gap: 16px; min-width: 0; margin: -16px 0 20px; padding: 12px 16px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
 .saved-jobs-selection label { display: inline-flex; align-items: center; gap: 8px; min-height: 40px; font-size: 13px; font-weight: 650; }
 .saved-jobs-selection > span { color: var(--muted); font-size: 13px; }
 .saved-jobs-selection .destructive-button { margin-left: auto; }
-.saved-jobs-table td > span { color: var(--muted); font-size: 13px; }
+.saved-job-posting-copy span { color: var(--muted); font-size: 13px; }
+.saved-job-draft-status { display: flex; align-items: center; min-height: 44px; overflow-wrap: anywhere; }
 .saved-job-row + .saved-job-row td { border-top: 1px solid var(--line); }
 .saved-job-row.is-selected td { background: var(--selected-job); }
 .saved-job-row.is-selected td:first-child { border-left: 3px solid var(--blue); padding-left: 17px; }
-.saved-job-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.saved-job-actions { display: flex; flex-wrap: nowrap; align-items: center; gap: 8px; min-width: max-content; min-height: 44px; }
+.saved-job-actions button { flex: 0 0 auto; }
 .saved-jobs-intake { display: grid; gap: 16px; min-width: 0; margin-bottom: 24px; padding: 24px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
 .saved-jobs-intake-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .saved-jobs-intake-heading h2 { margin-top: 4px; font: 700 18px/1.35 'Sora Variable', sans-serif; }
@@ -72,6 +77,9 @@
   .saved-job-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 12px; padding: 16px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
   .saved-job-row td { padding: 0; border: 0 !important; }
   .saved-job-row td::before { display: block; margin-bottom: 8px; color: var(--muted); font-size: 12px; font-weight: 650; content: attr(data-label); }
+  .saved-job-row td[data-label="Draft status"]::before, .saved-job-row td[data-label="Next action"]::before { margin-bottom: 0; }
+  .saved-job-draft-status { min-height: 0; }
+  .saved-job-actions { flex-wrap: wrap; min-width: 0; }
   .saved-job-row td[data-label="Posting"], .saved-job-row td[data-label="Next action"] { grid-column: 1 / -1; }
   .saved-job-row td[data-label="Draft status"] { grid-column: 1; }
 }
