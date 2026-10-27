@@ -4,7 +4,7 @@ import { appearanceSchema, settingsSchema, type Appearance, type WorkbenchAPI } 
 import { piModelPreferenceInputSchema, type PiModelPreferenceInput } from '../shared/pi-model'
 import { evidenceRevisionSchema, profileEntryInputSchema, profileMutationResultSchema, profileSnapshotSchema, uuidSchema, type ContactInput, type ProfileEntryInput, type SkillInput } from '../shared/profile'
 import { experienceSnapshotSchema, experienceMutationResultSchema, type ExperienceInput, type ProjectInput } from '../shared/experience'
-import { jobInputSchema, jobRecordSchema, jobSaveResultSchema, jobDeletionSelectionSchema, jobDeletionExecuteSchema, jobDeletionPreviewSchema, jobDeletionResultSchema, postingRefreshChoiceSchema, type JobInput } from '../shared/jobs'
+import { jobInputSchema, jobRecordSchema, jobSaveResultSchema, jobDeletionSelectionSchema, jobDeletionExecuteSchema, jobDeletionPreviewSchema, jobDeletionResultSchema, postingRefreshChoiceSchema, type JobInput, type JobSaveInput } from '../shared/jobs'
 import { profileExchangeResultSchema } from '../shared/profile-exchange'
 import { outboundConsentActionSchema, outboundConsentPreviewSchema } from '../shared/outbound-consent-contract'
 import { analysisIdSchema, analysisResultSchema, generationRecoverySchema, recoveryChoiceSchema, type AnalysisResult, type RecoveryChoice } from '../shared/posting-analysis'
@@ -105,8 +105,11 @@ const api: WorkbenchAPI = Object.freeze({
   async deleteProject(id: string) {
     return experienceMutationResultSchema.parse(await ipcRenderer.invoke('profile:project:delete', id))
   },
-  async saveJob(input: JobInput & { id?: string }) {
+  async saveJob(input: JobSaveInput) {
     return jobSaveResultSchema.parse(await ipcRenderer.invoke('jobs:save', input))
+  },
+  async openContactProfile(url: string) {
+    return z.object({ ok: z.boolean(), message: z.string() }).strict().parse(await ipcRenderer.invoke('contacts:open-profile', url))
   },
   async listJobs() {
     return jobRecordSchema.array().parse(await ipcRenderer.invoke('jobs:list'))

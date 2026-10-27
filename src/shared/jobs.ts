@@ -27,7 +27,6 @@ export const jobInputSchema = z.object({
   description: postingText,
   optionalDetails: postingOptionalDetailsSchema.optional()
 }).strict()
-export const jobSaveInputSchema = jobInputSchema.extend({ id: z.string().uuid().optional() }).strict()
 export const postingRevisionSchema = jobInputSchema.extend({
   optionalDetails: postingOptionalDetailsSchema,
   revision: z.number().int().positive(),
@@ -47,17 +46,20 @@ export const postingSourceSnapshotSchema = z.object({
   hashes: z.object({ title: z.string().length(64), company: z.string().length(64).nullable(), description: z.string().length(64) }).strict(),
   fieldOrigins: z.object({ title: z.enum(['source', 'user-correction']), company: z.enum(['source', 'user-correction']), description: z.enum(['source', 'user-correction']), optionalDetails: postingOptionalOriginsSchema }).strict()
 }).strict()
+export const httpsProfileUrlSchema = z.string().max(2048).url().refine(value => {
+  try { const url = new URL(value); return url.protocol === 'https:' && !url.username && !url.password }
+  catch { return false }
+}, 'Profile links must use HTTPS and cannot contain credentials.')
 export const jobContactSchema = z.object({
   id: z.string().uuid(),
   name: requiredText(120),
   role: requiredText(80),
-  profileUrl: z.string().max(2048).url().refine(value => {
-    try { const url = new URL(value); return url.protocol === 'https:' && !url.username && !url.password }
-    catch { return false }
-  }, 'Profile links must use HTTPS and cannot contain credentials.').nullable().default(null),
+  profileUrl: httpsProfileUrlSchema.nullable().default(null),
 }).strict()
 export const jobContactsSchema = z.array(jobContactSchema).max(20, 'A saved job can have at most 20 contacts.')
+export const jobSaveInputSchema = jobInputSchema.extend({ id: z.string().uuid().optional(), contacts: jobContactsSchema.optional() }).strict()
 export type JobContact = z.infer<typeof jobContactSchema>
+export type JobSaveInput = z.infer<typeof jobSaveInputSchema>
 export const jobRecordSchema = jobInputSchema.extend({
   optionalDetails: postingOptionalDetailsSchema,
   contacts: jobContactsSchema.default([]),

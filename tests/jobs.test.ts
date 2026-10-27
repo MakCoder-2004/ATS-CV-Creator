@@ -70,6 +70,24 @@ test('job contacts are bounded HTTPS-only record data and legacy records receive
   expect(legacy.contacts).toEqual([])
 })
 
+test('manual contacts save on the current job only, do not create posting revisions, and survive backup and reopen', async () => {
+  const { directory, workbench } = open()
+  const saved = await workbench.api.saveJob({ title: 'Engineer', company: 'Example', description: 'Complete manual posting text.' })
+  if (!saved.ok) throw new Error(saved.error.message)
+  const contact = { id: 'b09b9005-0c8f-4a92-9e7e-7a89abfacb93', name: 'Alex Recruiter', role: 'Recruiter', profileUrl: 'https://example.test/in/alex' }
+  const withContact = await workbench.api.saveJob({ id: saved.value.id, title: saved.value.title, company: saved.value.company, description: saved.value.description, contacts: [contact] })
+  expect(withContact).toMatchObject({ ok: true, value: { contacts: [contact], revisions: saved.value.revisions, updatedAt: saved.value.updatedAt } })
+  const backup = workbench.backup.createBackup()
+  expect(backup).toContain(contact.name)
+  workbench.close()
+  const reopened = createWorkbench(directory)
+  expect(await reopened.api.openJob(saved.value.id)).toMatchObject({ contacts: [contact], revisions: saved.value.revisions })
+  const restored = reopened.backup.previewRestore(backup)
+  reopened.backup.applyRestore(restored.token, value => value)
+  expect(await reopened.api.openJob(saved.value.id)).toMatchObject({ contacts: [contact] })
+  reopened.close()
+})
+
 test('saved jobs preserve original posting text, have stable IDs, and reopen after SQLite restart', async () => {
   const { directory, workbench } = open()
   const original = '\n  Responsibilities:\n- Build reliable systems.\n  Requirements: TypeScript.  \n'

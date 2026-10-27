@@ -1269,7 +1269,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       } catch (error) { return invalid(error instanceof Error && error.message === 'STALE_REFRESH' ? 'The saved posting changed during refresh acceptance. Nothing was replaced; compare again.' : 'The refreshed posting could not be saved. No partial source or revision history was retained.') }
     },
     async saveJob(input) {
-      const { id: _id, ...jobInput } = input
+      const { id: _id, contacts, ...jobInput } = input
       const parsed = jobInputSchema.safeParse(jobInput)
       if (!parsed.success) {
         const fieldErrors: Record<string, string> = {}
@@ -1290,7 +1290,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
         const revisions = acceptedRevision ? [...priorRevisions, acceptedRevision] : priorRevisions
         if (changed && revisions.length > MAX_POSTING_REVISIONS && !backupStatus.legacyOverCap) return jobSaveResultSchema.parse({ ok: false, error: { code: 'REVISION_LIMIT', message: `This saved job reached the ${MAX_POSTING_REVISIONS}-revision history limit. Nothing was changed and no history was deleted.`, fieldErrors: { description: 'The revision limit was reached. Existing posting history remains intact.' } } })
         if (changed && input.id && (activeAnalysisByJob.has(input.id) || externalJobOperations.has(input.id))) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'A provider operation is active for this saved job. Cancel it before changing the posting.' } })
-        const record = jobRecordSchema.parse({ ...parsed.data, optionalDetails: acceptedOptionalDetails, id: input.id ?? randomUUID(), createdAt: existingRow?.created_at ?? now, updatedAt: changed ? now : prior!.updatedAt, provenance: changed ? 'manual' : prior?.provenance ?? 'manual', sourceSnapshot: prior?.sourceSnapshot ?? null, sourceHistory: prior?.sourceHistory ?? [], revisions })
+        const record = jobRecordSchema.parse({ ...parsed.data, optionalDetails: acceptedOptionalDetails, contacts: contacts ?? prior?.contacts ?? [], id: input.id ?? randomUUID(), createdAt: existingRow?.created_at ?? now, updatedAt: changed ? now : prior!.updatedAt, provenance: changed ? 'manual' : prior?.provenance ?? 'manual', sourceSnapshot: prior?.sourceSnapshot ?? null, sourceHistory: prior?.sourceHistory ?? [], revisions })
         const serializedRecord = JSON.stringify(record)
         if (Buffer.byteLength(serializedRecord, 'utf8') > MAX_JOB_RECORD_UTF8_BYTES && (!backupStatus.legacyOverCap || !existingRow || Buffer.byteLength(serializedRecord, 'utf8') >= Buffer.byteLength(existingRow.data, 'utf8'))) return jobSaveResultSchema.parse({ ok: false, error: { code: 'HISTORY_SIZE_LIMIT', message: 'This saved job and its complete revision history exceed the 4 MiB per-job backup limit. Nothing was changed and no history was deleted.', fieldErrors: { description: 'Review the posting revision history limit; existing versions remain intact.' } } })
         db.prepare('INSERT INTO jobs (id, created_at, updated_at, data) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET updated_at=excluded.updated_at, data=excluded.data').run(record.id, record.createdAt, record.updatedAt, serializedRecord)

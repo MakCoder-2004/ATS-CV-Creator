@@ -139,6 +139,13 @@
 .job-dialog-form textarea { min-height: 230px; line-height: 1.55; resize: vertical; }
 .job-dialog-form :is(input, textarea):focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
 .job-dialog-form [aria-invalid=true] { border-color: var(--error); }
+.job-contacts { display: grid; gap: 16px; min-width: 0; padding: 16px; border: 1px solid var(--line); border-radius: 6px; }
+.job-contacts > p { margin: 0; max-width: 70ch; color: var(--muted); line-height: 1.55; }
+.job-contact-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) auto; align-items: end; gap: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 6px; }
+.job-contact-fields label { display: grid; min-width: 0; gap: 8px; font-size: 13px; font-weight: 650; }
+.job-contact-fields input { width: 100%; min-width: 0; min-height: 44px; padding: 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--canvas); color: var(--ink); font: inherit; }
+.job-contact-fields button, .job-contacts > button, .job-contacts > p > button { min-height: 44px; }
+@media (max-width: 760px) { .job-contact-fields { grid-template-columns: minmax(0, 1fr); } }
 .job-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; padding-top: 16px; border-top: 1px solid var(--line); }
 .job-dialog-actions button { min-height: 44px; min-width: 100px; }
 @media (max-width: 1000px) {

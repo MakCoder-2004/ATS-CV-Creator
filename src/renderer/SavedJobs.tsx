@@ -1,6 +1,6 @@
 import React, { FormEvent, useEffect, useRef, useState } from 'react'
 import { FolderOpen, Plus } from 'lucide-react'
-import type { JobDeletionPreview, JobInput, JobRecord, PostingRefreshChoice } from '../shared/jobs'
+import type { JobContact, JobDeletionPreview, JobInput, JobRecord, PostingRefreshChoice } from '../shared/jobs'
 import type { PostingPreview } from '../shared/posting-import'
 import { samePostingSource } from '../shared/posting-identity'
 import type { DraftRevision } from '../shared/draft'
@@ -31,6 +31,7 @@ const optionalPostingFields = [
 export function SavedJobs({ jobs, activeJob, onSaved, onOpened, onDeleted, onNavigate, reviewedResearch, onReviewedResearch, onDiscardReviewedResearch }: { jobs: JobRecord[]; activeJob: JobRecord | null; onSaved: (job: JobRecord) => void; onOpened: (job: JobRecord) => void; onDeleted: (jobIds: string[]) => Promise<void>; onNavigate: (page: 'Tailor CV') => void; reviewedResearch?: { token: string; reviewed: ReviewedJobResearch } | null; onReviewedResearch?: (token: string, reviewed: ReviewedJobResearch) => void; onDiscardReviewedResearch?: () => void }) {
   const [input, setInput] = useState<JobInput>({ title: '', company: '', description: '' })
   const [editingId, setEditingId] = useState<string | undefined>()
+  const [contacts, setContacts] = useState<JobContact[]>([])
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [message, setMessage] = useState('')
   const [messageError, setMessageError] = useState(false)
@@ -399,6 +400,7 @@ export function SavedJobs({ jobs, activeJob, onSaved, onOpened, onDeleted, onNav
     if (previewWasEdited()) { requestDiscard('new'); return }
     const hasUnfinishedEntry = !editingId && [input.title, input.company, input.description].some(value => value.trim())
     setEditingId(undefined)
+    setContacts([])
     if (!hasUnfinishedEntry) setInput({ title: '', company: '', description: '' })
     discardFetchPreview(); setSourceUrl(''); setCaptureMode('manual')
     setErrors({}); setMessage(''); setMessageError(false); setDialogOpen(false); setIntakeOpen(true)
@@ -409,7 +411,7 @@ export function SavedJobs({ jobs, activeJob, onSaved, onOpened, onDeleted, onNav
     try {
       const job = await window.workbench.openJob(id)
       if (!job) { setMessage('This saved job is no longer available. Refresh the list and try again.'); setMessageError(true); return }
-      closeIntake(); setEditingId(job.id); setInput({ title: job.title, company: job.company, description: job.description }); setErrors({}); onOpened(job); setDialogOpen(true)
+      closeIntake(); setEditingId(job.id); setInput({ title: job.title, company: job.company, description: job.description }); setContacts(job.contacts); setErrors({}); onOpened(job); setDialogOpen(true)
     } catch { setMessage('The saved job could not be opened. Try again.'); setMessageError(true) }
   }
   async function openForTailoring(id: string) {
@@ -445,7 +447,7 @@ export function SavedJobs({ jobs, activeJob, onSaved, onOpened, onDeleted, onNav
   async function save(event: FormEvent) {
     event.preventDefault(); setErrors({}); setMessage(''); setMessageError(false); setBusy(true)
     try {
-      const result = await window.workbench.saveJob({ ...input, id: editingId })
+      const result = await window.workbench.saveJob({ ...input, id: editingId, contacts })
       if (!result.ok) {
         const fieldErrors = result.error.fieldErrors ?? {}
         setErrors(fieldErrors); setMessage(result.error.message); setMessageError(true)
@@ -458,12 +460,13 @@ export function SavedJobs({ jobs, activeJob, onSaved, onOpened, onDeleted, onNav
   const sourceHostname = (() => { try { return new URL(sourceUrl).hostname } catch { return '' } })()
   const namedSource = (() => { try { return parseNamedPostingUrl(sourceUrl) } catch { return null } })()
   const field = (key: 'title' | 'company' | 'description') => ({ value: input[key], onChange: (event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => { setInput(value => ({ ...value, [key]: event.target.value })); setErrors(value => ({ ...value, [key]: '' })) }, 'aria-invalid': !!errors[key], 'aria-describedby': errors[key] ? `job-${key}-error` : undefined })
+  const editedJob = editingId ? jobs.find(job => job.id === editingId) : undefined
   const renderFields = () => <div className="form-grid">
     <label>Job title<input id="job-field-title" ref={titleRef} required {...field('title')} />{errors.title && <span id="job-title-error" className="field-error">{errors.title}</span>}</label>
     <label>Company<input id="job-field-company" required {...field('company')} />{errors.company && <span id="job-company-error" className="field-error">{errors.company}</span>}</label>
     <label className="wide-field">Posting and requirements<textarea id="job-field-description" rows={9} required maxLength={400000} {...field('description')} aria-describedby={`job-description-help${errors.description ? ' job-description-error' : ''}`} /><span id="job-description-help" className="field-hint">Complete posting text is saved up to 200,000 characters and 1 MiB of UTF-8 text. Longer text is rejected without truncation.</span>{errors.description && <span id="job-description-error" className="field-error">{errors.description}</span>}</label>
+    <fieldset className="wide-field job-contacts"><legend>Contacts (optional)</legend><p>Manually entered contacts are saved with this job only. They are not used for CV tailoring. Profile links open only when you select the button.</p>{contacts.map((contact, index) => <div className="job-contact-fields" key={contact.id}><label>Name<input maxLength={120} value={contact.name} onChange={event => setContacts(rows => rows.map(row => row.id === contact.id ? { ...row, name: event.target.value } : row))} /></label><label>Role<input maxLength={80} placeholder="Recruiter, HR, or another role" value={contact.role} onChange={event => setContacts(rows => rows.map(row => row.id === contact.id ? { ...row, role: event.target.value } : row))} /></label><label>Profile URL (HTTPS only)<input type="url" maxLength={2048} value={contact.profileUrl ?? ''} onChange={event => setContacts(rows => rows.map(row => row.id === contact.id ? { ...row, profileUrl: event.target.value || null } : row))} /></label><button type="button" className="secondary-button" onClick={() => setContacts(rows => rows.filter(row => row.id !== contact.id))}>Remove contact</button></div>)}<button type="button" className="secondary-button" disabled={contacts.length >= 20} onClick={() => setContacts(rows => [...rows, { id: crypto.randomUUID(), name: '', role: '', profileUrl: null }])}>Add contact</button>{editedJob?.contacts.map(contact => contact.profileUrl && <p key={`open-${contact.id}`}><button type="button" className="secondary-button" onClick={() => void window.workbench.openContactProfile(contact.profileUrl!).then(result => setMessage(result.message)).catch(error => { setMessage(String(error)); setMessageError(true) })}>Open {contact.name || 'contact'} profile</button></p>)}</fieldset>
   </div>
-  const editedJob = editingId ? jobs.find(job => job.id === editingId) : undefined
   const intakeVisible = intakeOpen || jobs.length === 0
   const sourcePolicy = decideJobSourcePolicy(sourceUrl)
   const sourceMatch = (() => { if (!preview) return undefined; return jobs.find(job => job.sourceSnapshot && samePostingSource(job.sourceSnapshot, preview)) })()
