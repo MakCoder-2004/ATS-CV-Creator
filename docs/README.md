@@ -88,7 +88,7 @@ These reports record tests, artifacts, and claims at the stated version or issue
 | [Issue 98 named API and search retirement](validation/issue-98-named-api-and-search-retirement.md) | Historical foundation check: the adapter was inert then, Tavily dispatch retired and a synthetic legacy key was verified. |
 | [Issue 98 temporary Greenhouse preview](validation/issue-98-temporary-greenhouse-preview.md) | Historical evidence for the read-only, volatile preview before #99's reviewed Save flow. |
 | [Issue 99 named posting Save](validation/issue-99-reviewed-save-2026-10-27.md) | Development implementation and synthetic verification for named Greenhouse/Lever; generic Lever, LinkedIn, and Indeed routes remain paused. |
-| [Issue 101 integration checkpoint](validation/issue-101-integration-2026-10-27.md) | Final serial suite passed after stale policy-test corrections; transient paragraph failures were not reproducible. The unpacked synthetic preview passed; installed Windows acceptance remains not verified and #101 stays open. |
+| [Issue 101 integration checkpoint](validation/issue-101-integration-2026-10-27.md) | Final serial suite and synthetic unpacked preview passed; the installed #108 candidate passed native-SQLite reopen, backup/restore and packaged export checks. Named API fakes remain unpacked-only; #101 awaits independent gate review. |
 
 ## Prototype design evidence
 
