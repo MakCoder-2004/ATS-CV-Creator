@@ -1,22 +1,21 @@
 # Issue 101 integration checkpoint — 2026-10-27
 
-**Verdict: INCOMPLETE; issue #101 remains open.** This checkpoint used a new isolated worktree at `E:/cv-tailor-101`, based on reviewed #99 PR #107 commit `7e05755d505d8edab429bd30ec29e663ae736399`. It did not modify or merge PR #107 or `main`.
+**Verdict: INCOMPLETE; issue #101 remains open pending installed Windows acceptance.** This checkpoint used a new isolated worktree at `E:/cv-tailor-101`, based on reviewed #99 PR #107 commit `7e05755d505d8edab429bd30ec29e663ae736399`. It did not modify or merge PR #107 or `main`.
 
 ## Scope and evidence
 
 - Installed the locked dependencies in this worktree with `npm ci --no-audit --no-fund` (696 packages); no concurrent install or test process ran.
 - `npm run typecheck` and `npm run build` passed. Build emitted only the known nonfatal upstream Zod annotation warnings.
-- One serial integration run, `npm test` (Node-ABI SQLite rebuild followed by Vitest with one worker), completed with **71 test files passed, 3 failed, 2 skipped; 534 tests passed, 4 failed, 3 skipped**. Failures are listed below; this is not a passing integration suite.
+- Initial serial integration run, `npm test` (Node-ABI SQLite rebuild followed by Vitest with one worker), found four failures. After correcting only the two stale policy assertions, one final serial `npm test` pass completed with **74 test files passed, 2 skipped; 538 tests passed, 3 skipped; no failures**. The unchanged Electron preview was not repeated.
 - After rebuilding `better-sqlite3` for Electron, one unpacked visible desktop test passed: `node node_modules/playwright/cli.js test tests/electron/named-greenhouse-preview.spec.ts --workers=1 --reporter=line` — **1 passed**. It exercised synthetic-only Greenhouse and Lever flows, exact-role/completeness review, explicit Save, the source-snapshot/working-record split, native SQLite persistence after renderer reload, deletion and the old-backup disclosure, and fail-closed generic Greenhouse/EU Lever routes. The dev-only fixture logs exactly three named API requests (two Greenhouse attempts, one Lever); link changes did not issue a late extra read. It uses isolated `appData` and `userData` siblings and scripted local responses; no live posting, Tavily, Pi model, packaged executable or installer was used. This is unpacked development preview evidence, not installed-app acceptance.
-- In the serial suite, named-posting unit coverage, including SQLite Save/backup/restore/delete/reopen, passed (`tests/jobs.test.ts`); source-policy, named API/session, backup, profile/CV, and authorization suites also ran as part of the same serial pass. These results do not erase the four unrelated suite failures or establish installed behavior.
+- In the final serial suite, named-posting unit coverage, including SQLite Save/backup/restore/delete/reopen, passed (`tests/jobs.test.ts`); source-policy, named API/session, backup, profile/CV, and authorization suites also passed. This does not establish installed behavior.
 
-## Serial-suite failures
+## Failure diagnosis and follow-up
 
-1. `tests/job-research-ui.test.ts` — stale copy assertion expects the older Lever-pause wording and does not match the current named-Lever opt-in disclosure.
-2. `tests/research-volatile-analysis.test.ts` — expects LinkedIn research dispatch, but current source policy correctly refuses it as paused.
-3. Two `tests/paragraph-repair-boundary.test.ts` cases fail because `generateDraft` returns `ok: false` for the 60-word paragraph boundary and the correction `- Built 12 stable systems.`. These failures are outside named job intake; they remain unresolved and must not be called stale without investigation.
-
-No second full suite or repeated Electron run was performed. The failures were not changed in this integration checkpoint.
+- `tests/job-research-ui.test.ts` had stale copy expecting Lever generally paused. Updated the assertion to require the current accurate disclosure: generic/direct LinkedIn, Indeed and Lever remain paused, with a distinct per-run opt-in and reviewed Save route.
+- `tests/research-volatile-analysis.test.ts` expected LinkedIn and Indeed identities to proceed to model outgoing-data preview, contradicting current fail-closed policy. Replaced it with assertions that both source-specific pauses are returned before dispatch and the synthetic model transport is never called. No source policy or production code was weakened.
+- The two paragraph-repair failures from the initial integration run were not reproducible consistently. The paragraph-boundary suite passed 4/4 on a separate clean worktree at `origin/main` commit `c52533f2dc2f61a23d7741d5eec312efe48fa378`; relevant generation/recovery production code is unchanged between that baseline and pinned #99 commit (the #99 workbench delta is the separate named-posting acceptance method). In `E:/cv-tailor-101`, the suite initially failed two cases, then one multiline-correction case on a subsequent targeted run, and passed all 4 cases in both the focused 3-file run and final serial integration. No assertion was weakened and no production code changed. The transient failure's cause was not established; do not claim it was introduced by #99.
+- The focused rerun of `tests/job-research-ui.test.ts`, `tests/research-volatile-analysis.test.ts`, and `tests/paragraph-repair-boundary.test.ts` passed **25/25**. The final serial `npm test` pass passed all non-skipped tests. No further full suite or Electron preview was run.
 
 ## Acceptance limits and remaining gates
 
