@@ -12,7 +12,7 @@ import { migrateLegacyOpenRouterWorkspace } from './pi-settings-migration'
 import { defaultOpenRouterModel, openRouterModelSchema } from '../shared/openrouter-settings'
 import { contactInputSchema, contactRecordSchema, evidenceRevisionSchema, profileEntryInputSchema, profileEntrySchema, profileMutationResultSchema, profileSnapshotSchema, skillInputSchema, skillRecordSchema, uuidSchema, type ContactRecord, type EvidenceRevision, type ProfileEntry, type ProfileSnapshot, type SkillRecord } from '../shared/profile'
 import { experienceInputSchema, experienceRecordSchema, experienceSnapshotSchema, experienceMutationResultSchema, projectInputSchema, projectRecordSchema, type ExperienceRecord, type ProjectRecord, type FactualItemRecord, type ExperienceSnapshot } from '../shared/experience'
-import { jobInputSchema, jobRecordSchema, jobSaveResultSchema, jobDeletionSelectionSchema, jobDeletionPreviewSchema, jobDeletionResultSchema, MAX_JOB_RECORD_UTF8_BYTES, MAX_POSTING_REVISIONS, legacyDraftTargetBaseline } from '../shared/jobs'
+import { hasSavedJobApplicationUrlInput, jobInputSchema, jobRecordSchema, jobSaveResultSchema, jobDeletionSelectionSchema, jobDeletionPreviewSchema, jobDeletionResultSchema, MAX_JOB_RECORD_UTF8_BYTES, MAX_POSTING_REVISIONS, legacyDraftTargetBaseline, postingOptionalDetailsSchema } from '../shared/jobs'
 import type { JobRecord } from '../shared/jobs'
 import { profileExchangeSchema, type ProfileExchange } from '../shared/profile-exchange'
 import { prepareOutboundBundle, type ConsentSource, type EvidenceScopeRevision, type OutboundBundle, type OutboundPayload } from '../shared/outbound-consent'
@@ -894,6 +894,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       return tx()
     },
     async saveJob(input) {
+      if (hasSavedJobApplicationUrlInput(input)) return jobSaveResultSchema.parse({ ok: false, error: { code: 'VALIDATION_ERROR', message: 'Job application URLs are not accepted in manual intake.', fieldErrors: { 'optionalDetails.applicationUrl': 'Remove this URL; saved jobs are entered manually.' } } })
       const { id: _id, contacts, ...jobInput } = input
       const parsed = jobInputSchema.safeParse(jobInput)
       if (!parsed.success) {
@@ -907,8 +908,13 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
         if (input.id && !existingRow) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'This saved job no longer exists.' } })
         const prior = existingRow ? jobRecordSchema.parse(JSON.parse(existingRow.data)) : undefined
         const backupStatus = backupEngine.readBackupStatus()
-        const acceptedOptionalDetails = parsed.data.optionalDetails ?? prior?.optionalDetails
-        const changed = !prior || prior.title !== parsed.data.title || prior.company !== parsed.data.company || prior.description !== parsed.data.description || (parsed.data.optionalDetails !== undefined && JSON.stringify(prior.optionalDetails) !== JSON.stringify(parsed.data.optionalDetails))
+        const requestedOptionalDetails = input.optionalDetails
+        const optionalDetailsPatch = requestedOptionalDetails ? Object.fromEntries(Object.entries(requestedOptionalDetails).filter(([, value]) => value !== undefined)) : undefined
+        const acceptedOptionalDetails = prior
+          ? optionalDetailsPatch ? postingOptionalDetailsSchema.parse({ ...prior.optionalDetails, ...optionalDetailsPatch }) : prior.optionalDetails
+          : parsed.data.optionalDetails
+        const optionalDetailsChanged = !!prior && !!optionalDetailsPatch && JSON.stringify(prior.optionalDetails) !== JSON.stringify(acceptedOptionalDetails)
+        const changed = !prior || prior.title !== parsed.data.title || prior.company !== parsed.data.company || prior.description !== parsed.data.description || optionalDetailsChanged
         const now = new Date(Math.max(Date.now(), prior ? Date.parse(prior.updatedAt) + 1 : 0)).toISOString()
         const priorRevisions = prior && prior.revisions.length === 0 && changed ? [{ title: prior.title, company: prior.company, description: prior.description, revision: 1, acceptedAt: prior.updatedAt, provenance: 'legacy-unknown' as const }] : prior?.revisions ?? []
         const acceptedRevision = changed ? { ...parsed.data, optionalDetails: acceptedOptionalDetails, revision: (priorRevisions.at(-1)?.revision ?? 0) + 1, acceptedAt: now, provenance: 'manual' as const } : undefined

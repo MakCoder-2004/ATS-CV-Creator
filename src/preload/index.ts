@@ -4,7 +4,7 @@ import { appearanceSchema, settingsSchema, type Appearance, type WorkbenchAPI } 
 import { piModelPreferenceInputSchema, type PiModelPreferenceInput } from '../shared/pi-model'
 import { evidenceRevisionSchema, profileEntryInputSchema, profileMutationResultSchema, profileSnapshotSchema, uuidSchema, type ContactInput, type ProfileEntryInput, type SkillInput } from '../shared/profile'
 import { experienceSnapshotSchema, experienceMutationResultSchema, type ExperienceInput, type ProjectInput } from '../shared/experience'
-import { jobRecordSchema, jobSaveResultSchema, jobDeletionSelectionSchema, jobDeletionExecuteSchema, jobDeletionPreviewSchema, jobDeletionResultSchema, type JobSaveInput } from '../shared/jobs'
+import { hasSavedJobApplicationUrlInput, jobRecordSchema, jobSaveResultSchema, jobDeletionSelectionSchema, jobDeletionExecuteSchema, jobDeletionPreviewSchema, jobDeletionResultSchema, type JobSaveInput } from '../shared/jobs'
 import { profileExchangeResultSchema } from '../shared/profile-exchange'
 import { outboundConsentActionSchema, outboundConsentPreviewSchema } from '../shared/outbound-consent-contract'
 import { analysisIdSchema, analysisResultSchema, generationRecoverySchema, recoveryChoiceSchema, type AnalysisResult, type RecoveryChoice } from '../shared/posting-analysis'
@@ -101,6 +101,7 @@ const api: WorkbenchAPI = Object.freeze({
     return experienceMutationResultSchema.parse(await ipcRenderer.invoke('profile:project:delete', id))
   },
   async saveJob(input: JobSaveInput) {
+    if (hasSavedJobApplicationUrlInput(input)) throw new Error('Job application URLs are not accepted in manual intake.')
     return jobSaveResultSchema.parse(await ipcRenderer.invoke('jobs:save', input))
   },
   async openContactProfile(jobId: string, contactId: string) {

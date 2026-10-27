@@ -56,6 +56,31 @@ test('manual contacts save on the current job only, do not create posting revisi
   reopened.close()
 })
 
+test('manual job-save API rejects new application URLs and preserves historical application URLs during edits', async () => {
+  const { directory, workbench } = open()
+  const saved = await workbench.api.saveJob({ title: 'Engineer', company: 'Example', description: 'Manual posting.' })
+  if (!saved.ok) throw new Error(saved.error.message)
+  const historic = seedHistoricalJob(directory, saved.value.id, { title: 'Imported Engineer', company: 'Example', description: 'Captured source wording.', submittedUrl: 'https://jobs.example.com/legacy-role', finalUrl: 'https://jobs.example.com/legacy-role' })
+  expect(historic.sourceSnapshot?.submittedUrl).toBe('https://jobs.example.com/legacy-role')
+  const historicalUrl = { value: 'https://example.com/legacy-application', origin: 'source', source: 'released-snapshot', uncertainty: 'none' }
+  const db = new Database(join(directory, 'workbench.sqlite'))
+  registerWorkspaceBackupRowSizer(db)
+  const stored = JSON.parse((db.prepare('SELECT data FROM jobs WHERE id=?').get(saved.value.id) as { data: string }).data)
+  stored.optionalDetails.applicationUrl = historicalUrl
+  stored.revisions[0].optionalDetails.applicationUrl = historicalUrl
+  stored.sourceSnapshot.optionalDetails.applicationUrl = historicalUrl
+  db.prepare('UPDATE jobs SET data=? WHERE id=?').run(JSON.stringify(stored), saved.value.id)
+  db.close()
+
+  const edited = await workbench.api.saveJob({ id: saved.value.id, title: 'Senior Engineer', company: 'Example', description: 'Edited manual posting.' })
+  expect(edited).toMatchObject({ ok: true, value: { optionalDetails: { applicationUrl: historicalUrl }, sourceSnapshot: { submittedUrl: 'https://jobs.example.com/legacy-role', optionalDetails: { applicationUrl: historicalUrl } }, provenance: 'manual' } })
+  const rawAttempt = { id: saved.value.id, title: 'Senior Engineer', company: 'Example', description: 'Edited manual posting.', optionalDetails: { applicationUrl: historicalUrl } }
+  expect(jobSaveInputSchema.safeParse(rawAttempt).success).toBe(false)
+  await expect(workbench.api.saveJob(rawAttempt as never)).resolves.toMatchObject({ ok: false, error: { code: 'VALIDATION_ERROR', fieldErrors: { 'optionalDetails.applicationUrl': expect.any(String) } } })
+  expect(await workbench.api.openJob(saved.value.id)).toMatchObject({ optionalDetails: { applicationUrl: historicalUrl } })
+  workbench.close()
+})
+
 test('saved jobs preserve original posting text, have stable IDs, and reopen after SQLite restart', async () => {
   const { directory, workbench } = open()
   const original = '\n  Responsibilities:\n- Build reliable systems.\n  Requirements: TypeScript.  \n'

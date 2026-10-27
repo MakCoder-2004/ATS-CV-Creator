@@ -80,7 +80,15 @@ export const jobContactsSchema = z.array(jobContactSchema).max(20, 'A saved job 
     seen.add(contact.id)
   })
 })
-export const jobSaveInputSchema = jobInputSchema.extend({ id: z.string().uuid().optional(), contacts: jobContactsSchema.optional() }).strict()
+const manualPostingOptionalFieldNames = postingOptionalFieldNames.filter((name): name is Exclude<typeof postingOptionalFieldNames[number], 'applicationUrl'> => name !== 'applicationUrl')
+const manualPostingOptionalDetailsShape = Object.fromEntries(manualPostingOptionalFieldNames.map(name => [name, optionalPostingFieldSchema.optional()])) as Record<typeof manualPostingOptionalFieldNames[number], ReturnType<typeof optionalPostingFieldSchema.optional>>
+export const jobSaveOptionalDetailsSchema = z.object(manualPostingOptionalDetailsShape).strict()
+export const jobSaveInputSchema = jobInputSchema.omit({ optionalDetails: true }).extend({ id: z.string().uuid().optional(), contacts: jobContactsSchema.optional(), optionalDetails: jobSaveOptionalDetailsSchema.optional() }).strict()
+export function hasSavedJobApplicationUrlInput(input: unknown): boolean {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return false
+  const details = (input as Record<string, unknown>).optionalDetails
+  return !!details && typeof details === 'object' && !Array.isArray(details) && Object.prototype.hasOwnProperty.call(details, 'applicationUrl')
+}
 export type JobContact = z.infer<typeof jobContactSchema>
 export type JobSaveInput = z.infer<typeof jobSaveInputSchema>
 export const jobRecordSchema = jobInputSchema.extend({

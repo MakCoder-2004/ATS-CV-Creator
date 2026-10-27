@@ -1,6 +1,8 @@
 import { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } from 'electron'
 import type { ZodError } from 'zod'
 import { fileURLToPath } from 'node:url'
+import { lookup } from 'node:dns/promises'
+import { isIP } from 'node:net'
 import { appendFileSync, existsSync, linkSync, lstatSync, mkdirSync, realpathSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
 import { basename, dirname, extname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -17,7 +19,8 @@ import type { AnalysisTransport } from './posting-analysis'
 import { appearanceSchema } from '../shared/appearance'
 import { contactSaveInputSchema, evidenceRevisionSchema, profileEntrySaveSchema, profileMutationResultSchema, profileSnapshotSchema, skillSaveInputSchema, uuidSchema } from '../shared/profile'
 import { experienceSaveInputSchema, experienceSnapshotSchema, experienceMutationResultSchema, projectSaveInputSchema } from '../shared/experience'
-import { jobRecordSchema, jobSaveInputSchema, jobSaveResultSchema, jobDeletionSelectionSchema, jobDeletionExecuteSchema, jobDeletionPreviewSchema, jobDeletionResultSchema, httpsProfileUrlSchema } from '../shared/jobs'
+import { hasSavedJobApplicationUrlInput, jobRecordSchema, jobSaveInputSchema, jobSaveResultSchema, jobDeletionSelectionSchema, jobDeletionExecuteSchema, jobDeletionPreviewSchema, jobDeletionResultSchema, httpsProfileUrlSchema } from '../shared/jobs'
+import { arePublicContactProfileAddresses } from './contact-profile-safety'
 import { registerProfileExchangeIpc } from './profile-exchange-ipc'
 import { registerProfilePdfImportIpc } from './profile-pdf-import-ipc'
 import { registerProfileDocxImportIpc } from './profile-docx-import-ipc'
@@ -297,6 +300,7 @@ app.whenReady().then(() => {
   ipcMain.handle('jobs:save', async (event, ...args: unknown[]) => {
     trusted(event)
     if (args.length !== 1) throw new Error('Expected job')
+    if (hasSavedJobApplicationUrlInput(args[0])) return jobSaveResultSchema.parse({ ok: false, error: { code: 'VALIDATION_ERROR', message: 'Job application URLs are not accepted in manual intake.', fieldErrors: { 'optionalDetails.applicationUrl': 'Remove this URL; saved jobs are entered manually.' } } })
     const input = jobSaveInputSchema.safeParse(args[0])
     if (!input.success) {
       const fieldErrors: Record<string, string> = {}
@@ -312,8 +316,12 @@ app.whenReady().then(() => {
     const contact = job?.contacts.find(item => item.id === contactId)
     if (!contact?.profileUrl) return { ok: false, message: 'This contact no longer has a saved profile link.' }
     const url = httpsProfileUrlSchema.parse(contact.profileUrl)
+    const target = new URL(url), host = target.hostname.replace(/^\[|\]$/g, '')
+    // The explicit click triggers DNS safety validation only; this does not fetch profile content or pin the browser's later resolution.
+    const addresses = isIP(host) ? [{ address: host }] : await lookup(host, { all: true, verbatim: true })
+    if (!arePublicContactProfileAddresses(addresses.map(address => address.address))) return { ok: false, message: 'This profile host does not resolve only to public addresses. Nothing was opened.' }
     await shell.openExternal(url)
-    return { ok: true, message: 'Opened the saved contact profile in your default browser.' }
+    return { ok: true, message: 'Opened the saved contact profile in your default browser. The browser controls redirects and final addresses.' }
   })
   ipcMain.handle('jobs:delete:preview', async (event, ...args: unknown[]) => {
     trusted(event); if (args.length !== 1) throw new Error('Expected saved job selection')
