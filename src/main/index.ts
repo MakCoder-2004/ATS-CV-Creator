@@ -271,12 +271,16 @@ app.whenReady().then(() => {
   workspace = createWorkbench(app.getPath('userData'), undefined, useScriptedPi ? undefined : scriptedAnalysis, undefined, postingFetchOptions, piRuntime)
   const namedPreviewFixture = namedPreviewFixtureEnabled ? {
     lookup: async (host: string) => {
-      if (host !== 'boards-api.greenhouse.io') throw new Error('Unexpected named-preview fixture host.')
+      if (!['boards-api.greenhouse.io', 'api.lever.co'].includes(host)) throw new Error('Unexpected named-preview fixture host.')
       return [{ address: '8.8.8.8', family: 4 }]
     },
     request: async (url: URL, _address: { address: string; family: number }, signal: AbortSignal) => {
-      const expected = 'https://boards-api.greenhouse.io/v1/boards/acme/jobs/123'
-      if (url.href !== expected) throw new Error('Unexpected named-preview fixture route.')
+      const responses: Record<string, unknown> = {
+        'https://boards-api.greenhouse.io/v1/boards/acme/jobs/123': { id: 123, title: 'Synthetic Reliability Engineer', company_name: 'Example Research', updated_at: '2026-10-25T12:00:00Z', content: `<p>${'Build and maintain synthetic systems, document decisions, collaborate with a fictional team, and review reliability outcomes. '.repeat(8)}</p>` },
+        'https://api.lever.co/v0/postings/acme/role1': { id: 'role1', text: 'Synthetic Reliability Engineer', categories: { team: 'Example Research' }, descriptionPlain: `${'Build and maintain synthetic systems, document decisions, collaborate with a fictional team, and review reliability outcomes. '.repeat(8)}`, hostedUrl: 'https://jobs.lever.co/acme/role1' }
+      }
+      const body = responses[url.href]
+      if (!body) throw new Error('Unexpected named-preview fixture route.')
       appendFileSync(join(app.getPath('userData'), 'named-preview-request-count.log'), 'request\n')
       await new Promise<void>((resolve, reject) => {
         const timer = setTimeout(() => { signal.removeEventListener('abort', abort); resolve() }, 500)
@@ -284,7 +288,7 @@ app.whenReady().then(() => {
         if (signal.aborted) abort()
         else signal.addEventListener('abort', abort, { once: true })
       })
-      return { status: 200, headers: { 'content-type': 'application/json' }, body: Buffer.from(JSON.stringify({ id: 123, title: 'Synthetic Reliability Engineer', company_name: 'Example Research', updated_at: '2026-10-25T12:00:00Z', content: `<p>${'Build and maintain synthetic systems, document decisions, collaborate with a fictional team, and review reliability outcomes. '.repeat(8)}</p>` })) }
+      return { status: 200, headers: { 'content-type': 'application/json' }, body: Buffer.from(JSON.stringify(body)) }
     }
   } : undefined
   namedPostingPreviews = createNamedPostingPreviewSession(namedPreviewFixture)

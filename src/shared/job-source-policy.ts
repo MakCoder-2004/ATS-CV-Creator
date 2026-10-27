@@ -2,7 +2,7 @@ export type JobSourcePolicy = { status: 'paused'; source: 'lever' | 'linkedin' |
 
 const paused = {
   greenhouse: 'Generic Greenhouse direct reads are unavailable. Use the explicit named Greenhouse preview or paste the posting text.',
-  lever: 'Automatic Lever fetching, saving, and refresh stay paused until the named-posting adapter and review flow pass safety checks. Paste the posting text instead.',
+  lever: 'Generic/direct Lever fetching, saving, and refresh stay paused. Only the separate opted-in named API preview can read and save an exact posting. Paste the text instead.',
   linkedin: 'Automatic LinkedIn reads remain paused without an approved selected-job route. Paste the posting text instead.',
   indeed: 'Automatic Indeed reads remain paused without an approved selected-job route. Paste the posting text instead.'
 } as const

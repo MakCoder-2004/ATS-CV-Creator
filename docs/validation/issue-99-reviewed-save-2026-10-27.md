@@ -1,24 +1,23 @@
-# Issue 99: reviewed named Greenhouse Save
+# Issue 99: reviewed named Greenhouse and Lever Save
 
-**Status:** Greenhouse's exact named API preview now has an explicit review and Save flow in this development branch. Lever remains paused; this is not full #99 closure or integrated/installed acceptance.
+**Status:** This development branch implements explicit reviewed Save through the exact named Greenhouse and non-EU Lever API routes. Generic/direct Lever, LinkedIn, and Indeed routes remain paused. This is not integrated or installed acceptance; #101 owns that handoff. PR #107 remains open for review.
 
 ## Implemented
 
-- A main-process session retains the immutable retrieved attempt and candidate. A reviewed attempt/candidate hash, exact-role/completeness decisions, expiry and one-time review token are checked before Save. Renderer-supplied flags or candidate data alone cannot create save authority.
-- Save writes the accepted posting, source snapshot, retrieval route/update time, source hash, field origins and first posting revision in one SQLite transaction. User corrections become working wording while the captured source snapshot remains unchanged. Exact duplicates are refused, including a transaction-time recheck; failed saves leave the preview retryable. Save does not authorize model work.
-- The Saved jobs review shows source/title/employer/board/posting ID, full text, capture/source-update time and freshness limits; includes separate working fields, exact-role and completeness acknowledgements, and explicit backup/deletion notice. Existing deletion removes attributable workspace data while leaving user-created backup artifacts untouched.
-- LinkedIn and Indeed remain paused. Lever remains paused and no Lever route was enabled.
+- A main-process session retains immutable retrieved attempt/candidate data. Exact-role/completeness review is bound to that candidate hash, expiry and a one-time token. Renderer flags or candidate data alone cannot authorize Save.
+- Greenhouse and non-EU Lever named API candidates share the guarded preview/review/Save path. Lever EU and generic/direct Lever are still refused before network access. LinkedIn/Indeed remain paused.
+- Save writes the accepted posting, separate captured source snapshot, retrieval route/update metadata, hashes, working wording, field origins, and initial revision atomically. User corrections do not rewrite source text. Duplicate checks also run inside the transaction; stale, declined, cancelled, incomplete, and expired data is not persisted. Save does not authorize model work.
+- Named API transport bounds DNS/IP selection, HTTPS route, redirects, response bytes, request deadline, and HTML worker extraction. The Lever extractor uses a two-second bound. Socket failures do not auto-retry; a retry requires a new explicit user start.
+- UI discloses per-run local opt-in, source identity, full text, source update/capture time and freshness limits, separate working wording, backup/deletion semantics, and the separate model-consent step.
 
 ## Verification
 
-- Focused contract, named API, preview-session and paused-source suites: **48 tests passed** (Node SQLite ABI).
-- Focused workspace Save/reopen/backup/restore/delete/duplicate/correction test: **passed** (Node SQLite ABI).
-- `npm run typecheck`: passed after the final schema change.
-- `npm run build`: passed.
-- One synthetic visible Electron flow: **passed** for preview, review, explicit Save, source/working separation, reload/reopen, deletion and older-backup disclosure. It used the fixed local fake response and isolated workspace; no live provider or packaged app.
-- `node scripts/check-doc-links.cjs` and `git diff --check`: passed.
-- No installed-Windows or live-source checks were run. `#101` retains those broader integration and separately approved installed gates.
+- Focused contract/API/session/source-policy/adapter tests: **54 passed** (Node SQLite ABI; no live endpoints).
+- Focused SQLite Save/correction/duplicate/backup/restore/delete/reopen test: **passed**.
+- `npm run typecheck`, `npm run build`, docs-link check and `git diff --check`: passed.
+- One synthetic visible Electron flow passed Greenhouse and Lever preview, reviewed Save, source/working separation, reopen, delete, backup-retention notice, and generic/EU pause assertions. All requests used fixed local fake responses; no live provider or packaged app was run.
+- No installed Windows test was run.
 
-## Still open under #99
+## Remaining gate
 
-The named Lever preview/review path and complete source-specific safe mocked regression coverage remain unfinished. Do not reopen Lever until the adapter's deadline/extraction, redirects, DNS pinning, response limits, cancellation and failure behavior are fully covered and reviewed. LinkedIn and Indeed remain paused. The Greenhouse synthetic flow does not prove live response completeness or universal access. Issue #99 stays open; no PR merge or issue closure is implied.
+#101 still owns broader integrated testing and separately approved installed-Windows validation. Public external-source behavior and legal rights are not claimed. PR #107 is open; issue #99 remains open pending review/merge. No source route beyond the exact named personal-local opt-in is enabled by this work.

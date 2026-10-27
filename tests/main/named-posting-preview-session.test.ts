@@ -13,8 +13,27 @@ const deferred = <T,>() => { let resolve!: (value: T) => void; const promise = n
     const lookup = vi.fn(async () => [{ address: '8.8.8.8', family: 4 }]), request = vi.fn()
     const session = createNamedPostingPreviewSession({ lookup, request: request as never })
     expect(() => session.start(url, false)).toThrow(/personal-local/)
-    expect(() => session.start('https://jobs.lever.co/acme/123', true)).toThrow(/Lever/i)
+    expect(() => session.start('https://jobs.eu.lever.co/acme/123', true)).toThrow(/supported/i)
+    expect(() => session.start('https://api.lever.co/v0/postings/acme/role1', true)).toThrow(/supported/i)
     expect(lookup).not.toHaveBeenCalled(); expect(request).not.toHaveBeenCalled()
+  })
+  it('turns socket failure into one failed attempt and retries only after a new explicit start', async () => {
+    let requests = 0
+    const session = createNamedPostingPreviewSession({ lookup: async () => [{ address: '8.8.8.8', family: 4 }], request: async url => {
+      requests++
+      if (url.hostname !== 'api.lever.co') throw new Error('Unexpected named source host.')
+      if (requests === 1) throw new Error('Synthetic socket reset.')
+      return { status: 200, headers: { 'content-type': 'application/json' }, body: Buffer.from(JSON.stringify({ id: 'role1', text: 'Engineer', categories: { team: 'Example Co' }, descriptionPlain: `Build reliable systems and document decisions. ${'Qualifications and responsibilities are reviewed by the engineering team. '.repeat(3)}`, hostedUrl: 'https://jobs.lever.co/acme/role1' })) }
+    } })
+    const first = session.start('https://jobs.lever.co/acme/role1', true)
+    for (let i = 0; i < 50 && session.read(first.token).status === 'loading'; i++) await new Promise(resolve => setTimeout(resolve, 10))
+    expect(session.read(first.token)).toMatchObject({ status: 'failed', attempt: { status: 'failed', reason: 'source-error' } })
+    expect(requests).toBe(1)
+    const second = session.start('https://jobs.lever.co/acme/role1', true)
+    for (let i = 0; i < 50 && session.read(second.token).status === 'loading'; i++) await new Promise(resolve => setTimeout(resolve, 10))
+    expect(session.read(second.token)).toMatchObject({ status: 'ready', candidate: { reference: { source: 'lever' }, returnedBoard: 'acme', returnedPostingId: 'role1' } })
+    expect(requests).toBe(2)
+    session.close()
   })
   it('returns loading before lookup completes; cancel aborts and late response cannot restore data', async () => {
     const pending = deferred<Array<{ address: string; family: number }>>()
@@ -59,6 +78,7 @@ const deferred = <T,>() => { let resolve!: (value: T) => void; const promise = n
     expect(decideJobSourcePolicy(url).status).toBe('paused')
     lookup.mockClear()
     await expect(fetchDirectJobResearch(url, { lookup })).rejects.toThrow(/Greenhouse/i)
+    await expect(fetchDirectJobResearch('https://jobs.lever.co/acme/role1', { lookup })).rejects.toThrow(/Lever/i)
     expect(lookup).not.toHaveBeenCalled()
   })
   it('pauses both EU Lever hosts before DNS or requests and rejects EU named URLs', async () => {

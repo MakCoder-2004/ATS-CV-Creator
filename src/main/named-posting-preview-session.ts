@@ -6,7 +6,7 @@ import { namedPostingAttemptSchema, namedPostingCandidateSchema, namedPostingPre
 
 type Entry = { generation: string; controller: AbortController; status: 'loading' | 'ready' | 'failed'; attempt?: NamedPostingAttempt; candidate?: NamedPostingCandidate; reviewToken?: string; review?: { attemptId: string; candidateHash: string; reviewedAt: string; exactRole: true; completeness: true }; timer: ReturnType<typeof setTimeout>; expiresAt: number }
 const ttl = 10 * 60_000
-/** Volatile exact Greenhouse detail preview; no persistence or promotion capability. */
+/** Volatile exact-role named API preview; only explicit main-held review can authorize Save. */
 export function createNamedPostingPreviewSession(options: NamedPostingApiOptions = {}, now = () => Date.now()) {
   const sessions = new Map<string, Entry>()
   let closed = false
@@ -14,12 +14,11 @@ export function createNamedPostingPreviewSession(options: NamedPostingApiOptions
   const start = (url: string, personalLocalOptIn: boolean) => {
     if (closed) throw new Error('Named posting previews are closed.')
     let reference
-    try { reference = parseNamedPostingUrl(url) } catch { throw new Error('Paste one supported public Greenhouse job link.') }
-    if (reference.source !== 'greenhouse') throw new Error('Automatic Lever reads remain paused. Paste the posting text instead.')
+    try { reference = parseNamedPostingUrl(url) } catch { throw new Error('Paste one supported public Greenhouse or non-EU Lever job link.') }
     if (personalLocalOptIn !== true) throw new Error('Confirm the personal-local, temporary preview notice before fetching.')
     const token = randomUUID(), generation = randomUUID(), controller = new AbortController(), started = now(), expiresAt = started + ttl
     // Grant derives only from the trusted main-process IPC action, not renderer eligibility data.
-    const eligibility = { personalLocalOptIn: true as const, source: 'greenhouse' as const, scope: 'personal-local' as const, optedInAt: new Date(started).toISOString() }
+    const eligibility = { personalLocalOptIn: true as const, source: reference.source, scope: 'personal-local' as const, optedInAt: new Date(started).toISOString() }
     const timer = setTimeout(() => discard(token), ttl)
     const entry: Entry = { generation, controller, status: 'loading', timer, expiresAt }
     sessions.set(token, entry)
@@ -33,7 +32,7 @@ export function createNamedPostingPreviewSession(options: NamedPostingApiOptions
     }).catch(() => {
       const live = sessions.get(token)
       if (closed || live !== entry || live.generation !== generation || controller.signal.aborted) return
-      live.attempt = namedPostingAttemptSchema.parse({ id: randomUUID(), reference: { source: 'greenhouse', board: reference.board, postingId: reference.postingId, submittedUrl: url, canonicalUrl: reference.canonicalUrl }, startedAt: new Date(started).toISOString(), status: 'failed', reason: 'source-error' })
+      live.attempt = namedPostingAttemptSchema.parse({ id: randomUUID(), reference: { source: reference.source, board: reference.board, postingId: reference.postingId, submittedUrl: url, canonicalUrl: reference.canonicalUrl }, startedAt: new Date(started).toISOString(), status: 'failed', reason: 'source-error' })
       live.status = 'failed'
     })
     return { token }
