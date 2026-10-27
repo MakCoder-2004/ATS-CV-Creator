@@ -4,9 +4,9 @@
 
 ## Accepted product-risk exception
 
-The maintainer explicitly accepts a **Wuzzuf-only personal-local product-risk exception** for guarded capture, human review, and saving the exact selected job posting despite Wuzzuf's published terms' modification/use restrictions. The maintainer understands this is a product-risk choice for their own local use; it is **not publisher permission, a license, legal advice, a finding of legality, or a blanket grant** to other people, sources, installs, or distribution. Do not describe Wuzzuf as having authorized CV Tailor or as generally permitting reposting or retention.
+The maintainer explicitly accepts a **Wuzzuf-only personal-local product-risk exception** for guarded capture, human review, and saving the exact selected job posting despite Wuzzuf's published terms' modification/use restrictions. Wuzzuf's official [Policies / User Agreement](https://wuzzuf.net/policies) states: “You may not reproduce, republish, or publicly display, perform or distribute, or otherwise use the materials on the Website for any public or commercial purpose or prepare any modifications to or prepare derivative works based on the contents of the Website.” The maintainer understands this as a product-risk choice for their own local use; it is **not publisher permission, a license, legal advice, a finding of legality, or a blanket grant** to other people, sources, installs, or distribution. Do not describe Wuzzuf as having authorized CV Tailor or as generally permitting reposting or retention.
 
-This decision does not authorize fetching or saving any posting by itself. It records the accepted scope and the gates below. Until a specifically reviewed implementation passes its gates, Wuzzuf remains unavailable to automatic intake. Manual paste remains distinct and available.
+This decision does not itself authorize or expand fetching or enable saving. The shipped generic bounded public direct-read path can already retrieve a Wuzzuf URL into temporary, non-saveable research; that existing behavior is not a Wuzzuf-specific exact-role reviewed Save or evidence of publisher permission. The Wuzzuf-specific exact-role reviewed Save and separate Pi extraction described below are not shipped until their respective implementation gates pass. Manual paste remains available.
 
 ## Local data and use boundary
 
