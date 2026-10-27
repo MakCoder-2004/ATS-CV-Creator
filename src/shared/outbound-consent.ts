@@ -84,15 +84,25 @@ export function prepareOutboundBundle(source: ConsentSource): OutboundBundle {
     const token = `[[${item.kind}_${index}]]`
     restore.set(token, item.value); identifiers.push({ value: item.value, token })
   }
-  const scrub = (text: string) => {
-    let result = identifiers.reduce((value, item) => value.replace(new RegExp(escapeRegExp(item.value), 'gi'), item.token), text)
-    result = result.replace(/\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b/g, '[REDACTED_EMAIL]')
-      .replace(/\b(?:\+?\d[\d ().-]{7,}\d)\b/g, '[REDACTED_PHONE]')
-      .replace(/\b(?:19|20)\d{2}-(?:0[1-9]|1[0-2])(?:-(?:0[1-9]|[12]\d|3[01]))?\b/g, '[DATE_OMITTED]')
-    return result
-  }
-  const model = { name: source.model.name, ...(source.model.providerId === undefined ? {} : { providerId: source.model.providerId }), ...(source.model.temperature === undefined ? {} : { temperature: source.model.temperature }), ...(source.model.topP === undefined ? {} : { topP: source.model.topP }), ...(source.model.maxOutputTokens === undefined ? {} : { maxOutputTokens: source.model.maxOutputTokens }), ...(source.model.thinkingLevel === undefined ? {} : { thinkingLevel: source.model.thinkingLevel }) }
   const evidence = [...source.profile.experience, ...source.profile.projects, ...source.profile.skills, ...source.profile.education, ...(source.profile.certificates ?? [])]
+  const trustedProtocolIds = new Set<string>()
+  const addProtocolId = (id: string | undefined) => { if (id && /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(id)) trustedProtocolIds.add(id.toLowerCase()) }
+  addProtocolId(source.job.id)
+  source.profile.revision.forEach(([id]) => addProtocolId(id))
+  for (const item of evidence) {
+    if ('id' in item) addProtocolId(item.id)
+    if ('factualItems' in item) item.factualItems?.forEach(child => addProtocolId(child.id))
+    if ('technologies' in item) item.technologies?.forEach(child => addProtocolId(child.id))
+  }
+  const trustedUuidPattern = trustedProtocolIds.size ? new RegExp(`(?<![0-9a-f])(${[...trustedProtocolIds].map(escapeRegExp).join('|')})(?![0-9a-f])`, 'gi') : undefined
+  const splitTrustedIds = (text: string) => trustedUuidPattern ? text.split(trustedUuidPattern) : [text]
+  const isTrustedId = (part: string) => trustedProtocolIds.has(part.toLowerCase())
+  const scrubUntrusted = (text: string) => identifiers.reduce((value, item) => value.replace(new RegExp(escapeRegExp(item.value), 'gi'), item.token), text)
+    .replace(/\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b/g, '[REDACTED_EMAIL]')
+    .replace(/\b(?:\+?\d[\d ().-]{7,}\d)\b/g, '[REDACTED_PHONE]')
+    .replace(/\b(?:19|20)\d{2}-(?:0[1-9]|1[0-2])(?:-(?:0[1-9]|[12]\d|3[01]))?\b/g, '[DATE_OMITTED]')
+  const scrub = (text: string) => splitTrustedIds(text).map(part => isTrustedId(part) ? part : scrubUntrusted(part)).join('')
+  const model = { name: source.model.name, ...(source.model.providerId === undefined ? {} : { providerId: source.model.providerId }), ...(source.model.temperature === undefined ? {} : { temperature: source.model.temperature }), ...(source.model.topP === undefined ? {} : { topP: source.model.topP }), ...(source.model.maxOutputTokens === undefined ? {} : { maxOutputTokens: source.model.maxOutputTokens }), ...(source.model.thinkingLevel === undefined ? {} : { thinkingLevel: source.model.thinkingLevel }) }
   const scope = { jobId: source.job.id, jobRevision: source.job.revision, profileRevision: source.profile.revision, evidenceRevisions: evidence.flatMap(item => [['id' in item ? item.id : undefined, item.revision], ...('factualItems' in item ? (item.factualItems ?? []).map(child => [child.id, child.revision]) : []), ...('technologies' in item ? (item.technologies ?? []).map(child => [child.id, child.revision]) : [])]).filter(([id]) => id !== undefined) }
   const outgoing = {
     job: { title: scrub(source.job.title), description: scrub(source.job.description) },
@@ -111,7 +121,10 @@ export function prepareOutboundBundle(source: ConsentSource): OutboundBundle {
   const containsRestoredIdentifier = (input: unknown): boolean => {
     const seen = new WeakSet<object>()
     const contains = (value: unknown): boolean => {
-      if (typeof value === 'string') return identifiers.some(({ value: identifier }) => new RegExp(`(?<![\\p{L}\\p{N}])${escapeRegExp(identifier)}(?![\\p{L}\\p{N}])`, 'iu').test(value)) || /\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b/.test(value) || /\b(?:\+?\d[\d ().-]{7,}\d)\b/.test(value) || /\b(?:19|20)\d{2}-(?:0[1-9]|1[0-2])(?:-(?:0[1-9]|[12]\d|3[01]))?\b/.test(value)
+      if (typeof value === 'string') return splitTrustedIds(value).some(part => {
+        if (isTrustedId(part)) return false
+        return identifiers.some(({ value: identifier }) => new RegExp(`(?<![\\p{L}\\p{N}])${escapeRegExp(identifier)}(?![\\p{L}\\p{N}])`, 'iu').test(part)) || /\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b/.test(part) || /\b(?:\+?\d[\d ().-]{7,}\d)\b/.test(part) || /\b(?:19|20)\d{2}-(?:0[1-9]|1[0-2])(?:-(?:0[1-9]|[12]\d|3[01]))?\b/.test(part)
+      })
       if (!value || typeof value !== 'object' || seen.has(value)) return false
       seen.add(value)
       if (Array.isArray(value)) return value.some(contains)

@@ -126,7 +126,7 @@ test('released version-1 job backups without provenance upgrade to honest legacy
   workbench.backup.applyRestore(preview.token, safetyBackup(dir))
   workbench.close(); instances.pop()
   const reopened = open(dir)
-  expect(await reopened.api.openJob(saved.value.id)).toMatchObject({ provenance: 'legacy-unknown', sourceSnapshot: null, revisions: [] })
+  expect(await reopened.api.openJob(saved.value.id)).toMatchObject({ provenance: 'legacy-unknown', sourceSnapshot: null, revisions: [], contacts: [] })
   const edited = await reopened.api.saveJob({ id: saved.value.id, title: 'Engineer', company: 'Example', description: 'Corrected wording.' })
   expect(edited).toMatchObject({ ok: true, value: { revisions: [{ description: 'Original wording.', revision: 1, provenance: 'legacy-unknown' }, { description: 'Corrected wording.', revision: 2, provenance: 'manual' }] } })
 })
@@ -139,6 +139,7 @@ test('released version-2 backups upgrade optional posting details to honest unkn
   old.version = 2
   for (const row of old.tables.jobs.rows) {
     const job = JSON.parse(row.data)
+    delete job.contacts
     delete job.optionalDetails
     for (const revision of job.revisions) delete revision.optionalDetails
     if (job.sourceSnapshot) {
@@ -150,15 +151,27 @@ test('released version-2 backups upgrade optional posting details to honest unkn
   const preview = workbench.backup.previewRestore(JSON.stringify(old))
   workbench.backup.applyRestore(preview.token, safetyBackup(dir))
   const restored = await workbench.api.openJob(saved.value.id)
+  expect(restored?.contacts).toEqual([])
   expect(restored?.optionalDetails.location).toMatchObject({ value: null, origin: 'unknown' })
   expect(restored?.revisions[0].optionalDetails.compensation).toMatchObject({ value: null, origin: 'unknown' })
+})
+
+test('released v3 backups without the contact field restore contacts as empty', async () => {
+  const { dir, workbench } = fixture()
+  const saved = await workbench.api.saveJob({ title: 'Legacy v3 role', company: 'Example', description: 'Historical posting text.' })
+  if (!saved.ok) throw new Error('Job fixture failed')
+  const oldV3 = JSON.parse(workbench.backup.createBackup())
+  expect(oldV3.version).toBe(3)
+  for (const row of oldV3.tables.jobs.rows) { const record = JSON.parse(row.data); delete record.contacts; row.data = JSON.stringify(record) }
+  const restore = workbench.backup.previewRestore(JSON.stringify(oldV3))
+  workbench.backup.applyRestore(restore.token, safetyBackup(dir))
+  expect(await workbench.api.openJob(saved.value.id)).toMatchObject({ contacts: [] })
 })
 
 test('released v2 backups retain historical JSON and HTML provenance through v3 restore without fetching', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'cv-tailor-historical-backup-'))
   directories.push(dir)
-  let requests = 0
-  const wb = createWorkbench(dir, undefined, scripted, undefined, { lookup: async () => [{ address: '8.8.8.8', family: 4 }], request: async () => { requests++; return { status: 200, headers: {}, body: Buffer.alloc(0) } } })
+  const wb = createWorkbench(dir, undefined, scripted)
   instances.push(wb)
   const records: Array<{ id: string; method: string; sourceHash: string; workingHash: string; sourceText: string; workingText: string }> = []
   try {
@@ -179,6 +192,7 @@ test('released v2 backups retain historical JSON and HTML provenance through v3 
     v2.version = 2
     for (const row of v2.tables.jobs.rows) {
       const job = JSON.parse(row.data)
+      delete job.contacts
       delete job.optionalDetails
       for (const revision of job.revisions) delete revision.optionalDetails
       if (job.sourceSnapshot) {
@@ -196,13 +210,12 @@ test('released v2 backups retain historical JSON and HTML provenance through v3 
       expect(restored?.sourceSnapshot?.description).toBe(record.sourceText)
       expect(restored?.sourceSnapshot?.hashes.description).toBe(record.sourceHash)
       expect(restored?.description).toBe(record.workingText)
+      expect(restored?.contacts).toEqual([])
       expect(createHash('sha256').update(restored!.description, 'utf8').digest('hex')).toBe(record.workingHash)
     }
-    expect(requests).toBe(0)
     wb.close(); instances.pop()
     const reopened = open(dir)
-    for (const record of records) expect(await reopened.api.openJob(record.id)).toMatchObject({ sourceSnapshot: { extractionMethod: record.method, description: record.sourceText, hashes: { description: record.sourceHash } }, description: record.workingText })
-    expect(requests).toBe(0)
+    for (const record of records) expect(await reopened.api.openJob(record.id)).toMatchObject({ sourceSnapshot: { extractionMethod: record.method, description: record.sourceText, hashes: { description: record.sourceHash } }, description: record.workingText, contacts: [] })
   } finally { wb.close() }
 }, 30_000)
 

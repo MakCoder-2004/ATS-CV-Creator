@@ -4,7 +4,7 @@ import { appearanceSchema, settingsSchema, type Appearance, type WorkbenchAPI } 
 import { piModelPreferenceInputSchema, type PiModelPreferenceInput } from '../shared/pi-model'
 import { evidenceRevisionSchema, profileEntryInputSchema, profileMutationResultSchema, profileSnapshotSchema, uuidSchema, type ContactInput, type ProfileEntryInput, type SkillInput } from '../shared/profile'
 import { experienceSnapshotSchema, experienceMutationResultSchema, type ExperienceInput, type ProjectInput } from '../shared/experience'
-import { jobInputSchema, jobRecordSchema, jobSaveResultSchema, jobDeletionSelectionSchema, jobDeletionExecuteSchema, jobDeletionPreviewSchema, jobDeletionResultSchema, postingRefreshChoiceSchema, type JobInput } from '../shared/jobs'
+import { hasSavedJobApplicationUrlInput, jobRecordSchema, jobSaveResultSchema, jobDeletionSelectionSchema, jobDeletionExecuteSchema, jobDeletionPreviewSchema, jobDeletionResultSchema, type JobSaveInput } from '../shared/jobs'
 import { profileExchangeResultSchema } from '../shared/profile-exchange'
 import { outboundConsentActionSchema, outboundConsentPreviewSchema } from '../shared/outbound-consent-contract'
 import { analysisIdSchema, analysisResultSchema, generationRecoverySchema, recoveryChoiceSchema, type AnalysisResult, type RecoveryChoice } from '../shared/posting-analysis'
@@ -15,13 +15,8 @@ import { regenerationProposalSchema, regenerationResultSchema, regenerationTarge
 import { mutateDraftRecordInputSchema } from '../shared/draft-records'
 import { profilePdfApplyResultSchema, profilePdfPreviewSchema, profilePdfProposalSchema, profilePdfRebaseResultSchema } from '../shared/profile-pdf-import'
 import { profileAiConsentActionSchema, profileAiConsentPreviewSchema, profileAiRunResultSchema } from '../shared/profile-ai-structuring'
-import { postingFetchStateSchema, postingPreviewEditSchema, postingRefreshComparisonSchema, postingReviewSchema } from '../shared/posting-import'
 import { workspaceBackupStatusSchema } from '../shared/workspace-backup'
-import { researchCancelSchema, researchReviewInputSchema, researchReviewStateSchema, researchStartSchema, researchStateSchema } from '../shared/job-research-ipc'
-import { normalizeJobResearchUrl } from '../shared/job-research-url'
 import { researchSearchKeyStatusSchema } from '../shared/research-search-settings'
-import { researchAnalysisTokenSchema, researchAnalysisConsentSchema, researchAnalysisPreviewReplySchema, researchAnalysisProgressReplySchema, researchAnalysisDiscardReplySchema } from '../shared/research-volatile-analysis-ipc'
-import { namedPostingPreviewReplySchema } from '../shared/named-posting-schema'
 
 const workspaceResult = z.object({ ok: z.boolean(), cancelled: z.boolean(), message: z.string() }).strict()
 const restoreSelection = z.discriminatedUnion('ok', [
@@ -105,8 +100,13 @@ const api: WorkbenchAPI = Object.freeze({
   async deleteProject(id: string) {
     return experienceMutationResultSchema.parse(await ipcRenderer.invoke('profile:project:delete', id))
   },
-  async saveJob(input: JobInput & { id?: string }) {
+  async saveJob(input: JobSaveInput) {
+    if (hasSavedJobApplicationUrlInput(input)) throw new Error('Job application URLs are not accepted in manual intake.')
     return jobSaveResultSchema.parse(await ipcRenderer.invoke('jobs:save', input))
+  },
+  async openContactProfile(jobId: string, contactId: string) {
+    if (typeof navigator === 'undefined' || !navigator.userActivation?.isActive) throw new Error('Select the saved contact profile button to open it.')
+    return z.object({ ok: z.boolean(), message: z.string() }).strict().parse(await ipcRenderer.invoke('contacts:open-profile', uuidSchema.parse(jobId), uuidSchema.parse(contactId)))
   },
   async listJobs() {
     return jobRecordSchema.array().parse(await ipcRenderer.invoke('jobs:list'))
@@ -121,44 +121,6 @@ const api: WorkbenchAPI = Object.freeze({
     const job = await ipcRenderer.invoke('jobs:open', uuidSchema.parse(id))
     return job === null ? null : jobRecordSchema.parse(job)
   },
-  async startJobResearch(url: string) {
-    // Normalize only public metadata; never accept credential-bearing or tracking-laden IPC inputs.
-    return researchStartSchema.parse(await ipcRenderer.invoke('job-research:start', normalizeJobResearchUrl(url).canonicalUrl))
-  },
-  async startJobResearchFromPosting(token: string) { return researchStartSchema.parse(await ipcRenderer.invoke('job-research:from-posting', uuidSchema.parse(token))) },
-  async getJobResearch(token: string) { return researchStateSchema.parse(await ipcRenderer.invoke('job-research:get', uuidSchema.parse(token))) },
-  async searchJobResearch(token: string) { return researchStateSchema.parse(await ipcRenderer.invoke('job-research:search', uuidSchema.parse(token))) },
-  async reviewJobResearch(token: string, acceptedFindingIds: string[], acknowledgedPartial: boolean) {
-    const review = researchReviewInputSchema.parse({ acceptedFindingIds, acknowledgedPartial })
-    return researchReviewStateSchema.parse(await ipcRenderer.invoke('job-research:review', uuidSchema.parse(token), review))
-  },
-  async cancelJobResearch(token: string) { return researchCancelSchema.parse(await ipcRenderer.invoke('job-research:cancel', uuidSchema.parse(token))) },
-  async previewResearchAnalysis(researchToken: string) { return researchAnalysisPreviewReplySchema.parse(await ipcRenderer.invoke('research-analysis:preview', researchAnalysisTokenSchema.parse(researchToken))) },
-  async consentResearchAnalysis(token: string, accepted: boolean) { return researchAnalysisProgressReplySchema.parse(await ipcRenderer.invoke('research-analysis:consent', researchAnalysisTokenSchema.parse(token), researchAnalysisConsentSchema.parse(accepted))) },
-  async startResearchAnalysis(token: string) { return researchAnalysisProgressReplySchema.parse(await ipcRenderer.invoke('research-analysis:start', researchAnalysisTokenSchema.parse(token))) },
-  async readResearchAnalysis(token: string) { return researchAnalysisProgressReplySchema.parse(await ipcRenderer.invoke('research-analysis:read', researchAnalysisTokenSchema.parse(token))) },
-  async cancelResearchAnalysis(token: string) { return researchAnalysisProgressReplySchema.parse(await ipcRenderer.invoke('research-analysis:cancel', researchAnalysisTokenSchema.parse(token))) },
-  async discardResearchAnalysis(token: string) { return researchAnalysisDiscardReplySchema.parse(await ipcRenderer.invoke('research-analysis:discard', researchAnalysisTokenSchema.parse(token))) },
-  async startPostingFetch(url: string) {
-    if (typeof url !== 'string' || new TextEncoder().encode(url).length > 2048) throw new Error('The posting link is invalid or too long.')
-    return z.object({ token: uuidSchema }).strict().parse(await ipcRenderer.invoke('posting-import:start', url))
-  },
-  async updatePostingPreview(token: string, expectedRevision: number, input: import('../shared/posting-import').PostingPreviewEdit) { return await ipcRenderer.invoke('posting-import:update-preview', uuidSchema.parse(token), expectedRevision, postingPreviewEditSchema.parse(input)) },
-  async reviewPostingPreview(token: string, revision: number, review: import('../shared/posting-import').PostingReview) { return await ipcRenderer.invoke('posting-import:review-preview', uuidSchema.parse(token), revision, postingReviewSchema.parse(review)) },
-  async acceptPostingImport(token: string, revision: number) { return jobSaveResultSchema.parse(await ipcRenderer.invoke('posting-import:accept', uuidSchema.parse(token), revision)) },
-  async comparePostingRefresh(token: string, jobId: string, expectedUpdatedAt: string, expectedRevision: number) { return postingRefreshComparisonSchema.parse(await ipcRenderer.invoke('posting-refresh:compare', uuidSchema.parse(token), uuidSchema.parse(jobId), expectedUpdatedAt, expectedRevision)) },
-  async acceptPostingRefresh(token: string, revision: number, jobId: string, expectedUpdatedAt: string, expectedBaseRevision: number, choices: import('../shared/jobs').PostingRefreshChoice) { return jobSaveResultSchema.parse(await ipcRenderer.invoke('posting-refresh:accept', uuidSchema.parse(token), revision, uuidSchema.parse(jobId), expectedUpdatedAt, expectedBaseRevision, postingRefreshChoiceSchema.parse(choices))) },
-  async readPostingPreview(token: string) { return postingFetchStateSchema.parse(await ipcRenderer.invoke('posting-import:read', uuidSchema.parse(token))) },
-  async cancelPostingFetch(token: string) { return z.object({ ok: z.boolean() }).strict().parse(await ipcRenderer.invoke('posting-import:cancel', uuidSchema.parse(token))) },
-  async startNamedPostingPreview(url: string, personalLocalOptIn: boolean) { if (typeof url !== 'string' || typeof personalLocalOptIn !== 'boolean') throw new Error('Choose a Greenhouse link and personal-local notice.'); return z.object({ token: uuidSchema }).strict().parse(await ipcRenderer.invoke('named-posting-preview:start', url, personalLocalOptIn)) },
-  async readNamedPostingPreview(token: string) { return namedPostingPreviewReplySchema.parse(await ipcRenderer.invoke('named-posting-preview:read', uuidSchema.parse(token))) },
-  async cancelNamedPostingPreview(token: string) { return z.object({ ok: z.literal(true) }).strict().parse(await ipcRenderer.invoke('named-posting-preview:cancel', uuidSchema.parse(token))) },
-  async reviewNamedPostingPreview(token: string, exactRole: boolean, completeness: boolean) {
-    if (typeof exactRole !== 'boolean' || typeof completeness !== 'boolean') throw new Error('Review the exact role and complete posting.')
-    return z.object({ reviewToken: uuidSchema, reviewedAt: z.string().datetime({ offset: true }) }).strict().parse(await ipcRenderer.invoke('named-posting-preview:review', uuidSchema.parse(token), exactRole, completeness))
-  },
-  async saveNamedPostingPreview(token: string, reviewToken: string, working: JobInput) { return jobSaveResultSchema.parse(await ipcRenderer.invoke('named-posting-preview:save', uuidSchema.parse(token), uuidSchema.parse(reviewToken), jobInputSchema.parse(working))) },
-  async openPostingSource(url: string) { return z.object({ ok: z.boolean(), message: z.string() }).strict().parse(await ipcRenderer.invoke('posting-import:open-source', url)) },
   async prepareOutboundConsent(jobId: string) {
     return outboundConsentPreviewSchema.parse(await ipcRenderer.invoke('consent:outbound:preview', uuidSchema.parse(jobId)))
   },

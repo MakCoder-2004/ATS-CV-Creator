@@ -14,7 +14,7 @@ The source for the app is under `src/`. Change the contract in `src/shared/`, ex
 ## Run checks in ABI order
 
 1. Run `npm run typecheck` and `npm run build` after changing TypeScript or Electron wiring.
-2. Run `npm test`. This command rebuilds `better-sqlite3` for Node, then runs Vitest tests under `tests/` with one worker so parallel test files do not compete with the app's fixed PDF and posting-extraction deadlines on Windows.
+2. Run `npm test`. This command rebuilds `better-sqlite3` for Node, then runs Vitest tests under `tests/` with one worker for deterministic Windows workspace/native-SQLite checks.
 3. While the binding still targets Node, repeat a focused test with `npx vitest run tests/<file>.test.ts` or use `npm run test:fast` for the full suite.
 4. Run `npm run test:electron` for Playwright Electron tests under `tests/electron/`. The script builds the app, rebuilds `better-sqlite3` for Electron, and runs the serial suite.
 5. If you return to Vitest after step 4, run `npm test` again before `npm run test:fast`.
@@ -36,7 +36,7 @@ The NSIS installer is per-user by default and may trigger an unknown-publisher w
 
 ## Find the right test and owner
 
-- For posting intake and SSRF limits, inspect `src/main/safe-posting-fetch.ts`, `tests/safe-posting-fetch.test.ts`, and the link-intake Electron tests.
+- Saved-job intake is manual-only: inspect `src/renderer/SavedJobs.tsx`, `src/shared/jobs.ts`, `src/main/workbench.ts`, `tests/manual-only-intake.test.ts`, and `tests/electron/jobs.spec.ts`. No job-host fetch/research adapter or Open original route exists; historical source provenance remains in the jobs/backup schemas.
 - For Pi model selection, consent, cache, or recovery, inspect `src/shared/pi-model.ts`, `src/main/pi-model.ts`, `src/main/pi-workbench-dispatcher.ts`, `src/main/workbench.ts`, and the focused Pi workbench tests.
 - For wording, citations, page fit, or approval, inspect `src/main/source-linked-generation.ts`, `src/shared/draft.ts`, `src/shared/document.ts`, and the review and export tests.
 - For profile import or backup, inspect the focused `src/main/*-ipc.ts` modules and matching `tests/` and `tests/electron/` cases.

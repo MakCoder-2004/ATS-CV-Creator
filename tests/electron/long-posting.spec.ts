@@ -18,10 +18,10 @@ test('saved posting above the previous limit stays complete and readable after r
     const page = await app.firstWindow({ timeout: 60000 })
     await expect(page.locator('[data-ui-ready="true"]')).toBeVisible()
     await page.getByRole('button', { name: 'Saved jobs', exact: true }).click()
-    await page.locator('.saved-jobs-heading').getByRole('button', { name: 'New job' }).click()
+    await page.locator('.saved-jobs-page-header').getByRole('button', { name: 'New job' }).click()
     await page.getByLabel('Job title').fill('Long posting engineer')
     await page.getByLabel('Company').fill('Example Systems')
-    const postingField = page.getByLabel('Posting and requirements')
+    const postingField = page.getByLabel('Full job posting')
     await expect(postingField).toHaveAttribute('aria-describedby', /job-description-help/)
     await postingField.fill(completeText)
     await page.getByRole('button', { name: 'Save job' }).click()
@@ -35,7 +35,7 @@ test('saved posting above the previous limit stays complete and readable after r
     await expect(reopenedPage.locator('[data-ui-ready="true"]')).toBeVisible()
     await reopenedPage.getByRole('button', { name: 'Saved jobs', exact: true }).click()
     await reopenedPage.locator('.saved-job-row').getByRole('button', { name: 'Edit Long posting engineer posting' }).click()
-    await expect(reopenedPage.getByLabel('Posting and requirements')).toHaveValue(completeText)
+    await expect(reopenedPage.getByLabel('Full job posting')).toHaveValue(completeText)
     await reopened.close()
     running = undefined
   } finally {

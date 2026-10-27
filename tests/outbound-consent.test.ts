@@ -17,10 +17,11 @@ const source: ConsentSource = {
 }
 
 describe('outbound consent public contract', () => {
-  it('minimizes free text, substitutes stable placeholders and excludes local-only fields', () => {
-    const bundle = prepareOutboundBundle(source)
+  it('minimizes free text, substitutes stable placeholders and excludes local-only fields including saved-job contacts', () => {
+    const jobWithContact = { ...source.job, contacts: [{ id: 'contact-1', name: 'Morgan Recruiter', role: 'HR', profileUrl: 'https://example.com/morgan' }] }
+    const bundle = prepareOutboundBundle({ ...source, job: jobWithContact })
     const wire = JSON.stringify(bundle.outgoing)
-    for (const secret of ['Ada Lovelace', 'Northstar Labs', 'Orion Ledger', 'Westbridge University', 'ada.private@example.test', '555-0199', 'London', 'jobs@northstar.example', '555-013-0022', '2022-06', '2019-01', '2022-05', 'SECRET SUMMARY', 'Secret language', 'Secret extra', 'private.example.test']) expect(wire).not.toContain(secret)
+    for (const secret of ['Ada Lovelace', 'Northstar Labs', 'Orion Ledger', 'Westbridge University', 'ada.private@example.test', '555-0199', 'London', 'jobs@northstar.example', '555-013-0022', '2022-06', '2019-01', '2022-05', 'SECRET SUMMARY', 'Secret language', 'Secret extra', 'private.example.test', 'Morgan Recruiter', 'https://example.com/morgan']) expect(wire).not.toContain(secret)
     expect(wire).toContain('[[EMPLOYER_1]]')
     expect(wire).toContain('[[PERSON_1]]')
     expect(wire).toContain('[[PROJECT_1]]')
@@ -30,6 +31,16 @@ describe('outbound consent public contract', () => {
     expect(bundle.preview.warnings).toEqual(expect.arrayContaining([expect.stringMatching(/identify/i)]))
     expect(bundle.restoreIdentifiers('[[EMPLOYER_1]] / [[PROJECT_1]]')).toBe('Northstar Labs / Orion Ledger')
     expect(bundle.outgoing.job.description).toContain('[DATE_OMITTED]')
+  })
+
+  it('protects only exact app-held UUID protocol IDs from phone-pattern scrubbing', () => {
+    const trustedId = '12345678-1234-4234-8234-123456789012'
+    const untrustedUuid = '87654321-4321-4321-8321-987654321098'
+    const bundle = prepareOutboundBundle({ ...source, profile: { ...source.profile, experience: [{ ...source.profile.experience[0], id: trustedId }] } })
+    const prompt = bundle.minimizeIdentifiers(JSON.stringify({ evidenceId: trustedId, freeText: untrustedUuid, marker: '[[PROTOCOL_UUID_0]]', adjacentPhone: 'Call 1234567890.' }))
+    expect(JSON.parse(prompt)).toMatchObject({ evidenceId: trustedId, freeText: '[REDACTED_PHONE]', marker: '[[PROTOCOL_UUID_0]]', adjacentPhone: 'Call [REDACTED_PHONE].' })
+    expect(bundle.containsRestoredIdentifier({ text: trustedId })).toBe(false)
+    expect(bundle.containsRestoredIdentifier({ text: untrustedUuid })).toBe(true)
   })
 
   it('freezes per-run authorization and rejects absent, revoked, stale, expanded or restored-identifier payloads', () => {

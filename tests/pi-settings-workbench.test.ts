@@ -30,7 +30,7 @@ function runtime(options: { listed?: boolean; available?: boolean; auth?: boolea
 function open(piRuntime: PiModelRuntime) {
   const directory = mkdtempSync(join(tmpdir(), 'cv-pi-settings-'))
   directories.push(directory)
-  return { directory, workbench: createWorkbench(directory, undefined, undefined, undefined, undefined, piRuntime) }
+  return { directory, workbench: createWorkbench(directory, undefined, undefined, undefined, piRuntime) }
 }
 
 test('stores exact slash-containing Pi selection and reloads it from SQLite', async () => {
@@ -40,7 +40,7 @@ test('stores exact slash-containing Pi selection and reloads it from SQLite', as
   const saved = await fixture.workbench.api.setPiModel({ reference: `${selection.providerId}/${selection.modelId}`, thinkingLevel: selection.thinkingLevel })
   expect(saved.pi).toEqual(selection)
   fixture.workbench.close()
-  const reopened = createWorkbench(fixture.directory, undefined, undefined, undefined, undefined, runtime())
+  const reopened = createWorkbench(fixture.directory, undefined, undefined, undefined, runtime())
   expect((await reopened.api.getSettings()).pi).toEqual(selection)
   reopened.close()
 })
@@ -51,7 +51,7 @@ test('rejects unlisted models, missing auth, and unsupported effort without chan
   const priorInput = { reference: `${prior.providerId}/${prior.modelId}`, thinkingLevel: prior.thinkingLevel }
   await fixture.workbench.api.setPiModel(priorInput)
   await expect(fixture.workbench.api.setPiModel({ reference: `${model.provider}/unknown/model`, thinkingLevel: 'off' })).rejects.toThrow(/model/i)
-  const unauthenticated = createWorkbench(fixture.directory, undefined, undefined, undefined, undefined, runtime({ auth: false }))
+  const unauthenticated = createWorkbench(fixture.directory, undefined, undefined, undefined, runtime({ auth: false }))
   try { await expect(unauthenticated.api.setPiModel(priorInput)).rejects.toThrow(/sign-in/i) }
   finally { unauthenticated.close() }
   await expect(fixture.workbench.api.setPiModel({ ...priorInput, thinkingLevel: 'low' })).rejects.toThrow(/does not support/)

@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createWorkbench } from '../src/main/workbench'
 import { countEnglishWords } from '../src/shared/draft'
+import { uuidSchema } from '../src/shared/profile'
 import type { AnalysisTransport } from '../src/main/posting-analysis'
 
 const opened: Array<ReturnType<typeof createWorkbench>> = []
@@ -14,24 +15,61 @@ const sixtyWords = Array(20).fill('Built stable systems').join(' ')
 
 async function runCase(mode: 'coverage' | 'factual', correction: string) {
   const dir = mkdtempSync(join(tmpdir(), 'paragraph-repair-')); directories.push(dir)
-  const requests: string[] = []
-  const transport: AnalysisTransport = { async generate({ prompt }) {
-    requests.push(prompt)
-    if (prompt.startsWith('Extract only explicit qualifications')) return JSON.stringify({ required: mode === 'coverage' ? ['TypeScript'] : [], preferred: [], tools: [], responsibilities: [], keywords: [] })
-    if (prompt.startsWith('Score these numbered')) {
-      const { items } = JSON.parse(prompt.slice(prompt.indexOf('{')))
-      return JSON.stringify({ relevance: items.map((item: { index: number }) => ({ index: item.index, score: 1, rationale: 'Relevant.' })) })
+  const requests: Array<{ kind: string; stage: string; selectedCount?: number; findingsCount?: number; opportunity?: boolean; citedEvidenceCount?: number; citedEvidenceType?: string; responseSchema?: string; issuePath?: string; issueFormat?: string; selectedEvidenceUuidValid?: boolean; selectedEvidenceRevisionNumber?: boolean; opportunityEvidenceUuidValid?: boolean; opportunityRevisionNumber?: boolean; thrown?: string }> = []
+  const transport: AnalysisTransport = { async generate({ prompt, responseSchema }) {
+    const kind = prompt.startsWith('Extract only explicit qualifications') ? 'extract' : prompt.startsWith('Score these numbered') ? 'score' : prompt.startsWith('Factual repair cycle') ? 'factual-repair' : prompt.startsWith('Supported-keyword coverage repair') ? 'coverage-repair' : 'generate'
+    const call: (typeof requests)[number] = { kind, stage: 'entered', responseSchema: typeof responseSchema === 'object' && responseSchema !== null && 'name' in responseSchema ? String((responseSchema as { name: unknown }).name).slice(0, 40) : typeof responseSchema }
+    requests.push(call)
+    const parseBody = () => {
+      call.stage = 'prompt-json-parse'
+      const parsed = JSON.parse(prompt.slice(prompt.indexOf('{')))
+      call.selectedCount = Array.isArray(parsed.selected) ? parsed.selected.length : undefined
+      call.findingsCount = Array.isArray(parsed.findings) ? parsed.findings.length : undefined
+      call.opportunity = parsed.opportunity !== undefined
+      if (parsed.opportunity && typeof parsed.opportunity === 'object') {
+        call.opportunityEvidenceUuidValid = uuidSchema.safeParse(parsed.opportunity.evidenceId).success
+        call.opportunityRevisionNumber = typeof parsed.opportunity.revision === 'number' && Number.isFinite(parsed.opportunity.revision)
+      }
+      const finding = parsed.findings?.[0]
+      const cited = finding?.citedEvidence
+      call.citedEvidenceCount = Array.isArray(cited) ? cited.length : undefined
+      call.citedEvidenceType = cited === undefined ? 'absent' : Array.isArray(cited) ? 'array' : typeof cited
+      const selectedCitation = Array.isArray(cited) ? cited[0] : undefined
+      if (selectedCitation && typeof selectedCitation === 'object') {
+        call.selectedEvidenceUuidValid = uuidSchema.safeParse(selectedCitation.evidenceId).success
+        call.selectedEvidenceRevisionNumber = typeof selectedCitation.revision === 'number' && Number.isFinite(selectedCitation.revision)
+      }
+      return parsed
     }
-    if (prompt.startsWith('Factual repair cycle') || prompt.startsWith('Supported-keyword coverage repair')) {
-      const { findings, opportunity } = JSON.parse(prompt.slice(prompt.indexOf('{')))
-      const index = mode === 'factual' ? findings[0].index : opportunity.index
-      const evidenceId = mode === 'factual' ? findings[0].citedEvidence[0].evidenceId : opportunity.evidenceId
-      const revision = mode === 'factual' ? findings[0].citedEvidence[0].revision : opportunity.revision
-      return JSON.stringify({ corrections: [{ section: 'experience', index, text: correction, citations: [{ evidenceId, revision }] }] })
-    }
-    const { selected } = JSON.parse(prompt.slice(prompt.indexOf('{')))
-    const role = selected.find((item: { category: string }) => item.category === 'experience')
-    return JSON.stringify({ headline: 'Engineer', summary: { text: 'Built stable systems.', evidence: [role.index], rationale: 'Saved.' }, education: [], experience: [{ text: mode === 'coverage' ? sixtyWords : 'Built 99 stable systems.', evidence: [role.index], rationale: 'Saved.' }], projects: [], skills: [], certificates: [] })
+    try {
+      let response: string
+      if (kind === 'extract') response = JSON.stringify({ required: mode === 'coverage' ? ['TypeScript'] : [], preferred: [], tools: [], responsibilities: [], keywords: [] })
+      else if (kind === 'score') { const { items } = parseBody(); response = JSON.stringify({ relevance: items.map((item: { index: number }) => ({ index: item.index, score: 1, rationale: 'Relevant.' })) }) }
+      else if (kind === 'factual-repair' || kind === 'coverage-repair') {
+        const { findings, opportunity } = parseBody()
+        call.stage = 'select-finding'
+        const index = mode === 'factual' ? findings[0].index : opportunity.index
+        const evidenceId = mode === 'factual' ? findings[0].citedEvidence[0].evidenceId : opportunity.evidenceId
+        const revision = mode === 'factual' ? findings[0].citedEvidence[0].revision : opportunity.revision
+        response = JSON.stringify({ corrections: [{ section: 'experience', index, text: correction, citations: [{ evidenceId, revision }] }] })
+      } else {
+        const { selected } = parseBody(); call.stage = 'select-role'
+        const role = selected.find((item: { category: string }) => item.category === 'experience')
+        response = JSON.stringify({ headline: 'Engineer', summary: { text: 'Built stable systems.', evidence: [role.index], rationale: 'Saved.' }, education: [], experience: [{ text: mode === 'coverage' ? sixtyWords : 'Built 99 stable systems.', evidence: [role.index], rationale: 'Saved.' }], projects: [], skills: [], certificates: [] })
+      }
+      if (typeof responseSchema === 'object' && responseSchema !== null && 'safeParse' in responseSchema && typeof responseSchema.safeParse === 'function') {
+        call.stage = 'response-schema-check'
+        const result = responseSchema.safeParse(JSON.parse(response))
+        const issue = result.success ? undefined : result.error.issues[0]
+        call.responseSchema = result.success ? 'valid' : `invalid:${String(issue?.code ?? 'unknown').slice(0, 24)}`
+        if (issue) {
+          call.issuePath = issue.path.map(part => typeof part === 'string' || typeof part === 'number' ? String(part) : '?').join('.').slice(0, 100)
+          call.issueFormat = 'format' in issue && typeof issue.format === 'string' ? issue.format.slice(0, 32) : undefined
+        }
+      }
+      call.stage = 'response-ready'
+      return response
+    } catch (error) { call.thrown = error instanceof Error ? error.constructor.name : 'unknown'; call.stage = 'fixture-threw'; throw error }
   } }
   const wb = createWorkbench(dir, undefined, transport); opened.push(wb)
   const role = await wb.api.saveExperience({ kind: 'employment', title: 'Engineer', organization: 'Sample', description: mode === 'coverage' ? `${sixtyWords} TypeScript` : 'Built 12 stable systems.' })
@@ -42,21 +80,32 @@ async function runCase(mode: 'coverage' | 'factual', correction: string) {
   expect((await wb.api.acceptOutboundConsent(preview.token, true, true)).ok).toBe(true)
   expect((await wb.api.startAnalysis(preview.token)).status).toBe('complete')
   const generated = await wb.api.generateDraft(preview.token)
-  expect(generated.ok).toBe(true)
+  const safeText = (value: string | undefined) => (value ?? '')
+    .replaceAll(sixtyWords, '[long evidence omitted]')
+    .replaceAll('TypeScript', '[skill]')
+    .replaceAll('Built 12 stable systems.', '[source wording omitted]')
+    .replaceAll('Built 99 stable systems.', '[generated wording omitted]')
+    .replaceAll('Engineer', '[role]')
+    .replaceAll('Sample', '[organization]')
+    .replaceAll('Target', '[target]')
+    .replace(/[\r\n]+/g, ' ')
+    .slice(0, 300)
+  const diagnostic = JSON.stringify({ message: safeText(generated.message), status: generated.draft?.status ?? 'no-draft', progress: safeText(generated.draft?.progress), calls: requests }).slice(0, 1200)
+  expect(generated.ok, `Bounded scripted generation diagnostic: ${diagnostic}`).toBe(true)
   return { generated, requests, jobId: job.value.id, wb }
 }
 
 test('a supported term cannot turn a valid 60-word paragraph into a 61-word saved paragraph', async () => {
   expect(countEnglishWords(sixtyWords)).toBe(60)
   const { generated, requests, jobId, wb } = await runCase('coverage', `TypeScript ${sixtyWords}`)
-  expect(requests.filter(prompt => prompt.startsWith('Supported-keyword coverage repair'))).toHaveLength(1)
+  expect(requests.filter(call => call.kind === 'coverage-repair')).toHaveLength(1)
   expect(generated.draft?.content.experience[0]).toMatchObject({ text: sixtyWords, descriptionFormat: 'paragraph' })
   expect((await wb.api.getDraft(jobId))?.content.experience[0].text).toBe(sixtyWords)
 })
 
 test.each(['Built 12 stable systems.\nOwned delivery.', '- Built 12 stable systems.', `${sixtyWords} TypeScript`])('factual correction with invalid paragraph shape cannot replace the cited wording (%s)', async correction => {
   const { generated, requests, jobId, wb } = await runCase('factual', correction)
-  expect(requests.filter(prompt => prompt.startsWith('Factual repair cycle'))).toHaveLength(2)
+  expect(requests.filter(call => call.kind === 'factual-repair')).toHaveLength(2)
   expect(generated.draft).toMatchObject({ status: 'blocked', checkReport: { passed: false } })
   expect(generated.draft?.content.experience[0].text).toBe('Built 99 stable systems.')
   expect((await wb.api.getDraft(jobId))?.content.experience[0].text).toBe('Built 99 stable systems.')

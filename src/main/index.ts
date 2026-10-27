@@ -1,6 +1,8 @@
 import { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } from 'electron'
 import type { ZodError } from 'zod'
 import { fileURLToPath } from 'node:url'
+import { lookup } from 'node:dns/promises'
+import { isIP } from 'node:net'
 import { appendFileSync, existsSync, linkSync, lstatSync, mkdirSync, realpathSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
 import { basename, dirname, extname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -17,7 +19,8 @@ import type { AnalysisTransport } from './posting-analysis'
 import { appearanceSchema } from '../shared/appearance'
 import { contactSaveInputSchema, evidenceRevisionSchema, profileEntrySaveSchema, profileMutationResultSchema, profileSnapshotSchema, skillSaveInputSchema, uuidSchema } from '../shared/profile'
 import { experienceSaveInputSchema, experienceSnapshotSchema, experienceMutationResultSchema, projectSaveInputSchema } from '../shared/experience'
-import { jobInputSchema, jobRecordSchema, jobSaveInputSchema, jobSaveResultSchema, jobDeletionSelectionSchema, jobDeletionExecuteSchema, jobDeletionPreviewSchema, jobDeletionResultSchema, postingRefreshChoiceSchema } from '../shared/jobs'
+import { hasSavedJobApplicationUrlInput, jobRecordSchema, jobSaveInputSchema, jobSaveResultSchema, jobDeletionSelectionSchema, jobDeletionExecuteSchema, jobDeletionPreviewSchema, jobDeletionResultSchema, httpsProfileUrlSchema } from '../shared/jobs'
+import { arePublicContactProfileAddresses } from './contact-profile-safety'
 import { registerProfileExchangeIpc } from './profile-exchange-ipc'
 import { registerProfilePdfImportIpc } from './profile-pdf-import-ipc'
 import { registerProfileDocxImportIpc } from './profile-docx-import-ipc'
@@ -30,23 +33,9 @@ import { addDraftItemInputSchema, draftCorrectionInputSchema, draftGenerationSch
 import { factualCheckReportSchema } from '../shared/factual-report'
 import { regenerationProposalSchema, regenerationResultSchema, regenerationTargetSchema } from '../shared/regeneration'
 import { mutateDraftRecordInputSchema } from '../shared/draft-records'
-import { validateLeverPostingUrl, type SafePostingFetchOptions } from './safe-posting-fetch'
-import { normalizeJobResearchUrl } from '../shared/job-research'
-import { researchCancelSchema, researchReviewInputSchema, researchReviewStateSchema, researchStartSchema, researchStateSchema } from '../shared/job-research-ipc'
-import { createJobResearchSessions } from './job-research-session'
-import { fetchDirectJobResearch } from './job-research-fetch'
-import { createVolatileResearchAnalysis } from './research-volatile-analysis'
-import { researchAnalysisTokenSchema, researchAnalysisConsentSchema, researchAnalysisPreviewReplySchema, researchAnalysisProgressReplySchema, researchAnalysisDiscardReplySchema } from '../shared/research-volatile-analysis-ipc'
-import type { PiModelSelection } from '../shared/pi-model'
-import { postingPreviewEditSchema, postingReviewSchema } from '../shared/posting-import'
-import { createNamedPostingPreviewSession } from './named-posting-preview-session'
-import { decideJobSourcePolicy } from '../shared/job-source-policy'
 
 let window: BrowserWindow | undefined
 let workspace: ReturnType<typeof createWorkbench> | undefined
-let research: ReturnType<typeof createJobResearchSessions> | undefined
-let researchAnalysis: ReturnType<typeof createVolatileResearchAnalysis> | undefined
-let namedPostingPreviews: ReturnType<typeof createNamedPostingPreviewSession> | undefined
 
 function invalidProfileInput(error: ZodError, kind: string) {
   const fieldErrors: Record<string, string> = {}
@@ -66,14 +55,6 @@ function isTrusted(event: Electron.IpcMainInvokeEvent): boolean {
 
 function trusted(event: Electron.IpcMainInvokeEvent): void {
   if (!isTrusted(event)) throw new Error('Untrusted IPC sender')
-}
-
-async function openOriginalPosting(url: string): Promise<void> {
-  if (!app.isPackaged && process.env.CV_TAILOR_SCRIPTED_OPEN_ORIGINAL === '1') {
-    if (!['https://jobs.lever.co/example-board/smoke-id', 'https://api.lever.co/v0/postings/example-board/smoke-id'].includes(url)) throw new Error('The scripted browser opener received an unexpected posting URL.')
-    return
-  }
-  await shell.openExternal(url)
 }
 
 // Test-only paths are set before readiness and credential construction. Never use an
@@ -190,58 +171,6 @@ app.whenReady().then(() => {
     if (process.env.CV_TAILOR_SCRIPTED_ANALYSIS === 'tailored-flow') return JSON.stringify({ required: ['Python', 'RASA', 'Google Cloud Platform', 'NLP'], preferred: ['Docker'], tools: ['Python', 'RASA', 'Google Cloud Platform', 'spaCy', 'Git', 'Docker'], responsibilities: ['Build Python APIs and conversational AI solutions'], keywords: ['Python', 'NLP', 'intent classification', 'model evaluation', 'backend services'] })
     return JSON.stringify({ required: ['TypeScript', 'Kubernetes'], preferred: ['Cloud architecture'], tools: ['TypeScript'], responsibilities: ['Build reliable services'], keywords: ['TypeScript', 'Kubernetes', 'Cloud architecture'] })
   } } : undefined
-  const scriptedPostingRefreshCounts = new Map<string, number>()
-  const scriptedPostingFetch = !app.isPackaged && ['1', 'delayed', 'refresh'].includes(process.env.CV_TAILOR_SCRIPTED_POSTING_FETCH ?? '') ? {
-    lookup: async () => [{ address: '8.8.8.8', family: 4 }],
-    request: async (url: URL) => {
-      if (process.env.CV_TAILOR_TEST_POSTING_REQUEST_COUNTER === '1') appendFileSync(join(app.getPath('userData'), 'scripted-posting-requests.log'), 'request\n')
-      if (process.env.CV_TAILOR_SCRIPTED_POSTING_FETCH === 'delayed') await new Promise(resolve => setTimeout(resolve, 800))
-      const id = url.pathname.split('/').at(-1)
-      const refreshCount = (scriptedPostingRefreshCounts.get(id ?? '') ?? 0) + 1
-      scriptedPostingRefreshCounts.set(id ?? '', refreshCount)
-      if (process.env.CV_TAILOR_SCRIPTED_POSTING_FETCH === 'refresh' && id === 'refresh-smoke' && refreshCount > 3) return { status: 403, headers: { 'content-type': 'text/plain' }, body: Buffer.from('Synthetic access restricted response.') }
-      const conflictFixture = id === 'conflict-review'
-      const descriptionPlain = id === 'refresh-smoke' && refreshCount === 2 ? `Responsibilities\n${'The fictional team builds reliable systems, documents operations, and collaborates to maintain a safe service environment. '.repeat(4)}\nRequirements\nTesting, careful written communication, and accessible interfaces.` : id === 'refresh-smoke' && refreshCount === 3 ? `Responsibilities\n${'The fictional team builds reliable systems, documents operations, and collaborates to maintain a safe service environment. '.repeat(4)}\nRequirements\nTesting, careful written communication, and privacy reviews.` : conflictFixture ? `Responsibilities\n${'The fictional team builds reliable systems, documents operations, and collaborates to maintain a safe service environment. '.repeat(4)}\nRequirements\nTesting and careful written communication.\nLocation: On-site` : id === 'missing-company' ? `Responsibilities\n${'Build and maintain fictional systems with careful collaboration and reliable operational practices. '.repeat(4)}\nRequirements\nExperience with testing and written communication.` : id === 'teaser' ? 'A short teaser.' : 'Responsibilities\nBuild and maintain fictional systems, document operational decisions, collaborate with the synthetic engineering team, and review reliability outcomes across a clearly invented service environment.'
-      const posting = { id, text: id === 'teaser' ? 'Synthetic Teaser Repair Engineer' : 'Synthetic Reliability Engineer', ...(id === 'missing-company' ? {} : { company: 'Example Research' }), ...(conflictFixture ? { companyName: 'Example Research Group', categories: { location: 'Remote' }, workplaceType: 'Remote', employmentType: 'Full-time', salaryRange: { currency: 'USD', min: 80000, max: 95000, interval: 'year' }, language: 'English', datePosted: '2 days ago', deadline: '2026-11-30', applyUrl: 'https://jobs.lever.co/example-board/apply-id' } : {}), descriptionPlain, lists: [{ text: 'Requirements', content: '<li>Testing and careful written communication.</li>' }] }
-      return { status: 200, headers: { 'content-type': 'application/json' }, body: Buffer.from(JSON.stringify(posting)) }
-    }
-  } : undefined
-  const singleRequestReleaseCheck = process.env.CV_TAILOR_SINGLE_POSTING_REQUEST === '1'
-  const scriptedResearchMode = !app.isPackaged ? process.env.CV_TAILOR_TEST_RESEARCH : undefined
-  const scriptedResearch = (scriptedResearchMode === '1' || scriptedResearchMode === 'full' || scriptedResearchMode === 'full-delayed' || scriptedResearchMode === 'unsafe') ? {
-    lookup: async () => [{ address: '8.8.8.8', family: 4 }],
-    request: async (url: URL) => {
-      appendFileSync(join(app.getPath('userData'), 'research-direct-requests.log'), 'request\n')
-      const expectedUrl = scriptedResearchMode === 'unsafe' ? 'https://www.linkedin.com/jobs/view/4482137197/' : 'https://jobs.example.org/role/123'
-      if (url.href.replace(/\/$/, '') !== expectedUrl.replace(/\/$/, '')) throw new Error('The scripted research received an unexpected URL.')
-      if (scriptedResearchMode === 'full-delayed') await new Promise(resolve => setTimeout(resolve, 1500))
-      return { status: 200, headers: { 'content-type': 'text/html' }, body: Buffer.from('<html><title>Synthetic Engineer</title></html>') }
-    },
-    extract: async () => scriptedResearchMode === 'unsafe'
-      ? { outcome: 'none' as const, reason: 'The page canonical identity differs from the selected role.' }
-      : scriptedResearchMode !== '1'
-        ? { outcome: 'full' as const, title: 'Synthetic Research Engineer', employer: 'Example Research', description: 'Build accessible TypeScript interfaces and test resilient desktop workflows. Document operational decisions, review privacy boundaries, collaborate with the engineering team, and maintain reliable services. Qualifications include TypeScript, careful written communication, and experience testing user-facing software.' }
-        : { outcome: 'partial' as const, title: 'Synthetic Engineer', employer: 'Example Research', description: 'Review TypeScript systems and document operational decisions. This partial synthetic role wording omits the complete requirements.', reason: 'Full role wording was not available.' }
-  } : undefined
-  const namedPreviewFixtureEnabled = !app.isPackaged && process.env.CV_TAILOR_TEST_NAMED_PREVIEW === '1'
-  const namedPreviewNoNetwork = namedPreviewFixtureEnabled ? {
-    lookup: async () => { throw new Error('Generic network is disabled in the named-preview UI fixture.') },
-    request: async () => { throw new Error('Generic network is disabled in the named-preview UI fixture.') },
-    research: {
-      lookup: async () => { throw new Error('Generic network is disabled in the named-preview UI fixture.') },
-      request: async () => { throw new Error('Generic network is disabled in the named-preview UI fixture.') },
-    }
-  } : undefined
-  const postingFetchOptions: SafePostingFetchOptions & { research?: import('./job-research-fetch').JobResearchFetchOptions } = {
-    ...namedPreviewNoNetwork,
-    ...scriptedPostingFetch,
-    ...(scriptedResearch ? { research: scriptedResearch } : {}),
-    ...(singleRequestReleaseCheck ? {
-      singleRequest: true,
-      onRequestStarted: () => console.info('[LINK37_SINGLE_REQUEST] request=1 started'),
-      onRequestCompleted: status => console.info(`[LINK37_SINGLE_REQUEST] request=1 completed status=${status}`)
-    } : {})
-  }
   const useScriptedPi = Boolean(scriptedAnalysis && !app.isPackaged && process.env.CV_TAILOR_SCRIPTED_PI_MODEL === '1')
   const piRuntime = useScriptedPi
     ? Promise.resolve((() => {
@@ -254,12 +183,6 @@ app.whenReady().then(() => {
         completeSimple: async (selected: { provider: string; id: string }, context: { messages: Array<{ role: string; content: string }> }, options: { signal?: AbortSignal }) => {
           const prompt = context.messages.find(message => message.role === 'user')?.content
           if (!prompt) throw new Error('The scripted Pi request has no prompt.')
-          if (!app.isPackaged && ['1', 'full'].includes(process.env.CV_TAILOR_TEST_RESEARCH ?? '') && prompt.startsWith('Extract only explicitly stated role responsibilities')) {
-            appendFileSync(join(app.getPath('userData'), 'research-model-requests.log'), 'request\n')
-            const data = JSON.parse(prompt.slice(prompt.indexOf('\n') + 1)) as { roleEvidence: Array<{ findingId: string }> }
-            const text = JSON.stringify({ requirements: data.roleEvidence.map(item => ({ category: 'qualification', text: 'Review the synthetic role wording.', findingIds: [item.findingId] })) })
-            return { role: 'assistant', provider: selected.provider, model: selected.id, stopReason: 'stop', content: [{ type: 'text', text }], usage: { output: 50 } }
-          }
           const text = await scriptedAnalysis!.generate({ model: 'scripted/cv-tailor-fixture', prompt, signal: options.signal ?? new AbortController().signal, responseSchema: z.unknown() })
           return { role: 'assistant', provider: selected.provider, model: selected.id, stopReason: 'stop', content: [{ type: 'text', text }], usage: { output: Math.ceil(Buffer.byteLength(text, 'utf8') / 4) } }
         }
@@ -268,72 +191,12 @@ app.whenReady().then(() => {
     : import('@earendil-works/pi-coding-agent')
       .then(({ ModelRuntime }) => ModelRuntime.create({ allowModelNetwork: false, refreshOnCreate: false }))
       .catch(() => null)
-  workspace = createWorkbench(app.getPath('userData'), undefined, useScriptedPi ? undefined : scriptedAnalysis, undefined, postingFetchOptions, piRuntime)
-  const namedPreviewFixture = namedPreviewFixtureEnabled ? {
-    lookup: async (host: string) => {
-      if (!['boards-api.greenhouse.io', 'api.lever.co'].includes(host)) throw new Error('Unexpected named-preview fixture host.')
-      return [{ address: '8.8.8.8', family: 4 }]
-    },
-    request: async (url: URL, _address: { address: string; family: number }, signal: AbortSignal) => {
-      const responses: Record<string, unknown> = {
-        'https://boards-api.greenhouse.io/v1/boards/acme/jobs/123': { id: 123, title: 'Synthetic Reliability Engineer', company_name: 'Example Research', updated_at: '2026-10-25T12:00:00Z', content: `<p>${'Build and maintain synthetic systems, document decisions, collaborate with a fictional team, and review reliability outcomes. '.repeat(8)}</p>` },
-        'https://api.lever.co/v0/postings/acme/role1': { id: 'role1', text: 'Synthetic Reliability Engineer', categories: { team: 'Example Research' }, descriptionPlain: `${'Build and maintain synthetic systems, document decisions, collaborate with a fictional team, and review reliability outcomes. '.repeat(8)}`, hostedUrl: 'https://jobs.lever.co/acme/role1' }
-      }
-      const body = responses[url.href]
-      if (!body) throw new Error('Unexpected named-preview fixture route.')
-      appendFileSync(join(app.getPath('userData'), 'named-preview-request-count.log'), 'request\n')
-      await new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(() => { signal.removeEventListener('abort', abort); resolve() }, 500)
-        const abort = () => { clearTimeout(timer); reject(new Error('Synthetic named-preview request cancelled.')) }
-        if (signal.aborted) abort()
-        else signal.addEventListener('abort', abort, { once: true })
-      })
-      return { status: 200, headers: { 'content-type': 'application/json' }, body: Buffer.from(JSON.stringify(body)) }
-    }
-  } : undefined
-  namedPostingPreviews = createNamedPostingPreviewSession(namedPreviewFixture)
-  app.on('before-quit', () => namedPostingPreviews?.close())
-  const researchCredentials = createResearchSearchCredentials({
-    credentialsDirectory: defaultResearchCredentialDirectory(app.getPath('appData'), app.getPath('userData')),
-    workspaceDirectory: app.getPath('userData'), encryption: safeStorage
-  })
-  const researchOptions = scriptedResearch ?? namedPreviewNoNetwork?.research
-  research = createJobResearchSessions({ ...(researchOptions ? { direct: (url, options) => fetchDirectJobResearch(url, { ...researchOptions, signal: options.signal }) } : {}) })
-  registerResearchSearchSettingsIpc(ipcMain, researchCredentials, trusted)
-  let analysisSelection: PiModelSelection | null = null
-  let selectionEpoch = 0
+  workspace = createWorkbench(app.getPath('userData'), undefined, useScriptedPi ? undefined : scriptedAnalysis, undefined, piRuntime)
   let modelUpdatePending = false
-  const currentSelection = async () => {
-    if (modelUpdatePending) throw new Error('Wait for Pi model selection to finish before reviewing outgoing data.')
-    const epoch = selectionEpoch
-    const selection = (await workspace!.api.getSettings()).pi
-    if (modelUpdatePending || epoch !== selectionEpoch) throw new Error('Pi settings changed. Review outgoing data again.')
-    if (!selection) throw new Error('Select a Pi model in Settings before reviewing outgoing data.')
-    analysisSelection = selection
-    return selection
-  }
-  async function volatileController() {
-    if (researchAnalysis) return researchAnalysis
-    // Never await ModelRuntime while creating the window; surface no SDK/provider internals to the renderer.
-    const runtime = await piRuntime
-    if (!runtime) throw new Error('Pi analysis is unavailable. Check your local Pi installation and try again.')
-    return researchAnalysis ??= createVolatileResearchAnalysis({
-      getAppHeldRun: runId => research!.getReviewedRunById(runId).run,
-      getAppHeldReview: runId => research!.getReviewedRunById(runId).review,
-      getPiSelection: () => analysisSelection,
-      getSelectionEpoch: () => modelUpdatePending ? -1 : selectionEpoch,
-      piRuntime: runtime,
-    })
-  }
   registerWorkspaceBackupIpc(() => window!, () => workspace!, () => {
-    const reopened = createWorkbench(app.getPath('userData'), undefined, useScriptedPi ? undefined : scriptedAnalysis, undefined, postingFetchOptions, piRuntime)
+    const reopened = createWorkbench(app.getPath('userData'), undefined, useScriptedPi ? undefined : scriptedAnalysis, undefined, piRuntime)
     const previous = workspace!
     workspace = reopened
-    selectionEpoch++
-    analysisSelection = null
-    researchAnalysis?.close()
-    researchAnalysis = undefined
-    research?.close()
     previous.close()
   }, trusted)
   ipcMain.handle('settings:get', (event, ...args: unknown[]) => {
@@ -352,12 +215,8 @@ app.whenReady().then(() => {
     const input = piModelPreferenceInputSchema.parse(args[0])
     if (modelUpdatePending) throw new Error('Wait for the current Pi model selection to finish.')
     modelUpdatePending = true
-    selectionEpoch++ // invalidate consent immediately, even while model authentication is pending
-    analysisSelection = null
     return workspace!.api.setPiModel(input).finally(() => {
       modelUpdatePending = false
-      selectionEpoch++ // also invalidate any preview attempted while validation was pending
-      analysisSelection = null
     })
   })
   registerProfileExchangeIpc(() => window!, () => workspace!.api, trusted)
@@ -441,13 +300,28 @@ app.whenReady().then(() => {
   ipcMain.handle('jobs:save', async (event, ...args: unknown[]) => {
     trusted(event)
     if (args.length !== 1) throw new Error('Expected job')
+    if (hasSavedJobApplicationUrlInput(args[0])) return jobSaveResultSchema.parse({ ok: false, error: { code: 'VALIDATION_ERROR', message: 'Job application URLs are not accepted in manual intake.', fieldErrors: { 'optionalDetails.applicationUrl': 'Remove this URL; saved jobs are entered manually.' } } })
     const input = jobSaveInputSchema.safeParse(args[0])
     if (!input.success) {
       const fieldErrors: Record<string, string> = {}
       for (const issue of input.error.issues) fieldErrors[issue.path.length ? issue.path.join('.') : '_'] = issue.message
-      return jobSaveResultSchema.parse({ ok: false, error: { code: 'VALIDATION_ERROR', message: 'Enter a title, company, and job description.', fieldErrors } })
+      return jobSaveResultSchema.parse({ ok: false, error: { code: 'VALIDATION_ERROR', message: 'Check the highlighted job and contact fields.', fieldErrors } })
     }
     return jobSaveResultSchema.parse(await workspace!.api.saveJob(input.data))
+  })
+  ipcMain.handle('contacts:open-profile', async (event, ...args: unknown[]) => {
+    trusted(event); if (args.length !== 2) throw new Error('Choose a saved job contact profile to open.')
+    const jobId = uuidSchema.parse(args[0]), contactId = uuidSchema.parse(args[1])
+    const job = await workspace!.api.openJob(jobId)
+    const contact = job?.contacts.find(item => item.id === contactId)
+    if (!contact?.profileUrl) return { ok: false, message: 'This contact no longer has a saved profile link.' }
+    const url = httpsProfileUrlSchema.parse(contact.profileUrl)
+    const target = new URL(url), host = target.hostname.replace(/^\[|\]$/g, '')
+    // The explicit click triggers DNS safety validation only; this does not fetch profile content or pin the browser's later resolution.
+    const addresses = isIP(host) ? [{ address: host }] : await lookup(host, { all: true, verbatim: true })
+    if (!arePublicContactProfileAddresses(addresses.map(address => address.address))) return { ok: false, message: 'This profile host does not resolve only to public addresses. Nothing was opened.' }
+    await shell.openExternal(url)
+    return { ok: true, message: 'Opened the saved contact profile in your default browser. The browser controls redirects and final addresses.' }
   })
   ipcMain.handle('jobs:delete:preview', async (event, ...args: unknown[]) => {
     trusted(event); if (args.length !== 1) throw new Error('Expected saved job selection')
@@ -462,128 +336,6 @@ app.whenReady().then(() => {
     trusted(event)
     if (args.length) throw new Error('Unexpected arguments')
     return jobRecordSchema.array().parse(await workspace!.api.listJobs())
-  })
-  ipcMain.handle('posting-import:update-preview', async (event, ...args: unknown[]) => {
-    trusted(event); if (args.length !== 3 || !Number.isSafeInteger(args[1])) throw new Error('Expected preview token, edit revision, and working details')
-    const input = postingPreviewEditSchema.safeParse(args[2])
-    if (!input.success) return { ok: false, message: 'The preview edit is invalid or exceeds a safe field limit.' }
-    return await workspace!.api.updatePostingPreview(uuidSchema.parse(args[0]), args[1] as number, input.data)
-  })
-  ipcMain.handle('posting-import:review-preview', async (event, ...args: unknown[]) => {
-    trusted(event); if (args.length !== 3 || !Number.isSafeInteger(args[1])) throw new Error('Expected preview token, edit revision, and review decisions')
-    const review = postingReviewSchema.safeParse(args[2])
-    if (!review.success) return { ok: false, message: 'Confirm the posting review and resolve each source conflict.' }
-    return await workspace!.api.reviewPostingPreview(uuidSchema.parse(args[0]), args[1] as number, review.data)
-  })
-  ipcMain.handle('posting-import:accept', async (event, ...args: unknown[]) => {
-    trusted(event); if (args.length !== 2 || !Number.isSafeInteger(args[1])) throw new Error('Expected preview token and reviewed edit revision')
-    return jobSaveResultSchema.parse(await workspace!.api.acceptPostingImport(uuidSchema.parse(args[0]), args[1] as number))
-  })
-  ipcMain.handle('posting-refresh:compare', async (event, ...args: unknown[]) => {
-    trusted(event); if (args.length !== 4 || typeof args[2] !== 'string' || !Number.isSafeInteger(args[3])) throw new Error('Expected preview, saved job, and base posting revision')
-    return workspace!.api.comparePostingRefresh(uuidSchema.parse(args[0]), uuidSchema.parse(args[1]), args[2], args[3] as number)
-  })
-  ipcMain.handle('posting-refresh:accept', async (event, ...args: unknown[]) => {
-    trusted(event); if (args.length !== 6 || !Number.isSafeInteger(args[1]) || typeof args[3] !== 'string' || !Number.isSafeInteger(args[4])) throw new Error('Expected reviewed preview, saved job, base posting revision, and field choices')
-    const choices = postingRefreshChoiceSchema.safeParse(args[5])
-    if (!choices.success) return jobSaveResultSchema.parse({ ok: false, error: { code: 'VALIDATION_ERROR', message: 'Choose source or current wording for each field.' } })
-    return jobSaveResultSchema.parse(await workspace!.api.acceptPostingRefresh(uuidSchema.parse(args[0]), args[1] as number, uuidSchema.parse(args[2]), args[3], args[4] as number, choices.data))
-  })
-  ipcMain.handle('job-research:start', (event, ...args: unknown[]) => {
-    trusted(event); if (args.length !== 1 || typeof args[0] !== 'string') throw new Error('Expected one public job URL.')
-    return researchStartSchema.parse(research!.startJobResearch(args[0]))
-  })
-  ipcMain.handle('job-research:from-posting', (event, ...args: unknown[]) => {
-    trusted(event); if (args.length !== 1) throw new Error('Expected one temporary posting token.')
-    const token = uuidSchema.parse(args[0])
-    research!.assertCanAcceptInitialDirectRun()
-    return researchStartSchema.parse(research!.acceptInitialDirectRun(workspace!.api.takePostingResearchRun(token)))
-  })
-  ipcMain.handle('job-research:get', (event, ...args: unknown[]) => {
-    trusted(event); if (args.length !== 1) throw new Error('Expected one research token.')
-    return researchStateSchema.parse(research!.getJobResearch(uuidSchema.parse(args[0])))
-  })
-  ipcMain.handle('job-research:search', async (event, ...args: unknown[]) => {
-    trusted(event); if (args.length !== 1) throw new Error('Expected one research token.')
-    return researchStateSchema.parse(await research!.searchJobResearch(uuidSchema.parse(args[0])))
-  })
-  ipcMain.handle('job-research:review', (event, ...args: unknown[]) => {
-    trusted(event); if (args.length !== 2) throw new Error('Expected token and review decisions.')
-    const review = researchReviewInputSchema.parse(args[1])
-    return researchReviewStateSchema.parse({ reviewed: research!.reviewJobResearch(uuidSchema.parse(args[0]), review.acceptedFindingIds, review.acknowledgedPartial) })
-  })
-  ipcMain.handle('job-research:cancel', (event, ...args: unknown[]) => {
-    trusted(event); if (args.length !== 1) throw new Error('Expected one research token.')
-    return researchCancelSchema.parse(research!.cancelJobResearch(uuidSchema.parse(args[0])))
-  })
-  ipcMain.handle('research-analysis:preview', async (event, ...args: unknown[]) => {
-    trusted(event); if (args.length !== 1) throw new Error('Expected one app-held research token.')
-    const { run } = research!.getReviewedRun(researchAnalysisTokenSchema.parse(args[0]))
-    await currentSelection()
-    return researchAnalysisPreviewReplySchema.parse((await volatileController()).preview(run.id))
-  })
-  ipcMain.handle('research-analysis:consent', async (event, ...args: unknown[]) => {
-    trusted(event); if (args.length !== 2) throw new Error('Expected review token and consent decision.')
-    const token = researchAnalysisTokenSchema.parse(args[0]), accepted = researchAnalysisConsentSchema.parse(args[1])
-    if (!researchAnalysis) throw new Error('Review an app-held research run before consenting.')
-    const controller = researchAnalysis
-    if (!accepted) { controller.decline(token); return researchAnalysisProgressReplySchema.parse(controller.read(token)) }
-    return researchAnalysisProgressReplySchema.parse(controller.consent(token))
-  })
-  ipcMain.handle('research-analysis:start', async (event, ...args: unknown[]) => {
-    trusted(event); if (args.length !== 1) throw new Error('Expected one consent token.')
-    const token = researchAnalysisTokenSchema.parse(args[0])
-    if (!researchAnalysis) throw new Error('Review an app-held research run before starting analysis.')
-    await currentSelection()
-    return researchAnalysisProgressReplySchema.parse(await researchAnalysis.start(token))
-  })
-  ipcMain.handle('research-analysis:read', (event, ...args: unknown[]) => {
-    trusted(event); if (args.length !== 1) throw new Error('Expected one analysis token.')
-    if (!researchAnalysis) throw new Error('No temporary analysis is available.')
-    return researchAnalysisProgressReplySchema.parse(researchAnalysis.read(researchAnalysisTokenSchema.parse(args[0])))
-  })
-  ipcMain.handle('research-analysis:cancel', (event, ...args: unknown[]) => {
-    trusted(event); if (args.length !== 1) throw new Error('Expected one analysis token.')
-    if (!researchAnalysis) throw new Error('No temporary analysis is available.')
-    return researchAnalysisProgressReplySchema.parse(researchAnalysis.cancel(researchAnalysisTokenSchema.parse(args[0])))
-  })
-  ipcMain.handle('research-analysis:discard', (event, ...args: unknown[]) => {
-    trusted(event); if (args.length !== 1) throw new Error('Expected one analysis token.')
-    if (!researchAnalysis) throw new Error('No temporary analysis is available.')
-    researchAnalysis.discard(researchAnalysisTokenSchema.parse(args[0]))
-    return researchAnalysisDiscardReplySchema.parse({ ok: true })
-  })
-  ipcMain.handle('posting-import:start', async (event, ...args: unknown[]) => {
-    trusted(event); if (args.length !== 1 || typeof args[0] !== 'string') throw new Error('Expected a posting link')
-    return await workspace!.api.startPostingFetch(args[0])
-  })
-  ipcMain.handle('posting-import:read', async (event, ...args: unknown[]) => {
-    trusted(event); if (args.length !== 1) throw new Error('Expected preview token')
-    return await workspace!.api.readPostingPreview(uuidSchema.parse(args[0]))
-  })
-  ipcMain.handle('posting-import:cancel', async (event, ...args: unknown[]) => {
-    trusted(event); if (args.length !== 1) throw new Error('Expected fetch token')
-    return await workspace!.api.cancelPostingFetch(uuidSchema.parse(args[0]))
-  })
-  ipcMain.handle('named-posting-preview:start', async (event, ...args: unknown[]) => {
-    trusted(event); if (args.length !== 2 || typeof args[0] !== 'string' || typeof args[1] !== 'boolean') throw new Error('Expected Greenhouse link and personal-local opt-in.')
-    return namedPostingPreviews!.start(args[0], args[1])
-  })
-  ipcMain.handle('named-posting-preview:read', (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected preview token.'); return namedPostingPreviews!.read(uuidSchema.parse(args[0])) })
-  ipcMain.handle('named-posting-preview:cancel', (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected preview token.'); return namedPostingPreviews!.cancel(uuidSchema.parse(args[0])) })
-  ipcMain.handle('named-posting-preview:review', (event, ...args: unknown[]) => {
-    trusted(event); if (args.length !== 3 || typeof args[1] !== 'boolean' || typeof args[2] !== 'boolean') throw new Error('Review the exact role and complete posting before saving.')
-    return namedPostingPreviews!.review(uuidSchema.parse(args[0]), args[1], args[2])
-  })
-  ipcMain.handle('named-posting-preview:save', async (event, ...args: unknown[]) => {
-    trusted(event); if (args.length !== 3) throw new Error('Review the current preview before saving.')
-    const working = jobInputSchema.safeParse(args[2]); if (!working.success) throw new Error('Correct the working posting fields before saving.')
-    return jobSaveResultSchema.parse(await namedPostingPreviews!.save(uuidSchema.parse(args[0]), uuidSchema.parse(args[1]), working.data, (acceptance, values) => workspace!.api.saveNamedPostingAcceptance(acceptance, values), result => result.ok))
-  })
-  ipcMain.handle('posting-import:open-source', async (event, ...args: unknown[]) => {
-    trusted(event); if (args.length !== 1 || typeof args[0] !== 'string') throw new Error('Expected a public posting link.')
-    const selected = validateLeverPostingUrl(args[0]) ? args[0] : normalizeJobResearchUrl(args[0]).canonicalUrl
-    await openOriginalPosting(selected); return { ok: true, message: 'Opened the posting in your default browser.' }
   })
   ipcMain.handle('consent:outbound:preview', async (event, ...args: unknown[]) => {
     trusted(event); if (args.length !== 1) throw new Error('Expected saved job ID')
@@ -765,4 +517,4 @@ app.whenReady().then(() => {
 })
 
 app.on('window-all-closed', () => app.quit())
-app.on('before-quit', () => { researchAnalysis?.close(); research?.close(); workspace?.close() })
+app.on('before-quit', () => { workspace?.close() })

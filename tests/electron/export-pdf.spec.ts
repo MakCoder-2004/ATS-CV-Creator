@@ -28,7 +28,7 @@ test('user approves and exports a selectable PDF, while cancellation and overwri
     await page.getByRole('button', { name: 'Open saved jobs' }).click()
     await page.getByLabel('Job title').fill('Engineer')
     await page.getByLabel('Company').fill('Example Co')
-    await page.getByLabel('Posting and requirements').fill('Build software with CaféScript.')
+    await page.getByLabel('Full job posting').fill('Build software with CaféScript.')
     await page.getByRole('button', { name: 'Save job' }).click()
     await page.getByRole('button', { name: 'Tailor CV', exact: true }).click()
     const jobId = await page.evaluate(async () => (await window.workbench.listJobs())[0].id)

@@ -25,7 +25,7 @@ test('visible failed-draft findings can be corrected and rechecked without losin
     await page.getByRole('button', { name: 'Saved jobs', exact: true }).click()
     await page.getByLabel('Job title').fill('Engineer')
     await page.getByLabel('Company').fill('Example')
-    await page.getByLabel('Posting and requirements').fill('Engineering experience required.')
+    await page.getByLabel('Full job posting').fill('Engineering experience required.')
     await page.getByRole('button', { name: 'Save job' }).click()
     await page.getByRole('button', { name: 'Tailor CV', exact: true }).click()
     await page.getByRole('button', { name: 'Inspect outgoing data' }).click()
