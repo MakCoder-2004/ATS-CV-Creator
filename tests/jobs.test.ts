@@ -10,6 +10,7 @@ import { createWorkspaceBackupEngine, registerWorkspaceBackupRowSizer } from '..
 import { seedHistoricalJob } from './helpers/historical-job'
 import type { AnalysisTransport } from '../src/main/posting-analysis'
 import { normalizePostingUrl, samePostingSource } from '../src/shared/posting-identity'
+import { jobContactSchema, jobRecordSchema } from '../src/shared/jobs'
 import { createNamedPostingPreviewSession } from '../src/main/named-posting-preview-session'
 
 const directories: string[] = []
@@ -59,6 +60,15 @@ test.each([
     expect(request).toHaveBeenCalledTimes(1)
   } finally { db.close(); wb.close() }
 }, 30_000)
+
+test('job contacts are bounded HTTPS-only record data and legacy records receive an empty contact list', () => {
+  const id = 'f290c2ee-b6d6-40f1-a039-e7c589db47a8'
+  expect(jobContactSchema.parse({ id, name: 'Sam Recruiter', role: 'Recruiter', profileUrl: 'https://example.test/in/sam' })).toMatchObject({ id, name: 'Sam Recruiter' })
+  expect(jobContactSchema.safeParse({ id, name: 'Sam', role: 'HR', profileUrl: 'http://example.test/profile' }).success).toBe(false)
+  expect(jobContactSchema.safeParse({ id, name: 'Sam', role: 'HR', profileUrl: 'https://user:secret@example.test/profile' }).success).toBe(false)
+  const legacy = jobRecordSchema.parse({ id, title: 'Engineer', company: 'Example', description: 'Manual posting.', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), provenance: 'manual', sourceSnapshot: null, sourceHistory: [], revisions: [] })
+  expect(legacy.contacts).toEqual([])
+})
 
 test('saved jobs preserve original posting text, have stable IDs, and reopen after SQLite restart', async () => {
   const { directory, workbench } = open()
