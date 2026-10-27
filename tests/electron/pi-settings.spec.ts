@@ -50,6 +50,39 @@ test('Settings shows Pi preferences and no retired-search controls when no legac
     await expect(page.getByRole('button', { name: 'Remove local key' })).toHaveCount(0)
     await expect(page.getByRole('heading', { name: 'Analysis request budgets' })).toHaveCount(0)
     await expect(page.locator('.settings-grid > .settings-block')).toHaveCount(1)
+    const dimensions = await modelCard.evaluate(block => ({
+      grid: block.parentElement!.getBoundingClientRect().width,
+      block: block.getBoundingClientRect().width
+    }))
+    expect(Math.abs(dimensions.grid - dimensions.block)).toBeLessThan(2)
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+  } finally {
+    await app?.close().catch(() => {})
+    await rm(storage.root, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 })
+  }
+})
+
+test('a failed legacy-key inspection stays truthful inside the full-width Pi block', async () => {
+  test.setTimeout(90000)
+  const storage = isolatedStorage('cv-tailor-key-status-failure-')
+  writeFileSync(join(storage.appData, 'CV Tailor Search Credentials'), 'blocks credential-directory creation')
+  let app: Awaited<ReturnType<typeof electron.launch>> | undefined
+  try {
+    app = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], env: storage.env, timeout: 30000 })
+    await assertIsolatedPaths(app, storage)
+    const page = await app.firstWindow({ timeout: 20000 })
+    await expect(page.locator('[data-ui-ready="true"]')).toBeVisible()
+    await page.getByRole('button', { name: 'Settings' }).click()
+    const piBlock = page.getByRole('region', { name: 'Pi model' })
+    await expect(piBlock.getByRole('status')).toContainText('storage could not be checked')
+    await expect(piBlock.getByRole('status')).toContainText('Any saved key was left unchanged')
+    await expect(piBlock.getByRole('button', { name: 'Remove local key' })).toHaveCount(0)
+    const dimensions = await page.locator('.settings-grid').evaluate(grid => {
+      const gridRect = grid.getBoundingClientRect()
+      const blockRect = grid.querySelector('.settings-block--pi')!.getBoundingClientRect()
+      return { grid: gridRect.width, block: blockRect.width }
+    })
+    expect(Math.abs(dimensions.grid - dimensions.block)).toBeLessThan(2)
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
   } finally {
     await app?.close().catch(() => {})
