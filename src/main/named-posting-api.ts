@@ -110,6 +110,7 @@ async function fetchWuzzuf(reference: NamedPostingReference, id: string, started
   const controller = new AbortController(), relay = () => controller.abort(options.signal?.reason)
   options.signal?.addEventListener('abort', relay, { once: true })
   const timer = setTimeout(() => controller.abort(new Error('deadline')), timeout)
+  let parsingStarted = false
   try {
     if (options.signal?.aborted) return failed('cancelled')
     const addresses = await abortable((options.lookup ?? defaultLookup)(url.hostname), controller.signal)
@@ -120,6 +121,7 @@ async function fetchWuzzuf(reference: NamedPostingReference, id: string, started
     if ([401,403].includes(response.status)) return failed('login-required')
     if (response.status === 404 || response.status === 410) return failed('not-found')
     if (response.status !== 200 || !String(response.headers['content-type'] ?? '').toLowerCase().includes('html') || String(response.headers['content-encoding'] ?? 'identity').toLowerCase() !== 'identity') return failed('incomplete')
+    parsingStarted = true
     const html = new TextDecoder('utf-8', { fatal: true }).decode(response.body)
     const worker = new Worker(join(__dirname, 'wuzzuf-posting-worker.cjs'), { workerData: { html, url: url.href, canonicalUrl: reference.canonicalUrl }, resourceLimits: { maxOldGenerationSizeMb: 48, maxYoungGenerationSizeMb: 16, stackSizeMb: 2 } })
     const workerReply = await new Promise<unknown>( (resolve, reject) => {
@@ -139,7 +141,11 @@ async function fetchWuzzuf(reference: NamedPostingReference, id: string, started
     if (data.canonicalUrl !== reference.canonicalUrl) return failed('ambiguous', 'canonical-mismatch')
     const candidate = namedPostingCandidateSchema.parse({ version: 1, attemptId: id, reference, returnedBoard: null, returnedPostingId: reference.postingId, title: data.title, employer: data.employer, text: data.text, completeness: 'full', capturedAt: new Date((options.now ?? Date.now)()).toISOString(), sourceUpdatedAt: null, retrievalMethod: 'wuzzuf-public-jobposting-v1', retrievalUrl: reference.canonicalUrl })
     return { attempt: retrieved, candidate }
-  } catch { return failed(options.signal?.aborted ? 'cancelled' : controller.signal.aborted ? 'deadline' : 'source-error', controller.signal.aborted ? undefined : 'html-invalid') }
+  } catch {
+    if (options.signal?.aborted) return failed('cancelled')
+    if (controller.signal.aborted) return failed('deadline')
+    return parsingStarted ? failed('incomplete', 'html-invalid') : failed('source-error')
+  }
   finally { clearTimeout(timer); options.signal?.removeEventListener('abort', relay) }
 }
 

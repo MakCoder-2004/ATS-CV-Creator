@@ -13,7 +13,7 @@
 ## Synthetic checks observed
 
 - Focused Vitest covers typed canonical/role/title/employer/description diagnostic branches, malformed extra canonical declarations, strict attempt validation, no candidate/source strings on failures, the Wuzzuf contract, visibility adversarial fixtures, two install roots sharing appData, revocation and transactional SQLite coverage. No body/title/company text or hash is included in diagnostic data.
-- `npx vitest run --maxWorkers=1 tests/wuzzuf-posting.test.ts tests/named-posting-contract.test.ts tests/main/named-posting-preview-session.test.ts` — 3 files, 50 passed, including each bounded Wuzzuf diagnostic enum path, raw-canonical cardinality, hidden evidence, and strict non-Wuzzuf rejection.
+- `npx vitest run --maxWorkers=1 tests/wuzzuf-posting.test.ts tests/named-posting-contract.test.ts tests/main/named-posting-preview-session.test.ts` — 3 files, 51 passed, including each bounded Wuzzuf diagnostic enum path, raw-canonical cardinality, hidden evidence, strict non-Wuzzuf rejection, network-error/diagnostic separation, and malformed-UTF-8 `html-invalid` handling.
 - `npx playwright test tests/electron/wuzzuf-failure-diagnostic.spec.ts --workers=1` — 1 visible Electron flow passed with a fake transport. A valid canonical plus malformed extra canonical yields a safe actionable `canonical-multiple` message; the UI shows no candidate/Save and the jobs list remains empty.
 - `npm run typecheck`, `npm run build`, `node scripts/check-doc-links.cjs` (81 Markdown files), and `git diff --check` passed.
 

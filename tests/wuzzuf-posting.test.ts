@@ -96,6 +96,13 @@ describe('Wuzzuf guarded exact posting adapter', () => {
     expect(await failedDiagnostic(page({description:'<p>Some essential-looking source text that is not visibly in the document and therefore cannot be confirmed on the page.</p>',renderDescription:false}))).toBe('description-not-visible')
     expect(await failedDiagnostic(page({description:`<p>${'Complete role content. '.repeat(10)} Read more`}))).toBe('description-teaser')
   })
+  it('separates source transport failures from bounded parser failures', async () => {
+    const networkFailure = await run(page(), { request:async()=>{throw new Error('socket reset')} })
+    expect(networkFailure.attempt).toMatchObject({status:'failed',reason:'source-error'})
+    expect(networkFailure.attempt.status === 'failed' && networkFailure.attempt.diagnostic).toBeUndefined()
+    const malformedUtf8 = await run(page(), { request:async()=>({status:200,headers:{'content-type':'text/html'},body:Buffer.from([0xff,0xfe])}) })
+    expect(malformedUtf8.attempt).toMatchObject({status:'failed',reason:'incomplete',diagnostic:'html-invalid'})
+  })
   it('rejects unsafe DNS targets and redirects without fallback', async () => {
     expect((await run(page(), {lookup:async()=>[{address:'127.0.0.1',family:4}]})).attempt).toMatchObject({status:'failed',reason:'unsafe-address'})
     expect((await run(page(), {request:async()=>({status:302,headers:{location:'https://evil.example'},body:Buffer.alloc(0)})})).attempt).toMatchObject({status:'failed',reason:'unsafe-redirect'})
