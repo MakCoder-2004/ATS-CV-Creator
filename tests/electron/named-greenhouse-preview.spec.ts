@@ -1,9 +1,10 @@
 import { expect, test, _electron as electron } from '@playwright/test'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { wuzzufPersonalLocalPolicyPath } from '../../src/main/wuzzuf-local-enablement'
+import { randomUUID } from 'node:crypto'
+import { wuzzufInstallationFingerprint, wuzzufPersonalLocalPolicyPath } from '../../src/main/wuzzuf-local-enablement'
 
 const link = 'https://boards.greenhouse.io/acme/jobs/123'
 const requestCount = (path: string) => existsSync(path) ? readFileSync(path, 'utf8').trim().split(/\r?\n/).filter(Boolean).length : 0
@@ -15,7 +16,7 @@ test('visible Greenhouse preview is explicit, temporary and stale-result safe', 
   mkdirSync(appData); mkdirSync(userData)
   const localPolicy = wuzzufPersonalLocalPolicyPath(appData)
   mkdirSync(join(appData, 'CV Tailor Personal Local Policy'))
-  writeFileSync(localPolicy, JSON.stringify({ version: 1, wuzzufPersonalLocalEnabled: true, acknowledgedNoticeVersion: 1 }), { flag: 'wx' })
+  writeFileSync(localPolicy, JSON.stringify({ version: 1, wuzzufPersonalLocalEnabled: true, acknowledgedNoticeVersion: 1, installationFingerprint: wuzzufInstallationFingerprint(process.cwd()) }), { flag: 'wx' })
   let app: Awaited<ReturnType<typeof electron.launch>> | undefined
   try {
     app = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], timeout: 60_000, env: {
@@ -54,8 +55,8 @@ test('visible Greenhouse preview is explicit, temporary and stale-result safe', 
     await expect(preview).toContainText('Build and maintain synthetic systems')
     await expect(preview.getByRole('button', { name: 'Save job' })).toBeDisabled()
     expect(requestCount(join(userData, 'named-preview-request-count.log'))).toBe(2)
-    await preview.getByRole('checkbox', { name: /reviewed the exact role/ }).check()
-    await preview.getByRole('checkbox', { name: /reviewed the complete posting text/ }).check()
+    await preview.getByRole('checkbox', { name: /inspected the original posting page/ }).check()
+    await preview.getByRole('checkbox', { name: /compared the complete captured text/ }).check()
     await preview.getByRole('button', { name: 'Confirm review' }).click()
     const saveButton = preview.getByRole('button', { name: 'Save job' })
     await expect(saveButton).toBeEnabled()
@@ -88,8 +89,8 @@ test('visible Greenhouse preview is explicit, temporary and stale-result safe', 
     await expect(leverPreview.getByRole('heading', { name: 'Synthetic Reliability Engineer' })).toBeVisible()
     await expect(leverPreview).toContainText('Lever Postings API - acme / role1')
     await expect.poll(() => requestCount(join(userData, 'named-preview-request-count.log'))).toBe(3)
-    await leverPreview.getByRole('checkbox', { name: /reviewed the exact role/ }).check()
-    await leverPreview.getByRole('checkbox', { name: /reviewed the complete posting text/ }).check()
+    await leverPreview.getByRole('checkbox', { name: /inspected the original posting page/ }).check()
+    await leverPreview.getByRole('checkbox', { name: /compared the complete captured text/ }).check()
     await leverPreview.getByRole('button', { name: 'Confirm review' }).click()
     await leverPreview.getByRole('button', { name: 'Save job' }).click()
     await expect(page.getByRole('row').filter({ hasText: 'Synthetic Reliability Engineer' })).toBeVisible()
@@ -118,8 +119,8 @@ test('visible Greenhouse preview is explicit, temporary and stale-result safe', 
     expect(await page.evaluate(async () => (window as any).workbench.listJobs())).toEqual([])
     await wuzzufPreview.getByLabel('Working job title').fill('Synthetic Wuzzuf Engineer — reviewed')
     await expect.poll(() => requestCount(join(userData, 'named-preview-request-count.log'))).toBe(4)
-    await wuzzufPreview.getByRole('checkbox', { name: /reviewed the exact role/ }).check()
-    await wuzzufPreview.getByRole('checkbox', { name: /reviewed the complete posting text/ }).check()
+    await wuzzufPreview.getByRole('checkbox', { name: /inspected the original posting page/ }).check()
+    await wuzzufPreview.getByRole('checkbox', { name: /compared the complete captured text/ }).check()
     await wuzzufPreview.getByRole('button', { name: 'Confirm review' }).click()
     await wuzzufPreview.getByRole('button', { name: 'Save job' }).click()
     await expect(page.getByRole('row').filter({ hasText: 'Synthetic Wuzzuf Engineer — reviewed' })).toBeVisible()
@@ -131,10 +132,23 @@ test('visible Greenhouse preview is explicit, temporary and stale-result safe', 
     await page.getByRole('button', { name: 'Delete 1 job' }).click()
     await expect(page.getByRole('row').filter({ hasText: 'Synthetic Wuzzuf Engineer — reviewed' })).toHaveCount(0)
     expect(await page.evaluate(async () => (window as any).workbench.listJobs())).toEqual([])
+
+    const heldReview = await page.evaluate(async (url) => (window as any).workbench.startNamedPostingPreview(url, true), wuzzufUrl)
+    const heldSave = await page.evaluate(async (url) => (window as any).workbench.startNamedPostingPreview(url, true), wuzzufUrl)
+    await expect.poll(async () => page.evaluate(async tokens => Promise.all(tokens.map((token: string) => (window as any).workbench.readNamedPostingPreview(token).then((state: any) => state.status))), [heldReview.token, heldSave.token])).toEqual(['ready','ready'])
+    unlinkSync(localPolicy)
+    expect(await page.evaluate(() => (window as any).workbench.getWuzzufPersonalLocalEnablement())).toBe(false)
+    const reviewAfterRevocation = await page.evaluate(async token => { try { await (window as any).workbench.reviewNamedPostingPreview(token, true, true); return 'allowed' } catch (error) { return error instanceof Error ? error.message : String(error) } }, heldReview.token)
+    expect(reviewAfterRevocation).toContain('no longer matches this installation')
+    const saveAfterRevocation = await page.evaluate(async ({token, review}) => { try { await (window as any).workbench.saveNamedPostingPreview(token, review, { title:'No save', company:'No save', description:'No save' }); return 'allowed' } catch (error) { return error instanceof Error ? error.message : String(error) } }, { token:heldSave.token, review:randomUUID() })
+    expect(saveAfterRevocation).toContain('no longer matches this installation')
+    expect(await page.evaluate(async tokens => Promise.all(tokens.map((token: string) => (window as any).workbench.readNamedPostingPreview(token))), [heldReview.token, heldSave.token])).toEqual([{status:'expired'},{status:'expired'}])
+    expect(await page.evaluate(async () => (window as any).workbench.listJobs())).toEqual([])
+
     await linkField.fill('https://jobs.eu.lever.co/acme/123')
     await page.getByRole('button', { name: 'Fetch posting', exact: true }).click()
     await expect(page.getByRole('alert').filter({ hasText: 'Generic/direct Lever fetching' })).toBeVisible()
-    expect(requestCount(join(userData, 'named-preview-request-count.log'))).toBe(4)
+    expect(requestCount(join(userData, 'named-preview-request-count.log'))).toBe(6)
   } finally {
     await app?.close().catch(() => {})
     await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 })

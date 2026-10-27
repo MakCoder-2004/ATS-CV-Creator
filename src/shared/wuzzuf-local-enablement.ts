@@ -5,6 +5,7 @@ export const wuzzufPersonalLocalPolicySchema = z.object({
   version: z.literal(1),
   wuzzufPersonalLocalEnabled: z.literal(true),
   acknowledgedNoticeVersion: z.literal(1),
+  installationFingerprint: z.string().regex(/^[a-f0-9]{64}$/),
 }).strict()
 
 export function parseWuzzufPersonalLocalPolicy(value: unknown): boolean {

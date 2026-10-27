@@ -69,6 +69,14 @@ function isTrusted(event: Electron.IpcMainInvokeEvent): boolean {
 function trusted(event: Electron.IpcMainInvokeEvent): void {
   if (!isTrusted(event)) throw new Error('Untrusted IPC sender')
 }
+function wuzzufInstallRoot(): string { return app.isPackaged ? dirname(app.getPath('exe')) : join(__dirname, '..', '..') }
+function wuzzufLocalPolicyEnabled(): boolean { return isWuzzufPersonalLocalEnabled(app.getPath('appData'), wuzzufInstallRoot()) }
+function requireWuzzufPolicyForAttempt(token: string): void {
+  if (namedPostingPreviews?.source(token) === 'wuzzuf' && !wuzzufLocalPolicyEnabled()) {
+    namedPostingPreviews.cancel(token)
+    throw new Error('The Wuzzuf local policy was removed or no longer matches this installation. Fetch again only after its owner re-enables it.')
+  }
+}
 
 async function openOriginalPosting(url: string): Promise<void> {
   if (!app.isPackaged && process.env.CV_TAILOR_SCRIPTED_OPEN_ORIGINAL === '1') {
@@ -575,24 +583,31 @@ app.whenReady().then(() => {
     return await workspace!.api.cancelPostingFetch(uuidSchema.parse(args[0]))
   })
   ipcMain.handle('named-posting-preview:wuzzuf-enabled', event => {
-    trusted(event); return isWuzzufPersonalLocalEnabled(app.getPath('appData'))
+    trusted(event); return wuzzufLocalPolicyEnabled()
   })
   ipcMain.handle('named-posting-preview:start', async (event, ...args: unknown[]) => {
     trusted(event); if (args.length !== 2 || typeof args[0] !== 'string' || typeof args[1] !== 'boolean') throw new Error('Expected a supported posting link and personal-local opt-in.')
     const reference = parseNamedPostingUrl(args[0])
-    if (reference.source === 'wuzzuf' && !isWuzzufPersonalLocalEnabled(app.getPath('appData'))) throw new Error('Wuzzuf reviewed Save is disabled on this installation. The owner-controlled local policy file is absent or invalid.')
+    if (reference.source === 'wuzzuf' && !wuzzufLocalPolicyEnabled()) throw new Error('Wuzzuf reviewed Save is disabled on this installation. The owner-controlled local policy file is absent, invalid, or bound to another installation.')
     return namedPostingPreviews!.start(args[0], args[1])
   })
-  ipcMain.handle('named-posting-preview:read', (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected preview token.'); return namedPostingPreviews!.read(uuidSchema.parse(args[0])) })
+  ipcMain.handle('named-posting-preview:read', (event, ...args: unknown[]) => {
+    trusted(event); if (args.length !== 1) throw new Error('Expected preview token.')
+    const token = uuidSchema.parse(args[0])
+    try { requireWuzzufPolicyForAttempt(token) } catch { return { status: 'expired' } }
+    return namedPostingPreviews!.read(token)
+  })
   ipcMain.handle('named-posting-preview:cancel', (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected preview token.'); return namedPostingPreviews!.cancel(uuidSchema.parse(args[0])) })
   ipcMain.handle('named-posting-preview:review', (event, ...args: unknown[]) => {
     trusted(event); if (args.length !== 3 || typeof args[1] !== 'boolean' || typeof args[2] !== 'boolean') throw new Error('Review the exact role and complete posting before saving.')
-    return namedPostingPreviews!.review(uuidSchema.parse(args[0]), args[1], args[2])
+    const token = uuidSchema.parse(args[0]); requireWuzzufPolicyForAttempt(token)
+    return namedPostingPreviews!.review(token, args[1], args[2])
   })
   ipcMain.handle('named-posting-preview:save', async (event, ...args: unknown[]) => {
     trusted(event); if (args.length !== 3) throw new Error('Review the current preview before saving.')
+    const token = uuidSchema.parse(args[0]); requireWuzzufPolicyForAttempt(token)
     const working = jobInputSchema.safeParse(args[2]); if (!working.success) throw new Error('Correct the working posting fields before saving.')
-    return jobSaveResultSchema.parse(await namedPostingPreviews!.save(uuidSchema.parse(args[0]), uuidSchema.parse(args[1]), working.data, (acceptance, values) => workspace!.api.saveNamedPostingAcceptance(acceptance, values), result => result.ok))
+    return jobSaveResultSchema.parse(await namedPostingPreviews!.save(token, uuidSchema.parse(args[1]), working.data, (acceptance, values) => workspace!.api.saveNamedPostingAcceptance(acceptance, values), result => result.ok))
   })
   ipcMain.handle('posting-import:open-source', async (event, ...args: unknown[]) => {
     trusted(event); if (args.length !== 1 || typeof args[0] !== 'string') throw new Error('Expected a public posting link.')

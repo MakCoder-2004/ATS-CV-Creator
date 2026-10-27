@@ -4,7 +4,7 @@ import { createNamedPostingAcceptance } from '../shared/named-posting-contract'
 import { namedPostingAttemptSchema, namedPostingCandidateSchema, namedPostingPreviewReplySchema, namedPostingReviewSchema, parseNamedPostingUrl, type NamedPostingAttempt, type NamedPostingCandidate, type NamedPostingPreviewReply } from '../shared/named-posting-schema'
 
 
-type Entry = { generation: string; controller: AbortController; status: 'loading' | 'ready' | 'failed'; attempt?: NamedPostingAttempt; candidate?: NamedPostingCandidate; reviewToken?: string; review?: { attemptId: string; candidateHash: string; reviewedAt: string; exactRole: true; completeness: true }; timer: ReturnType<typeof setTimeout>; expiresAt: number }
+type Entry = { generation: string; controller: AbortController; source: 'lever' | 'greenhouse' | 'wuzzuf'; status: 'loading' | 'ready' | 'failed'; attempt?: NamedPostingAttempt; candidate?: NamedPostingCandidate; reviewToken?: string; review?: { attemptId: string; candidateHash: string; reviewedAt: string; exactRole: true; completeness: true }; timer: ReturnType<typeof setTimeout>; expiresAt: number }
 const ttl = 10 * 60_000
 /** Volatile exact-role named API preview; only explicit main-held review can authorize Save. */
 export function createNamedPostingPreviewSession(options: NamedPostingApiOptions = {}, now = () => Date.now()) {
@@ -20,7 +20,7 @@ export function createNamedPostingPreviewSession(options: NamedPostingApiOptions
     // Grant derives only from the trusted main-process IPC action, not renderer eligibility data.
     const eligibility = { personalLocalOptIn: true as const, source: reference.source, scope: 'personal-local' as const, optedInAt: new Date(started).toISOString() }
     const timer = setTimeout(() => discard(token), ttl)
-    const entry: Entry = { generation, controller, status: 'loading', timer, expiresAt }
+    const entry: Entry = { generation, controller, source: reference.source, status: 'loading', timer, expiresAt }
     sessions.set(token, entry)
     void fetchNamedPostingApi({ source: reference.source, board: reference.board, postingId: reference.postingId, submittedUrl: url, canonicalUrl: reference.canonicalUrl }, { ...options, eligibility, signal: controller.signal, now }).then(result => {
       const live = sessions.get(token)
@@ -66,5 +66,10 @@ export function createNamedPostingPreviewSession(options: NamedPostingApiOptions
     if (item.status === 'ready' && item.attempt && item.candidate) return namedPostingPreviewReplySchema.parse(structuredClone({ status: 'ready', attempt: item.attempt, candidate: item.candidate, expiresAt: new Date(item.expiresAt).toISOString() }))
     return namedPostingPreviewReplySchema.parse({ status: 'failed', attempt: item.attempt!, expiresAt: new Date(item.expiresAt).toISOString() })
   }
-  return { start, read, review, save, cancel: (token: string) => { discard(token); return { ok: true as const } }, close: () => { closed = true; for (const token of [...sessions.keys()]) discard(token) } }
+  const source = (token: string) => {
+    const item = sessions.get(token)
+    if (!item || item.expiresAt <= now()) { discard(token); return undefined }
+    return item.source
+  }
+  return { start, read, review, save, source, cancel: (token: string) => { discard(token); return { ok: true as const } }, close: () => { closed = true; for (const token of [...sessions.keys()]) discard(token) } }
 }
