@@ -4,11 +4,11 @@ Open `index.html` directly with `file:///E:/cv-tailor-review-gallery/prototypes/
 
 ## Five interaction concepts
 
-1. **Inline evidence** — select CV wording; its cited source and reason appear in context alongside the readable paper.
-2. **Review inbox** — inspect example skill, check, and job-fit tasks, then route directly to related wording/evidence without a score.
-3. **Compare mode** — use spacious side-by-side wording/source reading, then return to the document.
-4. **Section navigator** — move between Education, Experience, Projects, and Technical skills with contextual source notes.
-5. **Guided pass** — review one claim at a time with Read source, Edit wording, Next claim, and permanent full-CV access.
+1. **Inline evidence** — select CV wording; its cited source and inclusion reason appear immediately beneath it on the paper, with a dismiss control.
+2. **Review inbox** — inspect reporting/data-quality and cautious job-match prompts alongside an affected CV excerpt; route each task to matching wording and source without a score.
+3. **Compare mode** — choose among three source-backed claims for spacious side-by-side reading; Back to document returns to the inline paper.
+4. **Section navigator** — move between Education, Experience, Projects, and Technical skills in a paper-like section view, with contextual source notes and full-CV access.
+5. **Guided pass** — review one claim at a time; Read source toggles its citation, Next claim updates both texts, and full-CV access stays available.
 
 The application shell, tokenized light/dark palette, 220px rail, 68px desktop header, workflow stages and white Letter-proportioned Lato paper follow the approved CV Tailor design system. On narrow layouts, the optional 304px context surface becomes a requested dialog. Every concept uses the same fictional Mara Venn / Northstar Labs examples and sources.
 
