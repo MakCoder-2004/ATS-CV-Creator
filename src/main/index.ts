@@ -192,6 +192,12 @@ app.whenReady().then(() => {
       .then(({ ModelRuntime }) => ModelRuntime.create({ allowModelNetwork: false, refreshOnCreate: false }))
       .catch(() => null)
   workspace = createWorkbench(app.getPath('userData'), undefined, useScriptedPi ? undefined : scriptedAnalysis, undefined, piRuntime)
+  const researchCredentials = createResearchSearchCredentials({
+    credentialsDirectory: defaultResearchCredentialDirectory(app.getPath('appData'), app.getPath('userData')),
+    workspaceDirectory: app.getPath('userData'),
+    encryption: safeStorage
+  })
+  registerResearchSearchSettingsIpc(ipcMain, researchCredentials, trusted)
   let modelUpdatePending = false
   registerWorkspaceBackupIpc(() => window!, () => workspace!, () => {
     const reopened = createWorkbench(app.getPath('userData'), undefined, useScriptedPi ? undefined : scriptedAnalysis, undefined, piRuntime)

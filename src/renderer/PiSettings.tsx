@@ -39,7 +39,7 @@ export function PiSettingsPanel() {
 
   return <section className="settings-panel" aria-label="Pi preferences">
     <div className="settings-grid">
-      <section className="settings-block" aria-labelledby="pi-model-heading">
+      <section className="settings-block settings-block--pi" aria-labelledby="pi-model-heading">
         <div className="settings-block-heading"><span className="settings-block-icon"><Sparkles size={18} aria-hidden="true" /></span><div><h2 id="pi-model-heading">Pi model</h2><p>Choose a provider and model available in your Pi setup.</p></div></div>
         <p className="settings-helper pi-settings-helper">Sign in through Pi outside CV Tailor. There is no Pi key here.</p>
         {selection && <p className="settings-helper pi-settings-helper">Saved selection: <strong>{selection.providerId}/{selection.modelId}</strong> · {selection.thinkingLevel} thinking</p>}
@@ -49,8 +49,8 @@ export function PiSettingsPanel() {
           <FieldSelect label="Thinking level" id="pi-thinking-level" value={thinkingLevel} onValueChange={value => setThinkingLevel(value as (typeof PI_THINKING_LEVELS)[number])} options={PI_THINKING_LEVELS.map(level => ({ value: level, label: level }))} />
           <div className="form-actions"><button className="primary-button" type="submit" disabled={busy || !loaded || !reference.trim() || (reference === (selection ? `${selection.providerId}/${selection.modelId}` : '') && thinkingLevel === selection?.thinkingLevel)}>{busy ? 'Saving…' : 'Save Pi model'}</button></div>
         </form>
+        <LegacySearchKeyCleanup />
       </section>
-      <LegacySearchKeyCleanup />
     </div>
     {error && <p className="profile-message error" role="alert">{error}</p>}{message && <p className="profile-message success" role="status">{message}</p>}
   </section>
