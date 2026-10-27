@@ -1,5 +1,5 @@
 import { test, expect, _electron as electron } from '@playwright/test'
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -18,7 +18,6 @@ function isolatedStorage(prefix: string) {
       CV_TAILOR_TEST_STORAGE_ROOT: root,
       CV_TAILOR_TEST_USER_DATA_DIR: userData,
       CV_TAILOR_TEST_APP_DATA_DIR: appData,
-      CV_TAILOR_TEST_KEY_CLIPBOARD: '1',
       CV_TAILOR_SCRIPTED_ANALYSIS: '1',
       CV_TAILOR_SCRIPTED_PI_MODEL: '1'
     }
@@ -32,7 +31,7 @@ async function assertIsolatedPaths(app: Awaited<ReturnType<typeof electron.launc
   expect(realpathSync.native(paths.userData)).toBe(realpathSync.native(storage.userData))
 }
 
-test('Settings keeps Pi preferences and retired-search recovery controls', async () => {
+test('Settings shows Pi preferences and no retired-search controls when no legacy key exists', async () => {
   test.setTimeout(90000)
   const storage = isolatedStorage('cv-tailor-pi-settings-')
   let app: Awaited<ReturnType<typeof electron.launch>> | undefined
@@ -47,15 +46,10 @@ test('Settings keeps Pi preferences and retired-search recovery controls', async
     await expect(modelCard.getByLabel('Thinking level')).toContainText('medium')
     await expect(page.getByText(/sign in through Pi outside CV Tailor/i)).toBeVisible()
     await expect(page.getByLabel('API key', { exact: true })).toHaveCount(0)
-    const card = page.getByRole('region', { name: 'Search retired' })
-    await expect(card).toBeVisible()
-    await expect(card.getByText('No Tavily key is saved on this device.')).toBeVisible()
-    await expect(card.getByLabel('Existing encrypted Tavily key')).toHaveCount(0)
-    await expect(card.getByRole('button', { name: 'Save Tavily key' })).toHaveCount(0)
-    await expect(card.getByRole('button', { name: 'Replace' })).toHaveCount(0)
-    await expect(card.getByText('No credential is sent to search')).toBeVisible()
+    await expect(page.getByText(/Search retired|Tavily|search key/i)).toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'Remove local key' })).toHaveCount(0)
     await expect(page.getByRole('heading', { name: 'Analysis request budgets' })).toHaveCount(0)
-    await expect(page.locator('.settings-grid > .settings-block')).toHaveCount(2)
+    await expect(page.locator('.settings-grid > .settings-block')).toHaveCount(1)
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
   } finally {
     await app?.close().catch(() => {})
@@ -63,7 +57,7 @@ test('Settings keeps Pi preferences and retired-search recovery controls', async
   }
 })
 
-test('a retired local key stays masked, clears on model change, and needs confirmed removal', async () => {
+test('a synthetic legacy key offers confirmed local removal only and disappears after removal', async () => {
   test.setTimeout(90000)
   const storage = isolatedStorage('cv-tailor-retired-key-')
   let app: Awaited<ReturnType<typeof electron.launch>> | undefined
@@ -81,25 +75,32 @@ test('a retired local key stays masked, clears on model change, and needs confir
     const page = await app.firstWindow({ timeout: 20000 })
     await expect(page.locator('[data-ui-ready="true"]')).toBeVisible()
     await page.getByRole('button', { name: 'Settings' }).click()
-    const card = page.getByRole('region', { name: 'Search retired' })
-    const savedKey = card.getByLabel('Existing encrypted Tavily key')
-    await expect(card.getByText('A Tavily key is saved on this device.')).toBeVisible()
-    await expect(savedKey).toHaveAttribute('type', 'password')
-    await expect(savedKey).not.toHaveValue('tvly-synthetic-retired-key-never-live')
-    await card.getByRole('button', { name: 'Reveal' }).click()
-    await expect(savedKey).toHaveValue('tvly-synthetic-retired-key-never-live')
-    await page.getByLabel('Provider/model reference').fill('scripted/cv-tailor-fixture')
-    await expect(savedKey).toHaveAttribute('type', 'password')
-    await expect(savedKey).not.toHaveValue('tvly-synthetic-retired-key-never-live')
-    await card.getByRole('button', { name: 'Remove local key' }).click()
-    await expect(card.getByRole('button', { name: 'Cancel' })).toBeFocused()
-    await card.getByRole('button', { name: 'Cancel' }).click()
-    await expect(card.getByRole('button', { name: 'Remove local key' })).toBeFocused()
-    await card.getByRole('button', { name: 'Remove local key' }).click()
-    await card.getByRole('button', { name: 'Confirm removal' }).click()
-    await expect(card.getByRole('heading', { name: 'Search retired' })).toBeFocused()
-    await expect(card.getByText('No Tavily key is saved on this device.')).toBeVisible()
+    const cleanup = page.getByRole('region', { name: 'Remove an old local search key' })
+    await expect(cleanup.getByText('An encrypted legacy key is saved on this device.')).toBeVisible()
+    await expect(cleanup.getByText('This removes only the encrypted local copy. It does not revoke the key in your Tavily account.')).toBeVisible()
+    await expect(cleanup.getByLabel(/key/i)).toHaveCount(0)
+    await expect(cleanup.getByRole('button', { name: 'Reveal' })).toHaveCount(0)
+    await expect(cleanup.getByRole('button', { name: 'Copy' })).toHaveCount(0)
+    expect(JSON.stringify(await page.locator('body').innerText())).not.toContain('tvly-synthetic-retired-key-never-live')
+    await cleanup.getByRole('button', { name: 'Remove local key' }).click()
+    await expect(cleanup.getByRole('button', { name: 'Cancel' })).toBeFocused()
+    await cleanup.getByRole('button', { name: 'Cancel' }).click()
+    await expect(cleanup.getByRole('button', { name: 'Remove local key' })).toBeFocused()
+    expect(existsSync(credentialFile)).toBe(true)
+    await cleanup.getByRole('button', { name: 'Remove local key' }).click()
+    const heldDirectory = `${credentialDirectory}-held`
+    renameSync(credentialDirectory, heldDirectory)
+    writeFileSync(credentialDirectory, 'blocks directory creation to simulate a storage failure')
+    await cleanup.getByRole('button', { name: 'Confirm removal' }).click()
+    await expect(cleanup.getByRole('alert')).toContainText('could not be removed from this device')
+    expect(existsSync(join(heldDirectory, 'tavily-key.dpapi'))).toBe(true)
+    expect(JSON.stringify(await page.locator('body').innerText())).not.toContain('tvly-synthetic-retired-key-never-live')
+    unlinkSync(credentialDirectory)
+    renameSync(heldDirectory, credentialDirectory)
+    await cleanup.getByRole('button', { name: 'Confirm removal' }).click()
+    await expect(page.getByRole('region', { name: 'Remove an old local search key' })).toHaveCount(0)
     expect(existsSync(credentialFile)).toBe(false)
+    expect(JSON.stringify(await page.locator('body').innerText())).not.toContain('tvly-synthetic-retired-key-never-live')
   } finally {
     await app?.close().catch(() => {})
     await rm(storage.root, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 })

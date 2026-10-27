@@ -148,10 +148,14 @@ nav button:hover, nav button[aria-current=page] { background: var(--raised); col
 .settings-block-icon { flex: none; display: grid; place-items: center; width: 38px; height: 38px; border-radius: 9px; background: var(--raised); color: var(--link); }
 .settings-helper { margin-top: auto; color: var(--muted); font-size: 12px; }
 .pi-settings-helper { margin-top: 0; line-height: 1.65; }
-.research-key-removal { display: grid; gap: 12px; }
-.research-key-removal .settings-helper { margin: 0; line-height: 1.65; }
-.research-key-removal .form-actions { flex-wrap: wrap; gap: 12px; }
-.settings-block[aria-labelledby="research-key-heading"] button { min-height: 48px; }
+.legacy-key-cleanup { align-self: start; display: grid; gap: 10px; min-width: 0; padding: 18px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.legacy-key-cleanup h2 { font-size: 15px; }
+.legacy-key-cleanup p, .legacy-key-status { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.legacy-key-cleanup button { min-height: 48px; justify-self: start; }
+.legacy-key-confirm { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--raised); }
+.legacy-key-confirm h3 { margin: 0; color: var(--ink); font-size: 14px; }
+.legacy-key-confirm .form-actions { gap: 8px; }
+.legacy-key-status { align-self: start; padding: 12px; border: 1px solid var(--line); border-radius: 8px; }
 .settings-block .field-control-label, .credential-panel .form-field { font-size: 13px; font-weight: 650; }
 .settings-block .field-select-trigger, .settings-block .form-field input { min-height: 48px; border-radius: 8px; }
 .credential-panel .form-actions { gap: 12px; }

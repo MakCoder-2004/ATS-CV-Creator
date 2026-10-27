@@ -1,20 +1,17 @@
-import { randomBytes } from 'node:crypto'
 import { promises as fs, realpathSync } from 'node:fs'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 
 /** Electron's safeStorage is supplied by the main process, never imported into Node tests. */
 export type DeviceEncryption = {
   isEncryptionAvailable(): boolean
-  encryptString(value: string): Buffer
-  decryptString(value: Buffer): string
 }
 export type SearchCredentialStatus = { configured: boolean; storageAvailable: boolean; message: string }
 
 const FILE = 'tavily-key.dpapi'
-const MESSAGE = 'Search is available only after a key is stored on this device.'
-const UNAVAILABLE = 'Device encryption is unavailable. No search key was saved.'
-const STORED_UNAVAILABLE = 'A search key is stored but device encryption is unavailable; it cannot be used until encryption returns. You can remove it locally.'
-const FAILED = 'Search key storage failed. The existing key was not replaced.'
+const FOUND = 'Legacy encrypted search key found on this device.'
+const ABSENT = 'No legacy encrypted search key is saved on this device.'
+const STORED_UNAVAILABLE = 'A legacy encrypted key is stored but device encryption is unavailable. You can still remove it locally.'
+const FAILED = 'Legacy search-key storage could not be checked. Any existing key was left unchanged.'
 
 const inside = (target: string, parent: string) => {
   const diff = relative(parent, target)
@@ -77,42 +74,13 @@ export function createResearchSearchCredentials(options: {
           throw error
         })
         const storageAvailable = available()
-        return { configured: Boolean(stat), storageAvailable, message: storageAvailable ? MESSAGE : stat ? STORED_UNAVAILABLE : UNAVAILABLE }
+        return { configured: Boolean(stat), storageAvailable, message: stat ? storageAvailable ? FOUND : STORED_UNAVAILABLE : ABSENT }
       } catch { return { configured: false, storageAvailable: false, message: FAILED } }
-    },
-    async save(key: string): Promise<SearchCredentialStatus> {
-      if (!available()) throw new Error(UNAVAILABLE)
-      if (typeof key !== 'string' || !/^[\x21-\x7e]{12,512}$/.test(key) || /[\s\r\n]/.test(key)) throw new Error('Enter a valid search key.')
-      let temp: string | undefined
-      try {
-        await checkLocation()
-        const encrypted = encryption.encryptString(key)
-        if (!Buffer.isBuffer(encrypted) || encrypted.length < 1 || encrypted.length > 8192) throw new Error('Invalid encrypted bytes.')
-        temp = join(dirname(file), `.tavily-${randomBytes(16).toString('hex')}.tmp`)
-        const handle = await fs.open(temp, 'wx', 0o600)
-        try { await handle.writeFile(encrypted); await handle.sync() } finally { await handle.close() }
-        await fs.rename(temp, file)
-        temp = undefined
-        return { configured: true, storageAvailable: true, message: MESSAGE }
-      } catch { throw new Error(FAILED) }
-      finally { if (temp) await fs.unlink(temp).catch(() => {}) }
     },
     async remove(): Promise<SearchCredentialStatus> {
       try { await checkLocation(); await fs.unlink(file).catch(error => { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }) }
-      catch { throw new Error('The local search key could not be removed.') }
-      return { configured: false, storageAvailable: available(), message: 'The local search key was removed. This does not revoke the provider key.' }
-    },
-    async withKey<T>(use: (key: string) => Promise<T>): Promise<T> {
-      if (!available()) throw new Error(UNAVAILABLE)
-      let key: string
-      try {
-        await checkLocation()
-        const ciphertext = await fs.readFile(file)
-        if (!ciphertext.length || ciphertext.length > 8192) throw new Error('Invalid ciphertext.')
-        key = encryption.decryptString(ciphertext)
-        if (!/^[\x21-\x7e]{12,512}$/.test(key)) throw new Error('Invalid key.')
-      } catch { throw new Error('The local search key could not be used. Check device encryption or reconnect the key.') }
-      return use(key)
+      catch { throw new Error('The legacy encrypted key could not be removed from this device.') }
+      return { configured: false, storageAvailable: available(), message: ABSENT }
     }
   }
 }
