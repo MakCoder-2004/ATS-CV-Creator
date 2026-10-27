@@ -2,7 +2,7 @@ import { z } from 'zod'
 import type { ContactInput, EvidenceRevision, ProfileEntryInput, ProfileMutationResult, ProfileSnapshot, SkillInput } from './profile'
 import type { ExperienceInput, ExperienceMutationResult, ExperienceSnapshot, ProjectInput } from './experience'
 import { piModelSelectionSchema, type PiModelPreferenceInput } from './pi-model'
-import type { JobInput, JobRecord, JobSaveInput, JobSaveResult, JobDeletionPreview, JobDeletionResult, PostingRefreshChoice } from './jobs'
+import type { JobRecord, JobSaveInput, JobSaveResult, JobDeletionPreview, JobDeletionResult } from './jobs'
 import type { ProfileExchangeResult } from './profile-exchange'
 import type { OutboundConsentAction, OutboundConsentPreview } from './outbound-consent-contract'
 import type { AnalysisResult, GenerationRecovery, RecoveryChoice } from './posting-analysis'
@@ -14,12 +14,8 @@ import type { RegenerationProposal, RegenerationTarget } from './regeneration'
 import type { MutateDraftRecordInput, MutateDraftRecordResult } from './draft-records'
 import type { ProfilePdfProposal, ProfilePdfPreview } from './profile-pdf-import'
 import type { ProfileAiConsentAction, ProfileAiConsentPreview, ProfileAiRunResult } from './profile-ai-structuring'
-import type { PostingFetchState, PostingPreviewEdit, PostingRefreshComparison, PostingReview } from './posting-import'
 import type { WorkspaceBackupStatus } from './workspace-backup'
-import type { ResearchState } from './job-research-ipc'
-import type { JobResearchRun, ReviewedJobResearch } from './job-research'
 import type { ResearchSearchKeyStatus } from './research-search-settings'
-import type { VolatileAnalysisPreview, VolatileAnalysisProgress } from './research-volatile-analysis'
 
 export const appearanceSchema = z.enum(['light', 'dark'])
 export type Appearance = z.infer<typeof appearanceSchema>
@@ -73,36 +69,10 @@ export interface WorkbenchAPI {
   deleteProject(id: string): Promise<ExperienceMutationResult>
   saveJob(input: JobSaveInput): Promise<JobSaveResult>
   openContactProfile(url: string): Promise<{ ok: boolean; message: string }>
-  updatePostingPreview(token: string, expectedRevision: number, input: PostingPreviewEdit): Promise<{ ok: boolean; revision?: number; message?: string }>
-  reviewPostingPreview(token: string, revision: number, review: PostingReview): Promise<{ ok: boolean; message?: string }>
-  acceptPostingImport(token: string, revision: number): Promise<JobSaveResult>
-  comparePostingRefresh(token: string, jobId: string, expectedUpdatedAt: string, expectedRevision: number): Promise<PostingRefreshComparison>
-  acceptPostingRefresh(token: string, revision: number, jobId: string, expectedUpdatedAt: string, expectedBaseRevision: number, choices: PostingRefreshChoice): Promise<JobSaveResult>
   listJobs(): Promise<JobRecord[]>
   previewJobDeletion(jobIds: string[]): Promise<JobDeletionPreview>
   executeJobDeletion(token: string, jobIds: string[]): Promise<JobDeletionResult>
   openJob(id: string): Promise<JobRecord | null>
-  startJobResearch(url: string): Promise<{ token: string }>
-  startJobResearchFromPosting(token: string): Promise<{ token: string }>
-  getJobResearch(token: string): Promise<ResearchState>
-  searchJobResearch(token: string): Promise<ResearchState>
-  reviewJobResearch(token: string, acceptedFindingIds: string[], acknowledgedPartial: boolean): Promise<{ reviewed: ReviewedJobResearch }>
-  cancelJobResearch(token: string): Promise<{ ok: boolean }>
-  previewResearchAnalysis(researchToken: string): Promise<VolatileAnalysisPreview>
-  consentResearchAnalysis(token: string, accepted: boolean): Promise<VolatileAnalysisProgress>
-  startResearchAnalysis(token: string): Promise<VolatileAnalysisProgress>
-  readResearchAnalysis(token: string): Promise<VolatileAnalysisProgress>
-  cancelResearchAnalysis(token: string): Promise<VolatileAnalysisProgress>
-  discardResearchAnalysis(token: string): Promise<{ ok: true }>
-  startPostingFetch(url: string): Promise<{ token: string }>
-  readPostingPreview(token: string): Promise<PostingFetchState>
-  cancelPostingFetch(token: string): Promise<{ ok: boolean }>
-  startNamedPostingPreview(url: string, personalLocalOptIn: boolean): Promise<{ token: string }>
-  readNamedPostingPreview(token: string): Promise<import('./named-posting-schema').NamedPostingPreviewReply>
-  cancelNamedPostingPreview(token: string): Promise<{ ok: true }>
-  reviewNamedPostingPreview(token: string, exactRole: boolean, completeness: boolean): Promise<{ reviewToken: string; reviewedAt: string }>
-  saveNamedPostingPreview(token: string, reviewToken: string, working: JobInput): Promise<JobSaveResult>
-  openPostingSource(url: string): Promise<{ ok: boolean; message: string }>
   prepareOutboundConsent(jobId: string): Promise<OutboundConsentPreview>
   acceptOutboundConsent(token: string, accepted: boolean, privacyAcknowledged: boolean): Promise<OutboundConsentAction>
   cancelOutboundConsent(token: string): Promise<OutboundConsentAction>
@@ -135,9 +105,7 @@ export interface WorkbenchAPI {
   acceptDocumentCuts(jobId: string, documentHash: string, entryIds: string[]): Promise<{ ok: boolean; message: string; draft?: DraftRevision }>
 }
 
-export type WorkbenchStorageAPI = Omit<WorkbenchAPI, 'getResearchSearchKeyStatus' | 'removeResearchSearchKey' | 'exportProfile' | 'previewProfileImport' | 'applyProfileImport' | 'cancelProfileImport' | 'previewProfilePdfImport' | 'cancelProfilePdfImport' | 'rebaseProfilePdfImport' | 'applyProfilePdfImport' | 'previewProfileDocxImport' | 'cancelProfileDocxImport' | 'rebaseProfileDocxImport' | 'applyProfileDocxImport' | 'previewProfileAiStructuring' | 'consentProfileAiStructuring' | 'runProfileAiStructuring' | 'cancelProfileAiStructuring' | 'exportWorkspaceBackup' | 'previewWorkspaceRestore' | 'applyWorkspaceRestore' | 'cancelWorkspaceRestore' | 'measureDocument' | 'getDocumentPdf' | 'exportApprovedPdf' | 'exportDraftDocx' | 'openPostingSource' | 'openContactProfile' | 'startJobResearch' | 'startJobResearchFromPosting' | 'getJobResearch' | 'searchJobResearch' | 'reviewJobResearch' | 'cancelJobResearch' | 'previewResearchAnalysis' | 'consentResearchAnalysis' | 'startResearchAnalysis' | 'readResearchAnalysis' | 'cancelResearchAnalysis' | 'discardResearchAnalysis' | 'startNamedPostingPreview' | 'readNamedPostingPreview' | 'cancelNamedPostingPreview' | 'reviewNamedPostingPreview' | 'saveNamedPostingPreview'> & {
-  takePostingResearchRun(token: string): JobResearchRun
-  saveNamedPostingAcceptance(input: import('./named-posting-schema').NamedPostingAcceptance, working: JobInput): Promise<JobSaveResult>
+export type WorkbenchStorageAPI = Omit<WorkbenchAPI, 'getResearchSearchKeyStatus' | 'removeResearchSearchKey' | 'exportProfile' | 'previewProfileImport' | 'applyProfileImport' | 'cancelProfileImport' | 'previewProfilePdfImport' | 'cancelProfilePdfImport' | 'rebaseProfilePdfImport' | 'applyProfilePdfImport' | 'previewProfileDocxImport' | 'cancelProfileDocxImport' | 'rebaseProfileDocxImport' | 'applyProfileDocxImport' | 'previewProfileAiStructuring' | 'consentProfileAiStructuring' | 'runProfileAiStructuring' | 'cancelProfileAiStructuring' | 'exportWorkspaceBackup' | 'previewWorkspaceRestore' | 'applyWorkspaceRestore' | 'cancelWorkspaceRestore' | 'measureDocument' | 'getDocumentPdf' | 'exportApprovedPdf' | 'exportDraftDocx' | 'openContactProfile'> & {
   saveDocumentFitReport(jobId: string, report: DocumentFitReport): Promise<DocumentFitReport>
   validateProfileImport(input: string): Promise<{ ok: boolean; message: string }>
   replaceProfile(input: string): Promise<{ ok: boolean; message: string; profile?: ProfileSnapshot }>

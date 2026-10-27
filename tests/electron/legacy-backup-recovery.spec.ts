@@ -44,10 +44,10 @@ test('over-cap legacy posting edits refuse when immutable history prevents a net
     expect(before).toMatchObject({ description, revisionCount: 300, firstRevision: description })
 
     const shortened = 'A deliberately shortened working posting.'
-    await page.getByLabel('Posting and requirements').fill(shortened)
+    await page.getByLabel('Full job posting').fill(shortened)
     await page.getByRole('button', { name: 'Save changes' }).click()
     await expect(page.getByRole('alert')).toContainText(/complete revision history exceed the 4 MiB/i)
-    await expect(page.getByLabel('Posting and requirements')).toHaveValue(shortened)
+    await expect(page.getByLabel('Full job posting')).toHaveValue(shortened)
     await expect(page.getByRole('status', { name: 'Workspace backup limits' })).toBeVisible()
     const after = await page.evaluate(async id => {
       const job = await window.workbench.openJob(id)

@@ -12,8 +12,7 @@ import { migrateLegacyOpenRouterWorkspace } from './pi-settings-migration'
 import { defaultOpenRouterModel, openRouterModelSchema } from '../shared/openrouter-settings'
 import { contactInputSchema, contactRecordSchema, evidenceRevisionSchema, profileEntryInputSchema, profileEntrySchema, profileMutationResultSchema, profileSnapshotSchema, skillInputSchema, skillRecordSchema, uuidSchema, type ContactRecord, type EvidenceRevision, type ProfileEntry, type ProfileSnapshot, type SkillRecord } from '../shared/profile'
 import { experienceInputSchema, experienceRecordSchema, experienceSnapshotSchema, experienceMutationResultSchema, projectInputSchema, projectRecordSchema, type ExperienceRecord, type ProjectRecord, type FactualItemRecord, type ExperienceSnapshot } from '../shared/experience'
-import { emptyPostingOptionalDetails, jobInputSchema, jobRecordSchema, jobSaveResultSchema, jobDeletionSelectionSchema, jobDeletionPreviewSchema, jobDeletionResultSchema, MAX_JOB_RECORD_UTF8_BYTES, MAX_POSTING_REVISIONS, legacyDraftTargetBaseline, postingOptionalFieldNames, postingRefreshChoiceSchema, type PostingRefreshChoice } from '../shared/jobs'
-import { directPostingIdentity, normalizePostingUrl, samePostingSource } from '../shared/posting-identity'
+import { jobInputSchema, jobRecordSchema, jobSaveResultSchema, jobDeletionSelectionSchema, jobDeletionPreviewSchema, jobDeletionResultSchema, MAX_JOB_RECORD_UTF8_BYTES, MAX_POSTING_REVISIONS, legacyDraftTargetBaseline } from '../shared/jobs'
 import type { JobRecord } from '../shared/jobs'
 import { profileExchangeSchema, type ProfileExchange } from '../shared/profile-exchange'
 import { prepareOutboundBundle, type ConsentSource, type EvidenceScopeRevision, type OutboundBundle, type OutboundPayload } from '../shared/outbound-consent'
@@ -37,78 +36,9 @@ import { createWorkspaceBackupEngine, registerWorkspaceBackupRowSizer, Workspace
 import type { WorkspaceBackupEngine } from '../shared/workspace-backup'
 import { generationRecoverySnapshotSchema } from '../shared/generation-recovery'
 import { profilePdfProposalSchema, type ProfilePdfProposal } from '../shared/profile-pdf-import'
-import { postingFetchStateSchema, postingPreviewEditSchema, postingReviewSchema, type PostingPreviewEdit } from '../shared/posting-import'
-import { fetchLeverPosting, validateLeverPostingUrl, type SafePostingFetchOptions } from './safe-posting-fetch'
-import { fetchDirectJobResearch, type JobResearchFetchOptions } from './job-research-fetch'
-import { jobResearchRunSchema, normalizeJobResearchUrl, type JobResearchRun } from '../shared/job-research'
-import { decideJobSourcePolicy } from '../shared/job-source-policy'
-import { namedPostingAcceptanceSchema, type NamedPostingAcceptance } from '../shared/named-posting-schema'
-import { postingPreviewSchema, type PostingPreview } from '../shared/posting-import'
 
 type NestedInput = { id?: string; text: string }
 type NestedRecord = { id: string; revision: number; text: string }
-function hasCompleteReviewedPostingText(value: string): boolean {
-  const text = value.trim()
-  if ([...text].length < 200) return false
-  const hasSectionHeading = /(?:^|\n)\s*(?:responsibilities|requirements|qualifications|what you(?:'|’)ll do|what we(?:'|’)re looking for)\s*:?(?:\n|$)/im.test(text)
-  const hasBullets = (text.match(/(?:^|\n)\s*[•*-]\s+\S/gm) ?? []).length > 0
-  const hasMultipleParagraphs = text.split(/\n\s*\n/).filter(paragraph => paragraph.trim()).length > 1
-  return hasSectionHeading && (hasBullets || hasMultipleParagraphs)
-}
-function repairsIncompletePosting(source: import('../shared/posting-import').PostingPreview, working: ReturnType<typeof jobInputSchema.parse>): boolean {
-  const titleIsConsciouslySupplied = !!source.title.trim() || (!!working.title.trim() && working.title !== source.title)
-  const descriptionNeedsRepair = source.notices.some(notice => /source did not provide posting text|structured source sections could not be interpreted|lacks enough posting-detail structure/i.test(notice))
-  const descriptionIsComplete = hasCompleteReviewedPostingText(working.description) && (!descriptionNeedsRepair || working.description !== source.description)
-  return titleIsConsciouslySupplied && !!working.company.trim() && descriptionIsComplete
-}
-class DirectResearchNotice extends Error {
-  constructor(readonly run: JobResearchRun) {
-    super(run.unknowns[0] ?? 'No complete exact-role posting with a named employer was found.')
-  }
-}
-function immutableDirectRun(run: JobResearchRun): JobResearchRun {
-  const copy = jobResearchRunSchema.parse(structuredClone(run))
-  const freeze = (value: object): void => {
-    for (const child of Object.values(value)) if (child && typeof child === 'object') freeze(child)
-    Object.freeze(value)
-  }
-  freeze(copy)
-  return copy
-}
-function completeDirectPreview(input: string, result: JobResearchRun): PostingPreview | null {
-  const run = jobResearchRunSchema.parse(result)
-  const selected = normalizeJobResearchUrl(input)
-  if (run.status !== 'full' || run.selected.canonicalUrl !== selected.canonicalUrl || run.selected.provider !== selected.provider) return null
-  const full = run.findings.filter(finding => finding.kind === 'direct-role-text' && finding.completeness === 'full')
-  if (full.length !== 1) return null
-  const source = run.sources.find(item => item.id === full[0].sourceId)
-  if (!source || source.method !== 'direct-html' || source.identity !== 'exact-role' || !source.title?.trim() || !source.employer?.trim() || !full[0].text.trim()) return null
-  if (source.title.length > 200 || source.employer.length > 200 || source.url !== selected.canonicalUrl) return null
-  return postingPreviewSchema.parse({ title: source.title, company: source.employer, description: full[0].text,
-    optionalDetails: emptyPostingOptionalDetails(), submittedUrl: selected.canonicalUrl, finalUrl: source.url,
-    notices: ['Review temporary role source before analysis. Nothing was saved to jobs or backups.'], conflicts: [],
-    extractionMethod: selected.provider === 'linkedin' ? 'linkedin-public-html-v1' : 'public-jsonld-v1' })
-}
-function postingSourcePolicy(...urls: Array<string | null | undefined>) {
-  for (const url of urls) {
-    if (!url) continue
-    const policy = decideJobSourcePolicy(url)
-    if (policy.status === 'paused') return policy
-  }
-  return { status: 'unchanged' as const }
-}
-function postingSourceIdentity(value: string): string | null {
-  return leverSourceIdentity(value) ?? directPostingIdentity(value)
-}
-function leverSourceIdentity(value: string): string | null {
-  try {
-    const url = new URL(value), parts = url.pathname.split('/').filter(Boolean)
-    if (url.protocol !== 'https:') return null
-    if (url.hostname === 'jobs.lever.co' && parts.length === 2) return `lever:${parts[0]}/${parts[1]}`
-    if (url.hostname === 'api.lever.co' && parts.length === 4 && parts[0] === 'v0' && parts[1] === 'postings') return `lever:${parts[2]}/${parts[3]}`
-  } catch {}
-  return null
-}
 function reconcileNestedItems(items: NestedInput[], previous: NestedRecord[], owner: string): NestedRecord[] {
   const byId = new Map(previous.map(item => [item.id, item]))
   const used = new Set<string>()
@@ -168,7 +98,7 @@ function inheritRevisionFindings(prior: DraftRevision, next: DraftRevision, read
   return draftRevisionSchema.parse({ ...next, checkReport: report, status: report.passed ? 'unverified' : 'blocked' })
 }
 
-export function createWorkbench(userData: string, _legacySecureStorage?: unknown, scriptedTransport?: AnalysisTransport, recoveryHooks?: { beforeGraphCheckpoint?: (metadata: import('@langchain/langgraph').CheckpointMetadata) => void; workspaceBackupMaxBytes?: number }, safePostingFetchOptions?: SafePostingFetchOptions & { research?: JobResearchFetchOptions }, piRuntime?: PiModelRuntime | Promise<PiModelRuntime | null>): { api: WorkbenchStorageAPI; authorizeOutboundPayload<T>(runId: string, payload: T): T; backup: WorkspaceBackupEngine; beginJobOperation(jobId: string, action: string): () => void; hasActiveWork(): boolean; close(): void } {
+export function createWorkbench(userData: string, _legacySecureStorage?: unknown, scriptedTransport?: AnalysisTransport, recoveryHooks?: { beforeGraphCheckpoint?: (metadata: import('@langchain/langgraph').CheckpointMetadata) => void; workspaceBackupMaxBytes?: number }, piRuntime?: PiModelRuntime | Promise<PiModelRuntime | null>): { api: WorkbenchStorageAPI; authorizeOutboundPayload<T>(runId: string, payload: T): T; backup: WorkspaceBackupEngine; beginJobOperation(jobId: string, action: string): () => void; hasActiveWork(): boolean; close(): void } {
   mkdirSync(userData, { recursive: true })
   const db = new Database(join(userData, 'workbench.sqlite'))
   registerWorkspaceBackupRowSizer(db)
@@ -179,24 +109,6 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
   const preserveKnownFindings = (checked: ReturnType<typeof checkDraftFacts>, prior: DraftRevision, next: DraftRevision = prior, includeGenerationFailures = true) => reconcileKnownFindings(checked, prior, next, includeGenerationFailures, readOrigin)
   db.pragma('journal_mode = WAL')
   const graphCheckpointer = new SqliteCheckpointSaver(db, recoveryHooks?.beforeGraphCheckpoint)
-  const postingFetches = new Map<string, { controller: AbortController; state: ReturnType<typeof postingFetchStateSchema.parse>; expiresAt: number; selected?: ReturnType<typeof normalizeJobResearchUrl>; directRun?: JobResearchRun; expiryTimer?: ReturnType<typeof setTimeout>; revision: number; working?: PostingPreviewEdit; reviewed?: { revision: number; input: ReturnType<typeof jobInputSchema.parse>; review: import('../shared/posting-import').PostingReview } }>()
-  const clearPostingTimer = (fetch: { expiryTimer?: ReturnType<typeof setTimeout> }) => { if (fetch.expiryTimer) clearTimeout(fetch.expiryTimer); fetch.expiryTimer = undefined }
-  // Only the supported Lever extraction paths may enter persisted posting snapshots.
-  const isSaveablePostingSource = (method: string) => method === 'lever-json-v1' || method === 'lever-html-jsonld-v1' || method === 'lever-html-static-v1'
-  const discardPostingFetch = (token: string) => {
-    const pending = postingFetches.get(token)
-    if (!pending) return
-    clearPostingTimer(pending)
-    pending.controller.abort()
-    pending.state = { status: 'cancelled' }
-    pending.selected = undefined; pending.directRun = undefined; pending.working = undefined; pending.reviewed = undefined
-    postingFetches.delete(token)
-  }
-  const livePostingFetch = (token: string) => {
-    const pending = postingFetches.get(token)
-    if (pending?.selected && pending.expiresAt <= Date.now()) { discardPostingFetch(token); return undefined }
-    return pending
-  }
   db.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY);
     CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS encrypted_credentials (key TEXT PRIMARY KEY, ciphertext TEXT NOT NULL);
@@ -980,293 +892,6 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
         return experienceMutationResultSchema.parse({ ok: true, value: readExperience() })
       })
       return tx()
-    },
-    async startPostingFetch(input: string) {
-      const sourcePolicy = decideJobSourcePolicy(input)
-      if (sourcePolicy.status === 'paused') throw new Error(sourcePolicy.reason)
-      const lever = validateLeverPostingUrl(input)
-      const selected = lever ? undefined : normalizeJobResearchUrl(input)
-      if ([...postingFetches.values()].some(fetch => fetch.state.status === 'fetching')) throw new Error('A posting fetch is already active. Cancel it or wait for it to finish.')
-      for (const [priorToken, prior] of postingFetches) if (['ready', 'incomplete', 'research-notice'].includes(prior.state.status)) discardPostingFetch(priorToken)
-      while (postingFetches.size >= 5) {
-        const expired = [...postingFetches.entries()].find(([, fetch]) => fetch.state.status !== 'fetching')
-        if (!expired) throw new Error('Temporary posting previews are full. Close an earlier preview and try again.')
-        discardPostingFetch(expired[0])
-      }
-      const token = randomUUID(), controller = new AbortController()
-      const fetch = { controller, state: postingFetchStateSchema.parse({ status: 'fetching' }), expiresAt: Date.now() + 15 * 60_000, selected, revision: 0 } as { controller: AbortController; state: ReturnType<typeof postingFetchStateSchema.parse>; expiresAt: number; selected?: ReturnType<typeof normalizeJobResearchUrl>; directRun?: JobResearchRun; expiryTimer?: ReturnType<typeof setTimeout>; revision: number }
-      if (selected) fetch.expiryTimer = setTimeout(() => discardPostingFetch(token), 15 * 60_000)
-      postingFetches.set(token, fetch)
-      const request = lever
-        ? fetchLeverPosting(input, { ...safePostingFetchOptions, signal: controller.signal }).then(preview => ({ preview, directRun: undefined as JobResearchRun | undefined }))
-        : fetchDirectJobResearch(input, { ...safePostingFetchOptions?.research, signal: controller.signal }).then(run => {
-          const preview = completeDirectPreview(input, run)
-          if (!preview) throw new DirectResearchNotice(run)
-          return { preview, directRun: immutableDirectRun(run) }
-        })
-      void request.then(({ preview, directRun }) => {
-        const current = postingFetches.get(token)
-        if (!current || current.controller.signal.aborted) return
-        if (directRun && (!current.selected || directRun.selected.canonicalUrl !== current.selected.canonicalUrl || directRun.selected.provider !== current.selected.provider)) {
-          current.state = { status: 'failed', message: 'The direct read did not match the selected posting.' }
-          return
-        }
-        current.directRun = directRun
-        const incomplete = preview.conflicts.length > 0 || preview.notices.some(notice => notice.includes('preview is incomplete') || notice.startsWith('Unresolved source conflict:')) || !preview.title || !preview.company || !preview.description
-        current.state = incomplete ? { status: 'incomplete', preview } : { status: 'ready', preview }
-        current.working = { title: preview.title, company: preview.company ?? '', description: preview.description, optionalDetails: preview.optionalDetails }
-      }).catch(error => {
-        const current = postingFetches.get(token)
-        if (!current) return
-        if (controller.signal.aborted) { current.state = { status: 'cancelled' }; current.directRun = undefined; return }
-        if (error instanceof DirectResearchNotice) {
-          if (current.selected && error.run.selected.canonicalUrl === current.selected.canonicalUrl && error.run.selected.provider === current.selected.provider && Date.now() < current.expiresAt) {
-            current.directRun = immutableDirectRun(error.run)
-            current.state = { status: 'research-notice', message: `${error.message} ${error.run.status === 'full' ? 'The captured text could not form a complete reviewable temporary capture.' : 'Direct research is incomplete.'} Nothing was saved. Review the available findings or open the original source.` }
-            return
-          }
-        }
-        current.state = { status: 'failed', message: error instanceof Error ? error.message : 'The posting could not be fetched. Open it or paste posting text instead.' }
-      })
-      return { token }
-    },
-    async readPostingPreview(token: string) {
-      const checked = uuidSchema.safeParse(token)
-      if (!checked.success) return postingFetchStateSchema.parse({ status: 'failed', message: 'This temporary preview is no longer available.' })
-      const fetch = livePostingFetch(checked.data)
-      const state = fetch?.state ?? { status: 'failed', message: 'This temporary preview is no longer available.' }
-      return postingFetchStateSchema.parse(fetch?.selected && (state.status === 'ready' || state.status === 'incomplete' || state.status === 'research-notice')
-        ? { ...state, expiresAt: fetch.expiresAt } : state)
-    },
-    // Main-only, one-time transfer of an app-captured run; the renderer never supplies evidence.
-    takePostingResearchRun(token: string) {
-      const checked = uuidSchema.safeParse(token)
-      const pending = checked.success ? livePostingFetch(checked.data) : undefined
-      if (!pending || pending.controller.signal.aborted || pending.expiresAt <= Date.now() || !['ready', 'incomplete', 'research-notice'].includes(pending.state.status) || !pending.selected || !pending.directRun) throw new Error('This temporary posting research is unavailable. Fetch the source again.')
-      const run = immutableDirectRun(pending.directRun)
-      if (run.selected.canonicalUrl !== pending.selected.canonicalUrl || run.selected.provider !== pending.selected.provider || !['full', 'provisional', 'blocked', 'none'].includes(run.status)) throw new Error('This temporary posting research does not match the selected source.')
-      // The research session owns the detached clone; no posting preview, edits or
-      // reviewed source may remain reachable through this token after handoff.
-      discardPostingFetch(token)
-      return run
-    },
-    async cancelPostingFetch(token: string) {
-      const checked = uuidSchema.safeParse(token)
-      if (!checked.success) return { ok: false }
-      const fetch = postingFetches.get(checked.data)
-      if (!fetch) return { ok: false }
-      clearPostingTimer(fetch)
-      fetch.controller.abort()
-      fetch.state = { status: 'cancelled' }; fetch.selected = undefined; fetch.reviewed = undefined; fetch.working = undefined; fetch.directRun = undefined
-      return { ok: true }
-    },
-    async updatePostingPreview(token: string, expectedRevision: number, input) {
-      const checked = uuidSchema.safeParse(token), pending = checked.success ? livePostingFetch(checked.data) : undefined
-      if (!pending || !Number.isSafeInteger(expectedRevision) || pending.revision !== expectedRevision || !['ready', 'incomplete'].includes(pending.state.status)) return { ok: false, message: 'This preview changed or is no longer available. Fetch it again before editing.' }
-      const parsed = postingPreviewEditSchema.safeParse(input)
-      if (!parsed.success) return { ok: false, message: 'The preview edit is invalid or exceeds a safe field limit.' }
-      const source = pending.state.status === 'ready' || pending.state.status === 'incomplete' ? pending.state.preview : null
-      if (!source) return { ok: false, message: 'This preview has no captured source to edit.' }
-      const optionalDetails = Object.fromEntries(Object.entries(parsed.data.optionalDetails).map(([field, detail]) => {
-        const captured = source.optionalDetails[field as keyof PostingPreviewEdit['optionalDetails']]
-        const unchanged = detail.value === captured.value
-        const sourceRemoved = detail.value === null && captured.value === null
-        return [field, {
-          value: detail.value,
-          origin: unchanged ? captured.origin : sourceRemoved ? 'unknown' : 'user-correction',
-          source: captured.source,
-          uncertainty: unchanged ? captured.uncertainty : 'none'
-        }]
-      })) as PostingPreviewEdit['optionalDetails']
-      pending.working = { ...parsed.data, optionalDetails }
-      pending.revision++
-      pending.reviewed = undefined
-      return { ok: true, revision: pending.revision }
-    },
-    async reviewPostingPreview(token: string, revision: number, review) {
-      const checked = uuidSchema.safeParse(token), pending = checked.success ? livePostingFetch(checked.data) : undefined
-      const checkedReview = postingReviewSchema.safeParse(review)
-      if (!pending || pending.revision !== revision || !checkedReview.success || !['ready', 'incomplete'].includes(pending.state.status)) return { ok: false, message: 'This preview changed or is no longer available; review the current version.' }
-      if (!checkedReview.data.completenessConfirmed) { pending.reviewed = undefined; return { ok: true } }
-      const source = pending.state.status === 'ready' || pending.state.status === 'incomplete' ? pending.state.preview : null
-      const parsed = pending.working ? jobInputSchema.safeParse(pending.working) : { success: false as const }
-      if (!source || !parsed.success) return { ok: false, message: 'Enter and review a non-empty title, company, and complete posting description before confirming.' }
-      const companyOnlyIncomplete = pending.state.status === 'incomplete' && !!source.title.trim() && !!source.description.trim() && source.company === null && source.notices.every(notice => /employer name was not provided|extraction cannot guarantee posting completeness or that the role remains open|^extracted from (?:inert lever-hosted|the supported lever-hosted)/i.test(notice))
-      const conflictOnlyIncomplete = pending.state.status === 'incomplete' && source.conflicts.length > 0 && !!source.title.trim() && !!parsed.data.company.trim() && !!source.description.trim() && source.notices.every(notice => /conflicting source values|unresolved source conflict:|extraction cannot guarantee posting completeness or that the role remains open|^extracted from (?:inert lever-hosted|the supported lever-hosted)/i.test(notice))
-      const contentRepair = pending.state.status === 'incomplete' && (!source.title.trim() || source.notices.some(notice => /source did not provide posting text|structured source sections could not be interpreted|lacks enough posting-detail structure/i.test(notice))) && repairsIncompletePosting(source, parsed.data)
-      if (pending.state.status !== 'ready' && !companyOnlyIncomplete && !conflictOnlyIncomplete && !contentRepair) return { ok: false, message: 'This source is incomplete; correct missing essential content. Teaser text cannot be confirmed as complete.' }
-      for (const conflict of source.conflicts) {
-        const resolution = checkedReview.data.conflictResolutions[conflict.id]
-        if (!resolution || !conflict.values.some(candidate => candidate.value === resolution)) return { ok: false, message: `Choose one of the listed source values for ${conflict.field}.` }
-        const selected = conflict.field === 'company' ? parsed.data.company : conflict.field === 'title' ? parsed.data.title : conflict.field === 'description' ? parsed.data.description : (parsed.data.optionalDetails ?? source.optionalDetails)[conflict.field].value
-        if (selected !== resolution) return { ok: false, message: `The working ${conflict.field} must equal the selected source value.` }
-      }
-      if (Object.keys(checkedReview.data.conflictResolutions).some(id => !source.conflicts.some(conflict => conflict.id === id))) return { ok: false, message: 'A conflict resolution does not belong to this preview.' }
-      if (companyOnlyIncomplete && (parsed.data.title !== source.title || parsed.data.description !== source.description)) return { ok: false, message: 'The source only permits a company correction; incomplete posting text cannot be replaced here.' }
-      pending.reviewed = { revision, input: parsed.data, review: checkedReview.data }
-      return { ok: true }
-    },
-    async saveNamedPostingAcceptance(input: NamedPostingAcceptance, workingInput: import('../shared/jobs').JobInput) {
-      const checked = namedPostingAcceptanceSchema.safeParse(input)
-      if (!checked.success) return jobSaveResultSchema.parse({ ok: false, error: { code: 'VALIDATION_ERROR', message: 'The reviewed named posting is invalid. Review it again before saving.' } })
-      const accepted = checked.data
-      const working = jobInputSchema.safeParse({ ...workingInput, optionalDetails: emptyPostingOptionalDetails() })
-      if (!working.success) return jobSaveResultSchema.parse({ ok: false, error: { code: 'VALIDATION_ERROR', message: 'Correct the working title, employer, and complete posting text before saving.', fieldErrors: Object.fromEntries(working.error.issues.map(issue => [String(issue.path[0] ?? '_'), issue.message])) } })
-      const values = working.data
-      const identity = `${accepted.source}:${accepted.board}/${accepted.postingId}`
-      const sourceIdentity = identity
-      const known = (db.prepare('SELECT data FROM jobs').all() as { data: string }[]).map(row => jobRecordSchema.parse(JSON.parse(row.data)))
-      if (known.some(job => job.sourceSnapshot && (job.sourceSnapshot.sourceIdentity === identity || samePostingSource(job.sourceSnapshot, { submittedUrl: accepted.provenanceUrl, finalUrl: accepted.provenanceUrl })))) return jobSaveResultSchema.parse({ ok: false, error: { code: 'DUPLICATE_SOURCE', message: 'This exact posting is already saved. Open the existing job instead; no duplicate was created.' } })
-      const now = accepted.acceptedAt
-      const hash = (value: string) => createHash('sha256').update(value, 'utf8').digest('hex')
-      const optionalDetails = emptyPostingOptionalDetails()
-      const snapshot = {
-        title: accepted.title, company: accepted.employer, description: accepted.text, optionalDetails, conflicts: [],
-        submittedUrl: accepted.provenanceUrl, finalUrl: accepted.provenanceUrl, sourceIdentity, capturedAt: accepted.capturedAt,
-        sourceUpdatedAt: accepted.sourceUpdatedAt, retrievalUrl: accepted.retrievalUrl, retrievalMethod: accepted.retrievalMethod,
-        extractionMethod: accepted.retrievalMethod, extractionVersion: 1 as const,
-        hashes: { title: hash(accepted.title), company: hash(accepted.employer), description: hash(accepted.text) },
-        fieldOrigins: { title: values.title === accepted.title ? 'source' as const : 'user-correction' as const, company: values.company === accepted.employer ? 'source' as const : 'user-correction' as const, description: values.description === accepted.text ? 'source' as const : 'user-correction' as const, optionalDetails: Object.fromEntries(Object.keys(optionalDetails).map(field => [field, 'unknown'])) }
-      }
-      const id = randomUUID()
-      const record = jobRecordSchema.parse({ ...values, optionalDetails, id, createdAt: now, updatedAt: now, provenance: 'imported', sourceSnapshot: snapshot, sourceHistory: [], revisions: [{ ...values, optionalDetails, revision: 1, acceptedAt: now, provenance: 'imported' }] })
-      try {
-        const tx = db.transaction(() => {
-          const latest = (db.prepare('SELECT data FROM jobs').all() as { data: string }[]).map(row => jobRecordSchema.parse(JSON.parse(row.data)))
-          if (latest.some(job => job.sourceSnapshot && (job.sourceSnapshot.sourceIdentity === identity || samePostingSource(job.sourceSnapshot, { submittedUrl: accepted.provenanceUrl, finalUrl: accepted.provenanceUrl })))) throw new Error('DUPLICATE_SOURCE')
-          if ((db.prepare('SELECT COUNT(*) AS count FROM jobs').get() as { count: number }).count >= 5_000) throw new Error('JOB_LIMIT')
-          if ((db.prepare('SELECT 1 FROM jobs WHERE id = ?').get(id))) throw new Error('ID_COLLISION')
-          db.prepare('INSERT INTO jobs (id, created_at, updated_at, data) VALUES (?, ?, ?, ?)').run(id, now, now, JSON.stringify(record))
-        })
-        tx()
-        return jobSaveResultSchema.parse({ ok: true, value: record })
-      } catch (error) {
-        return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: error instanceof Error && error.message === 'JOB_LIMIT' ? 'The saved-job limit was reached. Nothing was saved.' : error instanceof Error && error.message === 'DUPLICATE_SOURCE' ? 'This exact posting is already saved. Open the existing job instead; no duplicate was created.' : 'The reviewed posting could not be saved. No partial history was retained.' } })
-      }
-    },
-    async acceptPostingImport(token: string, revision: number) {
-      const checkedToken = uuidSchema.safeParse(token), pending = checkedToken.success ? livePostingFetch(checkedToken.data) : undefined
-      const candidate = pending?.state.status === 'ready' || pending?.state.status === 'incomplete' ? pending.state.preview : undefined
-      const sourcePolicy = postingSourcePolicy(candidate?.submittedUrl, candidate?.finalUrl, pending?.selected?.canonicalUrl, ...(pending?.directRun?.sources.map(source => source.url) ?? []))
-      if (sourcePolicy.status === 'paused') return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: sourcePolicy.reason } })
-      if (pending?.selected || (pending?.state.status === 'ready' || pending?.state.status === 'incomplete') && !isSaveablePostingSource(pending.state.preview.extractionMethod)) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'Review temporarily or paste text manually. This fetched source cannot be saved.' } })
-      if (!pending || pending.revision !== revision || pending.reviewed?.revision !== revision || !pending.reviewed.review.completenessConfirmed) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'Review the current preview after your last edit before saving.' } })
-      const pendingState = pending.state
-      const source = pendingState.status === 'ready' || pendingState.status === 'incomplete' ? pendingState.preview : null
-      if (!source) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'This posting preview is unavailable, cancelled, or already used.' } })
-      const parsed = pending.reviewed.input
-      const review = pending.reviewed.review
-      const companyOnlyIncomplete = pendingState.status === 'incomplete' && source.title.trim().length > 0 && source.description.trim().length > 0 && source.company === null && source.notices.every(notice => /employer name was not provided|extraction cannot guarantee posting completeness or that the role remains open|^extracted from (?:inert lever-hosted|the supported lever-hosted)/i.test(notice))
-      const conflictOnlyIncomplete = pendingState.status === 'incomplete' && source.conflicts.length > 0 && !!parsed.company.trim() && !!source.title.trim() && !!source.description.trim() && source.notices.every(notice => /conflicting source values|unresolved source conflict:|extraction cannot guarantee posting completeness or that the role remains open|^extracted from (?:inert lever-hosted|the supported lever-hosted)/i.test(notice))
-      const contentRepair = pendingState.status === 'incomplete' && (!source.title.trim() || source.notices.some(notice => /source did not provide posting text|structured source sections could not be interpreted|lacks enough posting-detail structure/i.test(notice))) && repairsIncompletePosting(source, parsed)
-      if (pendingState.status !== 'ready' && !companyOnlyIncomplete && !conflictOnlyIncomplete && !contentRepair) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'Resolve missing essential content before saving.' } })
-      const workingOptionalDetails = parsed.optionalDetails ?? source.optionalDetails
-      for (const conflict of source.conflicts) {
-        const resolution = review.conflictResolutions[conflict.id]
-        if (!resolution || !conflict.values.some(candidate => candidate.value === resolution)) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: `Resolve the conflicting ${conflict.field} values using one of the source values before saving.` } })
-        const selected = conflict.field === 'company' ? parsed.company : conflict.field === 'title' ? parsed.title : conflict.field === 'description' ? parsed.description : workingOptionalDetails[conflict.field].value
-        if (selected !== resolution) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: `The saved ${conflict.field} must match the explicitly selected source value.` } })
-      }
-      if (Object.keys(review.conflictResolutions).some(id => !source.conflicts.some(conflict => conflict.id === id))) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'A conflict resolution does not belong to this posting preview.' } })
-      if (companyOnlyIncomplete && (parsed.title !== source.title || parsed.description !== source.description)) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'This source only allows a reviewed employer-name correction; its incomplete posting content cannot be replaced here.' } })
-      const sourceIdentity = postingSourceIdentity(source.submittedUrl)
-      if (!sourceIdentity) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'The posting source identity could not be verified.' } })
-      const known = (db.prepare('SELECT data FROM jobs').all() as { data: string }[]).map(row => jobRecordSchema.parse(JSON.parse(row.data)))
-      if (known.some(job => job.sourceSnapshot && samePostingSource(job.sourceSnapshot, source))) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'This exact source is already saved. Open the existing posting instead; no duplicate was created.' } })
-      const hash = (value: string) => createHash('sha256').update(value, 'utf8').digest('hex')
-      const sourceSnapshot = {
-        title: source.title, company: source.company, description: source.description, optionalDetails: source.optionalDetails, conflicts: source.conflicts,
-        submittedUrl: source.submittedUrl, finalUrl: source.finalUrl, sourceIdentity, capturedAt: new Date().toISOString(),
-        extractionMethod: source.extractionMethod, extractionVersion: 1 as const,
-        hashes: { title: hash(source.title), company: source.company === null ? null : hash(source.company), description: hash(source.description) },
-        fieldOrigins: { title: parsed.title === source.title ? 'source' as const : 'user-correction' as const, company: source.company !== null && parsed.company === source.company ? 'source' as const : 'user-correction' as const, description: parsed.description === source.description ? 'source' as const : 'user-correction' as const, optionalDetails: Object.fromEntries(Object.entries(workingOptionalDetails).map(([field, detail]) => [field, detail.origin])) }
-      }
-      const now = new Date().toISOString(), id = randomUUID()
-      const record = jobRecordSchema.parse({ ...parsed, optionalDetails: workingOptionalDetails, id, createdAt: now, updatedAt: now, provenance: 'imported', sourceSnapshot, revisions: [{ ...parsed, optionalDetails: workingOptionalDetails, revision: 1, acceptedAt: now, provenance: 'imported' }] })
-      try {
-        const tx = db.transaction(() => db.prepare('INSERT INTO jobs (id, created_at, updated_at, data) VALUES (?, ?, ?, ?)').run(record.id, now, now, JSON.stringify(record)))
-        tx()
-        pending.state = { status: 'cancelled' }; pending.reviewed = undefined
-        return jobSaveResultSchema.parse({ ok: true, value: record })
-      } catch { return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'The reviewed posting could not be saved. No partial job history was retained.' } }) }
-    },
-    async comparePostingRefresh(token: string, jobId: string, expectedUpdatedAt: string, expectedRevision: number) {
-      const pending = livePostingFetch(token), row = db.prepare('SELECT data FROM jobs WHERE id = ?').get(jobId) as { data: string } | undefined
-      const current = row ? jobRecordSchema.parse(JSON.parse(row.data)) : undefined
-      const candidate = pending?.state.status === 'ready' || pending?.state.status === 'incomplete' ? pending.state.preview : undefined
-      const refreshPolicy = postingSourcePolicy(current?.sourceSnapshot?.submittedUrl, current?.sourceSnapshot?.finalUrl, candidate?.submittedUrl, candidate?.finalUrl, pending?.selected?.canonicalUrl, ...(pending?.directRun?.sources.map(source => source.url) ?? []))
-      if (refreshPolicy.status === 'paused') return { ok: false, message: refreshPolicy.reason }
-      if (pending?.selected || (pending?.state.status === 'ready' || pending?.state.status === 'incomplete') && !isSaveablePostingSource(pending.state.preview.extractionMethod) || current?.sourceSnapshot && !isSaveablePostingSource(current.sourceSnapshot.extractionMethod)) return { ok: false, message: 'Review temporarily or paste text manually. This fetched source cannot update a saved job.' }
-      if (!pending || !current || pending.state.status !== 'ready' && pending.state.status !== 'incomplete') return { ok: false, message: 'This refresh preview or saved posting is unavailable.' }
-      if (current.updatedAt !== expectedUpdatedAt || (current.revisions.at(-1)?.revision ?? 0) !== expectedRevision) return { ok: false, message: 'The saved posting changed while this refresh was being reviewed. Reopen it and compare again.' }
-      const source = pending.state.preview
-      if (!current.sourceSnapshot || !samePostingSource(current.sourceSnapshot, source)) return { ok: false, message: 'This refresh does not match the saved posting’s exact source identity.' }
-      const prior = current.sourceSnapshot
-      const unchanged = prior.title === source.title && prior.company === source.company && prior.description === source.description && isDeepStrictEqual(prior.optionalDetails, source.optionalDetails) && isDeepStrictEqual(prior.conflicts, source.conflicts) && prior.extractionMethod === source.extractionMethod && normalizePostingUrl(prior.submittedUrl) === normalizePostingUrl(source.submittedUrl) && normalizePostingUrl(prior.finalUrl) === normalizePostingUrl(source.finalUrl)
-      return { ok: true, unchanged, previousSource: prior, working: { title: current.title, company: current.company, description: current.description, optionalDetails: current.optionalDetails }, newSource: source }
-    },
-    async acceptPostingRefresh(token: string, revision: number, jobId: string, expectedUpdatedAt: string, expectedBaseRevision: number, choices: PostingRefreshChoice) {
-      const invalid = (message: string) => jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message } })
-      const checkedChoices = postingRefreshChoiceSchema.safeParse(choices), pending = livePostingFetch(token)
-      const existingRow = db.prepare('SELECT data FROM jobs WHERE id = ?').get(jobId) as { data: string } | undefined
-      const existing = existingRow ? jobRecordSchema.parse(JSON.parse(existingRow.data)) : undefined
-      const candidate = pending?.state.status === 'ready' || pending?.state.status === 'incomplete' ? pending.state.preview : undefined
-      const sourcePolicy = postingSourcePolicy(existing?.sourceSnapshot?.submittedUrl, existing?.sourceSnapshot?.finalUrl, candidate?.submittedUrl, candidate?.finalUrl, pending?.selected?.canonicalUrl, ...(pending?.directRun?.sources.map(source => source.url) ?? []))
-      if (sourcePolicy.status === 'paused') return invalid(sourcePolicy.reason)
-      if (pending?.selected || (pending?.state.status === 'ready' || pending?.state.status === 'incomplete') && !isSaveablePostingSource(pending.state.preview.extractionMethod)) return invalid('Review temporarily or paste text manually. This fetched source cannot update a saved job.')
-      if (!checkedChoices.success || !pending || pending.revision !== revision || pending.reviewed?.revision !== revision || !pending.reviewed.review.completenessConfirmed || pending.state.status !== 'ready' && pending.state.status !== 'incomplete') return invalid('Review the current refresh and choose which source fields to accept before applying it.')
-      const row = db.prepare('SELECT created_at, data FROM jobs WHERE id = ?').get(jobId) as { created_at: string; data: string } | undefined
-      if (!row) return invalid('The saved posting no longer exists.')
-      const prior = jobRecordSchema.parse(JSON.parse(row.data)), source = pending.state.preview, reviewed = pending.reviewed.input
-      if (prior.sourceSnapshot && !isSaveablePostingSource(prior.sourceSnapshot.extractionMethod)) return invalid('Historical public sources remain readable but cannot be refreshed. Paste text manually instead.')
-      if (prior.updatedAt !== expectedUpdatedAt || (prior.revisions.at(-1)?.revision ?? 0) !== expectedBaseRevision) return invalid('The saved posting changed while this refresh was being reviewed. Nothing was replaced; compare again.')
-      if (!prior.sourceSnapshot || !samePostingSource(prior.sourceSnapshot, source)) return invalid('This refresh does not match the saved posting’s exact source identity.')
-      const sourceIdentity = postingSourceIdentity(source.submittedUrl)
-      if (!sourceIdentity) return invalid('The refreshed source identity could not be verified.')
-      const choose = (field: 'title' | 'company' | 'description') => checkedChoices.data[field] === 'source' ? reviewed[field] : prior[field]
-      const optionalDetails = Object.fromEntries(postingOptionalFieldNames.map(field => [field, checkedChoices.data.optionalDetails[field] === 'source' ? reviewed.optionalDetails?.[field] ?? source.optionalDetails[field] : prior.optionalDetails[field]])) as typeof prior.optionalDetails
-      const working = jobInputSchema.safeParse({ title: choose('title'), company: choose('company'), description: choose('description'), optionalDetails })
-      if (!working.success) return invalid('Choose complete title, company, and posting text before accepting this refresh.')
-      const values = working.data
-      const acceptedOptionalDetails = values.optionalDetails ?? source.optionalDetails
-      const workingChanged = prior.title !== values.title || prior.company !== values.company || prior.description !== values.description || !isDeepStrictEqual(prior.optionalDetails, acceptedOptionalDetails)
-      const targetChanged = prior.title !== values.title || prior.company !== values.company || prior.description !== values.description
-      const sourceChanged = prior.sourceSnapshot.title !== source.title || prior.sourceSnapshot.company !== source.company || prior.sourceSnapshot.description !== source.description || !isDeepStrictEqual(prior.sourceSnapshot.optionalDetails, source.optionalDetails) || !isDeepStrictEqual(prior.sourceSnapshot.conflicts, source.conflicts) || prior.sourceSnapshot.extractionMethod !== source.extractionMethod || normalizePostingUrl(prior.sourceSnapshot.submittedUrl) !== normalizePostingUrl(source.submittedUrl) || normalizePostingUrl(prior.sourceSnapshot.finalUrl) !== normalizePostingUrl(source.finalUrl)
-      if (!sourceChanged && !workingChanged) { pending.state = { status: 'cancelled' }; pending.reviewed = undefined; return jobSaveResultSchema.parse({ ok: true, value: prior }) }
-      const lastAcceptedAt = Date.parse(prior.revisions.at(-1)?.acceptedAt ?? prior.updatedAt)
-      const now = new Date(Math.max(Date.now(), lastAcceptedAt + 1, targetChanged ? Date.parse(prior.updatedAt) + 1 : 0)).toISOString()
-      const targetUpdatedAt = targetChanged ? now : prior.updatedAt
-      const snapshot = {
-        title: source.title, company: source.company, description: source.description, optionalDetails: source.optionalDetails, conflicts: source.conflicts,
-        submittedUrl: source.submittedUrl, finalUrl: source.finalUrl, sourceIdentity, capturedAt: new Date().toISOString(), extractionMethod: source.extractionMethod, extractionVersion: 1 as const,
-        hashes: { title: createHash('sha256').update(source.title, 'utf8').digest('hex'), company: source.company === null ? null : createHash('sha256').update(source.company, 'utf8').digest('hex'), description: createHash('sha256').update(source.description, 'utf8').digest('hex') },
-        fieldOrigins: { title: values.title === source.title ? 'source' as const : 'user-correction' as const, company: source.company !== null && values.company === source.company ? 'source' as const : 'user-correction' as const, description: values.description === source.description ? 'source' as const : 'user-correction' as const, optionalDetails: Object.fromEntries(postingOptionalFieldNames.map(field => [field, acceptedOptionalDetails[field].value === source.optionalDetails[field].value ? source.optionalDetails[field].origin : 'user-correction'])) }
-      }
-      const history = sourceChanged && prior.sourceSnapshot ? [...prior.sourceHistory, prior.sourceSnapshot] : prior.sourceHistory
-      const newRevision = { ...values, optionalDetails: acceptedOptionalDetails, revision: (prior.revisions.at(-1)?.revision ?? 0) + 1, acceptedAt: now, provenance: 'imported' as const }
-      const record = jobRecordSchema.parse({ ...values, optionalDetails: acceptedOptionalDetails, id: prior.id, createdAt: prior.createdAt, updatedAt: targetUpdatedAt, provenance: 'imported', sourceSnapshot: snapshot, sourceHistory: history, revisions: [...prior.revisions, newRevision] })
-      if (targetChanged && activeAnalysisByJob.has(jobId)) return invalid('An analysis operation is active for this saved posting. Cancel it before accepting refresh changes.')
-      try {
-        const tx = db.transaction(() => {
-          const latest = db.prepare('SELECT data FROM jobs WHERE id = ?').get(jobId) as { data: string } | undefined
-          if (!latest) throw new Error('STALE_REFRESH')
-          const latestJob = jobRecordSchema.parse(JSON.parse(latest.data))
-          if (latestJob.updatedAt !== expectedUpdatedAt || (latestJob.revisions.at(-1)?.revision ?? 0) !== expectedBaseRevision) throw new Error('STALE_REFRESH')
-          db.prepare('UPDATE jobs SET updated_at = ?, data = ? WHERE id = ?').run(record.updatedAt, JSON.stringify(record), jobId)
-          if (targetChanged) {
-            const unresolved = (db.prepare('SELECT COUNT(*) AS count FROM provider_attempt_outcomes WHERE checkpointed_at IS NULL AND run_id IN (SELECT run_id FROM generation_recovery WHERE job_id = ?)').get(jobId) as { count: number }).count
-            db.prepare("UPDATE outbound_consents SET revoked = 1 WHERE run_id IN (SELECT run_id FROM generation_recovery WHERE job_id = ? AND status IN ('running','paused')) OR run_id = (SELECT run_id FROM analysis_run_state WHERE job_id = ?)").run(jobId, jobId)
-            db.prepare("UPDATE generation_recovery SET status = 'cancelled', updated_at = ? WHERE job_id = ? AND status IN ('running','paused')").run(now, jobId)
-            for (const [consentToken, value] of pendingOutbound) if (value.jobId === jobId) { if (value.consentId) outboundEngine.revoke(value.consentId); pendingOutbound.delete(consentToken) }
-            const analysisRow = db.prepare('SELECT data FROM analysis_run_state WHERE job_id = ?').get(jobId) as { data: string } | undefined
-            const earlier = currentAnalysis.get(jobId) ?? (analysisRow ? analysisResultSchema.parse(JSON.parse(analysisRow.data)) : undefined)
-            if (earlier?.analysis) saveAnalysisState({ ...earlier, status: 'stale', targetPostingUpdatedAt: prior.updatedAt, progress: `This posting analysis is retained for history but targets an earlier accepted posting. ${unresolved ? `${unresolved} provider request outcome(s) may be uncertain; the old run cannot resume. ` : ''}Review outgoing data and explicitly reassess the current posting.` })
-          }
-        })
-        tx()
-        pending.state = { status: 'cancelled' }; pending.reviewed = undefined
-        return jobSaveResultSchema.parse({ ok: true, value: record })
-      } catch (error) { return invalid(error instanceof Error && error.message === 'STALE_REFRESH' ? 'The saved posting changed during refresh acceptance. Nothing was replaced; compare again.' : 'The refreshed posting could not be saved. No partial source or revision history was retained.') }
     },
     async saveJob(input) {
       const { id: _id, contacts, ...jobInput } = input
@@ -2338,5 +1963,5 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
     const statement = nativePrepare(source)
     return wrapStatement(statement, !statement.readonly)
   }
-  return { api, authorizeOutboundPayload, backup, beginJobOperation, hasActiveWork: () => unsettledRunsByJob.size > 0 || externalJobOperations.size > 0 || activeProfileAiRuns.size > 0 || [...postingFetches.values()].some(fetch => fetch.state.status === 'fetching'), close: () => { for (const fetch of postingFetches.values()) { clearPostingTimer(fetch); fetch.controller.abort(); fetch.selected = undefined; fetch.directRun = undefined }; postingFetches.clear(); db.close() } }
+  return { api, authorizeOutboundPayload, backup, beginJobOperation, hasActiveWork: () => unsettledRunsByJob.size > 0 || externalJobOperations.size > 0 || activeProfileAiRuns.size > 0, close: () => { db.close() } }
 }

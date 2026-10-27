@@ -21,7 +21,7 @@ test('review centers the CV and reveals only the selected wording and human-read
     await page.getByRole('button', { name: 'Open saved jobs' }).click()
     await page.getByLabel('Job title').fill('Engineer')
     await page.getByLabel('Company').fill('Example Co')
-    await page.getByLabel('Posting and requirements').fill('Build services with TypeScript.')
+    await page.getByLabel('Full job posting').fill('Build services with TypeScript.')
     await page.getByRole('button', { name: 'Save job' }).click()
     await page.getByRole('button', { name: 'Tailor CV', exact: true }).click()
     await page.getByRole('button', { name: 'Inspect outgoing data' }).click()

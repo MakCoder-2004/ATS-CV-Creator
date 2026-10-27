@@ -30,7 +30,7 @@ test('development Electron selects a generated paragraph and source, opens its e
     await page.getByRole('button', { name: 'Saved jobs', exact: true }).click()
     await page.getByLabel('Job title').fill('Engineer')
     await page.getByLabel('Company').fill('Target')
-    await page.getByLabel('Posting and requirements').fill('Build reliable services and evaluation tools.')
+    await page.getByLabel('Full job posting').fill('Build reliable services and evaluation tools.')
     await page.getByRole('button', { name: 'Save job' }).click()
     await page.getByRole('button', { name: 'Tailor CV', exact: true }).click()
     await page.getByRole('button', { name: 'Inspect outgoing data' }).click()

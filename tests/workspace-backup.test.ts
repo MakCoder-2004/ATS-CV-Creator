@@ -139,6 +139,7 @@ test('released version-2 backups upgrade optional posting details to honest unkn
   old.version = 2
   for (const row of old.tables.jobs.rows) {
     const job = JSON.parse(row.data)
+    delete job.contacts
     delete job.optionalDetails
     for (const revision of job.revisions) delete revision.optionalDetails
     if (job.sourceSnapshot) {
@@ -157,8 +158,7 @@ test('released version-2 backups upgrade optional posting details to honest unkn
 test('released v2 backups retain historical JSON and HTML provenance through v3 restore without fetching', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'cv-tailor-historical-backup-'))
   directories.push(dir)
-  let requests = 0
-  const wb = createWorkbench(dir, undefined, scripted, undefined, { lookup: async () => [{ address: '8.8.8.8', family: 4 }], request: async () => { requests++; return { status: 200, headers: {}, body: Buffer.alloc(0) } } })
+  const wb = createWorkbench(dir, undefined, scripted)
   instances.push(wb)
   const records: Array<{ id: string; method: string; sourceHash: string; workingHash: string; sourceText: string; workingText: string }> = []
   try {
@@ -179,6 +179,7 @@ test('released v2 backups retain historical JSON and HTML provenance through v3 
     v2.version = 2
     for (const row of v2.tables.jobs.rows) {
       const job = JSON.parse(row.data)
+      delete job.contacts
       delete job.optionalDetails
       for (const revision of job.revisions) delete revision.optionalDetails
       if (job.sourceSnapshot) {
@@ -198,11 +199,9 @@ test('released v2 backups retain historical JSON and HTML provenance through v3 
       expect(restored?.description).toBe(record.workingText)
       expect(createHash('sha256').update(restored!.description, 'utf8').digest('hex')).toBe(record.workingHash)
     }
-    expect(requests).toBe(0)
     wb.close(); instances.pop()
     const reopened = open(dir)
     for (const record of records) expect(await reopened.api.openJob(record.id)).toMatchObject({ sourceSnapshot: { extractionMethod: record.method, description: record.sourceText, hashes: { description: record.sourceHash } }, description: record.workingText })
-    expect(requests).toBe(0)
   } finally { wb.close() }
 }, 30_000)
 

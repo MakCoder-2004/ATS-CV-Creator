@@ -21,7 +21,7 @@ test('user inspects minimized data, declines or explicitly authorizes only one r
     await page.getByRole('button', { name: 'Saved jobs', exact: true }).click()
     await page.getByLabel('Job title').fill('Canary Engineer')
     await page.getByLabel('Company').fill('Northstar Canary')
-    await page.getByLabel('Posting and requirements').fill('Northstar Canary needs an engineer. Send details to hiring@example.test.')
+    await page.getByLabel('Full job posting').fill('Northstar Canary needs an engineer. Send details to hiring@example.test.')
     await page.getByRole('button', { name: 'Save job' }).click()
     await page.getByRole('button', { name: 'Tailor CV', exact: true }).click()
 

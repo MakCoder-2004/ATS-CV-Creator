@@ -75,15 +75,6 @@ export const jobSaveResultSchema = z.discriminatedUnion('ok', [
   z.object({ ok: z.literal(true), value: jobRecordSchema }).strict(),
   z.object({ ok: z.literal(false), error: z.object({ code: z.string(), message: z.string(), fieldErrors: z.record(z.string(), z.string()).optional() }).strict() }).strict()
 ])
-export const postingRefreshChoiceSchema = z.object({
-  title: z.enum(['source', 'working']).default('working'),
-  company: z.enum(['source', 'working']).default('working'),
-  description: z.enum(['source', 'working']).default('working'),
-  optionalDetails: z.record(z.string(), z.enum(['source', 'working'])).default({})
-}).strict().superRefine((value, context) => {
-  for (const field of Object.keys(value.optionalDetails)) if (!(postingOptionalFieldNames as readonly string[]).includes(field)) context.addIssue({ code: 'custom', message: 'Unknown optional posting field.', path: ['optionalDetails', field] })
-})
-export type PostingRefreshChoice = z.infer<typeof postingRefreshChoiceSchema>
 export type JobInput = z.infer<typeof jobInputSchema>
 export type JobRecord = z.infer<typeof jobRecordSchema>
 

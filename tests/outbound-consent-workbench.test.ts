@@ -11,7 +11,7 @@ const workbenches: Array<ReturnType<typeof createWorkbench>> = []
 afterEach(() => { for (const workbench of workbenches.splice(0)) { try { workbench.close() } catch {} }; for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) })
 const model = { id: 'author/chat', provider: 'sample', name: 'Synthetic', api: 'openai-completions' as Api, baseUrl: 'https://example.invalid', input: ['text'], reasoning: true, contextWindow: 16384, maxTokens: 8192, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } } as Model<Api>
 const runtime = { getProviders: () => [{ id: model.provider, getModels: () => [model] }], getPhysicalModel: () => model, getAvailable: async () => [model], getAuth: async () => ({ source: 'synthetic' }) } as unknown as PiModelRuntime
-async function open() { const directory = mkdtempSync(join(tmpdir(), 'cv-tailor-consent-')); directories.push(directory); const workbench = createWorkbench(directory, undefined, undefined, undefined, undefined, runtime); workbenches.push(workbench); await workbench.api.setPiModel({ reference: 'sample/author/chat', thinkingLevel: 'low' }); return { directory, workbench } }
+async function open() { const directory = mkdtempSync(join(tmpdir(), 'cv-tailor-consent-')); directories.push(directory); const workbench = createWorkbench(directory, undefined, undefined, undefined, runtime); workbenches.push(workbench); await workbench.api.setPiModel({ reference: 'sample/author/chat', thinkingLevel: 'low' }); return { directory, workbench } }
 
 test('outgoing consent preview is minimized, explicit, frozen to job/profile/model revisions, and cancellable', async () => {
   const { directory, workbench } = await open()
@@ -31,7 +31,7 @@ test('outgoing consent preview is minimized, explicit, frozen to job/profile/mod
   await workbench.api.cancelOutboundConsent(preview.token)
   expect(await workbench.api.cancelOutboundConsent(preview.token)).toMatchObject({ ok: false })
   workbench.close()
-  const reopened = createWorkbench(directory, undefined, undefined, undefined, undefined, runtime)
+  const reopened = createWorkbench(directory, undefined, undefined, undefined, runtime)
   workbenches.push(reopened)
   expect(await reopened.api.acceptOutboundConsent(preview.token, true, true)).toMatchObject({ ok: false })
 })

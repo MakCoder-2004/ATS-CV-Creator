@@ -44,7 +44,7 @@ test('real Electron UI generates and exposes cited draft with a DEV-only scripte
     await page.getByRole('button', { name: 'Saved jobs', exact: true }).click()
     await page.getByLabel('Job title').fill('Fictional Systems Engineer')
     await page.getByLabel('Company').fill('Northwind Labs')
-    await page.getByLabel('Posting and requirements').fill('TypeScript and Kubernetes are required; cloud architecture is preferred.')
+    await page.getByLabel('Full job posting').fill('TypeScript and Kubernetes are required; cloud architecture is preferred.')
     await page.getByRole('button', { name: 'Save job' }).click()
     await page.getByRole('button', { name: 'Tailor CV', exact: true }).click()
     await page.getByRole('button', { name: 'Inspect outgoing data' }).click()

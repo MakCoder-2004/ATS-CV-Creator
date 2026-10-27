@@ -31,7 +31,7 @@ function workspace(authorized = true, answer: (prompt: string) => string = () =>
     getAuth: async () => authorized ? { source: 'synthetic' } : undefined,
     completeSimple
   } as unknown as PiModelRuntime
-  const workbench = createWorkbench(directory, undefined, undefined, undefined, undefined, runtime)
+  const workbench = createWorkbench(directory, undefined, undefined, undefined, runtime)
   workbenches.push(workbench)
   return { workbench, completeSimple }
 }

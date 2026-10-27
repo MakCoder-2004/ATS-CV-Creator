@@ -51,7 +51,7 @@ test('saved-job deletion confirms single and bulk choices, preserves cancel stat
     await expect(confirm).toContainText('Product Analyst')
     await expect(confirm).toContainText('Contoso Labs')
     await expect(confirm).toContainText('Profile facts and exported files stay untouched')
-    await expect(confirm).toContainText('Older history without a job link may remain in this workspace and in new backups.')
+    await expect(confirm).toContainText('Older backups may retain these records.')
     await page.screenshot({ path: 'docs/validation/spec-72-d2/deletion-confirm-light.png', fullPage: true })
     await confirm.getByRole('button', { name: 'Cancel' }).click()
     await expect(confirm).toHaveCount(0)

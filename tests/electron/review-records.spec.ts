@@ -21,7 +21,7 @@ test('review edits whole records with an explicit CV-only or profile scope and e
     await page.getByRole('button', { name: 'Open saved jobs' }).click()
     await page.getByLabel('Job title').fill('Engineer')
     await page.getByLabel('Company').fill('Example Co')
-    await page.getByLabel('Posting and requirements').fill('Build dependable TypeScript services.')
+    await page.getByLabel('Full job posting').fill('Build dependable TypeScript services.')
     await page.getByRole('button', { name: 'Save job' }).click()
     await page.getByRole('button', { name: 'Tailor CV', exact: true }).click()
     await page.getByRole('button', { name: 'Inspect outgoing data' }).click()

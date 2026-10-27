@@ -56,7 +56,7 @@ test('new-format backup retains the exact Pi selection while resetting workspace
     getProviders: () => [{ id: model.provider, getModels: () => [model] }],
     getPhysicalModel: () => model, getAvailable: async () => [model], getAuth: async () => ({ source: 'synthetic' })
   } as unknown as PiModelRuntime
-  const workbench = createWorkbench(dir, undefined, undefined, undefined, undefined, runtime)
+  const workbench = createWorkbench(dir, undefined, undefined, undefined, runtime)
   opened.push(workbench)
   await workbench.api.setPiModel({ reference: 'sample/author/chat', thinkingLevel: 'low' })
   const job = await workbench.api.saveJob({ title: 'Engineer', company: 'Example', description: 'Build TypeScript systems.' })
@@ -69,7 +69,7 @@ test('new-format backup retains the exact Pi selection while resetting workspace
   const restore = workbench.backup.previewRestore(backup)
   workbench.backup.applyRestore(restore.token, safetyCopy(dir))
   workbench.close(); opened.pop()
-  const reopened = createWorkbench(dir, undefined, undefined, undefined, undefined, runtime)
+  const reopened = createWorkbench(dir, undefined, undefined, undefined, runtime)
   opened.push(reopened)
   expect((await reopened.api.getSettings()).pi).toEqual({ providerId: 'sample', modelId: 'author/chat', thinkingLevel: 'low' })
   expect((await reopened.api.getSettings()).appearance).toBe('light')

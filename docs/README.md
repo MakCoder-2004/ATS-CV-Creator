@@ -36,7 +36,7 @@ Tailor CV and Saved jobs follow the approved Variant A visual direction. My prof
 
 ## Current feasibility research
 
-These reports record source-access decisions that are not shipped product behavior.
+These reports record historical source-access decisions, not shipped product behavior. Issue #116 supersedes their job-link intake direction: the product now uses manual-only entry, and these decisions do not authorize re-adding URL retrieval, search, or named-source adapters.
 
 | Document | Scope |
 | --- | --- |
@@ -65,7 +65,7 @@ These documents record earlier questions, proposals, and experiments. They are n
 
 ## Historical validation
 
-These reports record tests, artifacts, and claims at the stated version or issue. Keep them for traceability, but do not copy a past result into a current release claim.
+These reports record tests, artifacts, and claims at the stated version or issue. Keep them for traceability, but do not copy a past result into a current release claim. Job-link intake/research/named-source reports below are superseded as product guidance by issue #116; they remain historical evidence only.
 
 | Document | Scope |
 | --- | --- |
@@ -80,15 +80,15 @@ These reports record tests, artifacts, and claims at the stated version or issue
 | [Installed Pi migration 0.4.0](validation/pi-sdk-installed-0.4.0.md) | Real provider CV, regeneration, faithfulness, old-PDF/DOCX proposals, login gates, backup/reopen, and Settings screenshots. |
 | [Job deletion D1, D2, and D3](validation/spec-72-implementation.md) | Synthetic backend and visible UI checks pass. Installed acceptance remains pending user executable approval. |
 | [Version 0.5.0 integration and build](validation/specs-integration-0.5.0.md) | Reviewed spec integration, 345 passing tests, four integrated development Electron cases and a statically checked installer. Installed and real-provider gates remain open. |
-| [Version 0.6.0 job-link research](validation/universal-research-0.6.0.md) | Reviewed temporary public-link intake, scoped consented analysis, focused development checks and an unsigned installer checked statically. Installed and real-provider acceptance remain open under #89. |
+| [Version 0.6.0 job-link research](validation/universal-research-0.6.0.md) | Superseded by #116; historical synthetic evidence for the retired temporary public-link/research routes, not a current feature contract. |
 | [Installed Settings 0.6.1](validation/settings-installed-0.6.1.md) | Actual per-user installation, isolated SQLite reopen and two-card layout checks; encrypted-key/clipboard, legacy semantic and real-provider gates remain open. |
 | [Installed PDF and search safety 0.6.2](validation/installed-pdf-tavily-safety-0.6.2.md) | Actual per-user installation, isolated native SQLite reopen and synthetic PDF/DOCX export; user-approved unpacked PDF layout, with real Pi/Tavily and key/recovery gates still open. |
-| [Issue 94 link-intake and authorization baseline](validation/issue-94-link-intake-authorization-baseline.md) | Synthetic visible and domain-test evidence for direct/manual intake, research, consent, profile import and paragraph regeneration; the visible Tavily search uses a fake key/transport, and no live-provider behavior or fixed Tailor CV graph-call totals are claimed. |
-| [Issue 97 reviewed named-posting contract](validation/issue-97-reviewed-posting-contract.md) | Contract-only Lever/Greenhouse posting identities and synthetic tests; explicitly NOT ENABLED and not proof of live provider behavior. |
-| [Issue 98 named API adapter](validation/issue-98-named-api-adapter-2026-10-26.md) | Inert main-process named API adapter and deterministic fake tests; explicitly NOT ENABLED, with no IPC/renderer path or live provider behavior. |
+| [Issue 94 link-intake and authorization baseline](validation/issue-94-link-intake-authorization-baseline.md) | Superseded by #116 for job-link behavior; retained as historical synthetic evidence. |
+| [Issue 97 reviewed named-posting contract](validation/issue-97-reviewed-posting-contract.md) | Superseded by #116; retained as historical contract-only Lever/Greenhouse evidence, never live-provider proof. |
+| [Issue 98 named API adapter](validation/issue-98-named-api-adapter-2026-10-26.md) | Superseded by #116; historical inert-adapter/fake-test evidence only. |
 | [Issue 98 named API and search retirement](validation/issue-98-named-api-and-search-retirement.md) | Historical foundation check: the adapter was inert then, Tavily dispatch retired and a synthetic legacy key was verified. |
 | [Issue 98 temporary Greenhouse preview](validation/issue-98-temporary-greenhouse-preview.md) | Historical evidence for the read-only, volatile preview before #99's reviewed Save flow. |
-| [Issue 99 named posting Save](validation/issue-99-reviewed-save-2026-10-27.md) | Development implementation and synthetic verification for named Greenhouse/Lever; generic Lever, LinkedIn, and Indeed routes remain paused. |
+| [Issue 99 named posting Save](validation/issue-99-reviewed-save-2026-10-27.md) | Superseded by #116; historical synthetic named-source implementation evidence only. |
 | [Issue 101 integration checkpoint](validation/issue-101-integration-2026-10-27.md) | Final serial suite and synthetic unpacked preview passed; the installed #108 candidate passed native-SQLite reopen, backup/restore and packaged export checks. Named API fakes remain unpacked-only; #101 awaits independent gate review. |
 
 ## Prototype design evidence
