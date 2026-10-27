@@ -16,21 +16,23 @@ const titles = [
 // Measure rendered controls, not React state: a long title must not move the other columns.
 async function desktopRows(app: ElectronApplication) {
   const page = await app.firstWindow()
-  return page.locator('.saved-jobs-table table').evaluate(table => {
+  return page.locator('.saved-jobs-table').evaluate(table => {
     const headers = Array.from(table.querySelectorAll('thead th'))
     const headerStarts = headers.map(header => header.getBoundingClientRect().left + parseFloat(getComputedStyle(header).paddingLeft))
     const rows = Array.from(table.querySelectorAll('.saved-job-row')).map(row => {
-      const status = row.querySelector('.draft-status')!.getBoundingClientRect()
+      const title = row.querySelector('.saved-job-posting-copy strong')!.getBoundingClientRect()
+      const status = row.querySelector('.saved-job-draft-status')!.getBoundingClientRect()
       const actions = row.querySelector('.saved-job-actions')!.getBoundingClientRect()
-      const buttons = Array.from(row.querySelectorAll('.saved-job-action')).map(button => {
+      const buttons = Array.from(row.querySelectorAll('.saved-job-actions button')).map(button => {
         const rect = button.getBoundingClientRect()
         return { label: button.textContent?.trim(), left: rect.left, right: rect.right, top: rect.top, width: rect.width, height: rect.height }
       })
       return {
         statusLeft: status.left,
         actionsLeft: actions.left,
+        titleTop: title.top,
         statusCenter: status.top + status.height / 2,
-        actionsCenter: actions.top + actions.height / 2,
+        actionsTop: actions.top,
         buttons,
       }
     })
@@ -75,7 +77,7 @@ test('saved-job status and actions align for long and short postings at desktop 
     await expect(table.getByRole('columnheader')).toHaveText(['Posting', 'Draft status', 'Next action'])
     const rows = page.locator('.saved-job-row')
     await expect(rows).toHaveCount(3)
-    await expect(page.locator('.draft-status').filter({ hasText: 'No draft' })).toHaveCount(3)
+    await expect(page.locator('.saved-job-draft-status').filter({ hasText: 'No draft' })).toHaveCount(3)
     await expect(page.getByRole('checkbox', { name: 'Select all saved jobs' })).toBeVisible()
     await test.step('verify visible row controls and names', async () => {
       for (const [index, title] of titles.entries()) {
@@ -94,7 +96,8 @@ test('saved-job status and actions align for long and short postings at desktop 
     for (const row of desktop.rows) {
       expect(Math.abs(row.statusLeft - desktop.headerStarts[1])).toBeLessThanOrEqual(1)
       expect(Math.abs(row.actionsLeft - desktop.headerStarts[2])).toBeLessThanOrEqual(1)
-      expect(Math.abs(row.statusCenter - row.actionsCenter)).toBeLessThanOrEqual(1)
+      expect(Math.abs(row.statusCenter - (row.titleTop + 11))).toBeLessThanOrEqual(2)
+      expect(Math.abs(row.actionsTop - row.titleTop)).toBeLessThanOrEqual(1)
       expect(row.buttons.map(button => button.label)).toEqual(['Open posting', 'Edit', 'Delete'])
       expect(row.buttons.map(button => button.width)).toEqual(firstWidths)
       for (const button of row.buttons) expect(Math.abs(button.height - 44)).toBeLessThanOrEqual(0.5)
@@ -130,7 +133,7 @@ test('saved-job status and actions align for long and short postings at desktop 
       contentClientWidth: document.querySelector('.saved-jobs-page')!.clientWidth,
       rows: Array.from(document.querySelectorAll('.saved-job-row')).map(row => {
         const rect = row.getBoundingClientRect()
-        const buttons = Array.from(row.querySelectorAll('.saved-job-action')).map(button => {
+        const buttons = Array.from(row.querySelectorAll('.saved-job-actions button')).map(button => {
           const box = button.getBoundingClientRect()
           return { left: box.left, right: box.right, top: box.top, width: box.width, height: box.height }
         })
