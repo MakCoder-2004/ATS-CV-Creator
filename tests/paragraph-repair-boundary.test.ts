@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createWorkbench } from '../src/main/workbench'
 import { countEnglishWords } from '../src/shared/draft'
+import { uuidSchema } from '../src/shared/profile'
 import type { AnalysisTransport } from '../src/main/posting-analysis'
 
 const opened: Array<ReturnType<typeof createWorkbench>> = []
@@ -14,7 +15,7 @@ const sixtyWords = Array(20).fill('Built stable systems').join(' ')
 
 async function runCase(mode: 'coverage' | 'factual', correction: string) {
   const dir = mkdtempSync(join(tmpdir(), 'paragraph-repair-')); directories.push(dir)
-  const requests: Array<{ kind: string; stage: string; selectedCount?: number; findingsCount?: number; opportunity?: boolean; citedEvidenceCount?: number; citedEvidenceType?: string; responseSchema?: string; thrown?: string }> = []
+  const requests: Array<{ kind: string; stage: string; selectedCount?: number; findingsCount?: number; opportunity?: boolean; citedEvidenceCount?: number; citedEvidenceType?: string; responseSchema?: string; issuePath?: string; issueFormat?: string; selectedEvidenceUuidValid?: boolean; selectedEvidenceRevisionNumber?: boolean; opportunityEvidenceUuidValid?: boolean; opportunityRevisionNumber?: boolean; thrown?: string }> = []
   const transport: AnalysisTransport = { async generate({ prompt, responseSchema }) {
     const kind = prompt.startsWith('Extract only explicit qualifications') ? 'extract' : prompt.startsWith('Score these numbered') ? 'score' : prompt.startsWith('Factual repair cycle') ? 'factual-repair' : prompt.startsWith('Supported-keyword coverage repair') ? 'coverage-repair' : 'generate'
     const call: (typeof requests)[number] = { kind, stage: 'entered', responseSchema: typeof responseSchema === 'object' && responseSchema !== null && 'name' in responseSchema ? String((responseSchema as { name: unknown }).name).slice(0, 40) : typeof responseSchema }
@@ -25,10 +26,19 @@ async function runCase(mode: 'coverage' | 'factual', correction: string) {
       call.selectedCount = Array.isArray(parsed.selected) ? parsed.selected.length : undefined
       call.findingsCount = Array.isArray(parsed.findings) ? parsed.findings.length : undefined
       call.opportunity = parsed.opportunity !== undefined
+      if (parsed.opportunity && typeof parsed.opportunity === 'object') {
+        call.opportunityEvidenceUuidValid = uuidSchema.safeParse(parsed.opportunity.evidenceId).success
+        call.opportunityRevisionNumber = typeof parsed.opportunity.revision === 'number' && Number.isFinite(parsed.opportunity.revision)
+      }
       const finding = parsed.findings?.[0]
       const cited = finding?.citedEvidence
       call.citedEvidenceCount = Array.isArray(cited) ? cited.length : undefined
       call.citedEvidenceType = cited === undefined ? 'absent' : Array.isArray(cited) ? 'array' : typeof cited
+      const selectedCitation = Array.isArray(cited) ? cited[0] : undefined
+      if (selectedCitation && typeof selectedCitation === 'object') {
+        call.selectedEvidenceUuidValid = uuidSchema.safeParse(selectedCitation.evidenceId).success
+        call.selectedEvidenceRevisionNumber = typeof selectedCitation.revision === 'number' && Number.isFinite(selectedCitation.revision)
+      }
       return parsed
     }
     try {
@@ -50,7 +60,12 @@ async function runCase(mode: 'coverage' | 'factual', correction: string) {
       if (typeof responseSchema === 'object' && responseSchema !== null && 'safeParse' in responseSchema && typeof responseSchema.safeParse === 'function') {
         call.stage = 'response-schema-check'
         const result = responseSchema.safeParse(JSON.parse(response))
-        call.responseSchema = result.success ? 'valid' : `invalid:${String(result.error.issues[0]?.code ?? 'unknown').slice(0, 24)}`
+        const issue = result.success ? undefined : result.error.issues[0]
+        call.responseSchema = result.success ? 'valid' : `invalid:${String(issue?.code ?? 'unknown').slice(0, 24)}`
+        if (issue) {
+          call.issuePath = issue.path.map(part => typeof part === 'string' || typeof part === 'number' ? String(part) : '?').join('.').slice(0, 100)
+          call.issueFormat = 'format' in issue && typeof issue.format === 'string' ? issue.format.slice(0, 32) : undefined
+        }
       }
       call.stage = 'response-ready'
       return response

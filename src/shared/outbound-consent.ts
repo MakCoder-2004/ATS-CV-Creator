@@ -85,11 +85,17 @@ export function prepareOutboundBundle(source: ConsentSource): OutboundBundle {
     restore.set(token, item.value); identifiers.push({ value: item.value, token })
   }
   const scrub = (text: string) => {
-    let result = identifiers.reduce((value, item) => value.replace(new RegExp(escapeRegExp(item.value), 'gi'), item.token), text)
+    const protocolIds: string[] = []
+    let result = text.replace(/\b[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}\b/gi, id => {
+      const token = `[[PROTOCOL_UUID_${protocolIds.length}]]`
+      protocolIds.push(id)
+      return token
+    })
+    result = identifiers.reduce((value, item) => value.replace(new RegExp(escapeRegExp(item.value), 'gi'), item.token), result)
     result = result.replace(/\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b/g, '[REDACTED_EMAIL]')
       .replace(/\b(?:\+?\d[\d ().-]{7,}\d)\b/g, '[REDACTED_PHONE]')
       .replace(/\b(?:19|20)\d{2}-(?:0[1-9]|1[0-2])(?:-(?:0[1-9]|[12]\d|3[01]))?\b/g, '[DATE_OMITTED]')
-    return result
+    return protocolIds.reduce((value, id, index) => value.replaceAll(`[[PROTOCOL_UUID_${index}]]`, id), result)
   }
   const model = { name: source.model.name, ...(source.model.providerId === undefined ? {} : { providerId: source.model.providerId }), ...(source.model.temperature === undefined ? {} : { temperature: source.model.temperature }), ...(source.model.topP === undefined ? {} : { topP: source.model.topP }), ...(source.model.maxOutputTokens === undefined ? {} : { maxOutputTokens: source.model.maxOutputTokens }), ...(source.model.thinkingLevel === undefined ? {} : { thinkingLevel: source.model.thinkingLevel }) }
   const evidence = [...source.profile.experience, ...source.profile.projects, ...source.profile.skills, ...source.profile.education, ...(source.profile.certificates ?? [])]
@@ -111,7 +117,10 @@ export function prepareOutboundBundle(source: ConsentSource): OutboundBundle {
   const containsRestoredIdentifier = (input: unknown): boolean => {
     const seen = new WeakSet<object>()
     const contains = (value: unknown): boolean => {
-      if (typeof value === 'string') return identifiers.some(({ value: identifier }) => new RegExp(`(?<![\\p{L}\\p{N}])${escapeRegExp(identifier)}(?![\\p{L}\\p{N}])`, 'iu').test(value)) || /\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b/.test(value) || /\b(?:\+?\d[\d ().-]{7,}\d)\b/.test(value) || /\b(?:19|20)\d{2}-(?:0[1-9]|1[0-2])(?:-(?:0[1-9]|[12]\d|3[01]))?\b/.test(value)
+      if (typeof value === 'string') {
+        const text = value.replace(/\b[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}\b/gi, '[UUID]')
+        return identifiers.some(({ value: identifier }) => new RegExp(`(?<![\\p{L}\\p{N}])${escapeRegExp(identifier)}(?![\\p{L}\\p{N}])`, 'iu').test(text)) || /\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b/.test(text) || /\b(?:\+?\d[\d ().-]{7,}\d)\b/.test(text) || /\b(?:19|20)\d{2}-(?:0[1-9]|1[0-2])(?:-(?:0[1-9]|[12]\d|3[01]))?\b/.test(text)
+      }
       if (!value || typeof value !== 'object' || seen.has(value)) return false
       seen.add(value)
       if (Array.isArray(value)) return value.some(contains)

@@ -33,6 +33,14 @@ describe('outbound consent public contract', () => {
     expect(bundle.outgoing.job.description).toContain('[DATE_OMITTED]')
   })
 
+  it('preserves UUID protocol identifiers while redacting phone-like digit sequences', () => {
+    const bundle = prepareOutboundBundle(source)
+    const id = '12345678-1234-4234-8234-123456789012'
+    const prompt = bundle.minimizeIdentifiers(JSON.stringify({ evidenceId: id, note: 'Call 1234567890.' }))
+    expect(JSON.parse(prompt).evidenceId).toBe(id)
+    expect(prompt).toContain('[REDACTED_PHONE]')
+  })
+
   it('freezes per-run authorization and rejects absent, revoked, stale, expanded or restored-identifier payloads', () => {
     const bundle = prepareOutboundBundle(source)
     const engine = createOutboundConsentEngine()
