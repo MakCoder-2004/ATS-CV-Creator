@@ -1,5 +1,7 @@
 # Review evidence gallery
 
+Implementation handoff for the approved Inline evidence concept: [IMPLEMENTATION-HANDOFF.md](IMPLEMENTATION-HANDOFF.md).
+
 Open `index.html` directly with `file:///E:/cv-tailor-review-gallery/prototypes/review-evidence-gallery/index.html` or double-click it. It is a self-contained static HTML/CSS/inline-JS concept; no server, packages, network access, or application changes are required. Local Manrope/Sora WOFF2 assets and their licenses are in `fonts/`; Lato WOFF2 assets are loaded from `resources/fonts/lato/`.
 
 ## Five interaction concepts
