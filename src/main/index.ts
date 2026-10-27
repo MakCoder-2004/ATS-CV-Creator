@@ -271,13 +271,20 @@ app.whenReady().then(() => {
   workspace = createWorkbench(app.getPath('userData'), undefined, useScriptedPi ? undefined : scriptedAnalysis, undefined, postingFetchOptions, piRuntime)
   const namedPreviewFixture = namedPreviewFixtureEnabled ? {
     lookup: async (host: string) => {
-      if (!['boards-api.greenhouse.io', 'api.lever.co'].includes(host)) throw new Error('Unexpected named-preview fixture host.')
+      if (!['boards-api.greenhouse.io', 'api.lever.co', 'wuzzuf.net'].includes(host)) throw new Error('Unexpected named-preview fixture host.')
       return [{ address: '8.8.8.8', family: 4 }]
     },
     request: async (url: URL, _address: { address: string; family: number }, signal: AbortSignal) => {
       const responses: Record<string, unknown> = {
         'https://boards-api.greenhouse.io/v1/boards/acme/jobs/123': { id: 123, title: 'Synthetic Reliability Engineer', company_name: 'Example Research', updated_at: '2026-10-25T12:00:00Z', content: `<p>${'Build and maintain synthetic systems, document decisions, collaborate with a fictional team, and review reliability outcomes. '.repeat(8)}</p>` },
         'https://api.lever.co/v0/postings/acme/role1': { id: 'role1', text: 'Synthetic Reliability Engineer', categories: { team: 'Example Research' }, descriptionPlain: `${'Build and maintain synthetic systems, document decisions, collaborate with a fictional team, and review reliability outcomes. '.repeat(8)}`, hostedUrl: 'https://jobs.lever.co/acme/role1' }
+      }
+      if (url.href === 'https://wuzzuf.net/jobs/p/SyntheticWuzzuf123') {
+        const description = `${'Build and maintain synthetic systems, document decisions, collaborate with a fictional team, and review reliability outcomes. '.repeat(8)}`
+        const html = `<html><head><link rel="canonical" href="${url.href}"><script type="application/ld+json">${JSON.stringify({ '@context':'https://schema.org', '@type':'JobPosting', title:'Synthetic Wuzzuf Engineer', hiringOrganization:{ '@type':'Organization', name:'Example Wuzzuf Co' }, description })}</script></head><body><h1>Synthetic Wuzzuf Engineer</h1><div class="company-name">Example Wuzzuf Co</div><div class="job-description">${description}</div></body></html>`
+        appendFileSync(join(app.getPath('userData'), 'named-preview-request-count.log'), 'request\n')
+        await new Promise<void>((resolve, reject) => { const timer = setTimeout(() => { signal.removeEventListener('abort', abort); resolve() }, 500); const abort = () => { clearTimeout(timer); reject(new Error('Synthetic named-preview request cancelled.')) }; if (signal.aborted) abort(); else signal.addEventListener('abort', abort, { once: true }) })
+        return { status: 200, headers: { 'content-type': 'text/html; charset=utf-8', 'content-encoding':'identity' }, body: Buffer.from(html) }
       }
       const body = responses[url.href]
       if (!body) throw new Error('Unexpected named-preview fixture route.')

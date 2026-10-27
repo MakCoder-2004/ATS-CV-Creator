@@ -2,9 +2,9 @@ import { z } from 'zod'
 
 const timestamp = z.string().datetime({ offset: true })
 const boundedText = z.string().trim().min(1).max(100_000)
-const source = z.enum(['lever', 'greenhouse'])
+const source = z.enum(['lever', 'greenhouse', 'wuzzuf'])
 const ttlMs = 10 * 60_000
-export type NamedPostingIdentity = { source: 'lever' | 'greenhouse'; board: string; postingId: string; canonicalUrl: string }
+export type NamedPostingIdentity = { source: 'lever' | 'greenhouse' | 'wuzzuf'; board: string; postingId: string; canonicalUrl: string }
 
 /** Public board/page URL identity; deliberately excludes EU Lever and unknown variants. */
 export function parseNamedPostingUrl(input: string): NamedPostingIdentity {
@@ -17,6 +17,8 @@ export function parseNamedPostingUrl(input: string): NamedPostingIdentity {
   if (lever) return { source: 'lever', board: lever[1], postingId: lever[2], canonicalUrl: `https://jobs.lever.co/${lever[1]}/${lever[2]}` }
   const greenhouse = ['boards.greenhouse.io', 'job-boards.greenhouse.io'].includes(host) && url.pathname.match(/^\/([A-Za-z0-9_-]{1,100})\/jobs\/([0-9]{1,20})(?:\/[A-Za-z0-9_-]{1,200})?\/?$/)
   if (greenhouse) return { source: 'greenhouse', board: greenhouse[1], postingId: greenhouse[2], canonicalUrl: `https://${host}/${greenhouse[1]}/jobs/${greenhouse[2]}` }
+  const wuzzuf = host === 'wuzzuf.net' && url.pathname.match(/^\/jobs\/p\/([A-Za-z0-9_-]{8,160})\/?$/)
+  if (wuzzuf) return { source: 'wuzzuf', board: 'wuzzuf', postingId: wuzzuf[1], canonicalUrl: `https://wuzzuf.net/jobs/p/${wuzzuf[1]}` }
   throw new Error('Unsupported named posting URL.')
 }
 
@@ -40,12 +42,14 @@ export type NamedPostingAttempt = z.infer<typeof namedPostingAttemptSchema>
 function expectedApiRoute(reference: NamedPostingReference) {
   return reference.source === 'lever'
     ? { method: 'lever-postings-api-v0' as const, url: `https://api.lever.co/v0/postings/${reference.board}/${reference.postingId}` }
-    : { method: 'greenhouse-job-board-api-v1' as const, url: `https://boards-api.greenhouse.io/v1/boards/${reference.board}/jobs/${reference.postingId}` }
+    : reference.source === 'greenhouse'
+      ? { method: 'greenhouse-job-board-api-v1' as const, url: `https://boards-api.greenhouse.io/v1/boards/${reference.board}/jobs/${reference.postingId}` }
+      : { method: 'wuzzuf-public-jobposting-v1' as const, url: reference.canonicalUrl }
 }
 
-export const namedPostingCandidateSchema = z.object({ version: z.literal(1), attemptId: z.string().uuid(), reference: namedPostingReferenceSchema, returnedBoard: z.string().regex(/^[A-Za-z0-9_-]{1,100}$/).nullable(), returnedPostingId: z.string().regex(/^[A-Za-z0-9_-]{1,150}$/), title: z.string().trim().min(1).max(200), employer: z.string().trim().min(1).max(200), text: boundedText, completeness: z.enum(['full', 'partial']), capturedAt: timestamp, sourceUpdatedAt: timestamp.nullable(), retrievalMethod: z.enum(['lever-postings-api-v0', 'greenhouse-job-board-api-v1']), retrievalUrl: z.string().url().max(2048) }).strict().superRefine((candidate, ctx) => {
+export const namedPostingCandidateSchema = z.object({ version: z.literal(1), attemptId: z.string().uuid(), reference: namedPostingReferenceSchema, returnedBoard: z.string().regex(/^[A-Za-z0-9_-]{1,100}$/).nullable(), returnedPostingId: z.string().regex(/^[A-Za-z0-9_-]{1,150}$/), title: z.string().trim().min(1).max(200), employer: z.string().trim().min(1).max(200), text: boundedText, completeness: z.enum(['full', 'partial']), capturedAt: timestamp, sourceUpdatedAt: timestamp.nullable(), retrievalMethod: z.enum(['lever-postings-api-v0', 'greenhouse-job-board-api-v1', 'wuzzuf-public-jobposting-v1']), retrievalUrl: z.string().url().max(2048) }).strict().superRefine((candidate, ctx) => {
   const route = expectedApiRoute(candidate.reference)
-  if (candidate.reference.source === 'lever' && candidate.returnedBoard !== candidate.reference.board || candidate.reference.source === 'greenhouse' && candidate.returnedBoard !== null || candidate.returnedPostingId !== candidate.reference.postingId) ctx.addIssue({ code: 'custom', message: 'Returned identity does not match selected posting.' })
+  if (candidate.reference.source === 'lever' && candidate.returnedBoard !== candidate.reference.board || candidate.reference.source !== 'lever' && candidate.returnedBoard !== null || candidate.returnedPostingId !== candidate.reference.postingId) ctx.addIssue({ code: 'custom', message: 'Returned identity does not match selected posting.' })
   if (candidate.retrievalMethod !== route.method || candidate.retrievalUrl !== route.url) ctx.addIssue({ code: 'custom', message: 'Retrieval provenance must identify the documented named API route.' })
   if (candidate.completeness !== 'full' || candidate.text.length < 80) ctx.addIssue({ code: 'custom', message: 'Incomplete posting cannot be accepted.' })
 })
@@ -59,7 +63,7 @@ export const namedPostingPreviewReplySchema = z.discriminatedUnion('status', [
 ])
 export type NamedPostingPreviewReply = z.infer<typeof namedPostingPreviewReplySchema>
 
-export const namedPostingAcceptanceSchema = z.object({ version: z.literal(1), attemptId: z.string().uuid(), acceptedAt: timestamp, source: z.enum(['lever', 'greenhouse']), board: z.string(), postingId: z.string(), title: z.string().max(200), employer: z.string().max(200), text: boundedText, provenanceUrl: z.string().url(), retrievalMethod: z.enum(['lever-postings-api-v0', 'greenhouse-job-board-api-v1']), retrievalUrl: z.string().url(), capturedAt: timestamp, sourceUpdatedAt: timestamp.nullable(), evidenceHash: z.string().regex(/^[a-f0-9]{64}$/), userReviewedExactRole: z.literal(true), userReviewedCompleteness: z.literal(true) }).strict()
+export const namedPostingAcceptanceSchema = z.object({ version: z.literal(1), attemptId: z.string().uuid(), acceptedAt: timestamp, source: z.enum(['lever', 'greenhouse', 'wuzzuf']), board: z.string(), postingId: z.string(), title: z.string().max(200), employer: z.string().max(200), text: boundedText, provenanceUrl: z.string().url(), retrievalMethod: z.enum(['lever-postings-api-v0', 'greenhouse-job-board-api-v1', 'wuzzuf-public-jobposting-v1']), retrievalUrl: z.string().url(), capturedAt: timestamp, sourceUpdatedAt: timestamp.nullable(), evidenceHash: z.string().regex(/^[a-f0-9]{64}$/), userReviewedExactRole: z.literal(true), userReviewedCompleteness: z.literal(true) }).strict()
 export type NamedPostingAcceptance = z.infer<typeof namedPostingAcceptanceSchema>
 export const namedPostingReviewSchema = z.object({ attemptId: z.string().uuid(), candidateHash: z.string().regex(/^[a-f0-9]{64}$/), reviewedAt: timestamp, exactRole: z.literal(true), completeness: z.literal(true) }).strict()
 export type NamedPostingReview = z.infer<typeof namedPostingReviewSchema>

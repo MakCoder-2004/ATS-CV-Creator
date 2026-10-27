@@ -104,6 +104,17 @@ const deferred = <T,>() => { let resolve!: (value: T) => void; const promise = n
     expect(persist).not.toHaveBeenCalled()
     session.close()
   })
+  it('consumes the app-held review token on one Save attempt and requires fresh review after rejection', async () => {
+    const session = createNamedPostingPreviewSession({ lookup: async () => [{ address: '8.8.8.8', family: 4 }], request: async () => response() })
+    const { token } = session.start(url, true)
+    for (let i = 0; i < 30 && session.read(token).status === 'loading'; i++) await new Promise(resolve => setTimeout(resolve, 20))
+    const review = session.review(token, true, true), persist = vi.fn(async () => ({ ok: false }))
+    await session.save(token, review.reviewToken, { title: 'Engineer', company: 'Example Co', description: 'Synthetic text' }, persist, result => result.ok)
+    await expect(session.save(token, review.reviewToken, { title: 'Engineer', company: 'Example Co', description: 'Synthetic text' }, persist, result => result.ok)).rejects.toThrow(/Review this exact posting again/)
+    const renewed = session.review(token, true, true)
+    expect(renewed.reviewToken).not.toBe(review.reviewToken)
+    session.close()
+  })
   it('rejects a provider result with the wrong posting ID without exposing a candidate', async () => {
     const body = Buffer.from(JSON.stringify({ ...JSON.parse(response().body.toString()), id: 456 }))
     const session = createNamedPostingPreviewSession({ lookup: async () => [{ address: '8.8.8.8', family: 4 }], request: async () => ({ ...response(), body }) })

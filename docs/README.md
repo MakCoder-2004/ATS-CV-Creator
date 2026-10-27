@@ -90,6 +90,7 @@ These reports record tests, artifacts, and claims at the stated version or issue
 | [Issue 98 temporary Greenhouse preview](validation/issue-98-temporary-greenhouse-preview.md) | Historical evidence for the read-only, volatile preview before #99's reviewed Save flow. |
 | [Issue 99 named posting Save](validation/issue-99-reviewed-save-2026-10-27.md) | Development implementation and synthetic verification for named Greenhouse/Lever; generic Lever, LinkedIn, and Indeed routes remain paused. |
 | [Issue 101 integration checkpoint](validation/issue-101-integration-2026-10-27.md) | Final serial suite and synthetic unpacked preview passed; the installed #108 candidate passed native-SQLite reopen, backup/restore and packaged export checks. Named API fakes remain unpacked-only; #101 awaits independent gate review. |
+| [Wuzzuf guarded capture and reviewed Save candidate](validation/wuzzuf-reviewed-save-2026-10-27.md) | Synthetic #112 development checks only; no live Wuzzuf, Pi, packaged, or installed run. Independent security/privacy/source-policy and acceptance gates remain open. |
 
 ## Prototype design evidence
 

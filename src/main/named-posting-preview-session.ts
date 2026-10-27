@@ -14,7 +14,7 @@ export function createNamedPostingPreviewSession(options: NamedPostingApiOptions
   const start = (url: string, personalLocalOptIn: boolean) => {
     if (closed) throw new Error('Named posting previews are closed.')
     let reference
-    try { reference = parseNamedPostingUrl(url) } catch { throw new Error('Paste one supported public Greenhouse or non-EU Lever job link.') }
+    try { reference = parseNamedPostingUrl(url) } catch { throw new Error('Paste one exact supported Greenhouse, non-EU Lever, or Wuzzuf posting link.') }
     if (personalLocalOptIn !== true) throw new Error('Confirm the personal-local, temporary preview notice before fetching.')
     const token = randomUUID(), generation = randomUUID(), controller = new AbortController(), started = now(), expiresAt = started + ttl
     // Grant derives only from the trusted main-process IPC action, not renderer eligibility data.
@@ -53,6 +53,8 @@ export function createNamedPostingPreviewSession(options: NamedPostingApiOptions
     if (!item || item.expiresAt <= now()) { discard(token); throw new Error('The temporary posting preview expired. Fetch it again.') }
     if (item.status !== 'ready' || !item.attempt || item.attempt.status !== 'retrieved' || !item.candidate || !item.review || item.reviewToken !== reviewToken) throw new Error('Review this exact posting again before Save.')
     const acceptance = createNamedPostingAcceptance(item.candidate, item.attempt, item.review, now())
+    // A review grant authorizes one Save attempt only; a failed transaction needs a fresh review.
+    item.reviewToken = undefined; item.review = undefined
     const result = await persist(acceptance, working)
     if (succeeded(result)) discard(token)
     return result

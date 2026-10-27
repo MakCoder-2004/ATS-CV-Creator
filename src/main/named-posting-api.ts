@@ -15,7 +15,7 @@ export type NamedPostingApiOptions = {
   now?: () => number
   signal?: AbortSignal
   /** Must come from trusted main-process settings; renderer input is never a grant. */
-  eligibility?: { personalLocalOptIn: true; source: 'lever' | 'greenhouse'; scope: 'personal-local'; optedInAt: string } | null
+  eligibility?: { personalLocalOptIn: true; source: 'lever' | 'greenhouse' | 'wuzzuf'; scope: 'personal-local'; optedInAt: string } | null
   /** Deterministic adapter seam; production uses the bounded worker and fixed deadline. */
   extractHtml?: (sections: string[], signal: AbortSignal) => Promise<string[]>
   /** Test seam only. Production extraction stays at the 2-second worker deadline. */
@@ -27,6 +27,7 @@ const timeout = 15_000
 const extractionTimeout = 2_000
 const defaultLookup = async (host: string): Promise<Address[]> => (await dnsLookup(host, { all: true, verbatim: true })).map(({ address, family }) => ({ address, family }))
 const headers = Object.freeze({ Accept: 'application/json', 'Accept-Encoding': 'identity', 'User-Agent': 'CV-Tailor/1.0' })
+const htmlHeaders = Object.freeze({ Accept: 'text/html', 'Accept-Encoding': 'identity', 'User-Agent': 'CV-Tailor/1.0' })
 const abortable = <T>(operation: Promise<T>, signal: AbortSignal): Promise<T> => new Promise((resolve, reject) => {
   const cancel = () => reject(signal.reason ?? new Error('cancelled'))
   operation.then(value => { signal.removeEventListener('abort', cancel); resolve(value) }, error => { signal.removeEventListener('abort', cancel); reject(error) })
@@ -97,13 +98,48 @@ async function leverText(value: any, signal: AbortSignal, options: NamedPostingA
   return pieces.filter(Boolean).join('\n\n')
 }
 
-/** Inert exact-detail API adapter. It performs no policy decision, IPC, persistence, or source activation. */
+async function fetchWuzzuf(reference: NamedPostingReference, id: string, started: number, startedAt: string, retrieved: import('../shared/named-posting-schema').NamedPostingAttempt, failed: (reason: Extract<NamedPostingAttempt, {status:'failed'}>['reason']) => { attempt: NamedPostingAttempt }, options: NamedPostingApiOptions) {
+  const url = new URL(reference.canonicalUrl)
+  const controller = new AbortController(), relay = () => controller.abort(options.signal?.reason)
+  options.signal?.addEventListener('abort', relay, { once: true })
+  const timer = setTimeout(() => controller.abort(new Error('deadline')), timeout)
+  try {
+    if (options.signal?.aborted) return failed('cancelled')
+    const addresses = await abortable((options.lookup ?? defaultLookup)(url.hostname), controller.signal)
+    if (!addresses.length || addresses.some(a => !isPublicAddress(a.address, a.family))) return failed('unsafe-address')
+    const response = await abortable((options.request ?? defaultRequest)(url, addresses[0], controller.signal, htmlHeaders), controller.signal)
+    if (response.body.length > MAX_BYTES) return failed('incomplete')
+    if ([301,302,303,307,308].includes(response.status)) return failed('unsafe-redirect')
+    if ([401,403].includes(response.status)) return failed('login-required')
+    if (response.status === 404 || response.status === 410) return failed('not-found')
+    if (response.status !== 200 || !String(response.headers['content-type'] ?? '').toLowerCase().includes('html') || String(response.headers['content-encoding'] ?? 'identity').toLowerCase() !== 'identity') return failed('incomplete')
+    const html = new TextDecoder('utf-8', { fatal: true }).decode(response.body)
+    const worker = new Worker(join(__dirname, 'wuzzuf-posting-worker.cjs'), { workerData: { html, url: url.href, canonicalUrl: reference.canonicalUrl }, resourceLimits: { maxOldGenerationSizeMb: 48, maxYoungGenerationSizeMb: 16, stackSizeMb: 2 } })
+    const data = await new Promise<{title:string; employer:string; text:string}>( (resolve, reject) => {
+      let settled = false
+      const finish = (action: () => void) => { if (settled) return; settled = true; clearTimeout(parseTimer); controller.signal.removeEventListener('abort', cancel); void worker.terminate(); action() }
+      const parseTimer = setTimeout(() => finish(() => reject(new Error('deadline'))), 2_000)
+      const cancel = () => finish(() => reject(new Error('cancelled')))
+      if (controller.signal.aborted) return cancel()
+      controller.signal.addEventListener('abort', cancel, { once: true })
+      worker.once('message', (result: any) => finish(() => result.error ? reject(new Error(result.error)) : resolve(result)))
+      worker.once('error', error => finish(() => reject(error)))
+    })
+    if (data.text.length > MAX_TEXT) return failed('incomplete')
+    const candidate = namedPostingCandidateSchema.parse({ version: 1, attemptId: id, reference, returnedBoard: null, returnedPostingId: reference.postingId, title: data.title, employer: data.employer, text: data.text, completeness: 'full', capturedAt: new Date((options.now ?? Date.now)()).toISOString(), sourceUpdatedAt: null, retrievalMethod: 'wuzzuf-public-jobposting-v1', retrievalUrl: reference.canonicalUrl })
+    return { attempt: retrieved, candidate }
+  } catch (error) { return failed(options.signal?.aborted ? 'cancelled' : controller.signal.aborted ? 'deadline' : error instanceof Error && /identity|match|ambiguous/i.test(error.message) ? 'ambiguous' : error instanceof Error && /partial|missing|limit/i.test(error.message) ? 'incomplete' : 'source-error') }
+  finally { clearTimeout(timer); options.signal?.removeEventListener('abort', relay) }
+}
+
+/** Inert exact-detail adapter. It performs no policy decision, IPC, persistence, or source activation. */
 export async function fetchNamedPostingApi(input: unknown, options: NamedPostingApiOptions = {}): Promise<{ attempt: NamedPostingAttempt; candidate?: NamedPostingCandidate }> {
   const reference = namedPostingReferenceSchema.parse(input)
   const started = (options.now ?? Date.now)(), startedAt = new Date(started).toISOString(), id = randomUUID()
   const failed = (reason: Extract<NamedPostingAttempt, {status:'failed'}>['reason']) => ({ attempt: namedPostingAttemptSchema.parse({ id, reference, startedAt, status: 'failed', reason }) as NamedPostingAttempt })
   const preflight = namedPostingAttemptSchema.safeParse({ id, reference, startedAt, status: 'retrieved', expiresAt: new Date(started + 600_000).toISOString(), eligibility: options.eligibility })
   if (!preflight.success || preflight.data.status !== 'retrieved') return failed('opt-in-required')
+  if (reference.source === 'wuzzuf') return fetchWuzzuf(reference, id, started, startedAt, preflight.data, failed, options)
   const api = reference.source === 'lever' ? new URL(`https://api.lever.co/v0/postings/${reference.board}/${reference.postingId}`) : new URL(`https://boards-api.greenhouse.io/v1/boards/${reference.board}/jobs/${reference.postingId}`)
   const controller = new AbortController(); const abort = () => controller.abort(options.signal?.reason)
   options.signal?.addEventListener('abort', abort, { once: true })
