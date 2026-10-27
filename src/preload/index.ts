@@ -19,7 +19,7 @@ import { postingFetchStateSchema, postingPreviewEditSchema, postingRefreshCompar
 import { workspaceBackupStatusSchema } from '../shared/workspace-backup'
 import { researchCancelSchema, researchReviewInputSchema, researchReviewStateSchema, researchStartSchema, researchStateSchema } from '../shared/job-research-ipc'
 import { normalizeJobResearchUrl } from '../shared/job-research-url'
-import { researchSearchKeyCopySchema, researchSearchKeyRevealSchema, researchSearchKeyStatusSchema } from '../shared/research-search-settings'
+import { researchSearchKeyStatusSchema } from '../shared/research-search-settings'
 import { researchAnalysisTokenSchema, researchAnalysisConsentSchema, researchAnalysisPreviewReplySchema, researchAnalysisProgressReplySchema, researchAnalysisDiscardReplySchema } from '../shared/research-volatile-analysis-ipc'
 import { namedPostingPreviewReplySchema } from '../shared/named-posting-schema'
 
@@ -45,8 +45,6 @@ const api: WorkbenchAPI = Object.freeze({
   },
   async getResearchSearchKeyStatus() { return researchSearchKeyStatusSchema.parse(await ipcRenderer.invoke('research-search:key:status')) },
   async removeResearchSearchKey() { return researchSearchKeyStatusSchema.parse(await ipcRenderer.invoke('research-search:key:remove')) },
-  async revealResearchSearchKey() { return researchSearchKeyRevealSchema.parse(await ipcRenderer.invoke('research-search:key:reveal')) },
-  async copyResearchSearchKey() { return researchSearchKeyCopySchema.parse(await ipcRenderer.invoke('research-search:key:copy')) },
   async exportWorkspaceBackup() { return workspaceResult.parse(await ipcRenderer.invoke('workspace:backup')) },
   async previewWorkspaceRestore() { return restoreSelection.parse(await ipcRenderer.invoke('workspace:restore:preview')) },
   async applyWorkspaceRestore(token: string) { return restoreDecision.parse(await ipcRenderer.invoke('workspace:restore:apply', uuidSchema.parse(token))) },

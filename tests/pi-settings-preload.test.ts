@@ -24,36 +24,24 @@ test('preload sends a typed Pi selection only through the Settings IPC channel',
   expect('setFaithfulnessCheck' in bridge.api!).toBe(false)
 })
 
-test('preload exposes only named status, remove, reveal and copy methods; stale save IPC is absent', async () => {
-  const key = 'tvly-secret-example-key-12345'
-  const status = { configured: true, storageAvailable: true, message: 'Search is available only after a key is stored on this device.' }
+test('preload exposes only status and confirmed local-removal methods for legacy keys', async () => {
+  const status = { configured: true, storageAvailable: true, message: 'Legacy encrypted search key found on this device.' }
   bridge.invoke.mockResolvedValue(status)
   await expect(bridge.api!.getResearchSearchKeyStatus()).resolves.toEqual(status)
-  expect('saveResearchSearchKey' in bridge.api!).toBe(false)
   await expect(bridge.api!.removeResearchSearchKey()).resolves.toEqual(status)
-  bridge.invoke.mockResolvedValue({ key })
-  await expect(bridge.api!.revealResearchSearchKey()).resolves.toEqual({ key })
-  bridge.invoke.mockResolvedValue({ ok: true, message: 'Search key copied. Clipboard contents remain outside CV Tailor until replaced.' })
-  await expect(bridge.api!.copyResearchSearchKey()).resolves.toMatchObject({ ok: true })
-  expect(bridge.invoke.mock.calls).toEqual([
-    ['research-search:key:status'], ['research-search:key:remove'],
-    ['research-search:key:reveal'], ['research-search:key:copy']
-  ])
-  bridge.invoke.mockResolvedValue({ key: 'short' })
-  await expect(bridge.api!.revealResearchSearchKey()).rejects.toThrow()
-  bridge.invoke.mockResolvedValue({ ok: true, message: 'unexpected', key })
-  await expect(bridge.api!.copyResearchSearchKey()).rejects.toThrow()
-  bridge.invoke.mockClear()
-  expect(bridge.invoke).not.toHaveBeenCalled()
-  bridge.invoke.mockResolvedValue({ ...status, key })
+  expect(bridge.invoke.mock.calls).toEqual([['research-search:key:status'], ['research-search:key:remove']])
+  expect('revealResearchSearchKey' in bridge.api!).toBe(false)
+  expect('copyResearchSearchKey' in bridge.api!).toBe(false)
+  expect('saveResearchSearchKey' in bridge.api!).toBe(false)
+  bridge.invoke.mockResolvedValue({ ...status, key: 'plaintext' })
   await expect(bridge.api!.getResearchSearchKeyStatus()).rejects.toThrow()
 })
 
-test('preload accepts a configured key status while device encryption is unavailable', async () => {
+test('preload distinguishes an encrypted legacy key from failed storage inspection', async () => {
   const status = {
     configured: true,
     storageAvailable: false,
-    message: 'A search key is stored but device encryption is unavailable; it cannot be used until encryption returns. You can remove it locally.'
+    message: 'A legacy encrypted key is stored but device encryption is unavailable. You can still remove it locally.'
   }
   bridge.invoke.mockResolvedValue(status)
   await expect(bridge.api!.getResearchSearchKeyStatus()).resolves.toEqual(status)
