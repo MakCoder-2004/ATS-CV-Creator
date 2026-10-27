@@ -141,19 +141,17 @@ describe('volatile, reviewed job-research analysis boundary', () => {
     expect(preview.outgoingText).toContain('https://jobs.example.org/post/123')
     expect(preview.outgoingText).not.toContain('utm_source')
   })
-  it('sends canonical LinkedIn and Indeed identities without original query context', () => {
-    for (const [provider, canonical, source] of [
-      ['linkedin', 'https://www.linkedin.com/jobs/view/4464025097/', 'https://www.linkedin.com/jobs/view/4464025097/?trackingId=synthetic'],
-      ['indeed', 'https://www.indeed.com/viewjob?jk=1234567890abcdef', 'https://www.indeed.com/viewjob?jk=1234567890abcdef&from=search'],
+  it('keeps LinkedIn and Indeed paused before model dispatch', () => {
+    for (const [provider, canonical, source, reason] of [
+      ['linkedin', 'https://www.linkedin.com/jobs/view/4464025097/', 'https://www.linkedin.com/jobs/view/4464025097/?trackingId=synthetic', /Automatic LinkedIn reads remain paused/],
+      ['indeed', 'https://www.indeed.com/viewjob?jk=1234567890abcdef', 'https://www.indeed.com/viewjob?jk=1234567890abcdef&from=search', /Automatic Indeed reads remain paused/],
     ] as const) {
       const f = fixture()
       f.run.selected = { canonicalUrl: canonical, host: new URL(canonical).hostname, provider, roleId: provider === 'linkedin' ? '4464025097' : '1234567890abcdef' }
       f.run.sources[0].url = source
       f.setReview(promoteJobResearch(f.run, [roleId], true))
-      const outgoing = f.controller.preview(runId).outgoingText
-      expect(outgoing).toContain(canonical)
-      expect(outgoing).not.toContain('trackingId')
-      expect(outgoing).not.toContain('from=search')
+      expect(() => f.controller.preview(runId)).toThrow(reason)
+      expect(f.completeSimple).not.toHaveBeenCalled()
     }
   })
   it('rejects no role evidence, expiry and declined consent without calls', async () => {
