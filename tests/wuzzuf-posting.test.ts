@@ -45,6 +45,16 @@ describe('Wuzzuf guarded exact posting adapter', () => {
     const cancelled = await run(page(), {signal:controller.signal,lookup,request:async()=>{throw new Error('request must not run')} })
     expect(cancelled.attempt).toMatchObject({status:'failed',reason:'cancelled'})
   })
+  it('rejects hidden, ancestor-hidden, and contradictory visible identity evidence', async () => {
+    const clean = page()
+    expect((await run(clean.replace('<h1>Senior Engineer</h1>', '<h1 hidden>Senior Engineer</h1>'))).attempt).toMatchObject({status:'failed',reason:'ambiguous'})
+    expect((await run(clean.replace('<h1>Senior Engineer</h1>', '<section aria-hidden="true"><h1>Senior Engineer</h1></section>'))).attempt).toMatchObject({status:'failed',reason:'ambiguous'})
+    expect((await run(clean.replace('<h1>Senior Engineer</h1>', '<h1 style="display:none">Senior Engineer</h1>'))).attempt).toMatchObject({status:'failed',reason:'ambiguous'})
+    expect((await run(clean.replace('<div class="company-name">Example Systems</div>', '<div class="company-name" style="visibility:hidden">Example Systems</div>'))).attempt).toMatchObject({status:'failed',reason:'ambiguous'})
+    expect((await run(clean.replace('<div class="company-name">Example Systems</div>', '<div hidden><div class="company-name">Example Systems</div></div>'))).attempt).toMatchObject({status:'failed',reason:'ambiguous'})
+    expect((await run(page({renderDescription:false,extra:`<div aria-hidden="true">${standardDescription}</div>`}))).attempt).toMatchObject({status:'failed',reason:'incomplete'})
+    expect((await run(page({extra:'<h1>Another role</h1>'}))).attempt).toMatchObject({status:'failed',reason:'ambiguous'})
+  })
   it('rejects unsafe DNS targets, redirects, login pages, and incomplete posting text', async () => {
     expect((await run(page(), {lookup:async()=>[{address:'127.0.0.1',family:4}]})).attempt).toMatchObject({status:'failed',reason:'unsafe-address'})
     expect((await run(page(), {request:async()=>({status:302,headers:{location:'https://evil.example'},body:Buffer.alloc(0)})})).attempt).toMatchObject({status:'failed',reason:'unsafe-redirect'})

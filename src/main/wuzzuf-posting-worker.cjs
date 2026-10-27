@@ -1,6 +1,26 @@
 const { parentPort, workerData } = require('node:worker_threads')
 const parse5 = require('parse5')
 const MAX_BYTES = 2 * 1024 * 1024
+const HIDDEN_CLASSES = new Set(['hidden','hide','is-hidden','d-none','visually-hidden','sr-only','screen-reader-only','screenreader-only','u-hidden','u-visually-hidden'])
+function isHidden(node) {
+  let current = node, depth = 0
+  while (current && depth++ < 128) {
+    const attrs = new Map((current.attrs || []).map(attr => [attr.name.toLowerCase(), attr.value]))
+    if (attrs.has('hidden') || attrs.has('inert') || String(attrs.get('aria-hidden') || '').trim().toLowerCase() === 'true') return true
+    const classes = String(attrs.get('class') || '').toLowerCase().split(/\s+/)
+    if (classes.some(name => HIDDEN_CLASSES.has(name))) return true
+    const style = String(attrs.get('style') || '').replace(/\/\*[\s\S]*?\*\//g, '')
+    for (const item of style.split(';')) {
+      const split = item.indexOf(':')
+      if (split < 0) continue
+      const name = item.slice(0, split).trim().toLowerCase()
+      const value = item.slice(split + 1).replace(/!important\s*$/i, '').trim().toLowerCase()
+      if (name === 'display' && value === 'none' || name === 'visibility' && ['hidden','collapse'].includes(value) || name === 'content-visibility' && value === 'hidden' || name === 'opacity' && Number(value) === 0) return true
+    }
+    current = current.parentNode
+  }
+  return !!current
+}
 function text(node, out = []) {
   if (node.nodeName === '#text') out.push(node.value)
   if (['br','p','div','li','h1','h2','h3','h4','section','article'].includes(node.tagName)) out.push('\n')
@@ -9,7 +29,7 @@ function text(node, out = []) {
 }
 const joinedText = node => text(node).join('')
 function visibleText(root, out = []) {
-  if (['script','style','noscript','iframe','svg','template'].includes(root.tagName)) return ''
+  if (isHidden(root) || ['script','style','noscript','iframe','svg','template'].includes(root.tagName)) return out
   if (root.nodeName === '#text') out.push(root.value)
   if (['br','p','div','li','h1','h2','h3','h4','section','article'].includes(root.tagName)) out.push('\n')
   for (const child of root.childNodes || []) visibleText(child, out)
@@ -41,10 +61,14 @@ try {
   }
   const canonicals = [...new Set(canonicalNodes.map(x => { try { const u = new URL(x, workerData.url); return u.protocol === 'https:' && u.hostname === 'wuzzuf.net' && !u.username && !u.password && !u.port && !u.search && !u.hash && /^\/jobs\/p\/[A-Za-z0-9_-]{8,160}\/?$/.test(u.pathname) ? `https://wuzzuf.net${u.pathname.replace(/\/$/, '')}` : '' } catch { return '' } }).filter(Boolean))]
   if (jobs.length !== 1 || canonicals.length !== 1 || canonicals[0] !== workerData.canonicalUrl) throw new Error('Wuzzuf posting identity is ambiguous or does not uniquely match the selected canonical URL.')
+  const titleEvidence = nodes.filter(n => n.tagName === 'h1')
+  if (titleEvidence.length !== 1 || isHidden(titleEvidence[0])) throw new Error('Visible title evidence is missing, hidden, or ambiguous.')
+  const employerEvidence = nodes.filter(n => n.attrs?.some(a => a.name === 'class' && a.value.toLowerCase().split(/\s+/).some(token => ['company-name','companyname','company-name-link','company'].includes(token)) || a.name === 'data-testid' && /company/i.test(a.value)))
+  if (employerEvidence.length !== 1 || isHidden(employerEvidence[0])) throw new Error('Visible employer evidence is missing, hidden, or ambiguous.')
+  const visibleTitle = joinedText(titleEvidence[0]).replace(/\s+/g, ' ').trim()
+  const visibleEmployerNode = employerEvidence[0]
+  const visibleEmployer = joinedText(visibleEmployerNode).replace(/\s+/g, ' ').trim()
   const job = jobs[0]
-  const visibleTitle = joinedText(nodes.find(n => n.tagName === 'h1') || {}).replace(/\s+/g, ' ').trim()
-  const visibleEmployerNode = nodes.find(n => n.attrs?.some(a => ['company-name','companyName','company-name-link','company'].includes(a.name === 'class' ? a.value : '') || a.name === 'data-testid' && /company/i.test(a.value)))
-  const visibleEmployer = visibleEmployerNode ? joinedText(visibleEmployerNode).replace(/\s+/g, ' ').trim() : ''
   const title = typeof job.title === 'string' ? job.title.trim() : ''
   const employer = typeof job.hiringOrganization?.name === 'string' ? job.hiringOrganization.name.trim() : ''
   const normalize = x => x.normalize('NFKC').replace(/\s+/g, ' ').trim().toLocaleLowerCase('en')

@@ -1,8 +1,9 @@
 import { expect, test, _electron as electron } from '@playwright/test'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { wuzzufPersonalLocalPolicyPath } from '../../src/main/wuzzuf-local-enablement'
 
 const link = 'https://boards.greenhouse.io/acme/jobs/123'
 const requestCount = (path: string) => existsSync(path) ? readFileSync(path, 'utf8').trim().split(/\r?\n/).filter(Boolean).length : 0
@@ -12,6 +13,9 @@ test('visible Greenhouse preview is explicit, temporary and stale-result safe', 
   const root = mkdtempSync(join(tmpdir(), 'cv-named-preview-'))
   const appData = join(root, 'appdata'), userData = join(root, 'workspace')
   mkdirSync(appData); mkdirSync(userData)
+  const localPolicy = wuzzufPersonalLocalPolicyPath(appData)
+  mkdirSync(join(appData, 'CV Tailor Personal Local Policy'))
+  writeFileSync(localPolicy, JSON.stringify({ version: 1, wuzzufPersonalLocalEnabled: true, acknowledgedNoticeVersion: 1 }), { flag: 'wx' })
   let app: Awaited<ReturnType<typeof electron.launch>> | undefined
   try {
     app = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], timeout: 60_000, env: {
@@ -97,6 +101,9 @@ test('visible Greenhouse preview is explicit, temporary and stale-result safe', 
     await page.getByRole('button', { name: 'Delete 1 job' }).click()
     await expect(page.getByRole('row').filter({ hasText: 'Synthetic Reliability Engineer' })).toHaveCount(0)
 
+    expect(await page.evaluate(() => (window as any).workbench.getWuzzufPersonalLocalEnablement())).toBe(true)
+    expect(localPolicy.startsWith(appData)).toBe(true)
+    expect(localPolicy.startsWith(userData)).toBe(false)
     const wuzzufUrl = 'https://wuzzuf.net/jobs/p/SyntheticWuzzuf123'
     await linkField.fill(wuzzufUrl)
     await expect(page.getByText(/Wuzzuf-only personal-local product-risk exception/)).toBeVisible()

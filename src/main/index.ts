@@ -40,6 +40,8 @@ import { researchAnalysisTokenSchema, researchAnalysisConsentSchema, researchAna
 import type { PiModelSelection } from '../shared/pi-model'
 import { postingPreviewEditSchema, postingReviewSchema } from '../shared/posting-import'
 import { createNamedPostingPreviewSession } from './named-posting-preview-session'
+import { parseNamedPostingUrl } from '../shared/named-posting-schema'
+import { isWuzzufPersonalLocalEnabled } from './wuzzuf-local-enablement'
 import { decideJobSourcePolicy } from '../shared/job-source-policy'
 
 let window: BrowserWindow | undefined
@@ -572,8 +574,13 @@ app.whenReady().then(() => {
     trusted(event); if (args.length !== 1) throw new Error('Expected fetch token')
     return await workspace!.api.cancelPostingFetch(uuidSchema.parse(args[0]))
   })
+  ipcMain.handle('named-posting-preview:wuzzuf-enabled', event => {
+    trusted(event); return isWuzzufPersonalLocalEnabled(app.getPath('appData'))
+  })
   ipcMain.handle('named-posting-preview:start', async (event, ...args: unknown[]) => {
-    trusted(event); if (args.length !== 2 || typeof args[0] !== 'string' || typeof args[1] !== 'boolean') throw new Error('Expected Greenhouse link and personal-local opt-in.')
+    trusted(event); if (args.length !== 2 || typeof args[0] !== 'string' || typeof args[1] !== 'boolean') throw new Error('Expected a supported posting link and personal-local opt-in.')
+    const reference = parseNamedPostingUrl(args[0])
+    if (reference.source === 'wuzzuf' && !isWuzzufPersonalLocalEnabled(app.getPath('appData'))) throw new Error('Wuzzuf reviewed Save is disabled on this installation. The owner-controlled local policy file is absent or invalid.')
     return namedPostingPreviews!.start(args[0], args[1])
   })
   ipcMain.handle('named-posting-preview:read', (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected preview token.'); return namedPostingPreviews!.read(uuidSchema.parse(args[0])) })
