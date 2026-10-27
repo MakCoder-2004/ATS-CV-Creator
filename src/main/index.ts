@@ -575,6 +575,15 @@ app.whenReady().then(() => {
   })
   ipcMain.handle('named-posting-preview:read', (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected preview token.'); return namedPostingPreviews!.read(uuidSchema.parse(args[0])) })
   ipcMain.handle('named-posting-preview:cancel', (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected preview token.'); return namedPostingPreviews!.cancel(uuidSchema.parse(args[0])) })
+  ipcMain.handle('named-posting-preview:review', (event, ...args: unknown[]) => {
+    trusted(event); if (args.length !== 3 || typeof args[1] !== 'boolean' || typeof args[2] !== 'boolean') throw new Error('Review the exact role and complete posting before saving.')
+    return namedPostingPreviews!.review(uuidSchema.parse(args[0]), args[1], args[2])
+  })
+  ipcMain.handle('named-posting-preview:save', async (event, ...args: unknown[]) => {
+    trusted(event); if (args.length !== 3) throw new Error('Review the current preview before saving.')
+    const working = jobInputSchema.safeParse(args[2]); if (!working.success) throw new Error('Correct the working posting fields before saving.')
+    return jobSaveResultSchema.parse(await namedPostingPreviews!.save(uuidSchema.parse(args[0]), uuidSchema.parse(args[1]), working.data, (acceptance, values) => workspace!.api.saveNamedPostingAcceptance(acceptance, values), result => result.ok))
+  })
   ipcMain.handle('posting-import:open-source', async (event, ...args: unknown[]) => {
     trusted(event); if (args.length !== 1 || typeof args[0] !== 'string') throw new Error('Expected a public posting link.')
     const selected = validateLeverPostingUrl(args[0]) ? args[0] : normalizeJobResearchUrl(args[0]).canonicalUrl

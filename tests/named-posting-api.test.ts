@@ -31,6 +31,19 @@ describe('inert named public API adapter', () => {
     expect((await run('lever',lever(),{lookup:async()=>[{address:'127.0.0.1',family:4}]})).attempt).toMatchObject({status:'failed',reason:'unsafe-address'})
     expect((await run('lever',lever(),{request:async()=>({status:200,headers:{'content-type':'application/json'},body:Buffer.alloc(2*1024*1024+1)})})).attempt.status).toBe('failed')
   })
+  it('bounds the paused Lever named adapter seam: exact host, pinned address, one request, and socket failure', async () => {
+    const request = vi.fn(async (_url: URL, _address: { address: string; family: number }, _signal: AbortSignal, _headers: Readonly<Record<string, string>>) => { throw new Error('synthetic socket closed') })
+    const lookup = vi.fn(async (host: string) => {
+      expect(host).toBe('api.lever.co')
+      return [{ address: '8.8.8.8', family: 4 }]
+    })
+    const result = await fetchNamedPostingApi(ref('lever'), { eligibility: grant('lever'), now: () => Date.parse('2026-01-02T00:00:00Z'), lookup, request })
+    expect(result.attempt).toMatchObject({ status: 'failed', reason: 'source-error' })
+    expect(lookup).toHaveBeenCalledTimes(1)
+    expect(request).toHaveBeenCalledTimes(1)
+    expect(request.mock.calls[0][0].href).toBe('https://api.lever.co/v0/postings/acme/role1')
+    expect(request.mock.calls[0][1]).toEqual({ address: '8.8.8.8', family: 4 })
+  })
   it('does not fetch without trusted source-specific opt-in and reports HTTP access limits', async () => {
     const request=vi.fn(), lookup=vi.fn(async()=>[{address:'8.8.8.8',family:4}]);
     for (const optedInAt of ['bogus', 'January 1, 2026']) {

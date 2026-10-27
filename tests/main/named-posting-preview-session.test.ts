@@ -71,6 +71,19 @@ const deferred = <T,>() => { let resolve!: (value: T) => void; const promise = n
     expect(() => createNamedPostingPreviewSession().start('https://jobs.eu.lever.co/acme/123', true)).toThrow(/Greenhouse/)
     expect(lookup).not.toHaveBeenCalled(); expect(request).not.toHaveBeenCalled()
   })
+  it('requires explicit source review and rejects a reviewed token after expiry before persistence', async () => {
+    let now = Date.now()
+    const session = createNamedPostingPreviewSession({ lookup: async () => [{ address: '8.8.8.8', family: 4 }], request: async () => response() }, () => now)
+    const { token } = session.start(url, true)
+    for (let i = 0; i < 30 && session.read(token).status === 'loading'; i++) await new Promise(resolve => setTimeout(resolve, 20))
+    expect(() => session.review(token, false, true)).toThrow(/exact role/i)
+    const reviewed = session.review(token, true, true)
+    const persist = vi.fn(async () => ({ ok: true }))
+    now += 10 * 60_000
+    await expect(session.save(token, reviewed.reviewToken, { title: 'Engineer', company: 'Example Co', description: 'Synthetic text' }, persist, result => result.ok)).rejects.toThrow(/expired/i)
+    expect(persist).not.toHaveBeenCalled()
+    session.close()
+  })
   it('rejects a provider result with the wrong posting ID without exposing a candidate', async () => {
     const body = Buffer.from(JSON.stringify({ ...JSON.parse(response().body.toString()), id: 456 }))
     const session = createNamedPostingPreviewSession({ lookup: async () => [{ address: '8.8.8.8', family: 4 }], request: async () => ({ ...response(), body }) })

@@ -20,7 +20,7 @@ export function createNamedPostingAcceptance(candidateInput: unknown, attemptInp
   assertBoundAndFresh(candidate, attempt, now)
   const candidateHash = createHash('sha256').update(JSON.stringify(candidate)).digest('hex')
   if (review.attemptId !== attempt.id || review.candidateHash !== candidateHash || Date.parse(review.reviewedAt) < Date.parse(candidate.capturedAt) || Date.parse(review.reviewedAt) > now) throw new Error('Review record is not bound to this candidate or has invalid timing.')
-  return acceptanceFor(candidate, attempt, review.reviewedAt)
+  return acceptanceFor(candidate, attempt, new Date(now).toISOString())
 }
 
 function assertBoundAndFresh(candidate: NamedPostingCandidate, attempt: z.infer<typeof namedPostingRetrievedAttemptSchema>, now: number) {
@@ -38,8 +38,8 @@ export function verifyNamedPostingAcceptance(acceptanceInput: unknown, appHeldCa
   const candidateHash = createHash('sha256').update(JSON.stringify(candidate)).digest('hex')
   if (review.attemptId !== attempt.id || review.candidateHash !== candidateHash || Date.parse(review.reviewedAt) > now) throw new Error('App-held review is not valid for this candidate and attempt.')
   const acceptedAt = Date.parse(acceptance.acceptedAt)
-  if (acceptedAt < Date.parse(candidate.capturedAt) || acceptedAt < Date.parse(attempt.startedAt) || acceptedAt >= Date.parse(attempt.expiresAt) || acceptedAt > now || acceptance.acceptedAt !== review.reviewedAt) throw new Error('Acceptance temporal order is invalid.')
-  const expected = acceptanceFor(candidate, attempt, review.reviewedAt)
+  if (acceptedAt < Date.parse(candidate.capturedAt) || acceptedAt < Date.parse(review.reviewedAt) || acceptedAt < Date.parse(attempt.startedAt) || acceptedAt >= Date.parse(attempt.expiresAt) || acceptedAt > now) throw new Error('Acceptance temporal order is invalid.')
+  const expected = acceptanceFor(candidate, attempt, acceptance.acceptedAt)
   if (JSON.stringify(acceptance) !== JSON.stringify(expected)) throw new Error('Acceptance does not match the app-held reviewed posting and source attempt.')
   return expected
 }
