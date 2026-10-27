@@ -20,7 +20,11 @@ async function desktopRows(app: ElectronApplication) {
     const headers = Array.from(table.querySelectorAll('thead th'))
     const headerStarts = headers.map(header => header.getBoundingClientRect().left + parseFloat(getComputedStyle(header).paddingLeft))
     const rows = Array.from(table.querySelectorAll('.saved-job-row')).map(row => {
-      const title = row.querySelector('.saved-job-posting-copy strong')!.getBoundingClientRect()
+      const title = row.querySelector('.saved-job-posting-copy strong')!
+      const firstTitleLine = document.createRange()
+      firstTitleLine.selectNodeContents(title)
+      const titleLine = firstTitleLine.getClientRects()[0]!
+      const checkbox = row.querySelector('.saved-job-select input')!.getBoundingClientRect()
       const status = row.querySelector('.saved-job-draft-status')!.getBoundingClientRect()
       const actions = row.querySelector('.saved-job-actions')!.getBoundingClientRect()
       const buttons = Array.from(row.querySelectorAll('.saved-job-actions button')).map(button => {
@@ -30,9 +34,11 @@ async function desktopRows(app: ElectronApplication) {
       return {
         statusLeft: status.left,
         actionsLeft: actions.left,
-        titleTop: title.top,
+        titleLineCenter: titleLine.top + titleLine.height / 2,
+        checkboxCenter: checkbox.top + checkbox.height / 2,
         statusCenter: status.top + status.height / 2,
-        actionsTop: actions.top,
+        actionsCenter: actions.top + actions.height / 2,
+        firstButtonCenter: buttons.length ? buttons[0].top + buttons[0].height / 2 : 0,
         buttons,
       }
     })
@@ -96,8 +102,10 @@ test('saved-job status and actions align for long and short postings at desktop 
     for (const row of desktop.rows) {
       expect(Math.abs(row.statusLeft - desktop.headerStarts[1])).toBeLessThanOrEqual(1)
       expect(Math.abs(row.actionsLeft - desktop.headerStarts[2])).toBeLessThanOrEqual(1)
-      expect(Math.abs(row.statusCenter - (row.titleTop + 11))).toBeLessThanOrEqual(2)
-      expect(Math.abs(row.actionsTop - row.titleTop)).toBeLessThanOrEqual(1)
+      expect(Math.abs(row.statusCenter - row.titleLineCenter)).toBeLessThanOrEqual(2)
+      expect(Math.abs(row.checkboxCenter - row.titleLineCenter)).toBeLessThanOrEqual(2)
+      expect(Math.abs(row.actionsCenter - row.titleLineCenter)).toBeLessThanOrEqual(2)
+      expect(Math.abs(row.firstButtonCenter - row.titleLineCenter)).toBeLessThanOrEqual(2)
       expect(row.buttons.map(button => button.label)).toEqual(['Open posting', 'Edit', 'Delete'])
       expect(row.buttons.map(button => button.width)).toEqual(firstWidths)
       for (const button of row.buttons) expect(Math.abs(button.height - 44)).toBeLessThanOrEqual(0.5)
