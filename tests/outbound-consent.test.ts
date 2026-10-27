@@ -33,12 +33,14 @@ describe('outbound consent public contract', () => {
     expect(bundle.outgoing.job.description).toContain('[DATE_OMITTED]')
   })
 
-  it('preserves UUID protocol identifiers while redacting phone-like digit sequences', () => {
-    const bundle = prepareOutboundBundle(source)
-    const id = '12345678-1234-4234-8234-123456789012'
-    const prompt = bundle.minimizeIdentifiers(JSON.stringify({ evidenceId: id, note: 'Call 1234567890.' }))
-    expect(JSON.parse(prompt).evidenceId).toBe(id)
-    expect(prompt).toContain('[REDACTED_PHONE]')
+  it('protects only exact app-held UUID protocol IDs from phone-pattern scrubbing', () => {
+    const trustedId = '12345678-1234-4234-8234-123456789012'
+    const untrustedUuid = '87654321-4321-4321-8321-987654321098'
+    const bundle = prepareOutboundBundle({ ...source, profile: { ...source.profile, experience: [{ ...source.profile.experience[0], id: trustedId }] } })
+    const prompt = bundle.minimizeIdentifiers(JSON.stringify({ evidenceId: trustedId, freeText: untrustedUuid, marker: '[[PROTOCOL_UUID_0]]', adjacentPhone: 'Call 1234567890.' }))
+    expect(JSON.parse(prompt)).toMatchObject({ evidenceId: trustedId, freeText: '[REDACTED_PHONE]', marker: '[[PROTOCOL_UUID_0]]', adjacentPhone: 'Call [REDACTED_PHONE].' })
+    expect(bundle.containsRestoredIdentifier({ text: trustedId })).toBe(false)
+    expect(bundle.containsRestoredIdentifier({ text: untrustedUuid })).toBe(true)
   })
 
   it('freezes per-run authorization and rejects absent, revoked, stale, expanded or restored-identifier payloads', () => {
