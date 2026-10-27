@@ -50,6 +50,11 @@ test('Settings shows Pi preferences and no retired-search controls when no legac
     await expect(page.getByRole('button', { name: 'Remove local key' })).toHaveCount(0)
     await expect(page.getByRole('heading', { name: 'Analysis request budgets' })).toHaveCount(0)
     await expect(page.locator('.settings-grid > .settings-block')).toHaveCount(1)
+    const dimensions = await modelCard.evaluate(block => ({
+      grid: block.parentElement!.getBoundingClientRect().width,
+      block: block.getBoundingClientRect().width
+    }))
+    expect(Math.abs(dimensions.grid - dimensions.block)).toBeLessThan(2)
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
   } finally {
     await app?.close().catch(() => {})
