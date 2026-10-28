@@ -12,6 +12,8 @@ import { documentFitReportSchema } from '../shared/document'
 import { appearanceSchema } from '../shared/appearance'
 import { openRouterModelSchema } from '../shared/openrouter-settings'
 import { piModelSelectionSchema } from '../shared/pi-model'
+import { coverLetterOperationSchema, coverLetterPurposeSchema, coverLetterRevisionSchema } from '../shared/cover-letter'
+import { legacyV3TableSchemas } from './workspace-backup-legacy-v3'
 
 // Keep this explicit: credentials are never serialized; all workspace persistence tables, including
 // migrations and LangGraph checkpoints, are represented in the versioned format.
@@ -20,7 +22,7 @@ const tables = [
   'profile_experience', 'profile_projects', 'jobs', 'outbound_consents', 'posting_analysis_cache',
   'analysis_run_state', 'analysis_attempts', 'provider_attempt_outcomes', 'generation_recovery',
   'generation_recovery_extensions', 'draft_revisions', 'regeneration_proposals', 'document_fit_reports',
-  'langgraph_checkpoints', 'langgraph_checkpoint_writes'
+  'cover_letter_revisions', 'cover_letter_operations', 'langgraph_checkpoints', 'langgraph_checkpoint_writes'
 ]
 const hash = (value: string) => createHash('sha256').update(value, 'utf8').digest('hex')
 
@@ -105,7 +107,7 @@ export function createWorkspaceBackupEngine(db: Database.Database, maxBackupByte
   }
   const installBackupAccountingTriggers = () => {
     const names = actualTables()
-    const emptySnapshot = { format: 'cv-tailor-workspace-backup', version: 3 as const, createdAt: new Date().toISOString(), warning: workspaceBackupWarning, tables: Object.fromEntries(names.map(name => [name, { schema: tableSchema(name), rows: [] }])) }
+    const emptySnapshot = { format: 'cv-tailor-workspace-backup', version: 4 as const, createdAt: new Date().toISOString(), warning: workspaceBackupWarning, tables: Object.fromEntries(names.map(name => [name, { schema: tableSchema(name), rows: [] }])) }
     const baseBytes = Buffer.byteLength(JSON.stringify(emptySnapshot), 'utf8')
     for (const name of names) for (const suffix of ['insert', 'update', 'delete']) db.exec(`DROP TRIGGER IF EXISTS "cv_backup_${name}_${suffix}"`)
     db.prepare(`DELETE FROM ${WORKSPACE_BACKUP_SIZE_TABLE}`).run()
@@ -181,7 +183,7 @@ export function createWorkspaceBackupEngine(db: Database.Database, maxBackupByte
       if (count > maxRows) throw new Error(`Workspace table ${name} exceeds its ${maxRows}-row backup safety limit.`)
       return [name, { schema: tableSchema(name), rows: rowsFor(name) }]
     }))
-    const snapshot = { format: 'cv-tailor-workspace-backup', version: 3 as const, createdAt: new Date().toISOString(), warning: workspaceBackupWarning, tables }
+    const snapshot = { format: 'cv-tailor-workspace-backup', version: 4 as const, createdAt: new Date().toISOString(), warning: workspaceBackupWarning, tables }
     validateRawBounds(snapshot)
     const encoded = JSON.stringify(snapshot)
     if (Buffer.byteLength(encoded, 'utf8') > maxBackupBytes) throw new Error(`Backup exceeds the ${Math.round(maxBackupBytes / (1024 * 1024))} MiB workspace safety limit.`)
@@ -249,6 +251,35 @@ export function createWorkspaceBackupEngine(db: Database.Database, maxBackupByte
     for (const row of rows.analysis_run_state?.rows ?? []) { const data = parseJson('analysis_run_state', row.data as string); assertValid(analysisResultSchema, data, 'analysis_run_state'); if ((data as { jobId: string }).jobId !== row.job_id || (data as { runId?: string }).runId !== row.run_id) fail('analysis_run_state') }
     for (const row of rows.generation_recovery?.rows ?? []) { const data = parseJson('generation_recovery', row.snapshot as string); assertValid(generationRecoverySnapshotSchema, data, 'generation_recovery'); if ((data as { runId: string }).runId !== row.run_id || (data as { jobId: string }).jobId !== row.job_id || (data as { consentId: string }).consentId !== row.consent_id || (data as { scopeHash: string }).scopeHash !== row.scope_hash) fail('generation_recovery') }
     for (const row of rows.document_fit_reports?.rows ?? []) assertValid(documentFitReportSchema, parseJson('document_fit_reports', row.data as string), 'document_fit_reports')
+    for (const row of rows.cover_letter_revisions?.rows ?? []) {
+      const data = parseJson('cover_letter_revisions', row.data as string)
+      assertValid(coverLetterRevisionSchema, data, 'cover_letter_revisions')
+      if ((data as { id: string }).id !== row.id || (data as { jobId: string }).jobId !== row.job_id || (data as { revision: number }).revision !== row.revision) fail('cover_letter_revisions')
+    }
+    const operationRecords = new Map<string, ReturnType<typeof coverLetterOperationSchema.parse>>()
+    for (const row of rows.cover_letter_operations?.rows ?? []) {
+      const data = parseJson('cover_letter_operations', row.data as string)
+      assertValid(coverLetterOperationSchema, data, 'cover_letter_operations')
+      const operation = data as ReturnType<typeof coverLetterOperationSchema.parse>
+      if (operation.id !== row.id || operation.jobId !== row.job_id || operation.parentRunId !== row.parent_run_id || operation.consentId !== row.consent_id || operation.status !== row.status || operation.createdAt !== row.created_at || operation.updatedAt !== row.updated_at) fail('cover_letter_operations')
+      operationRecords.set(operation.id, operation)
+    }
+    const consentRecords = new Map((rows.outbound_consents?.rows ?? []).map(row => [String(row.id), row]))
+    for (const row of rows.cover_letter_operations?.rows ?? []) {
+      const operation = operationRecords.get(String(row.id))!
+      const consent = consentRecords.get(operation.consentId)
+      if (!consent || consent.run_id !== operation.parentRunId || consent.job_id !== operation.jobId || consent.purpose === 'cv' || consent.purpose_hash !== operation.purposeHash) fail('cover_letter_operations')
+    }
+    for (const row of rows.cover_letter_revisions?.rows ?? []) {
+      const letter = coverLetterRevisionSchema.parse(parseJson('cover_letter_revisions', row.data as string))
+      const operation = operationRecords.get(letter.operationId)
+      if (!operation || operation.jobId !== letter.jobId || operation.parentRunId !== letter.parentRunId || operation.status !== 'saved') fail('cover_letter_revisions')
+    }
+    for (const row of rows.outbound_consents?.rows ?? []) {
+      const purpose = coverLetterPurposeSchema.safeParse(row.purpose)
+      const expected = typeof row.scope_hash === 'string' && purpose.success ? hash(JSON.stringify({ version: 1, scopeHash: row.scope_hash, purpose: purpose.data })) : ''
+      if (row.purpose_version !== 1 || !purpose.success || row.purpose_hash !== expected) fail('outbound_consents')
+    }
     for (const table of ['outbound_consents','analysis_attempts','provider_attempt_outcomes','generation_recovery_extensions'] as const) for (const row of rows[table]?.rows ?? []) {
       const runId = row.run_id
       const profileImportRun = (table === 'analysis_attempts' || table === 'provider_attempt_outcomes') && typeof runId === 'string' && runId.startsWith('profile-import:') && uuidSchema.safeParse(runId.slice('profile-import:'.length)).success
@@ -257,7 +288,7 @@ export function createWorkspaceBackupEngine(db: Database.Database, maxBackupByte
     }
     const jobs = new Set((rows.jobs?.rows ?? []).map(row => row.id))
     for (const row of rows.outbound_consents?.rows ?? []) if (row.job_id !== null && row.job_id !== undefined && !jobs.has(row.job_id)) fail('outbound_consents')
-    for (const table of ['draft_revisions','regeneration_proposals','document_fit_reports','posting_analysis_cache','analysis_run_state','generation_recovery'] as const) for (const row of rows[table]?.rows ?? []) if (!jobs.has(row.job_id)) fail(table)
+    for (const table of ['draft_revisions','regeneration_proposals','document_fit_reports','cover_letter_revisions','cover_letter_operations','posting_analysis_cache','analysis_run_state','generation_recovery'] as const) for (const row of rows[table]?.rows ?? []) if (!jobs.has(row.job_id)) fail(table)
   }
   const workspaceFingerprint = () => JSON.stringify({
     tables: Object.fromEntries(actualTables().map(name => [name, { schema: tableSchema(name), rows: rowsFor(name) }])),
@@ -278,6 +309,24 @@ export function createWorkspaceBackupEngine(db: Database.Database, maxBackupByte
     const result = workspaceBackupSchema.safeParse(parsed)
     if (!result.success) throw new Error('Backup is invalid or incompatible.')
     let backup = result.data
+    const incomingVersion = backup.version
+    if (incomingVersion === 3) {
+      const names = Object.keys(backup.tables).sort()
+      const expectedNames = Object.keys(legacyV3TableSchemas).sort()
+      const versions = backup.tables.schema_migrations?.rows.map(row => Number(row.version)).sort((a, b) => a - b)
+      const acceptedLedgers = [[1, 2, 3, 4, 5, 6, 7, 8, 10], [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]]
+      if (JSON.stringify(names) !== JSON.stringify(expectedNames) || !versions || !acceptedLedgers.some(ledger => JSON.stringify(ledger) === JSON.stringify(versions))) throw new Error('Backup v3 inventory or migration history is incompatible.')
+      const legacy = new Database(':memory:')
+      try {
+        for (const name of expectedNames) {
+          const item = backup.tables[name]
+          if (item.schema !== legacyV3TableSchemas[name]) throw new Error(`Backup v3 schema is incompatible: ${name}`)
+          legacy.exec(item.schema)
+          const columns = (legacy.pragma(`table_info("${name}")`) as Array<{ name: string }>).map(column => column.name).sort()
+          for (const row of item.rows) if (JSON.stringify(Object.keys(row).sort()) !== JSON.stringify(columns)) throw new Error(`Backup v3 row columns are incompatible: ${name}`)
+        }
+      } finally { legacy.close() }
+    }
     // Version-1 was the released workspace representation before posting provenance/revisions.
     // Upgrade only this known shape in memory; leave the supplied file and live workspace untouched.
     if (backup.version === 1) {
@@ -356,7 +405,12 @@ export function createWorkspaceBackupEngine(db: Database.Database, maxBackupByte
         for (const row of upgraded.tables[name]?.rows ?? []) owners.set(String(row.run_id), String(row.job_id))
       }
       upgraded.tables.outbound_consents!.schema = tableSchema('outbound_consents')
-      for (const row of upgraded.tables.outbound_consents!.rows) row.job_id = owners.get(String(row.run_id)) ?? null
+      for (const row of upgraded.tables.outbound_consents!.rows) {
+        row.job_id = owners.get(String(row.run_id)) ?? null
+        row.purpose_version = 1
+        row.purpose = 'cv'
+        row.purpose_hash = hash(JSON.stringify({ version: 1, scopeHash: row.scope_hash, purpose: 'cv' }))
+      }
       upgraded.tables.schema_migrations!.rows.push({ version: 10 })
       backup = upgraded
     }
@@ -367,17 +421,33 @@ export function createWorkspaceBackupEngine(db: Database.Database, maxBackupByte
       const expectedLegacyColumns = ['id', 'run_id', 'scope_hash', 'created_at', 'revoked', 'job_id']
       const expectedVersions = [1, 2, 3, 4, 5, 6, 7, 8, ...(rowsFor('schema_migrations').some(row => row.version === 9) ? [9] : []), 10]
       const versions = upgraded.tables.schema_migrations!.rows.map(row => row.version).sort((a, b) => Number(a) - Number(b))
-      if (table.schema !== legacySchema || JSON.stringify(versions) !== JSON.stringify(expectedVersions)) throw new Error('Backup migration history or consent schema is incompatible.')
+      const currentConsentSchema = tableSchema('outbound_consents')
+      if ((table.schema !== legacySchema && table.schema !== currentConsentSchema) || JSON.stringify(versions) !== JSON.stringify(expectedVersions)) throw new Error('Backup migration history or consent schema is incompatible.')
       const legacyHash = (scopeHash: string) => hash(JSON.stringify({ version: 1, scopeHash, purpose: 'cv' }))
       for (const row of table.rows) {
-        if (JSON.stringify(Object.keys(row).sort()) !== JSON.stringify([...expectedLegacyColumns].sort()) || typeof row.scope_hash !== 'string' || !/^[a-f0-9]{64}$/.test(row.scope_hash)) throw new Error('Backup legacy consent row is incompatible.')
-        row.purpose_version = 1
-        row.purpose = 'cv'
-        row.purpose_hash = legacyHash(row.scope_hash)
+        if (typeof row.scope_hash !== 'string' || !/^[a-f0-9]{64}$/.test(row.scope_hash)) throw new Error('Backup legacy consent row is incompatible.')
+        if (table.schema === legacySchema) {
+          if (JSON.stringify(Object.keys(row).sort()) !== JSON.stringify([...expectedLegacyColumns].sort())) throw new Error('Backup legacy consent row is incompatible.')
+          row.purpose_version = 1
+          row.purpose = 'cv'
+          row.purpose_hash = legacyHash(row.scope_hash)
+        } else if (row.purpose_version !== 1 || row.purpose !== 'cv' || row.purpose_hash !== legacyHash(row.scope_hash)) throw new Error('Backup legacy consent purpose is incompatible.')
       }
-      table.schema = tableSchema('outbound_consents')
+      table.schema = currentConsentSchema
       upgraded.tables.schema_migrations!.rows.push({ version: 11 })
       backup = upgraded
+    }
+    if (backup.tables.schema_migrations && !backup.tables.schema_migrations.rows.some(row => row.version === 12)) {
+      const upgraded = structuredClone(backup) as typeof backup
+      for (const name of ['cover_letter_revisions', 'cover_letter_operations'] as const) {
+        if (upgraded.tables[name]) throw new Error(`Backup contains an unexpected legacy table: ${name}`)
+        upgraded.tables[name] = { schema: tableSchema(name), rows: [] }
+      }
+      upgraded.tables.schema_migrations!.rows.push({ version: 12 })
+      upgraded.version = 4
+      backup = upgraded
+    } else if (backup.tables.schema_migrations?.rows.some(row => row.version === 12)) {
+      backup.version = 4
     }
     const expected = actualTables().sort()
     const names = Object.keys(backup.tables).sort()
@@ -485,6 +555,16 @@ export function createWorkspaceBackupEngine(db: Database.Database, maxBackupByte
         if (names.includes('settings')) db.exec("DELETE FROM settings WHERE key='faithfulness-check'")
         if (names.includes('outbound_consents')) db.exec('UPDATE outbound_consents SET revoked=1')
         if (names.includes('generation_recovery')) db.exec("UPDATE generation_recovery SET status='cancelled' WHERE status IN ('running','paused')")
+        if (names.includes('cover_letter_operations')) {
+          const operations = db.prepare("SELECT id,data,status FROM cover_letter_operations WHERE status IN ('prepared','dispatched')").all() as Array<{ id: string; data: string; status: string }>
+          const update = db.prepare('UPDATE cover_letter_operations SET status=?,data=?,updated_at=? WHERE id=?')
+          const now = new Date().toISOString()
+          for (const row of operations) {
+            const operation = coverLetterOperationSchema.parse(JSON.parse(row.data))
+            const status = row.status === 'dispatched' ? 'uncertain' : 'cancelled'
+            update.run(status, JSON.stringify({ ...operation, status, updatedAt: now }), now, row.id)
+          }
+        }
         if (db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='encrypted_credentials'").get()) db.exec('DELETE FROM encrypted_credentials')
       })
       transaction()

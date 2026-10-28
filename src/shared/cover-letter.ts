@@ -65,6 +65,18 @@ export const coverLetterRevisionSchema = z.object({
 })
 export type CoverLetterRevision = z.infer<typeof coverLetterRevisionSchema>
 
+export const coverLetterOperationSchema = z.object({
+  id: uuidSchema,
+  jobId: uuidSchema,
+  parentRunId: uuidSchema,
+  consentId: uuidSchema,
+  purposeHash: digestSchema,
+  status: z.enum(['prepared', 'dispatched', 'saved', 'failed', 'cancelled', 'uncertain']),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
+}).strict()
+export type CoverLetterOperation = z.infer<typeof coverLetterOperationSchema>
+
 export const coverLetterOutcomeSchema = z.discriminatedUnion('status', [
   z.object({ status: z.literal('not-requested') }).strict(),
   z.object({ status: z.literal('not-started'), reason: z.string().min(1).max(500) }).strict(),
@@ -74,8 +86,13 @@ export const coverLetterOutcomeSchema = z.discriminatedUnion('status', [
 export const requestedDocumentsResultSchema = z.object({ cv: draftGenerationSchema, letter: coverLetterOutcomeSchema }).strict()
 
 export const coverLetterAcknowledgmentSchema = z.object({ jobId: uuidSchema, letterId: uuidSchema, paragraphId: uuidSchema, acknowledged: z.literal(true) }).strict()
+export type CoverLetterAcknowledgment = z.infer<typeof coverLetterAcknowledgmentSchema>
 export const coverLetterRecipientSchema = z.object({ jobId: uuidSchema, letterId: uuidSchema, recipient: z.string().trim().min(1).max(200).nullable() }).strict()
+export type CoverLetterRecipient = z.infer<typeof coverLetterRecipientSchema>
 export const coverLetterEditSchema = z.object({ jobId: uuidSchema, letterId: uuidSchema, paragraphs: z.array(coverLetterParagraphSchema).min(1).max(8), recipient: z.string().trim().min(1).max(200).nullable() }).strict()
+export type CoverLetterEdit = z.infer<typeof coverLetterEditSchema>
+export const coverLetterActionResultSchema = z.object({ ok: z.boolean(), message: z.string(), letter: coverLetterRevisionSchema.optional() }).strict()
+export type CoverLetterActionResult = z.infer<typeof coverLetterActionResultSchema>
 
 /** A model-facing payload contains only approved posting text and bounded source passages. */
 export const coverLetterModelResponseSchema = z.object({ paragraphs: z.array(z.object({ text: z.string().trim().min(1).max(3000), citations: z.array(coverLetterCitationSchema).min(1).max(20) }).strict()).min(1).max(8) }).strict()

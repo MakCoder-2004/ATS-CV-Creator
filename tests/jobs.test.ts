@@ -402,7 +402,7 @@ test('v3 backup byte ledger matches Unicode posting JSON and restores exact acce
   if (!saved.ok) throw new Error(saved.error.message)
   const backup = workbench.backup.createBackup()
   const decoded = JSON.parse(backup)
-  expect(decoded.version).toBe(3)
+  expect(decoded.version).toBe(4)
   expect(Buffer.byteLength(backup, 'utf8')).toBe((await workbench.api.getWorkspaceBackupStatus()).bytes)
   const restore = workbench.backup.previewRestore(backup)
   workbench.backup.applyRestore(restore.token, safety => safety)

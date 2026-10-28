@@ -73,6 +73,9 @@ test('complete workspace backup restores draft revisions, evidence, posting, pre
   const proposal = await active.api.regenerateDraft(nextConsent.token, { kind: 'section', section: 'skills' })
   expect(proposal).toMatchObject({ ok: true, proposal: { status: 'pending' } })
   const backup = active.backup.createBackup()
+  expect(JSON.parse(backup).version).toBe(4)
+  expect(Object.keys(JSON.parse(backup).tables)).toContain('cover_letter_revisions')
+  expect(Object.keys(JSON.parse(backup).tables)).toContain('cover_letter_operations')
   expect(JSON.parse(backup).tables.draft_revisions.rows.length).toBeGreaterThan(0)
   expect(JSON.parse(backup).tables.langgraph_checkpoints.rows.length).toBeGreaterThan(0)
   expect(backup).not.toContain('encrypted_credentials')
@@ -177,19 +180,19 @@ test('captured v3 backup refuses a changed consent schema before migration', asy
   const { workbench } = fixture()
   const backup = JSON.parse(readFileSync(join(process.cwd(), 'tests/fixtures/cover-letter-legacy-v3.json'), 'utf8'))
   backup.tables.outbound_consents.schema = 'CREATE TABLE outbound_consents (id TEXT PRIMARY KEY, run_id TEXT)'
-  expect(() => workbench.backup.previewRestore(JSON.stringify(backup))).toThrow(/consent schema is incompatible/i)
+  expect(() => workbench.backup.previewRestore(JSON.stringify(backup))).toThrow(/schema is incompatible/i)
 })
 
 test('released v3 backups without the contact field restore contacts as empty', async () => {
   const { dir, workbench } = fixture()
-  const saved = await workbench.api.saveJob({ title: 'Legacy v3 role', company: 'Example', description: 'Historical posting text.' })
-  if (!saved.ok) throw new Error('Job fixture failed')
-  const oldV3 = JSON.parse(workbench.backup.createBackup())
+  const oldV3 = JSON.parse(readFileSync(join(process.cwd(), 'tests/fixtures/cover-letter-legacy-v3.json'), 'utf8'))
   expect(oldV3.version).toBe(3)
-  for (const row of oldV3.tables.jobs.rows) { const record = JSON.parse(row.data); delete record.contacts; row.data = JSON.stringify(record) }
+  const historicalJob = JSON.parse(oldV3.tables.jobs.rows[0].data)
+  delete historicalJob.contacts
+  oldV3.tables.jobs.rows[0].data = JSON.stringify(historicalJob)
   const restore = workbench.backup.previewRestore(JSON.stringify(oldV3))
   workbench.backup.applyRestore(restore.token, safetyBackup(dir))
-  expect(await workbench.api.openJob(saved.value.id)).toMatchObject({ contacts: [] })
+  expect(await workbench.api.openJob(historicalJob.id)).toMatchObject({ contacts: [] })
 })
 
 test('released v2 backups retain historical JSON and HTML provenance through v3 restore without fetching', async () => {
@@ -308,6 +311,23 @@ test('restore rejects oversized aggregate, table, row, and posting-revision inpu
   expect(await workbench.api.openJob(saved.value.id)).toEqual(saved.value)
   workbench.close(); instances.pop()
   expect(await open(dir).api.openJob(saved.value.id)).toEqual(saved.value)
+})
+
+test('cover-letter rows use the shared backup capacity trigger and roll back on overflow', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cv-tailor-letter-capacity-')); directories.push(dir)
+  const wb = createWorkbench(dir, undefined, scripted, { workspaceBackupMaxBytes: 20_000 }); instances.push(wb)
+  const job = await wb.api.saveJob({ title: 'Capacity role', company: 'Example', description: 'Keep this posting.' })
+  if (!job.ok) throw new Error('Job fixture failed')
+  const status = await wb.api.getWorkspaceBackupStatus()
+  const db = new Database(join(dir, 'workbench.sqlite'))
+  db.function('cv_workspace_backup_row_bytes', { deterministic: true }, (rowJson: string) => Buffer.byteLength(JSON.stringify(JSON.parse(rowJson)), 'utf8'))
+  try {
+    const id = '30000000-0000-4000-8000-000000000001', run = '40000000-0000-4000-8000-000000000001', consent = '50000000-0000-4000-8000-000000000001'
+    const now = new Date().toISOString(), oversize = 'x'.repeat(status.maxBytes - status.bytes + 500)
+    expect(() => db.prepare('INSERT INTO cover_letter_operations(id,job_id,parent_run_id,consent_id,status,data,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)').run(id, job.value.id, run, consent, 'prepared', oversize, now, now)).toThrow(/WORKSPACE_BACKUP_CAPACITY/)
+    expect(db.prepare('SELECT COUNT(*) AS count FROM cover_letter_operations').get()).toEqual({ count: 0 })
+    expect((await wb.api.getWorkspaceBackupStatus()).bytes).toBe(status.bytes)
+  } finally { db.close() }
 })
 
 test('failed database write rolls back the full replacement, including current credentials', async () => {

@@ -16,7 +16,7 @@ import { hasSavedJobApplicationUrlInput, jobInputSchema, jobRecordSchema, jobSav
 import type { JobRecord } from '../shared/jobs'
 import { profileExchangeSchema, type ProfileExchange } from '../shared/profile-exchange'
 import { prepareOutboundBundle, type ConsentSource, type EvidenceScopeRevision, type OutboundBundle, type OutboundPayload } from '../shared/outbound-consent'
-import { coverLetterPurposeSchema, type CoverLetterPurpose } from '../shared/cover-letter'
+import { coverLetterAcknowledgmentMaterial, coverLetterAcknowledgmentSchema, coverLetterActionResultSchema, coverLetterEditSchema, coverLetterOperationSchema, coverLetterPurposeSchema, coverLetterRecipientSchema, coverLetterRevisionSchema, type CoverLetterPurpose } from '../shared/cover-letter'
 import { createOutboundConsentEngine } from './outbound-consent'
 import type { OutboundConsentAction, OutboundConsentPreview } from '../shared/outbound-consent-contract'
 import { regenerationProposalSchema, regenerationTargetSchema, type RegenerationTarget, type RegenerationProposal } from '../shared/regeneration'
@@ -131,7 +131,9 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
     CREATE TABLE IF NOT EXISTS generation_recovery_extensions (id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, prior_run_limit INTEGER NOT NULL, new_run_limit INTEGER NOT NULL, prior_time_limit_ms INTEGER NOT NULL, new_time_limit_ms INTEGER NOT NULL, recorded_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS draft_revisions (id TEXT PRIMARY KEY, job_id TEXT NOT NULL, revision INTEGER NOT NULL, data TEXT NOT NULL, UNIQUE(job_id, revision));
     CREATE TABLE IF NOT EXISTS regeneration_proposals (id TEXT PRIMARY KEY, job_id TEXT NOT NULL, status TEXT NOT NULL, data TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS document_fit_reports (job_id TEXT PRIMARY KEY, data TEXT NOT NULL);`)
+    CREATE TABLE IF NOT EXISTS document_fit_reports (job_id TEXT PRIMARY KEY, data TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS cover_letter_revisions (id TEXT PRIMARY KEY, job_id TEXT NOT NULL, revision INTEGER NOT NULL, data TEXT NOT NULL, UNIQUE(job_id, revision));
+    CREATE TABLE IF NOT EXISTS cover_letter_operations (id TEXT PRIMARY KEY, job_id TEXT NOT NULL, parent_run_id TEXT NOT NULL, consent_id TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('prepared','dispatched','saved','failed','cancelled','uncertain')), data TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);`)
   if (!(db.pragma('table_info(outbound_consents)') as Array<{ name: string }>).some(column => column.name === 'job_id')) {
     db.exec('ALTER TABLE outbound_consents ADD COLUMN job_id TEXT')
   }
@@ -144,13 +146,26 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
   if (!consentColumns.some(column => column.name === 'purpose')) db.exec("ALTER TABLE outbound_consents ADD COLUMN purpose TEXT NOT NULL DEFAULT 'cv'")
   if (!consentColumns.some(column => column.name === 'purpose_hash')) db.exec("ALTER TABLE outbound_consents ADD COLUMN purpose_hash TEXT NOT NULL DEFAULT ''")
   db.prepare('INSERT OR IGNORE INTO schema_migrations (version) VALUES (10)').run()
-  const purposeRows = db.prepare("SELECT id,scope_hash,purpose,purpose_hash FROM outbound_consents WHERE purpose_hash='' OR purpose_version<>1 OR purpose NOT IN ('cv','cv+cover-letter','cover-letter-only')").all() as Array<{ id: string; scope_hash: string; purpose: string; purpose_hash: string }>
-  const updateLegacyPurpose = db.prepare('UPDATE outbound_consents SET purpose_version=1,purpose=?,purpose_hash=? WHERE id=?')
+  const purposeRows = db.prepare('SELECT id,scope_hash,purpose_version,purpose,purpose_hash FROM outbound_consents').all() as Array<{ id: string; scope_hash: string; purpose_version: number; purpose: string; purpose_hash: string }>
+  const updateConsentPurpose = db.prepare('UPDATE outbound_consents SET purpose_version=1,purpose=?,purpose_hash=?,revoked=CASE WHEN ? THEN 1 ELSE revoked END WHERE id=?')
   for (const row of purposeRows) {
-    const purpose = coverLetterPurposeSchema.safeParse(row.purpose).success ? row.purpose as CoverLetterPurpose : 'cv'
-    updateLegacyPurpose.run(purpose, createHash('sha256').update(JSON.stringify({ version: 1, scopeHash: row.scope_hash, purpose })).digest('hex'), row.id)
+    const parsedPurpose = coverLetterPurposeSchema.safeParse(row.purpose)
+    const legacyCv = row.purpose_hash === '' && row.purpose_version === 1 && row.purpose === 'cv'
+    const purpose = legacyCv ? 'cv' : parsedPurpose.success ? parsedPurpose.data : 'cv'
+    const expected = createHash('sha256').update(JSON.stringify({ version: 1, scopeHash: row.scope_hash, purpose })).digest('hex')
+    if (!legacyCv && parsedPurpose.success && row.purpose_version === 1 && row.purpose_hash === expected) continue
+    const corrupt = !legacyCv
+    updateConsentPurpose.run(corrupt ? 'cv' : purpose, createHash('sha256').update(JSON.stringify({ version: 1, scopeHash: row.scope_hash, purpose: corrupt ? 'cv' : purpose })).digest('hex'), corrupt ? 1 : 0, row.id)
   }
-  db.prepare('INSERT OR IGNORE INTO schema_migrations (version) VALUES (11)').run()
+  db.prepare('INSERT OR IGNORE INTO schema_migrations (version) VALUES (11), (12)').run()
+  const strandedLetterOperations = db.prepare("SELECT id,data,status FROM cover_letter_operations WHERE status IN ('prepared','dispatched')").all() as Array<{ id: string; data: string; status: string }>
+  const reconcileLetterOperation = db.prepare('UPDATE cover_letter_operations SET status=?,data=?,updated_at=? WHERE id=?')
+  for (const row of strandedLetterOperations) {
+    const operation = coverLetterOperationSchema.parse(JSON.parse(row.data))
+    const status = row.status === 'dispatched' ? 'uncertain' : 'cancelled'
+    const updatedAt = new Date().toISOString()
+    reconcileLetterOperation.run(status, JSON.stringify({ ...operation, status, updatedAt }), updatedAt, row.id)
+  }
   const providerOutcomeColumns = db.pragma('table_info(provider_attempt_outcomes)') as Array<{ name: string }>
   if (!providerOutcomeColumns.some(column => column.name === 'checkpointed_at')) db.exec('ALTER TABLE provider_attempt_outcomes ADD COLUMN checkpointed_at TEXT')
   db.prepare('INSERT OR IGNORE INTO schema_migrations (version) VALUES (1), (2), (4), (5), (6), (7)').run()
@@ -410,10 +425,19 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
     const values = (table: string, column: string, keys: string[]) => keys.length
       ? db.prepare(`SELECT * FROM ${table} WHERE ${column} IN (SELECT value FROM json_each(?)) ORDER BY rowid`).all(JSON.stringify(keys))
       : []
-    const jobTables = ['posting_analysis_cache', 'analysis_run_state', 'generation_recovery', 'draft_revisions', 'regeneration_proposals', 'document_fit_reports'] as const
+    const jobTables = ['posting_analysis_cache', 'analysis_run_state', 'generation_recovery', 'draft_revisions', 'regeneration_proposals', 'document_fit_reports', 'cover_letter_revisions', 'cover_letter_operations'] as const
     const owned = Object.fromEntries(jobTables.map(table => [table, values(table, 'job_id', ids)])) as Record<string, Array<Record<string, unknown>>>
+    for (const row of owned.cover_letter_revisions) {
+      try { const letter = coverLetterRevisionSchema.parse(JSON.parse(String(row.data))); if (letter.id !== row.id || letter.jobId !== row.job_id || letter.revision !== row.revision) return null } catch { return null }
+    }
+    for (const row of owned.cover_letter_operations) {
+      try {
+        const operation = coverLetterOperationSchema.parse(JSON.parse(String(row.data)))
+        if (operation.id !== row.id || operation.jobId !== row.job_id || operation.parentRunId !== row.parent_run_id || operation.consentId !== row.consent_id || operation.status !== row.status) return null
+      } catch { return null }
+    }
     const ownedConsents = values('outbound_consents', 'job_id', ids) as Array<{ run_id: string }>
-    const runIds = [...new Set([...owned.posting_analysis_cache, ...owned.analysis_run_state, ...owned.generation_recovery, ...ownedConsents].map(row => row.run_id as string).concat([...pendingOutbound.values()].filter(item => ids.includes(item.jobId)).map(item => item.runId)))]
+    const runIds = [...new Set([...owned.posting_analysis_cache, ...owned.analysis_run_state, ...owned.generation_recovery, ...ownedConsents].map(row => row.run_id as string).concat(owned.cover_letter_operations.map(row => row.parent_run_id as string), [...pendingOutbound.values()].filter(item => ids.includes(item.jobId)).map(item => item.runId)))]
     const runTables = ['outbound_consents', 'analysis_attempts', 'provider_attempt_outcomes', 'generation_recovery_extensions'] as const
     for (const table of runTables) owned[table] = values(table, 'run_id', runIds) as Array<Record<string, unknown>>
     owned.langgraph_checkpoints = values('langgraph_checkpoints', 'thread_id', runIds) as Array<Record<string, unknown>>
@@ -421,7 +445,34 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
     const pending = [...pendingOutbound.entries()].filter(([, item]) => ids.includes(item.jobId)).map(([token, item]) => [token, item.jobId, item.runId, item.consentId]).sort((a, b) => String(a[0]).localeCompare(String(b[0])))
     return { jobs: selected as Array<{ id: string; data: string }>, owned, runIds, fingerprint: createHash('sha256').update(JSON.stringify({ selected, owned, pending })).digest('hex') }
   }
-  const deletionBusy = (ids: string[]) => ids.find(id => unsettledRunsByJob.has(id) || externalJobOperations.has(id))
+  const deletionBusy = (ids: string[]) => ids.find(id => unsettledRunsByJob.has(id) || externalJobOperations.has(id) || db.prepare("SELECT 1 FROM cover_letter_operations WHERE job_id=? AND status IN ('prepared','dispatched') LIMIT 1").get(id))
+  const readCoverLetter = (jobId: string): ReturnType<typeof coverLetterRevisionSchema.parse> | null => {
+    const row = db.prepare('SELECT data FROM cover_letter_revisions WHERE job_id=? ORDER BY revision DESC LIMIT 1').get(jobId) as { data: string } | undefined
+    return row ? coverLetterRevisionSchema.parse(JSON.parse(row.data)) : null
+  }
+  const coverLetterCurrentStatus = (letter: ReturnType<typeof coverLetterRevisionSchema.parse>): string | null => {
+    const source = currentConsentSource(letter.jobId)
+    if (!source) return 'The saved job or Pi model is no longer available.'
+    const bundle = prepareOutboundBundle(source)
+    if (letter.bindings.scopeHash !== bundle.scopeHash || letter.bindings.postingUpdatedAt !== source.job.revision || letter.bindings.modelHash !== createHash('sha256').update(JSON.stringify(source.model)).digest('hex')) return 'The job, profile, model, or source scope changed. Review a new letter before approval.'
+    const available = new Map<string, { revision: number; category: string; parentId?: string }>()
+    const add = (id: string, revision: number, category: string, parentId?: string) => available.set(id, { revision, category, ...(parentId ? { parentId } : {}) })
+    const profile = readProfile(), experience = readExperience()
+    profile.skills.forEach(item => add(item.id, item.revision, 'skill'))
+    profile.education.forEach(item => add(item.id, item.revision, 'education'))
+    experience.experience.forEach(item => { add(item.id, item.revision, 'experience'); item.factualItems.forEach(child => add(child.id, child.revision, 'experience', item.id)) })
+    experience.projects.forEach(item => { add(item.id, item.revision, 'project'); item.factualItems.forEach(child => add(child.id, child.revision, 'project', item.id)); item.technologies.forEach(child => add(child.id, child.revision, 'project', item.id)) })
+    for (const bound of letter.bindings.sources) {
+      const current = available.get(bound.evidenceId)
+      if (!current || current.revision !== bound.revision || current.category !== bound.category || current.parentId !== bound.parentId) return 'A cited career fact changed or disappeared. Review the source passages again.'
+    }
+    const operation = db.prepare('SELECT data FROM cover_letter_operations WHERE id=? AND job_id=? AND parent_run_id=? AND status=?').get(letter.operationId, letter.jobId, letter.parentRunId, 'saved') as { data: string } | undefined
+    if (!operation) return 'The cover-letter operation is missing or unsettled.'
+    const draft = db.prepare('SELECT 1 FROM draft_revisions WHERE id=? AND job_id=?').get(letter.cvRevisionId, letter.jobId)
+    if (!draft) return 'The originating CV revision is missing.'
+    return null
+  }
+  const acknowledgmentHash = (paragraph: ReturnType<typeof coverLetterRevisionSchema.parse>['paragraphs'][number], sources: ReturnType<typeof coverLetterRevisionSchema.parse>['bindings']['sources']) => createHash('sha256').update(coverLetterAcknowledgmentMaterial(paragraph, sources)).digest('hex')
   const api: WorkbenchStorageAPI = {
     async getWorkspaceBackupStatus() { return backupEngine.readBackupStatus() },
     async getSettings() {
@@ -991,13 +1042,14 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
           for (const table of ['outbound_consents', 'posting_analysis_cache', 'analysis_run_state', 'generation_recovery'] as const) {
             if (state.runIds.length && db.prepare(`SELECT 1 FROM ${table} WHERE run_id IN (SELECT value FROM json_each(?)) AND job_id IS NOT NULL AND job_id NOT IN (SELECT value FROM json_each(?)) LIMIT 1`).get(JSON.stringify(state.runIds), JSON.stringify(preview.ids))) throw new Error('STALE_DELETION')
           }
+          if (state.runIds.length && db.prepare('SELECT 1 FROM cover_letter_operations WHERE parent_run_id IN (SELECT value FROM json_each(?)) AND job_id NOT IN (SELECT value FROM json_each(?)) LIMIT 1').get(JSON.stringify(state.runIds), JSON.stringify(preview.ids))) throw new Error('STALE_DELETION')
           const remove = (table: string, column: string, keys: string[]) => {
             if (keys.length) db.prepare(`DELETE FROM ${table} WHERE ${column} IN (SELECT value FROM json_each(?))`).run(JSON.stringify(keys))
           }
           for (const table of ['langgraph_checkpoint_writes', 'langgraph_checkpoints']) remove(table, 'thread_id', state.runIds)
           for (const table of ['generation_recovery_extensions', 'provider_attempt_outcomes', 'analysis_attempts', 'outbound_consents']) remove(table, 'run_id', state.runIds)
           remove('outbound_consents', 'job_id', preview.ids)
-          for (const table of ['document_fit_reports', 'regeneration_proposals', 'draft_revisions', 'generation_recovery', 'analysis_run_state', 'posting_analysis_cache']) remove(table, 'job_id', preview.ids)
+          for (const table of ['cover_letter_operations', 'cover_letter_revisions', 'document_fit_reports', 'regeneration_proposals', 'draft_revisions', 'generation_recovery', 'analysis_run_state', 'posting_analysis_cache']) remove(table, 'job_id', preview.ids)
           remove('jobs', 'id', preview.ids)
           return state
         })()
@@ -1032,6 +1084,18 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       if (!purpose.success) return outboundConsentPreviewSchema.parse({ ok: false, message: 'Choose a valid document purpose before reviewing outgoing data.' })
       const source = currentConsentSource(jobId)
       if (!source) return outboundConsentPreviewSchema.parse({ ok: false, message: scriptedTransport ? 'That saved job is unavailable. Choose another job.' : 'Choose an available Pi model and thinking level in Settings before reviewing outgoing data.' })
+      const replacingPurpose = [...pendingOutbound.values()].some(prior => prior.jobId === jobId && prior.purpose !== purpose.data)
+      if (replacingPurpose && (unsettledRunsByJob.has(jobId) || activeAnalysisByJob.has(jobId))) return outboundConsentPreviewSchema.parse({ ok: false, message: 'Cancel or finish the active job operation before changing document purpose.' })
+      for (const [priorToken, prior] of pendingOutbound) if (prior.jobId === jobId && prior.purpose !== purpose.data) {
+        if (prior.consentId) {
+          outboundEngine.revoke(prior.consentId)
+          db.prepare('UPDATE outbound_consents SET revoked=1 WHERE id=?').run(prior.consentId)
+        }
+        dispatcher.cancel(prior.runId)
+        startedAnalysisTokens.delete(priorToken)
+        startedRegenerationTokens.delete(priorToken)
+        pendingOutbound.delete(priorToken)
+      }
       try {
         const bundle = prepareOutboundBundle(source)
         const token = randomUUID(), runId = randomUUID()
@@ -1768,6 +1832,62 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       const contentHash = createHash('sha256').update(JSON.stringify(canonical)).digest('hex')
       if (!report?.passed || !fit || fit.overflow || fit.actualPages > fit.targetPages || draft.approval.contentHash !== contentHash || draft.approval.evidenceHash !== report.evidenceRevisionHash || draft.approval.targetPages !== canonical.targetPages || draft.approval.checkHash !== createHash('sha256').update(JSON.stringify({ draftId: report.draftId, draftRevision: report.draftRevision, evidenceRevisionHash: report.evidenceRevisionHash, passed: report.passed, findings: report.findings })).digest('hex')) return { ok: false, message: 'Approval is stale or current checks/page fit no longer pass. Review and approve the current document again.' }
       return { ok: true, message: 'Current approved document is eligible for export.', document: canonical }
+    },
+    async getCoverLetter(jobId: string) {
+      if (!uuidSchema.safeParse(jobId).success) return null
+      return readCoverLetter(jobId)
+    },
+    async editCoverLetter(input) {
+      const parsed = coverLetterEditSchema.safeParse(input)
+      if (!parsed.success) return coverLetterActionResultSchema.parse({ ok: false, message: 'The cover-letter edit is invalid or contains unsupported authority fields.' })
+      const prior = readCoverLetter(parsed.data.jobId)
+      if (!prior || prior.id !== parsed.data.letterId) return coverLetterActionResultSchema.parse({ ok: false, message: 'This cover-letter revision is no longer current.' })
+      const stale = coverLetterCurrentStatus(prior)
+      if (stale) return coverLetterActionResultSchema.parse({ ok: false, message: stale })
+      if (parsed.data.paragraphs.length !== prior.paragraphs.length || parsed.data.paragraphs.some((paragraph, index) => paragraph.id !== prior.paragraphs[index]?.id)) return coverLetterActionResultSchema.parse({ ok: false, message: 'Keep the current paragraph identities while editing their wording.' })
+      const { fit: _fit, approvedAt: _approvedAt, ...base } = prior
+      const saved = coverLetterRevisionSchema.parse({ ...base, id: randomUUID(), revision: prior.revision + 1, recipient: parsed.data.recipient ?? undefined, paragraphs: parsed.data.paragraphs, acknowledgments: {}, approved: false, createdAt: new Date().toISOString() })
+      try {
+        db.prepare('INSERT INTO cover_letter_revisions(id,job_id,revision,data) VALUES(?,?,?,?)').run(saved.id, saved.jobId, saved.revision, JSON.stringify(saved))
+        return coverLetterActionResultSchema.parse({ ok: true, message: 'The cover letter was edited locally. Review its paragraphs again.', letter: saved })
+      } catch { return coverLetterActionResultSchema.parse({ ok: false, message: 'The cover-letter edit could not be saved.' }) }
+    },
+    async setCoverLetterRecipient(input) {
+      const parsed = coverLetterRecipientSchema.safeParse(input)
+      if (!parsed.success) return coverLetterActionResultSchema.parse({ ok: false, message: 'The local recipient is invalid.' })
+      const prior = readCoverLetter(parsed.data.jobId)
+      if (!prior || prior.id !== parsed.data.letterId) return coverLetterActionResultSchema.parse({ ok: false, message: 'This cover-letter revision is no longer current.' })
+      return this.editCoverLetter({ jobId: parsed.data.jobId, letterId: parsed.data.letterId, paragraphs: prior.paragraphs, recipient: parsed.data.recipient })
+    },
+    async acknowledgeCoverLetterParagraph(input) {
+      const parsed = coverLetterAcknowledgmentSchema.safeParse(input)
+      if (!parsed.success) return coverLetterActionResultSchema.parse({ ok: false, message: 'A paragraph acknowledgment must be an explicit current decision.' })
+      const letter = readCoverLetter(parsed.data.jobId)
+      if (!letter || letter.id !== parsed.data.letterId) return coverLetterActionResultSchema.parse({ ok: false, message: 'This cover-letter revision is no longer current.' })
+      const stale = coverLetterCurrentStatus(letter)
+      if (stale) return coverLetterActionResultSchema.parse({ ok: false, message: stale })
+      const paragraph = letter.paragraphs.find(item => item.id === parsed.data.paragraphId)
+      if (!paragraph) return coverLetterActionResultSchema.parse({ ok: false, message: 'The paragraph is not part of the current cover letter.' })
+      const acknowledgments = { ...letter.acknowledgments, [paragraph.id]: acknowledgmentHash(paragraph, letter.bindings.sources) }
+      const saved = coverLetterRevisionSchema.parse({ ...letter, acknowledgments, approved: false, approvedAt: undefined })
+      db.prepare('UPDATE cover_letter_revisions SET data=? WHERE id=? AND job_id=?').run(JSON.stringify(saved), saved.id, saved.jobId)
+      return coverLetterActionResultSchema.parse({ ok: true, message: 'The current paragraph wording and source references were acknowledged locally.', letter: saved })
+    },
+    async checkCoverLetter(jobId) {
+      const letter = readCoverLetter(jobId)
+      if (!letter) return coverLetterActionResultSchema.parse({ ok: false, message: 'No cover-letter draft is saved for this job.' })
+      const stale = coverLetterCurrentStatus(letter)
+      if (stale) return coverLetterActionResultSchema.parse({ ok: false, message: stale, letter })
+      return coverLetterActionResultSchema.parse({ ok: letter.findings.length === 0, message: letter.findings.length ? 'Resolve the known cover-letter findings before approval.' : 'Current source bindings and paragraph citations are available for review.', letter })
+    },
+    async approveCoverLetter(jobId) {
+      const letter = readCoverLetter(jobId)
+      if (!letter) return coverLetterActionResultSchema.parse({ ok: false, message: 'No cover-letter draft is saved for this job.' })
+      const stale = coverLetterCurrentStatus(letter)
+      if (stale) return coverLetterActionResultSchema.parse({ ok: false, message: stale, letter })
+      if (letter.findings.length) return coverLetterActionResultSchema.parse({ ok: false, message: 'Resolve all known cover-letter findings before approval.', letter })
+      if (letter.paragraphs.some(paragraph => letter.acknowledgments[paragraph.id] !== acknowledgmentHash(paragraph, letter.bindings.sources))) return coverLetterActionResultSchema.parse({ ok: false, message: 'Acknowledge every current paragraph and its bound source passages before approval.', letter })
+      return coverLetterActionResultSchema.parse({ ok: false, message: 'This backend has no main-generated PDF fit measurement. Cover-letter approval is unavailable until compilation is implemented.', letter })
     },
     async getDraft(jobId: string) {
       if (!uuidSchema.safeParse(jobId).success) return null

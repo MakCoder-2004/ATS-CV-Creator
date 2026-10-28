@@ -17,6 +17,7 @@ import { mutateDraftRecordInputSchema } from '../shared/draft-records'
 import { profilePdfApplyResultSchema, profilePdfPreviewSchema, profilePdfProposalSchema, profilePdfRebaseResultSchema } from '../shared/profile-pdf-import'
 import { profileAiConsentActionSchema, profileAiConsentPreviewSchema, profileAiRunResultSchema } from '../shared/profile-ai-structuring'
 import { workspaceBackupStatusSchema } from '../shared/workspace-backup'
+import { coverLetterAcknowledgmentSchema, coverLetterActionResultSchema, coverLetterEditSchema, coverLetterRecipientSchema, coverLetterRevisionSchema } from '../shared/cover-letter'
 import { researchSearchKeyStatusSchema } from '../shared/research-search-settings'
 
 const workspaceResult = z.object({ ok: z.boolean(), cancelled: z.boolean(), message: z.string() }).strict()
@@ -134,6 +135,12 @@ const api: WorkbenchAPI = Object.freeze({
   async startAnalysis(consentToken: string): Promise<AnalysisResult> { return analysisResultSchema.parse(await ipcRenderer.invoke('analysis:start', uuidSchema.parse(consentToken))) },
   async getAnalysis(jobId: string) { const value = await ipcRenderer.invoke('analysis:get', analysisIdSchema.parse(jobId)); return value === null ? null : analysisResultSchema.parse(value) },
   async generateDraft(consentToken: string, pageTarget: 1 | 2 = 1) { if (pageTarget !== 1 && pageTarget !== 2) throw new Error('Choose a one- or two-page target.'); return draftGenerationSchema.parse(await ipcRenderer.invoke('draft:generate', uuidSchema.parse(consentToken), pageTarget)) },
+  async getCoverLetter(jobId: string) { const value = await ipcRenderer.invoke('cover-letter:get', uuidSchema.parse(jobId)); return value === null ? null : coverLetterRevisionSchema.parse(value) },
+  async editCoverLetter(input: import('../shared/cover-letter').CoverLetterEdit) { return coverLetterActionResultSchema.parse(await ipcRenderer.invoke('cover-letter:edit', coverLetterEditSchema.parse(input))) },
+  async setCoverLetterRecipient(input: import('../shared/cover-letter').CoverLetterRecipient) { return coverLetterActionResultSchema.parse(await ipcRenderer.invoke('cover-letter:recipient', coverLetterRecipientSchema.parse(input))) },
+  async acknowledgeCoverLetterParagraph(input: import('../shared/cover-letter').CoverLetterAcknowledgment) { return coverLetterActionResultSchema.parse(await ipcRenderer.invoke('cover-letter:paragraph:acknowledge', coverLetterAcknowledgmentSchema.parse(input))) },
+  async checkCoverLetter(jobId: string) { return coverLetterActionResultSchema.parse(await ipcRenderer.invoke('cover-letter:check', uuidSchema.parse(jobId))) },
+  async approveCoverLetter(jobId: string) { return coverLetterActionResultSchema.parse(await ipcRenderer.invoke('cover-letter:approve', uuidSchema.parse(jobId))) },
   async renewDraftReview(jobId: string) { return draftGenerationSchema.parse(await ipcRenderer.invoke('draft:renew-review', uuidSchema.parse(jobId))) },
   async regenerateDraft(consentToken: string, target: Parameters<WorkbenchAPI['regenerateDraft']>[1]) { return regenerationResultSchema.parse(await ipcRenderer.invoke('draft:regenerate', uuidSchema.parse(consentToken), regenerationTargetSchema.parse(target))) },
   async getRegenerationProposal(jobId: string) { const value = await ipcRenderer.invoke('draft:regeneration:get', analysisIdSchema.parse(jobId)); return value === null ? null : regenerationProposalSchema.parse(value) },
