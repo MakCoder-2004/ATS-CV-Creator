@@ -1,0 +1,192 @@
+{
+  "schemaVersion": 1,
+  "entry": "cover-letter.tex",
+  "contentFilename": "content.tex",
+  "assets": [
+    {
+      "root": "application",
+      "path": "cover-letter.tex",
+      "sha256": "2fb7392510f590940b8907c8f462c54f7ea3d42d7a3a6f102f739aad938790ee"
+    },
+    {
+      "root": "toolchain",
+      "path": "bin/windows/pdflatex.exe",
+      "sha256": "4b582d0be712b74ae5090aba2d7338f185082f6446cbee7b26115e8ab6e21184"
+    },
+    {
+      "root": "toolchain",
+      "path": "cv-tailor-toolchain.json",
+      "sha256": "cc3a071414f7a9e23a15403a1a2282e0596719ae40b6d84d102efa3e9c0a11f1"
+    },
+    {
+      "root": "toolchain",
+      "path": "texmf-dist/fonts/enc/dvips/lato/a_cl4kdn.enc",
+      "sha256": "e85cd49ef625c8ddfdfc3a18a4f5a3e2c1e5622f9289c014d3b4b488e5ec3d6a"
+    },
+    {
+      "root": "toolchain",
+      "path": "texmf-dist/fonts/tfm/jknappen/ec/ecrm1095.tfm",
+      "sha256": "6a3850cd71bbb2f43d98b7eb6b47f925de25626f5f4a0648c2d9d7b4b774eb2a"
+    },
+    {
+      "root": "toolchain",
+      "path": "texmf-dist/fonts/tfm/public/cm/cmr10.tfm",
+      "sha256": "87f2d8981927644cbecaf3d639e96e348ea4e7be49d8804468bd8ba9ff3f5244"
+    },
+    {
+      "root": "toolchain",
+      "path": "texmf-dist/fonts/tfm/typoland/lato/Lato-Bold-T1-TLF--base.tfm",
+      "sha256": "aab0881fb36c8db48ab01ff0007d2adfc3d0ee3d94e0cc78933d201d79766c8d"
+    },
+    {
+      "root": "toolchain",
+      "path": "texmf-dist/fonts/tfm/typoland/lato/Lato-Bold-T1-TLF.tfm",
+      "sha256": "6f62cb0a1a3b12217e2d2d3cb9a8b9b53e5fe309cf6ebcc5f79cbeead89dbb5d"
+    },
+    {
+      "root": "toolchain",
+      "path": "texmf-dist/fonts/tfm/typoland/lato/Lato-Regular-T1-TLF--base.tfm",
+      "sha256": "94fa71ee54d4793e85947bd491d82527dfda3d2d75ab3250e8313b5c54335dad"
+    },
+    {
+      "root": "toolchain",
+      "path": "texmf-dist/fonts/tfm/typoland/lato/Lato-Regular-T1-TLF.tfm",
+      "sha256": "61fb5095f5a93efa69f294cdc944833630816b36cf9b6b76420cdf05db0bff3d"
+    },
+    {
+      "root": "toolchain",
+      "path": "texmf-dist/fonts/type1/typoland/lato/Lato-Bold.pfb",
+      "sha256": "e82b4c486105e7e43d371ed8df6497f8981ae3793edfad4dfbaaf818e13ee889"
+    },
+    {
+      "root": "toolchain",
+      "path": "texmf-dist/fonts/type1/typoland/lato/Lato-Regular.pfb",
+      "sha256": "40a5fe752b7457ad656426b09c7fbfbe856e071d646b99d48e4ced51b48d79de"
+    },
+    {
+      "root": "toolchain",
+      "path": "texmf-dist/fonts/vf/typoland/lato/Lato-Bold-T1-TLF.vf",
+      "sha256": "26d30e2e0dd198d88856b447cd8bfc4f2d2719b1c303c1881378ed18c5e46431"
+    },
+    {
+      "root": "toolchain",
+      "path": "texmf-dist/fonts/vf/typoland/lato/Lato-Regular-T1-TLF.vf",
+      "sha256": "92a9f73f40656e7abe2f88f48bcb71ae037b7ab10d6784071c9e008e4434b8c8"
+    },
+    {
+      "root": "toolchain",
+      "path": "texmf-dist/tex/generic/iftex/ifluatex.sty",
+      "sha256": "1f1dd9c7cc37bfc574fdf4103a4b8e476e31a5058b0214f14985d2f5f018a221"
+    },
+    {
+      "root": "toolchain",
+      "path": "texmf-dist/tex/generic/iftex/iftex.sty",
+      "sha256": "0dc0cefe2131f82330a3b8e62034c184455329d7d9bb94abe21e740821630381"
+    },
+    {
+      "root": "toolchain",
+      "path": "texmf-dist/tex/generic/iftex/ifvtex.sty",
+      "sha256": "1138730b9ad7d9f664b4760a4ea0ae0945afd21c006b76b67e623e863bbf3756"
+    },
+    {
+      "root": "toolchain",
+      "path": "texmf-dist/tex/generic/iftex/ifxetex.sty",
+      "sha256": "b4729967ca572a3fbbcdc36f0e0764a53ae0855a0b7c3e29222ca119c054bd6e"
+    },
+    {
+      "root": "toolchain",
+      "path": "texmf-dist/tex/generic/pdftex/glyphtounicode.tex",
+      "sha256": "395e568c1f4db5e89013e6aa4aac22a668b543256a20b4349436070356870851"
+    },
+    {
+      "root": "toolchain",
+      "path": "texmf-dist/tex/generic/xkeyval/keyval.tex",
+      "sha256": "8e19ce03ea9b83fe1a69089f08e16835b1f2ed6baf19f635aaf7cc4d27155f5d"
+    },
+    {
+      "root": "toolchain",
+      "path": "texmf-dist/tex/generic/xkeyval/xkeyval.tex",
+      "sha256": "adec9c8e36d791b131d9eefd00726d58f531a5a4b8c0ef8f87ffa497d4b16cb8"
+    },
+    {
+      "root": "toolchain",
+      "path": "texmf-dist/tex/generic/xkeyval/xkvutils.tex",
+      "sha256": "a49b792fa91181b8965091bca36e4e25d54f3e95d5ff7aac7c2f6a425ed7df0e"
+    },
+    {
+      "root": "toolchain",
+      "path": "texmf-dist/tex/latex/base/article.cls",
+      "sha256": "c09f5982893f8a092e69435caa151eef0d3cb4d7495abf23f08b640191cf81f6"
+    },
+    {
+      "root": "toolchain",
+      "path": "texmf-dist/tex/latex/base/fontenc.sty",
+      "sha256": "ac8ca5b250f2b6b545d0d82a10a2fc17e36fe95e2e0c48eba5626cf8af877263"
+    },
+    {
+      "root": "toolchain",
+      "path": "texmf-dist/tex/latex/base/size11.clo",
+      "sha256": "b8c6f5233985add1f64d4dd6665fc30d894ae4b8da6d8e9f0ce40bdb7c7032df"
+    },
+    {
+      "root": "toolchain",
+      "path": "texmf-dist/tex/latex/fontaxes/fontaxes-v1.sty",
+      "sha256": "66c883309c07614b72e6d39bc8c33004d7c6f777af3bb6ac91aa880325083d2d"
+    },
+    {
+      "root": "toolchain",
+      "path": "texmf-dist/tex/latex/fontaxes/fontaxes.sty",
+      "sha256": "e7e932af3be7aa76ff9774ed2d9aba523f7a851fc25ddde24e21df88c203253b"
+    },
+    {
+      "root": "toolchain",
+      "path": "texmf-dist/tex/latex/geometry/geometry.sty",
+      "sha256": "d541ce56a3f45e2462be958ec62a50404213f26b241c7d7ad3e812685d38f5d8"
+    },
+    {
+      "root": "toolchain",
+      "path": "texmf-dist/tex/latex/graphics/keyval.sty",
+      "sha256": "e82c9ff41e9f97190a716024e89f3afdc65bf40bace3a2c6cbb5f517bacee322"
+    },
+    {
+      "root": "toolchain",
+      "path": "texmf-dist/tex/latex/l3kernel/l3backend-pdftex.def",
+      "sha256": "98d05d10a0357f7a07e9a3d567136a732d92e9f3c9159a02badb07f0051709d2"
+    },
+    {
+      "root": "toolchain",
+      "path": "texmf-dist/tex/latex/lato/lato.sty",
+      "sha256": "ce5190863cd8f152714bc672395577bad19e879946888c5f2a2a245c05d026d7"
+    },
+    {
+      "root": "toolchain",
+      "path": "texmf-dist/tex/latex/lato/T1lato-TLF.fd",
+      "sha256": "89d5e03c423dd7e7bce9e98b2cdbc80f3096712acff2b1ca4dca42cf39d102fc"
+    },
+    {
+      "root": "toolchain",
+      "path": "texmf-dist/tex/latex/xkeyval/xkeyval.sty",
+      "sha256": "efd9fb88373975a6d1c669eb343c12abb5e51a0d2eb6ca18670b944a78635999"
+    },
+    {
+      "root": "toolchain",
+      "path": "texmf-dist/web2c/texmf.cnf",
+      "sha256": "4bd26d87206b846ecacb4f4db844332c0e3fd3022f45b287883e5db95f489abc"
+    },
+    {
+      "root": "toolchain",
+      "path": "texmf-var/fonts/map/pdftex/updmap/pdftex.map",
+      "sha256": "5a14820fe5cc64572cfcfa05c294046e3147af9c6e34d8d5fd91e32212227cec"
+    },
+    {
+      "root": "toolchain",
+      "path": "texmf-var/web2c/pdftex/pdflatex.fmt",
+      "sha256": "39d36c405794c663533afb1fa37b4ead4c02b26929db8884a8e0fb1f09d5a4b0"
+    },
+    {
+      "root": "toolchain",
+      "path": "texmf.cnf",
+      "sha256": "4cc000a89591bc4eae25ed62b7996870979907f5a1ddd0ba8098506e5bbf80a6"
+    }
+  ]
+}
