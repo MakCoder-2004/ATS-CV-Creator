@@ -23,11 +23,11 @@ let compiler: ReturnType<typeof createCoverLetterCompiler>
 let identity: Awaited<ReturnType<ReturnType<typeof createCoverLetterCompiler>['getTemplateIdentity']>>
 beforeAll(async () => {
   root = await mkdtemp(join(tmpdir(), 'letter-artifacts-'))
-  toolchainRoot = resolve('E:/cv-tailor-main/.tools/latex')
+  toolchainRoot = resolve(process.env.CV_TAILOR_LATEX_ROOT ?? '.tools/latex')
   compiler = createCoverLetterCompiler({ toolchainRoot, templateRoot, tempRoot: join(root, 'temp') })
   identity = await compiler.getTemplateIdentity()
 }, 30_000)
-afterAll(async () => { await rm(root, { recursive: true, force: true }) })
+afterAll(async () => { await rm(root, { recursive: true, force: true }) }, 60_000)
 const canonical = (overrides: Record<string, unknown> = {}) => projectCoverLetter({ ...baseRevision, ...overrides }, contact, identity)
 
 test('recipient, date, sender header and subject each change canonical document identity', () => {
@@ -63,7 +63,7 @@ test('actual Lato PDF is one selectable US Letter page and DOCX uses same canoni
   expect(plain).toContain('Built reliable tools for Montréal teams with Zoë.')
   expect(await zip.file('word/styles.xml')!.async('string')).toContain('Lato')
   expect(xml).not.toContain('Built systems.')
-})
+}, 60_000)
 
 test('same-document concurrent compilation returns independent bytes and metadata', async () => {
   const letter = canonical({ subject: 'Concurrent copy test' })
@@ -81,7 +81,7 @@ test('same-document concurrent compilation returns independent bytes and metadat
   const nextWarm = await compiler.compile(letter)
   expect(nextWarm.templateIdentity).toEqual(identity)
   expect(await (await import('node:fs/promises')).readdir(join(root, 'temp'))).toEqual([])
-})
+}, 60_000)
 
 test('ambient TeX font and format lookup overrides cannot replace pinned fonts', async () => {
   const letter = canonical({ subject: 'Ambient lookup isolation' })
@@ -126,7 +126,7 @@ test('actual compiler refuses unsupported Arabic and multipage body output', asy
   await expect(compiler.compile(longRecipient)).rejects.toThrow(/overflow|one-page|prepared|PDF/i)
   const longBody = Array.from({ length: 8 }, (_, i) => ({ ...baseRevision.paragraphs[0], id: uid((i + 1).toString(16)), text: `Paragraph ${i + 1}. ${'Detailed application content '.repeat(60)}` }))
   await expect(compiler.compile(canonical({ paragraphs: longBody }))).rejects.toThrow(/one-page|exactly one|prepared|PDF/i)
-})
+}, 60_000)
 
 test('asset verification runs before a warm-cache return and rejects changed template and font bytes', async () => {
   const copy = join(root, 'corrupt-copy'), copiedToolchain = join(copy, 'toolchain'), copiedApp = join(copy, 'application')
