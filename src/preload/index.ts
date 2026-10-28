@@ -7,6 +7,7 @@ import { experienceSnapshotSchema, experienceMutationResultSchema, type Experien
 import { hasSavedJobApplicationUrlInput, jobRecordSchema, jobSaveResultSchema, jobDeletionSelectionSchema, jobDeletionExecuteSchema, jobDeletionPreviewSchema, jobDeletionResultSchema, type JobSaveInput } from '../shared/jobs'
 import { profileExchangeResultSchema } from '../shared/profile-exchange'
 import { outboundConsentActionSchema, outboundConsentPreviewSchema } from '../shared/outbound-consent-contract'
+import { coverLetterPurposeSchema } from '../shared/cover-letter'
 import { analysisIdSchema, analysisResultSchema, generationRecoverySchema, recoveryChoiceSchema, type AnalysisResult, type RecoveryChoice } from '../shared/posting-analysis'
 import { addDraftItemInputSchema, draftCorrectionInputSchema, draftGenerationSchema, draftRevisionSchema, suggestedSkillDecisionSchema, draftTailoringCorrectionSchema, cvTitleChangeSchema } from '../shared/draft'
 import { factualCheckReportSchema } from '../shared/factual-report'
@@ -121,8 +122,8 @@ const api: WorkbenchAPI = Object.freeze({
     const job = await ipcRenderer.invoke('jobs:open', uuidSchema.parse(id))
     return job === null ? null : jobRecordSchema.parse(job)
   },
-  async prepareOutboundConsent(jobId: string) {
-    return outboundConsentPreviewSchema.parse(await ipcRenderer.invoke('consent:outbound:preview', uuidSchema.parse(jobId)))
+  async prepareOutboundConsent(jobId: string, purpose: import('../shared/cover-letter').CoverLetterPurpose = 'cv') {
+    return outboundConsentPreviewSchema.parse(await ipcRenderer.invoke('consent:outbound:preview', uuidSchema.parse(jobId), coverLetterPurposeSchema.parse(purpose)))
   },
   async acceptOutboundConsent(token: string, accepted: boolean, privacyAcknowledged: boolean) {
     return outboundConsentActionSchema.parse(await ipcRenderer.invoke('consent:outbound:accept', uuidSchema.parse(token), accepted, privacyAcknowledged))

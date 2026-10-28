@@ -162,6 +162,8 @@ test('captured public v3 backup restores synthetic profile, job and contact data
   expect(JSON.parse(backup).version).toBe(3)
   const preview = workbench.backup.previewRestore(backup)
   workbench.backup.applyRestore(preview.token, safetyBackup(dir))
+  const restoredDb = new Database(join(dir, 'workbench.sqlite'), { readonly: true })
+  try { expect(restoredDb.prepare('SELECT purpose_version,purpose,purpose_hash FROM outbound_consents').get()).toMatchObject({ purpose_version: 1, purpose: 'cv', purpose_hash: expect.stringMatching(/^[a-f0-9]{64}$/) }) } finally { restoredDb.close() }
   expect((await workbench.api.getProfile()).contact).toMatchObject({ fullName: 'Fixture Candidate', email: 'candidate@example.test' })
   expect((await workbench.api.getProfile()).skills).toMatchObject([{ name: 'TypeScript', category: 'Programming' }])
   expect(await workbench.api.listJobs()).toMatchObject([{ title: 'Software Engineer', company: 'Fixture Systems' }])
@@ -169,6 +171,13 @@ test('captured public v3 backup restores synthetic profile, job and contact data
   const reopened = open(dir)
   expect((await reopened.api.getProfile()).contact).toMatchObject({ fullName: 'Fixture Candidate' })
   expect(await reopened.api.listJobs()).toMatchObject([{ title: 'Software Engineer' }])
+})
+
+test('captured v3 backup refuses a changed consent schema before migration', async () => {
+  const { workbench } = fixture()
+  const backup = JSON.parse(readFileSync(join(process.cwd(), 'tests/fixtures/cover-letter-legacy-v3.json'), 'utf8'))
+  backup.tables.outbound_consents.schema = 'CREATE TABLE outbound_consents (id TEXT PRIMARY KEY, run_id TEXT)'
+  expect(() => workbench.backup.previewRestore(JSON.stringify(backup))).toThrow(/consent schema is incompatible/i)
 })
 
 test('released v3 backups without the contact field restore contacts as empty', async () => {

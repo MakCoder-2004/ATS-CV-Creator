@@ -5,6 +5,7 @@ import { piModelSelectionSchema, type PiModelPreferenceInput } from './pi-model'
 import type { JobRecord, JobSaveInput, JobSaveResult, JobDeletionPreview, JobDeletionResult } from './jobs'
 import type { ProfileExchangeResult } from './profile-exchange'
 import type { OutboundConsentAction, OutboundConsentPreview } from './outbound-consent-contract'
+import type { CoverLetterPurpose } from './cover-letter'
 import type { AnalysisResult, GenerationRecovery, RecoveryChoice } from './posting-analysis'
 
 import type { AddDraftItemInput, DraftCorrectionInput, DraftRevision, SuggestedSkillDecision, DraftTailoringCorrection } from './draft'
@@ -73,7 +74,7 @@ export interface WorkbenchAPI {
   previewJobDeletion(jobIds: string[]): Promise<JobDeletionPreview>
   executeJobDeletion(token: string, jobIds: string[]): Promise<JobDeletionResult>
   openJob(id: string): Promise<JobRecord | null>
-  prepareOutboundConsent(jobId: string): Promise<OutboundConsentPreview>
+  prepareOutboundConsent(jobId: string, purpose?: CoverLetterPurpose): Promise<OutboundConsentPreview>
   acceptOutboundConsent(token: string, accepted: boolean, privacyAcknowledged: boolean): Promise<OutboundConsentAction>
   cancelOutboundConsent(token: string): Promise<OutboundConsentAction>
   startAnalysis(consentToken: string): Promise<AnalysisResult>

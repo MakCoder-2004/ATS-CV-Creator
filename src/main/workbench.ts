@@ -16,6 +16,7 @@ import { hasSavedJobApplicationUrlInput, jobInputSchema, jobRecordSchema, jobSav
 import type { JobRecord } from '../shared/jobs'
 import { profileExchangeSchema, type ProfileExchange } from '../shared/profile-exchange'
 import { prepareOutboundBundle, type ConsentSource, type EvidenceScopeRevision, type OutboundBundle, type OutboundPayload } from '../shared/outbound-consent'
+import { coverLetterPurposeSchema, type CoverLetterPurpose } from '../shared/cover-letter'
 import { createOutboundConsentEngine } from './outbound-consent'
 import type { OutboundConsentAction, OutboundConsentPreview } from '../shared/outbound-consent-contract'
 import { regenerationProposalSchema, regenerationTargetSchema, type RegenerationTarget, type RegenerationProposal } from '../shared/regeneration'
@@ -121,7 +122,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
     CREATE TABLE IF NOT EXISTS profile_experience (id TEXT PRIMARY KEY, revision INTEGER NOT NULL, data TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS profile_projects (id TEXT PRIMARY KEY, revision INTEGER NOT NULL, data TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, data TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS outbound_consents (id TEXT PRIMARY KEY, run_id TEXT NOT NULL UNIQUE, scope_hash TEXT NOT NULL, created_at TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0, job_id TEXT);
+    CREATE TABLE IF NOT EXISTS outbound_consents (id TEXT PRIMARY KEY, run_id TEXT NOT NULL UNIQUE, scope_hash TEXT NOT NULL, created_at TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0, job_id TEXT, purpose_version INTEGER NOT NULL DEFAULT 1, purpose TEXT NOT NULL DEFAULT 'cv', purpose_hash TEXT NOT NULL DEFAULT '');
     CREATE TABLE IF NOT EXISTS posting_analysis_cache (cache_key TEXT PRIMARY KEY, job_id TEXT NOT NULL, run_id TEXT NOT NULL, data TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS analysis_run_state (job_id TEXT PRIMARY KEY, run_id TEXT NOT NULL, data TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS analysis_attempts (id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, attempted_at TEXT NOT NULL);
@@ -138,7 +139,18 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
     (SELECT job_id FROM generation_recovery WHERE run_id=outbound_consents.run_id LIMIT 1),
     (SELECT job_id FROM analysis_run_state WHERE run_id=outbound_consents.run_id LIMIT 1),
     (SELECT job_id FROM posting_analysis_cache WHERE run_id=outbound_consents.run_id LIMIT 1)) WHERE job_id IS NULL`).run()
+  const consentColumns = db.pragma('table_info(outbound_consents)') as Array<{ name: string }>
+  if (!consentColumns.some(column => column.name === 'purpose_version')) db.exec("ALTER TABLE outbound_consents ADD COLUMN purpose_version INTEGER NOT NULL DEFAULT 1")
+  if (!consentColumns.some(column => column.name === 'purpose')) db.exec("ALTER TABLE outbound_consents ADD COLUMN purpose TEXT NOT NULL DEFAULT 'cv'")
+  if (!consentColumns.some(column => column.name === 'purpose_hash')) db.exec("ALTER TABLE outbound_consents ADD COLUMN purpose_hash TEXT NOT NULL DEFAULT ''")
   db.prepare('INSERT OR IGNORE INTO schema_migrations (version) VALUES (10)').run()
+  const purposeRows = db.prepare("SELECT id,scope_hash,purpose,purpose_hash FROM outbound_consents WHERE purpose_hash='' OR purpose_version<>1 OR purpose NOT IN ('cv','cv+cover-letter','cover-letter-only')").all() as Array<{ id: string; scope_hash: string; purpose: string; purpose_hash: string }>
+  const updateLegacyPurpose = db.prepare('UPDATE outbound_consents SET purpose_version=1,purpose=?,purpose_hash=? WHERE id=?')
+  for (const row of purposeRows) {
+    const purpose = coverLetterPurposeSchema.safeParse(row.purpose).success ? row.purpose as CoverLetterPurpose : 'cv'
+    updateLegacyPurpose.run(purpose, createHash('sha256').update(JSON.stringify({ version: 1, scopeHash: row.scope_hash, purpose })).digest('hex'), row.id)
+  }
+  db.prepare('INSERT OR IGNORE INTO schema_migrations (version) VALUES (11)').run()
   const providerOutcomeColumns = db.pragma('table_info(provider_attempt_outcomes)') as Array<{ name: string }>
   if (!providerOutcomeColumns.some(column => column.name === 'checkpointed_at')) db.exec('ALTER TABLE provider_attempt_outcomes ADD COLUMN checkpointed_at TEXT')
   db.prepare('INSERT OR IGNORE INTO schema_migrations (version) VALUES (1), (2), (4), (5), (6), (7)').run()
@@ -240,7 +252,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
     return { ok: true, data }
   }
   const outboundEngine = createOutboundConsentEngine()
-  const pendingOutbound = new Map<string, { jobId: string; source: ConsentSource; bundle: OutboundBundle; runId: string; consentId?: string }>()
+  const pendingOutbound = new Map<string, { jobId: string; source: ConsentSource; bundle: OutboundBundle; runId: string; purpose: CoverLetterPurpose; consentId?: string }>()
   const currentAnalysis = new Map<string, ReturnType<typeof analysisResultSchema.parse>>()
   const saveAnalysisState = (input: unknown) => {
     const parsed = analysisResultSchema.parse(input)
@@ -1014,15 +1026,17 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       const row = db.prepare('SELECT data FROM jobs WHERE id = ?').get(id) as { data: string } | undefined
       return row ? jobRecordSchema.parse(JSON.parse(row.data)) : null
     },
-    async prepareOutboundConsent(jobId: string): Promise<OutboundConsentPreview> {
+    async prepareOutboundConsent(jobId: string, requestedPurpose: CoverLetterPurpose = 'cv'): Promise<OutboundConsentPreview> {
       if (!uuidSchema.safeParse(jobId).success) return outboundConsentPreviewSchema.parse({ ok: false, message: 'Choose a valid saved job to review outgoing data.' })
+      const purpose = coverLetterPurposeSchema.safeParse(requestedPurpose)
+      if (!purpose.success) return outboundConsentPreviewSchema.parse({ ok: false, message: 'Choose a valid document purpose before reviewing outgoing data.' })
       const source = currentConsentSource(jobId)
       if (!source) return outboundConsentPreviewSchema.parse({ ok: false, message: scriptedTransport ? 'That saved job is unavailable. Choose another job.' : 'Choose an available Pi model and thinking level in Settings before reviewing outgoing data.' })
       try {
         const bundle = prepareOutboundBundle(source)
         const token = randomUUID(), runId = randomUUID()
-        pendingOutbound.set(token, { jobId, source, bundle, runId })
-        return outboundConsentPreviewSchema.parse({ ok: true, token, jobTitle: source.job.title, jobCompany: source.job.company, outgoing: bundle.outgoing, warning: bundle.preview.residualSensitivityNotice, termsNotice: scriptedTransport ? 'This scripted request uses only the reviewed outgoing data. Redaction cannot guarantee anonymity.' : 'After you authorize this run, Pi sends the reviewed data to the selected model provider. Provider data-use policies and charges vary. Do not submit confidential information. Redaction cannot guarantee anonymity.' })
+        pendingOutbound.set(token, { jobId, source, bundle, runId, purpose: purpose.data })
+        return outboundConsentPreviewSchema.parse({ ok: true, token, jobTitle: source.job.title, jobCompany: source.job.company, outgoing: bundle.outgoing, purpose: purpose.data, warning: bundle.preview.residualSensitivityNotice, termsNotice: scriptedTransport ? 'This scripted request uses only the reviewed outgoing data. Redaction cannot guarantee anonymity.' : 'After you authorize this run, Pi sends the reviewed data to the selected model provider. Provider data-use policies and charges vary. Do not submit confidential information. Redaction cannot guarantee anonymity.' })
       } catch { return outboundConsentPreviewSchema.parse({ ok: false, message: 'Outgoing data could not be prepared safely. Review your profile and model settings, then try again.' }) }
     },
     async acceptOutboundConsent(token: string, accepted: boolean, privacyAcknowledged: boolean): Promise<OutboundConsentAction> {
@@ -1036,9 +1050,9 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
         return outboundConsentActionSchema.parse({ ok: false, message: 'Your job, profile, or model settings changed after preview. Review the outgoing data again.' })
       }
       try {
-        const record = outboundEngine.grantConsent(pending.runId, pending.bundle, { accepted, privacyAcknowledged })
+        const record = outboundEngine.grantConsent(pending.runId, pending.bundle, { accepted, privacyAcknowledged }, pending.purpose)
         try {
-          db.prepare('INSERT INTO outbound_consents (id, run_id, scope_hash, created_at, revoked, job_id) VALUES (?, ?, ?, ?, 0, ?)').run(record.id, pending.runId, pending.bundle.scopeHash, record.createdAt, pending.jobId)
+          db.prepare('INSERT INTO outbound_consents (id, run_id, scope_hash, created_at, revoked, job_id, purpose_version, purpose, purpose_hash) VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?)').run(record.id, pending.runId, pending.bundle.scopeHash, record.createdAt, pending.jobId, record.purposeVersion, record.purpose, record.purposeHash)
         } catch {
           outboundEngine.revoke(record.id)
           return outboundConsentActionSchema.parse({ ok: false, message: 'Consent could not be saved. No request was sent.' })
@@ -1050,6 +1064,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
     async startAnalysis(token: string) {
       const pending = pendingOutbound.get(token)
       if (!pending?.consentId) throw new Error('Review and authorize this exact outgoing bundle before analysis.')
+      if (pending.purpose === 'cover-letter-only') throw new Error('This authorization permits a cover letter only, not posting analysis.')
       if (externalJobOperations.has(pending.jobId)) throw new Error(`Finish ${externalJobOperations.get(pending.jobId)} before starting analysis.`)
       const latestSource = currentConsentSource(pending.jobId)
       if (!latestSource || prepareOutboundBundle(latestSource).scopeHash !== pending.bundle.scopeHash) throw new Error('The job, profile, Pi model, or thinking level changed after consent. Review outgoing data and authorize a new run.')
@@ -1100,6 +1115,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       if (pageTarget !== 1 && pageTarget !== 2) return { ok: false, message: 'Choose a one- or two-page target.' }
       const pending = pendingOutbound.get(token)
       if (!pending?.consentId) return { ok: false, message: 'Review and authorize this exact outgoing bundle before generation.' }
+      if (pending.purpose === 'cover-letter-only') return { ok: false, message: 'This authorization permits a cover letter only, not CV generation.' }
       if (externalJobOperations.has(pending.jobId)) return { ok: false, message: `Finish ${externalJobOperations.get(pending.jobId)} before generating.` }
       const recoveryRow = resumeRunId ? db.prepare('SELECT snapshot, status FROM generation_recovery WHERE run_id=? AND job_id=?').get(resumeRunId, pending.jobId) as { snapshot: string; status: string } | undefined : undefined
       if (resumeRunId && unsettledRunsByJob.get(pending.jobId)?.has(resumeRunId)) return { ok: false, message: 'The earlier provider response has not settled. Wait before reviewing recovery.' }
@@ -1878,9 +1894,10 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       if (!consent || consent.revoked || consent.scope_hash !== row.scope_hash) return { ok: false, message: 'The saved consent is missing or revoked. This run cannot resume; review outgoing data for a new run.' }
       const bundle = prepareOutboundBundle(frozen.source)
       if (bundle.scopeHash !== row.scope_hash) return { ok: false, message: 'The frozen outgoing bundle failed its integrity check. This run cannot resume.' }
-      try { outboundEngine.restoreConsent({ id: consent.id, runId: consent.run_id, scopeHash: consent.scope_hash, createdAt: consent.created_at, revoked: false }) } catch { return { ok: false, message: 'Saved consent could not be restored safely.' } }
+      const cvPurposeHash = createHash('sha256').update(JSON.stringify({ version: 1, scopeHash: consent.scope_hash, purpose: 'cv' })).digest('hex')
+      try { outboundEngine.restoreConsent({ id: consent.id, runId: consent.run_id, scopeHash: consent.scope_hash, createdAt: consent.created_at, purposeVersion: 1, purpose: 'cv', purposeHash: cvPurposeHash, revoked: false }) } catch { return { ok: false, message: 'Saved consent could not be restored safely.' } }
       const token = randomUUID()
-      pendingOutbound.set(token, { jobId: row.job_id, source: frozen.source, bundle, runId, consentId: consent.id })
+      pendingOutbound.set(token, { jobId: row.job_id, source: frozen.source, bundle, runId, purpose: 'cv', consentId: consent.id })
       dispatcher.authorize(runId, consent.id)
       recoveredRunIds.add(runId)
       const resume = api.generateDraft as (token: string, pageTarget: 1 | 2, runId: string) => Promise<{ ok: boolean; message: string }>

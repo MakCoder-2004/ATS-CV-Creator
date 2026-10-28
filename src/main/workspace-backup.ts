@@ -360,6 +360,25 @@ export function createWorkspaceBackupEngine(db: Database.Database, maxBackupByte
       upgraded.tables.schema_migrations!.rows.push({ version: 10 })
       backup = upgraded
     }
+    if (backup.tables.outbound_consents && backup.tables.schema_migrations && !backup.tables.schema_migrations.rows.some(row => row.version === 11)) {
+      const upgraded = structuredClone(backup) as typeof backup
+      const table = upgraded.tables.outbound_consents!
+      const legacySchema = 'CREATE TABLE outbound_consents (id TEXT PRIMARY KEY, run_id TEXT NOT NULL UNIQUE, scope_hash TEXT NOT NULL, created_at TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0, job_id TEXT)'
+      const expectedLegacyColumns = ['id', 'run_id', 'scope_hash', 'created_at', 'revoked', 'job_id']
+      const expectedVersions = [1, 2, 3, 4, 5, 6, 7, 8, ...(rowsFor('schema_migrations').some(row => row.version === 9) ? [9] : []), 10]
+      const versions = upgraded.tables.schema_migrations!.rows.map(row => row.version).sort((a, b) => Number(a) - Number(b))
+      if (table.schema !== legacySchema || JSON.stringify(versions) !== JSON.stringify(expectedVersions)) throw new Error('Backup migration history or consent schema is incompatible.')
+      const legacyHash = (scopeHash: string) => hash(JSON.stringify({ version: 1, scopeHash, purpose: 'cv' }))
+      for (const row of table.rows) {
+        if (JSON.stringify(Object.keys(row).sort()) !== JSON.stringify([...expectedLegacyColumns].sort()) || typeof row.scope_hash !== 'string' || !/^[a-f0-9]{64}$/.test(row.scope_hash)) throw new Error('Backup legacy consent row is incompatible.')
+        row.purpose_version = 1
+        row.purpose = 'cv'
+        row.purpose_hash = legacyHash(row.scope_hash)
+      }
+      table.schema = tableSchema('outbound_consents')
+      upgraded.tables.schema_migrations!.rows.push({ version: 11 })
+      backup = upgraded
+    }
     const expected = actualTables().sort()
     const names = Object.keys(backup.tables).sort()
     if (names.length !== expected.length || names.some((name, i) => name !== expected[i])) throw new Error('Backup is invalid or incompatible with this workspace schema.')

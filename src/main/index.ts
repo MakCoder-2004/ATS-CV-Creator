@@ -28,6 +28,7 @@ import { registerWorkspaceBackupIpc } from './workspace-backup-ipc'
 import { registerResearchSearchSettingsIpc } from './research-search-settings-ipc'
 import { createResearchSearchCredentials, defaultResearchCredentialDirectory } from './research-search-credentials'
 import { outboundConsentActionSchema, outboundConsentPreviewSchema } from '../shared/outbound-consent-contract'
+import { coverLetterPurposeSchema } from '../shared/cover-letter'
 import { analysisIdSchema, analysisResultSchema, analysisStartInputSchema, generationRecoverySchema, recoveryChoiceSchema } from '../shared/posting-analysis'
 import { addDraftItemInputSchema, draftCorrectionInputSchema, draftGenerationSchema, draftRevisionSchema, suggestedSkillDecisionSchema, draftTailoringCorrectionSchema, cvTitleChangeSchema } from '../shared/draft'
 import { factualCheckReportSchema } from '../shared/factual-report'
@@ -352,8 +353,10 @@ app.whenReady().then(() => {
     return jobRecordSchema.array().parse(await workspace!.api.listJobs())
   })
   ipcMain.handle('consent:outbound:preview', async (event, ...args: unknown[]) => {
-    trusted(event); if (args.length !== 1) throw new Error('Expected saved job ID')
-    return outboundConsentPreviewSchema.parse(await workspace!.api.prepareOutboundConsent(uuidSchema.parse(args[0])))
+    trusted(event); if (args.length < 1 || args.length > 2) throw new Error('Expected saved job ID and optional document purpose')
+    const jobId = uuidSchema.parse(args[0])
+    const purpose = args.length === 1 ? 'cv' : coverLetterPurposeSchema.parse(args[1])
+    return outboundConsentPreviewSchema.parse(await workspace!.api.prepareOutboundConsent(jobId, purpose))
   })
   ipcMain.handle('consent:outbound:accept', async (event, ...args: unknown[]) => {
     trusted(event); if (args.length !== 3 || typeof args[1] !== 'boolean' || typeof args[2] !== 'boolean') throw new Error('Expected preview token and consent decisions')
