@@ -156,6 +156,21 @@ test('released version-2 backups upgrade optional posting details to honest unkn
   expect(restored?.revisions[0].optionalDetails.compensation).toMatchObject({ value: null, origin: 'unknown' })
 })
 
+test('captured public v3 backup restores synthetic profile, job and contact data', async () => {
+  const { dir, workbench } = fixture()
+  const backup = readFileSync(join(process.cwd(), 'tests/fixtures/cover-letter-legacy-v3.json'), 'utf8')
+  expect(JSON.parse(backup).version).toBe(3)
+  const preview = workbench.backup.previewRestore(backup)
+  workbench.backup.applyRestore(preview.token, safetyBackup(dir))
+  expect((await workbench.api.getProfile()).contact).toMatchObject({ fullName: 'Fixture Candidate', email: 'candidate@example.test' })
+  expect((await workbench.api.getProfile()).skills).toMatchObject([{ name: 'TypeScript', category: 'Programming' }])
+  expect(await workbench.api.listJobs()).toMatchObject([{ title: 'Software Engineer', company: 'Fixture Systems' }])
+  workbench.close(); instances.pop()
+  const reopened = open(dir)
+  expect((await reopened.api.getProfile()).contact).toMatchObject({ fullName: 'Fixture Candidate' })
+  expect(await reopened.api.listJobs()).toMatchObject([{ title: 'Software Engineer' }])
+})
+
 test('released v3 backups without the contact field restore contacts as empty', async () => {
   const { dir, workbench } = fixture()
   const saved = await workbench.api.saveJob({ title: 'Legacy v3 role', company: 'Example', description: 'Historical posting text.' })
