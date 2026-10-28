@@ -2,6 +2,12 @@
   "schemaVersion": 1,
   "entry": "cover-letter.tex",
   "contentFilename": "content.tex",
+  "systemDependencies": [
+    "advapi32.dll",
+    "kernel32.dll",
+    "shell32.dll",
+    "user32.dll"
+  ],
   "assets": [
     {
       "root": "application",
@@ -10,8 +16,18 @@
     },
     {
       "root": "toolchain",
+      "path": "bin/windows/msvcr100.dll",
+      "sha256": "1d1a1ae540ba132f998d60d3622f0297b6e86ae399332c3b47462d7c0f560a36"
+    },
+    {
+      "root": "toolchain",
       "path": "bin/windows/pdflatex.exe",
       "sha256": "4b582d0be712b74ae5090aba2d7338f185082f6446cbee7b26115e8ab6e21184"
+    },
+    {
+      "root": "toolchain",
+      "path": "bin/windows/pdftex.dll",
+      "sha256": "199788b93da06b355cedc4bab1a3695e5c199413176020a708e7658eb2c835bf"
     },
     {
       "root": "toolchain",

@@ -46,6 +46,75 @@ function verifyAssets(manifest, roots) {
     assert.equal(sha256(fs.readFileSync(resolveIn(roots[asset.root], asset.path))), asset.sha256, `Asset changed: ${key}`);
   }
 }
+function nativeImports(file) {
+  const bytes = fs.readFileSync(file);
+  const pe = bytes.readUInt32LE(0x3c);
+  assert.equal(bytes.toString('ascii', pe, pe + 4), 'PE\u0000\u0000', 'Expected Windows PE asset');
+  const optional = pe + 24;
+  const magic = bytes.readUInt16LE(optional);
+  assert.ok(magic === 0x10b || magic === 0x20b, 'Unsupported PE format');
+  const directory = optional + (magic === 0x20b ? 112 : 96);
+  const sections = optional + bytes.readUInt16LE(pe + 20);
+  const count = bytes.readUInt16LE(pe + 6);
+  assert.ok(count > 0 && count <= 96);
+  const offset = rva => {
+    for (let index = 0; index < count; index++) {
+      const section = sections + index * 40;
+      const start = bytes.readUInt32LE(section + 12);
+      const size = bytes.readUInt32LE(section + 16);
+      if (rva >= start && rva < start + size) {
+        const result = bytes.readUInt32LE(section + 20) + rva - start;
+        assert.ok(result < bytes.length);
+        return result;
+      }
+    }
+    throw new Error(`Unmapped PE import RVA in ${path.basename(file)}`);
+  };
+  const names = new Set();
+  const add = rva => {
+    const start = offset(rva);
+    const end = bytes.indexOf(0, start);
+    assert.ok(end > start && end - start < 256, 'Invalid PE import name');
+    const name = bytes.toString('ascii', start, end).toLowerCase();
+    assert.match(name, /^[a-z0-9_.-]+$/);
+    names.add(name);
+  };
+  for (const [index, stride, nameOffset] of [[1, 20, 12], [13, 32, 4]]) {
+    const rva = bytes.readUInt32LE(directory + index * 8);
+    if (!rva) continue;
+    let cursor = offset(rva);
+    let terminated = false;
+    for (let entry = 0; entry < 2048 && cursor + stride <= bytes.length; entry++, cursor += stride) {
+      if (bytes.subarray(cursor, cursor + stride).every(byte => byte === 0)) { terminated = true; break; }
+      let name = bytes.readUInt32LE(cursor + nameOffset);
+      if (index === 13 && !(bytes.readUInt32LE(cursor) & 1)) {
+        const base = magic === 0x20b ? Number(bytes.readBigUInt64LE(optional + 24)) : bytes.readUInt32LE(optional + 28);
+        name -= base;
+      }
+      add(name);
+    }
+    assert.ok(terminated, 'Unterminated PE import table');
+  }
+  return [...names];
+}
+function nativeClosure() {
+  const directory = path.dirname(executable);
+  const local = new Map(fs.readdirSync(directory).map(name => [name.toLowerCase(), path.join(directory, name)]));
+  const systemAllowlist = new Set(['kernel32.dll', 'advapi32.dll', 'user32.dll', 'shell32.dll', 'ws2_32.dll', 'wsock32.dll', 'ntdll.dll', 'msvcrt.dll', 'ole32.dll', 'gdi32.dll']);
+  const system = new Set();
+  const files = new Set();
+  function visit(file) {
+    if (files.has(file)) return;
+    files.add(file);
+    for (const name of nativeImports(file)) {
+      if (systemAllowlist.has(name)) system.add(name);
+      else if (local.has(name)) visit(local.get(name));
+      else throw new Error(`Unpinned non-system native dependency ${name}`);
+    }
+  }
+  visit(executable);
+  return { files: [...files], system: [...system].sort() };
+}
 function compile(name, content) {
   const directory = fs.mkdtempSync(path.join(audit, `${name}-`));
   fs.copyFileSync(path.join(app, 'cover-letter.tex'), path.join(directory, 'cover-letter.tex'));
@@ -141,7 +210,8 @@ async function main() {
   const assets = new Map();
   const addAsset = (kind, relative, file) => assets.set(`${kind}/${relative}`, { root: kind, path: relative.replaceAll('\\', '/'), sha256: sha256(fs.readFileSync(file)) });
   addAsset('application', 'cover-letter.tex', path.join(app, 'cover-letter.tex'));
-  addAsset('toolchain', 'bin/windows/pdflatex.exe', executable);
+  const native = nativeClosure();
+  for (const file of native.files) addAsset('toolchain', path.relative(toolchain, file).replaceAll('\\', '/'), file);
   addAsset('toolchain', 'cv-tailor-toolchain.json', path.join(toolchain, 'cv-tailor-toolchain.json'));
   for (const result of [generic, named, escaped]) {
     const fls = fs.readFileSync(path.join(result.directory, 'cover-letter.fls'), 'utf8');
@@ -152,7 +222,7 @@ async function main() {
       if (relative && !relative.startsWith('..') && !path.isAbsolute(relative)) addAsset('toolchain', relative.replaceAll('\\', '/'), input);
     }
   }
-  const generated = { schemaVersion: 1, entry: 'cover-letter.tex', contentFilename: 'content.tex', assets: [...assets.values()].sort((a, b) => `${a.root}/${a.path}`.localeCompare(`${b.root}/${b.path}`)) };
+  const generated = { schemaVersion: 1, entry: 'cover-letter.tex', contentFilename: 'content.tex', systemDependencies: native.system, assets: [...assets.values()].sort((a, b) => `${a.root}/${a.path}`.localeCompare(`${b.root}/${b.path}`)) };
   const roots = { application: app, toolchain };
   verifyAssets(generated, roots);
   if (args.includes('--record-assets')) fs.writeFileSync(manifestPath, JSON.stringify(generated, null, 2) + '\n');
@@ -174,7 +244,20 @@ async function main() {
   assert.ok(font, 'Manifest must pin the embedded regular font');
   fs.appendFileSync(resolveIn(fakeRoots.toolchain, font.path), 'corrupt');
   assert.throws(() => verifyAssets(pinned, fakeRoots), /Asset changed/);
-  observations.assets = { count: pinned.assets.length, corruptionRefused: ['template', 'font'], runtimeEnforcement: 'not integrated' };
+  fs.copyFileSync(resolveIn(roots.toolchain, font.path), resolveIn(fakeRoots.toolchain, font.path));
+  const nativeProbes = [];
+  for (const file of native.files.filter(file => file !== executable)) {
+    const relative = path.relative(toolchain, file);
+    const target = resolveIn(fakeRoots.toolchain, relative);
+    fs.appendFileSync(target, 'corrupt');
+    assert.throws(() => verifyAssets(pinned, fakeRoots), /Asset changed/);
+    fs.copyFileSync(file, target);
+    fs.unlinkSync(target);
+    assert.throws(() => verifyAssets(pinned, fakeRoots));
+    fs.copyFileSync(file, target);
+    nativeProbes.push(path.basename(file));
+  }
+  observations.assets = { count: pinned.assets.length, systemDependencies: native.system, corruptionRefused: ['template', 'font', ...nativeProbes], missingNativeRefused: nativeProbes, runtimeEnforcement: 'not integrated' };
   fs.writeFileSync(path.join(audit, 'summary.json'), JSON.stringify(observations, null, 2) + '\n');
   console.log(`VERIFIED generic/named/escaped PDFs, overflow and unsupported-character refusals, ${pinned.assets.length} pinned assets and template/font corruption probes`);
   console.log(path.join(audit, 'summary.json'));

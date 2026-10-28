@@ -35,8 +35,8 @@ The fixture is a synthetic paragraph letter, not generated career evidence. Thes
 | Unsupported Arabic glyph | VERIFIED negative, compilation reports the actual unsupported Unicode character rather than an unrelated process failure. Arabic layout is not supported by this Latin template. |
 | Closing and signature | VERIFIED, separate left-aligned lines. A first visual inspection caught the closing appended to the final body line; the template was corrected and this now has an explicit artifact assertion. |
 | Visual inspection | VERIFIED, parent inspected the final rendered generic page and the escaped-text page. No apparent clipping in the accepted samples. |
-| Required asset manifest | VERIFIED, 37 root-relative application/toolchain files captured from successful generic/named/extended-Latin recorder closures plus engine and toolchain metadata. |
-| Corruption probes | VERIFIED, the manifest verifier rejects an altered template and altered embedded font in owned asset copies. Shared compiler assets were not changed. |
+| Required asset manifest | VERIFIED, 39 root-relative application/toolchain files captured from successful generic/named/extended-Latin recorder closures, toolchain metadata, and recursive normal/delay PE imports of the native compiler. |
+| Corruption probes | VERIFIED, the manifest verifier rejects altered template/font bytes and altered or missing `pdftex.dll` and `msvcr100.dll` in owned asset copies. Shared compiler assets were not changed. |
 
 The final harness was run repeatedly without recording a new manifest; the observed closure matched the pinned file. The final `.audit/cover-letter-layout/summary.json` records concrete output folders, page geometry, embedded fonts, and negative outcomes. Sources and license hashes in the downloaded upstream bundle remain unchanged.
 
@@ -49,6 +49,8 @@ The parent also corrected test-input Unicode literals and the closing's paragrap
 ## Runtime manifest and integration boundary
 
 `application/assets.json` has `schemaVersion: 1`, fixed `entry` and `contentFilename`, and an `assets` array. Every entry has `root` of `application` or `toolchain`, a contained slash-separated relative `path`, and SHA-256 of exact bytes. The application template is LF-pinned for stable checkout bytes.
+
+The first independent review rejected the 37-file inventory because the TeX recorder cannot see OS-loaded DLLs. The corrected inventory adds `pdftex.dll`, which contains the actual engine, and its supplied `msvcr100.dll`. The verifier recursively reads normal and delay import tables of the pinned executable and non-system dependencies. It fails on an unknown non-system dependency rather than assuming it is installed. `systemDependencies` explicitly lists `advapi32.dll`, `kernel32.dll`, `shell32.dll`, and `user32.dll` as Windows-owned dependencies, not bundled or hash-pinned application assets. This is the observed PE import closure, not a promise about arbitrary future plugin or dynamic library loading.
 
 The explicit `--record-assets` flag regenerates the manifest only after successful artifact tests. A normal run compares the observed closure with the pinned manifest and verifies every hash. The manifest covers the exercised regular/bold Latin template configuration, not every TeX package, arbitrary font family, or future template change. Expand it deliberately if rendering dependencies change.
 
