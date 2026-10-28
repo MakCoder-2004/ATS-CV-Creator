@@ -13,7 +13,7 @@ const directories: string[] = []
 const opened: Array<ReturnType<typeof createWorkbench>> = []
 afterEach(() => { for (const workspace of opened.splice(0)) workspace.close(); for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true }) })
 
-async function fixture(regenerationTransport?: (signal: AbortSignal) => Promise<string>, legacySources = false, titleSuggestion = 'Engineer · TypeScript') {
+async function fixture(regenerationTransport?: (signal: AbortSignal) => Promise<string>, legacySources = false, titleSuggestion = 'Engineer · TypeScript', roleDescription = 'Built systems.') {
   const prompts: string[] = []
   const directory = mkdtempSync(join(tmpdir(), 'approval-contract-')); directories.push(directory)
   const transport: AnalysisTransport = { async generate({ prompt, signal }) {
@@ -39,7 +39,7 @@ async function fixture(regenerationTransport?: (signal: AbortSignal) => Promise<
 
   const skill = await workspace.api.saveSkill({ name: 'TypeScript', category: 'Programming' })
   if (!skill.ok) throw new Error('Could not create source fixture')
-  const legacyRole = legacySources ? await workspace.api.saveExperience({ kind: 'employment', title: 'Engineer', organization: 'Example Employer', description: 'Built systems.', factualItems: [{ text: 'Reduced failures.' }] }) : undefined
+  const legacyRole = legacySources ? await workspace.api.saveExperience({ kind: 'employment', title: 'Engineer', organization: 'Example Employer', description: roleDescription, factualItems: [{ text: 'Reduced failures.' }] }) : undefined
   const legacyProject = legacySources ? await workspace.api.saveProject({ name: 'Compiler', description: 'Improved builds.', factualItems: [{ text: 'Added diagnostics.' }] }) : undefined
   if (legacyRole && !legacyRole.ok || legacyProject && !legacyProject.ok) throw new Error('Could not create legacy grouping source fixture')
   const job = await workspace.api.saveJob({ title: 'Engineer', company: 'Example', description: 'TypeScript required.' })
@@ -191,8 +191,24 @@ test('unsupported licensed title cannot become a proposal or alter an approved C
   expect((await workspace.api.getCanonicalDocument(jobId))?.identity.cvTitle).toBeUndefined()
 })
 
+test('an incidental professional-engineer phrase cannot authorize a protected title proposal', async () => {
+  const { workspace, jobId } = await fixture(undefined, true, 'Professional Engineer', 'Built tools for a professional engineer.')
+  await workspace.api.checkDraft(jobId)
+  await measure(workspace, jobId)
+  expect(await workspace.api.approveDraft(jobId)).toMatchObject({ ok: true })
+  const original = (await workspace.api.getDraft(jobId))!
+  const preview = await workspace.api.prepareOutboundConsent(jobId)
+  if (!preview.ok) throw new Error(preview.message)
+  await workspace.api.acceptOutboundConsent(preview.token, true, true)
+  const result = await workspace.api.regenerateDraft(preview.token, { kind: 'title' })
+  expect(result).toMatchObject({ ok: false })
+  expect(result.proposal).toBeUndefined()
+  expect(await workspace.api.getDraft(jobId)).toMatchObject({ id: original.id, approved: true })
+  expect(await workspace.api.assertDraftExportable(jobId)).toMatchObject({ ok: true })
+})
+
 test('an existing approved CV gets a title only after fresh consent and explicit proposal acceptance', async () => {
-  const { workspace, jobId, prompts } = await fixture(undefined, true)
+  const { workspace, jobId, prompts } = await fixture(undefined, true, 'Engineer · TypeScript', 'Built tools for a professional engineer.')
   await workspace.api.checkDraft(jobId)
   await measure(workspace, jobId)
   expect(await workspace.api.approveDraft(jobId)).toMatchObject({ ok: true })
@@ -224,7 +240,12 @@ test('an existing approved CV gets a title only after fresh consent and explicit
   await measure(workspace, jobId)
   expect(await workspace.api.approveDraft(jobId)).toMatchObject({ ok: false })
   expect(await workspace.api.assertDraftExportable(jobId)).toMatchObject({ ok: false })
-  const removed = await workspace.api.changeCvTitle({ jobId, draftId: licensed.draft!.id, title: null })
+  const protectedEdit = await workspace.api.changeCvTitle({ jobId, draftId: licensed.draft!.id, title: 'Professional Engineer' })
+  expect(protectedEdit.draft?.checkReport?.findings).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'unsupported-title', itemPath: 'cvTitle', message: expect.stringMatching(/professional engineer/i) })]))
+  await measure(workspace, jobId)
+  expect(await workspace.api.approveDraft(jobId)).toMatchObject({ ok: false })
+  expect(await workspace.api.assertDraftExportable(jobId)).toMatchObject({ ok: false })
+  const removed = await workspace.api.changeCvTitle({ jobId, draftId: protectedEdit.draft!.id, title: null })
   expect(removed).toMatchObject({ ok: true, draft: { approved: false } })
   expect(removed.draft?.cvTitle).toBeUndefined()
   expect((await workspace.api.getCanonicalDocument(jobId))?.identity.cvTitle).toBeUndefined()

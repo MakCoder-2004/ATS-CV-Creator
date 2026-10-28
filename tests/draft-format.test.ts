@@ -1,5 +1,13 @@
 import { describe, expect, test } from 'vitest'
-import { countEnglishWords, draftRevisionSchema, isGeneratedDescriptionParagraph } from '../src/shared/draft'
+import { countEnglishWords, cvTitleUnsupportedTerms, draftRevisionSchema, isGeneratedDescriptionParagraph } from '../src/shared/draft'
+
+test('CV title rejects protected credential phrases even when mentioned incidentally in cited prose', () => {
+  const cited = ['Software Engineer', 'Built tools for a licensed professional engineer.', 'Machine Learning']
+  expect(cvTitleUnsupportedTerms('Software Engineer · Machine Learning', cited, ['Software Engineer'])).toEqual([])
+  for (const title of ['Licensed Software Engineer', 'Licenced Software Engineer', 'Professional Engineer', 'Professional Eng.', 'Prof. Engineer', 'P.Eng', 'P.E.', 'PE', 'Certified Software Engineer', 'Registered Nurse', 'Ph.D. Software Engineer']) {
+    expect(cvTitleUnsupportedTerms(title, cited, ['Software Engineer']), title).not.toEqual([])
+  }
+})
 
 describe('generated description format', () => {
   test('counts contractions and hyphenated technical terms as single words', () => {

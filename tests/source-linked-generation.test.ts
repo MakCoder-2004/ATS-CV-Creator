@@ -46,7 +46,7 @@ test('cross-category model citations get one bounded correction request without 
 test('suggests a grounded professional title without copying the posting or accepting foreign title evidence', async () => {
   const roleId = randomUUID(), skillId = randomUUID()
   const items = [
-    { id: roleId, revision: 1, category: 'experience' as const, snapshot: { title: 'Software Engineer', organization: 'Example', description: 'Built ML tooling for a licensed organization.' }, text: '{"title":"Software Engineer","organization":"Example","description":"Built ML tooling for a licensed organization."}' },
+    { id: roleId, revision: 1, category: 'experience' as const, snapshot: { title: 'Software Engineer', organization: 'Example', description: 'Built ML tooling for a licensed professional engineer.' }, text: '{"title":"Software Engineer","organization":"Example","description":"Built ML tooling for a licensed professional engineer."}' },
     { id: skillId, revision: 1, category: 'skills' as const, snapshot: { name: 'Machine Learning', category: 'Technical' }, text: '{"name":"Machine Learning","category":"Technical"}' }
   ]
   const run = (title: string, evidence: number[]) => runSourceLinkedGraph({ job: { title: 'Machine Learning Developer' }, analysis: { tools: [], keywords: [] }, items, identity: { id: randomUUID(), jobId: randomUUID(), revision: 1, createdAt: new Date(0).toISOString(), lockedFields: { fullName: 'Candidate', experience: [{ evidenceId: roleId, title: 'Software Engineer', organization: 'Example' }], education: [], projects: [], certificates: [] } }, call: async prompt => ({ attempts: 1, value: prompt.startsWith('Score these numbered') ? { relevance: items.map((_, index) => ({ index, score: 1, rationale: 'Related saved fact.' })) } : { cvTitle: { text: title, evidence, rationale: 'Grounded in the saved role and technical skill.' }, education: [], experience: [{ text: 'Built ML tooling.', evidence: [0], rationale: 'Saved role.' }], projects: [], skills: [{ name: 'Machine Learning', evidence: [1], rationale: 'Saved skill.' }] } }) })
@@ -56,6 +56,7 @@ test('suggests a grounded professional title without copying the posting or acce
   expect((await run('Machine Learning Developer', [0])).draft.cvTitle).toBeUndefined()
   expect((await run('Data Scientist', [0, 1])).draft.cvTitle).toBeUndefined()
   expect((await run('Licensed Software Engineer', [0])).draft.cvTitle).toBeUndefined()
+  expect((await run('Professional Engineer', [0])).draft.cvTitle).toBeUndefined()
   expect((await run('Software Engineer', [99])).draft.cvTitle).toBeUndefined()
 })
 

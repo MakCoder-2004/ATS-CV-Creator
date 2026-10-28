@@ -26,8 +26,13 @@ export function cvTitleUnsupportedTerms(title: string, sourceText: string[], hel
   const supported = new Set(sourceText.flatMap(cvTitleWords))
   const held = new Set(heldTitles.flatMap(cvTitleWords))
   const connectors = new Set(['and', 'or', 'of', 'for', 'with', 'in', 'the', 'a', 'an'])
-  const credentialClaims = new Set(['licensed', 'certified', 'registered', 'chartered', 'accredited', 'phd', 'doctor', 'md', 'mba', 'cpa', 'pmp'])
-  return [...new Set(cvTitleWords(title))].filter(word => credentialClaims.has(word) ? !held.has(word) : !connectors.has(word) && !supported.has(word))
+  // These terms imply a credential; a held-role label or incidental description is not license evidence.
+  const credentialClaims = new Set(['licensed', 'licenced', 'license', 'licence', 'licensure', 'certified', 'certification', 'certificated', 'registered', 'registration', 'chartered', 'accredited', 'phd', 'doctor', 'md', 'mba', 'cpa', 'cfa', 'pmp'])
+  const normalizedTitle = cvTitleWords(title).join(' ')
+  const protectedPhrases = ['professional engineer', 'professional eng', 'prof engineer', 'p eng', 'p e', 'peng', 'pe', 'registered nurse', 'r n', 'rn', 'board certified', 'certified public accountant', 'ph d', 'm d']
+  const protectedMatches = protectedPhrases.filter(phrase => (` ${normalizedTitle} `).includes(` ${phrase} `))
+  const ordinary = [...new Set(cvTitleWords(title))].filter(word => credentialClaims.has(word) || !connectors.has(word) && !supported.has(word) && !held.has(word))
+  return [...new Set([...ordinary, ...protectedMatches])]
 }
 export function cvTitleSourceValues(value: unknown): string[] {
   if (typeof value === 'string') return [value]
