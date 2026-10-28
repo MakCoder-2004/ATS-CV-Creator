@@ -8,4 +8,6 @@ The exact LF bytes have SHA-256 `d905efcc3bc4cfa70ddb8c5669cfa13b11f0eeb4250fe37
 
 `tests/cover-letter-legacy-backup.test.ts` restores this static fixture and checks the actual retained facts/posting. Its corrupted-consent-schema case guards against a future version upgrade laundering untrusted legacy SQL into a trusted current definition.
 
+The regression suite also derives the known pre-job-ownership v3 shape by removing migration 10 and its `job_id` consent column. Git history immediately before `b9c888e` confirms that the app emitted v3 with that older consent schema. The unchanged baseline engine accepts this known upgrade; the initial feature storage candidate rejected it, so preserving that transform is an explicit regression gate. This derived case is not presented as another captured backup.
+
 This fixture has no draft, active consent, or checkpoint rows. Existing dedicated legacy canonical-hash, consent, recovery, and backup tests remain necessary; this fixture does not replace them.

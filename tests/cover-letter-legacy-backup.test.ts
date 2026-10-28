@@ -32,6 +32,17 @@ test('a captured pre-letter v3 backup restores its actual career facts and posti
   expect(await workspace.api.listJobs()).toEqual([expect.objectContaining({ title: 'Platform Engineer', company: 'Legacy Fixture Target' })])
 })
 
+test('the released v3 pre-job-ownership shape still upgrades through its known migration', async () => {
+  const workspace = openWorkspace()
+  const historical = JSON.parse(fixture)
+  historical.tables.schema_migrations.rows = historical.tables.schema_migrations.rows.filter((row: { version: number }) => row.version !== 10)
+  historical.tables.outbound_consents.schema = historical.tables.outbound_consents.schema.replace(', job_id TEXT)', ')')
+  const preview = workspace.backup.previewRestore(JSON.stringify(historical))
+  workspace.backup.applyRestore(preview.token, content => content)
+  expect((await workspace.api.getProfile()).contact?.fullName).toBe('Legacy Fixture Candidate')
+  expect(await workspace.api.listJobs()).toEqual([expect.objectContaining({ title: 'Platform Engineer' })])
+})
+
 test('a legacy transform must not launder a corrupted original consent table definition', () => {
   const workspace = openWorkspace()
   const corrupted = JSON.parse(fixture)
