@@ -13,7 +13,7 @@ const directories: string[] = []
 const opened: Array<ReturnType<typeof createWorkbench>> = []
 afterEach(() => { for (const workspace of opened.splice(0)) workspace.close(); for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true }) })
 
-async function fixture(regenerationTransport?: (signal: AbortSignal) => Promise<string>, legacySources = false) {
+async function fixture(regenerationTransport?: (signal: AbortSignal) => Promise<string>, legacySources = false, titleSuggestion = 'Engineer · TypeScript') {
   const prompts: string[] = []
   const directory = mkdtempSync(join(tmpdir(), 'approval-contract-')); directories.push(directory)
   const transport: AnalysisTransport = { async generate({ prompt, signal }) {
@@ -25,7 +25,7 @@ async function fixture(regenerationTransport?: (signal: AbortSignal) => Promise<
       const { sourceCandidates } = JSON.parse(prompt.slice(prompt.indexOf('{'))) as { sourceCandidates: Array<{ index: number; text: string[] }> }
       const role = sourceCandidates.find(item => item.text[0] === 'employment' && item.text[1] === 'Engineer')
       const skill = sourceCandidates.find(item => item.text.includes('TypeScript'))
-      return JSON.stringify({ items: role && skill ? [{ text: 'Engineer · TypeScript', evidence: [role.index, skill.index], rationale: 'Uses a saved role and a cited skill.' }] : [] })
+      return JSON.stringify({ items: role && skill ? [{ text: titleSuggestion, evidence: [role.index, skill.index], rationale: 'Uses a saved role and a cited skill.' }] : [] })
     }
     if (prompt.startsWith('Propose conservative replacement wording')) {
       if (regenerationTransport) return regenerationTransport(signal)
@@ -172,6 +172,25 @@ test('regeneration proposals require fresh consent, compare without mutation, re
   expect(await workspace.api.getDocumentFitReport(jobId)).toBeNull()
 })
 
+test('unsupported licensed title cannot become a proposal or alter an approved CV', async () => {
+  const { workspace, jobId, prompts } = await fixture(undefined, true, 'Licensed Engineer · TypeScript')
+  await workspace.api.checkDraft(jobId)
+  await measure(workspace, jobId)
+  expect(await workspace.api.approveDraft(jobId)).toMatchObject({ ok: true })
+  const prior = (await workspace.api.getDraft(jobId))!
+  const preview = await workspace.api.prepareOutboundConsent(jobId)
+  if (!preview.ok) throw new Error(preview.message)
+  await workspace.api.acceptOutboundConsent(preview.token, true, true)
+  const result = await workspace.api.regenerateDraft(preview.token, { kind: 'title' })
+  expect(prompts.some(prompt => prompt.startsWith('Suggest one concise professional-focus CV title'))).toBe(true)
+  expect(result).toMatchObject({ ok: false })
+  expect(result.proposal).toBeUndefined()
+  expect(await workspace.api.getRegenerationProposal(jobId)).toBeNull()
+  expect(await workspace.api.getDraft(jobId)).toMatchObject({ id: prior.id, approved: true })
+  expect(await workspace.api.assertDraftExportable(jobId)).toMatchObject({ ok: true, document: { identity: { name: expect.any(String) } } })
+  expect((await workspace.api.getCanonicalDocument(jobId))?.identity.cvTitle).toBeUndefined()
+})
+
 test('an existing approved CV gets a title only after fresh consent and explicit proposal acceptance', async () => {
   const { workspace, jobId, prompts } = await fixture(undefined, true)
   await workspace.api.checkDraft(jobId)
@@ -200,7 +219,12 @@ test('an existing approved CV gets a title only after fresh consent and explicit
   expect(edited).toMatchObject({ ok: true, draft: { cvTitle: { authoredBy: 'user' }, checkReport: { passed: false } } })
   expect(edited.draft?.checkReport?.findings).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'unsupported-title', itemPath: 'cvTitle' })]))
   expect(await workspace.api.approveDraft(jobId)).toMatchObject({ ok: false })
-  const removed = await workspace.api.changeCvTitle({ jobId, draftId: edited.draft!.id, title: null })
+  const licensed = await workspace.api.changeCvTitle({ jobId, draftId: edited.draft!.id, title: 'Licensed Engineer' })
+  expect(licensed.draft?.checkReport?.findings).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'unsupported-title', itemPath: 'cvTitle', message: expect.stringMatching(/licensed/i) })]))
+  await measure(workspace, jobId)
+  expect(await workspace.api.approveDraft(jobId)).toMatchObject({ ok: false })
+  expect(await workspace.api.assertDraftExportable(jobId)).toMatchObject({ ok: false })
+  const removed = await workspace.api.changeCvTitle({ jobId, draftId: licensed.draft!.id, title: null })
   expect(removed).toMatchObject({ ok: true, draft: { approved: false } })
   expect(removed.draft?.cvTitle).toBeUndefined()
   expect((await workspace.api.getCanonicalDocument(jobId))?.identity.cvTitle).toBeUndefined()

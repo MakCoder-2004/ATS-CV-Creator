@@ -20,6 +20,21 @@ export function cvTitleHasHeldRoleAnchor(title: string, heldTitles: string[]): b
   const occupations = text.match(/\b(?:engineer|developer|analyst|scientist|designer|manager|architect|consultant|researcher|specialist|trainee|administrator|technician|coordinator|professional)\b/giu) ?? []
   return occupations.length ? occupations.every(term => roles.some(role => new RegExp(`\\b${term}\\b`, 'iu').test(role))) : roles.some(role => role.length > 2 && text.includes(role))
 }
+const cvTitleWords = (value: string) => value.normalize('NFKC').toLocaleLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []
+/** Compare title modifiers to the cited facts, not merely to the job posting or a matching occupation word. */
+export function cvTitleUnsupportedTerms(title: string, sourceText: string[], heldTitles: string[]): string[] {
+  const supported = new Set(sourceText.flatMap(cvTitleWords))
+  const held = new Set(heldTitles.flatMap(cvTitleWords))
+  const connectors = new Set(['and', 'or', 'of', 'for', 'with', 'in', 'the', 'a', 'an'])
+  const credentialClaims = new Set(['licensed', 'certified', 'registered', 'chartered', 'accredited', 'phd', 'doctor', 'md', 'mba', 'cpa', 'pmp'])
+  return [...new Set(cvTitleWords(title))].filter(word => credentialClaims.has(word) ? !held.has(word) : !connectors.has(word) && !supported.has(word))
+}
+export function cvTitleSourceValues(value: unknown): string[] {
+  if (typeof value === 'string') return [value]
+  if (Array.isArray(value)) return value.flatMap(cvTitleSourceValues)
+  if (value && typeof value === 'object') return Object.entries(value).filter(([key]) => !/^(?:id|revision|sourceIds|evidenceId|createdAt|updatedAt)$/i.test(key)).flatMap(([, child]) => cvTitleSourceValues(child))
+  return []
+}
 export const cvTitleSchema = z.object({ text: cvTitleTextSchema, citations: z.array(draftCitationSchema).min(1).max(5), rationale: z.string().trim().min(1).max(500), authoredBy: z.enum(['model', 'user']) }).strict()
 export const cvTitleChangeSchema = z.object({ jobId: z.string().uuid(), draftId: z.string().uuid(), title: cvTitleTextSchema.nullable() }).strict()
 export type CvTitleChange = z.infer<typeof cvTitleChangeSchema>
