@@ -1,0 +1,101 @@
+
+\documentclass[letterpaper,11pt]{article}
+
+% Load shared packages
+\input{../shared/packages}
+
+%-------------------------------------------
+% Font size settings for letter body
+\newcommand{\contentfontsize}{12pt}
+\newcommand{\contentlinespacing}{14pt}
+
+%-------------------------------------------
+% Cover letter-specific commands
+
+\newcommand{\paragap}{\vspace{10pt}}
+
+% Opening paragraph template
+\newcommand{\openingpara}[1]{%
+\noindent
+#1
+\paragap
+}
+
+% Bullet points template
+\newcommand{\bulletpoints}[1]{%
+\begin{itemize}[leftmargin=0.25in, itemsep=6pt, topsep=0pt, partopsep=0pt]
+#1
+\end{itemize}
+}
+
+% Single bullet item with bold title
+\newcommand{\bulletitem}[2]{%
+\item \textbf{#1:} #2
+}
+
+%-------------------------------------------
+%%%%%%  COVER LETTER STARTS HERE  %%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+% Load recipient / hiring manager info
+\input{recipient}
+
+% Load role-specific content
+\input{content}
+
+\begin{document}
+
+%----------HEADING----------
+\input{../shared/header}
+
+%----------LETTER INFO----------
+\fontsize{\contentfontsize}{\contentlinespacing}\selectfont
+\vspace{20pt}
+
+% Date
+\noindent
+\today
+
+\vspace{12pt}
+
+% Recipient block (only shown when hiring manager info is provided)
+\ifdefempty{\hmname}{}{%
+\noindent
+\hmname\\
+\ifdefempty{\hmtitle}{}{\hmtitle\\}%
+\ifdefempty{\hmorg}{}{\hmorg\\}%
+\ifdefempty{\hmaddra}{}{\hmaddra\\}%
+\ifdefempty{\hmaddrb}{}{\hmaddrb\\}%
+
+\vspace{12pt}
+}
+
+% Subject Line
+\noindent
+\textbf{RE: \jobtitle}%
+\ifdefempty{\jobid}{}{ {\small(\#\jobid)}}
+
+\vspace{12pt}
+
+% Salutation — use name when available, otherwise generic
+\noindent
+\ifdefempty{\hmname}{Dear Hiring Manager,}{Dear \hmname,}
+
+\vspace{10pt}
+
+\letterbody
+
+\paragap
+Thank you for considering my application!
+
+\vspace{15pt}
+
+% Signature
+\noindent
+Sincerely,
+
+\vspace{10pt}
+
+\noindent
+Lorem Ipsum  % <-- Update this to match shared/header.tex
+
+\end{document}
