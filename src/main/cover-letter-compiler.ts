@@ -21,9 +21,11 @@ function validRelativePath(value: string): boolean {
 
 export function createCoverLetterCompiler(config: { toolchainRoot: string; templateRoot: string; tempRoot: string }) {
   const toolchainRoot = resolve(config.toolchainRoot), templateRoot = resolve(config.templateRoot), tempRoot = resolve(config.tempRoot)
-  let cache: { documentHash: string; pdf: Buffer; templateIdentity: CoverLetterTemplateIdentity } | undefined
+  type CompileResult = { documentHash: string; pdf: Buffer; templateIdentity: CoverLetterTemplateIdentity }
+  const copyResult = (result: CompileResult): CompileResult => ({ ...result, pdf: Buffer.from(result.pdf), templateIdentity: { ...result.templateIdentity } })
+  let cache: CompileResult | undefined
   let queue: Promise<unknown> = Promise.resolve()
-  const inFlight = new Map<string, Promise<{ documentHash: string; pdf: Buffer; templateIdentity: CoverLetterTemplateIdentity }>>()
+  const inFlight = new Map<string, Promise<CompileResult>>()
 
   async function verifyAssets(): Promise<{ identity: CoverLetterTemplateIdentity; template: Buffer }> {
     try {
@@ -64,9 +66,9 @@ export function createCoverLetterCompiler(config: { toolchainRoot: string; templ
     const canonicalBytes = Buffer.from(JSON.stringify(letter))
     if (canonicalBytes.byteLength > MAX_SOURCE_BYTES) throw new Error('The cover letter is too large to prepare safely.')
     const documentHash = hashCoverLetterDocument(letter)
-    if (cache?.documentHash === documentHash) return { ...cache, pdf: Buffer.from(cache.pdf), templateIdentity: { ...cache.templateIdentity } }
+    if (cache?.documentHash === documentHash) return copyResult(cache)
     const existing = inFlight.get(documentHash)
-    if (existing) return existing.then(result => ({ ...result, pdf: Buffer.from(result.pdf), templateIdentity: { ...result.templateIdentity } }))
+    if (existing) return existing.then(copyResult)
     if (inFlight.size >= 4) throw new Error('PDF preparation is busy. Wait for the current letter to finish, then try again.')
 
     const task = queue.catch(() => {}).then(async () => {
@@ -78,13 +80,41 @@ export function createCoverLetterCompiler(config: { toolchainRoot: string; templ
         await cp(join(toolchainRoot, 'texmf-var', 'web2c', 'pdftex', 'pdflatex.fmt'), join(directory, 'home', 'web2c', 'pdftex', 'pdflatex.fmt'))
         await writeFile(join(directory, 'cover-letter.tex'), verified.template)
         await writeFile(join(directory, 'content.tex'), renderCoverLetterTex(letter))
-        const environment: NodeJS.ProcessEnv = {}
-        for (const [key, value] of Object.entries(process.env)) if (!/^(?:TEX|MIKTEX|BIB|LUA|OSFONTDIR|FONTCONFIG|GS_|HOME$)/i.test(key)) environment[key] = value
-        Object.assign(environment, {
-          PATH: `${join(toolchainRoot, 'bin', 'windows')};${join(process.env.SystemRoot ?? 'C:\\Windows', 'System32')}`,
-          HOME: join(directory, 'home'), TEXMFCNF: `${toolchainRoot};${join(toolchainRoot, 'texmf-dist', 'web2c')}`, TEXMFROOT: toolchainRoot, TEXMFDIST: join(toolchainRoot, 'texmf-dist'), TEXINPUTS: `${join(toolchainRoot, 'texmf-dist', 'tex')}//;`, TEXMFHOME: join(directory, 'home'), TEXMFCONFIG: join(directory, 'home'), TEXMFVAR: join(directory, 'home'), TEXMFOUTPUT: directory,
+        const home = join(directory, 'home')
+        const texmfDist = join(toolchainRoot, 'texmf-dist')
+        const texmfWeb2c = join(texmfDist, 'web2c')
+        const systemRoot = process.env.SystemRoot ?? 'C:\\Windows'
+        const environment: NodeJS.ProcessEnv = {
+          SystemRoot: systemRoot,
+          WINDIR: systemRoot,
+          PATH: `${join(toolchainRoot, 'bin', 'windows')};${join(systemRoot, 'System32')}`,
+          HOME: home,
+          USERPROFILE: home,
+          TMP: directory,
+          TEMP: directory,
+          TEXMFCNF: `${toolchainRoot};${texmfWeb2c}`,
+          TEXMFROOT: toolchainRoot,
+          TEXMFDIST: texmfDist,
+          TEXMFMAIN: texmfDist,
+          TEXMFLOCAL: join(directory, 'texmf-local'),
+          TEXMFSYSVAR: join(toolchainRoot, 'texmf-var'),
+          TEXMFSYSCONFIG: join(toolchainRoot, 'texmf-config'),
+          TEXMFHOME: home,
+          TEXMFCONFIG: home,
+          TEXMFVAR: home,
+          TEXMFOUTPUT: directory,
+          TEXMFCACHE: home,
+          TEXMFDBS: `${join(toolchainRoot, 'texmf-var')}//;${texmfDist}//`,
+          TEXINPUTS: `.;${join(texmfDist, 'tex')}//;`,
+          TEXFORMATS: `${join(home, 'web2c', 'pdftex')};${texmfWeb2c}`,
+          TEXPOOL: texmfWeb2c,
+          T1FONTS: `${join(texmfDist, 'fonts', 'type1')}//`,
+          TFMFONTS: `${join(texmfDist, 'fonts', 'tfm')}//`,
+          VFFONTS: `${join(texmfDist, 'fonts', 'vf')}//`,
+          ENCFONTS: `${join(texmfDist, 'fonts', 'enc')}//`,
+          TEXFONTMAPS: `${join(toolchainRoot, 'texmf-var', 'fonts', 'map', 'pdftex', 'updmap')}//;${join(texmfDist, 'fonts', 'map', 'pdftex')}//;${join(texmfDist, 'fonts', 'map')}//`,
           openin_any: 'p', openout_any: 'p', shell_escape: 'f', SOURCE_DATE_EPOCH: '946684800', FORCE_SOURCE_DATE: '1',
-        })
+        }
         const executable = join(toolchainRoot, 'bin', 'windows', 'pdflatex.exe')
         try {
           for (let pass = 0; pass < 2; pass++) await execute(executable, ['-no-shell-escape', '-interaction=nonstopmode', '-halt-on-error', '-file-line-error', 'cover-letter.tex'], { cwd: directory, env: environment, windowsHide: true, timeout: 20_000, maxBuffer: 1024 * 1024, encoding: 'utf8' })
@@ -100,8 +130,8 @@ export function createCoverLetterCompiler(config: { toolchainRoot: string; templ
         try { inspected = await inspectCoverLetterPdf(pdf); assertCoverLetterPdfContent(letter, inspected) }
         catch (error) { throw error instanceof Error && /exactly one|Letter page|selectable text|reading order/.test(error.message) ? error : new Error(safeFailure) }
         const result = { documentHash, pdf, templateIdentity: { ...verified.identity } }
-        cache = { ...result, pdf: Buffer.from(pdf) }
-        return { ...result, pdf: Buffer.from(pdf) }
+        cache = copyResult(result)
+        return copyResult(result)
       } finally { await rm(directory, { recursive: true, force: true }) }
     })
     queue = task

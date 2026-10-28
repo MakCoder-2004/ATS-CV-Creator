@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, expect, test } from 'vitest'
+import { createHash } from 'node:crypto'
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { resolve, join } from 'node:path'
@@ -64,16 +65,59 @@ test('actual Lato PDF is one selectable US Letter page and DOCX uses same canoni
   expect(xml).not.toContain('Built systems.')
 })
 
-test('same-document concurrent compilation returns independent byte buffers and cleans owned workspaces', async () => {
+test('same-document concurrent compilation returns independent bytes and metadata', async () => {
   const letter = canonical({ subject: 'Concurrent copy test' })
   const [a, b] = await Promise.all([compiler.compile(letter), compiler.compile(letter)])
   expect(a.documentHash).toBe(b.documentHash)
   expect(a.pdf).toEqual(b.pdf)
   a.pdf.fill(0)
+  a.templateIdentity.manifestSha256 = '0'.repeat(64)
   expect(b.pdf.subarray(0, 5).toString()).toBe('%PDF-')
-  expect((await compiler.compile(letter)).pdf.subarray(0, 5).toString()).toBe('%PDF-')
+  expect(b.templateIdentity).toEqual(identity)
+  const warm = await compiler.compile(letter)
+  expect(warm.pdf.subarray(0, 5).toString()).toBe('%PDF-')
+  expect(warm.templateIdentity).toEqual(identity)
+  warm.templateIdentity.revision = 'poisoned'
+  const nextWarm = await compiler.compile(letter)
+  expect(nextWarm.templateIdentity).toEqual(identity)
   expect(await (await import('node:fs/promises')).readdir(join(root, 'temp'))).toEqual([])
 })
+
+test('ambient TeX font and format lookup overrides cannot replace pinned fonts', async () => {
+  const letter = canonical({ subject: 'Ambient lookup isolation' })
+  const overrideFonts = join(root, 'ambient-font-override')
+  await mkdir(overrideFonts, { recursive: true })
+  await cp(join(toolchainRoot, 'texmf-dist/fonts/type1/typoland/lato/Lato-Bold.pfb'), join(overrideFonts, 'Lato-Regular.pfb'))
+  const keys = ['T1FONTS', 'TFMFONTS', 'VFFONTS', 'ENCFONTS', 'TEXINPUTS', 'TEXFORMATS']
+  const previous = new Map(keys.map(key => [key, process.env[key]]))
+  const clean = await createCoverLetterCompiler({ toolchainRoot, templateRoot, tempRoot: join(root, 'clean-font-temp') }).compile(letter)
+  try {
+    process.env.T1FONTS = `${overrideFonts};`
+    process.env.TFMFONTS = `${overrideFonts};`
+    process.env.VFFONTS = `${overrideFonts};`
+    process.env.ENCFONTS = `${overrideFonts};`
+    process.env.TEXINPUTS = `${overrideFonts};`
+    process.env.TEXFORMATS = overrideFonts
+    const isolated = await createCoverLetterCompiler({ toolchainRoot, templateRoot, tempRoot: join(root, 'override-font-temp') }).compile(letter)
+    const fingerprints = async (pdfBytes: Buffer) => {
+      const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs')
+      const task = getDocument({ data: new Uint8Array(pdfBytes), useSystemFonts: false, fontExtraProperties: true })
+      try {
+        const pdf = await task.promise
+        const page = await pdf.getPage(1)
+        await page.getOperatorList()
+        const content = await page.getTextContent()
+        return [...new Set(content.items.filter((item): item is typeof item & { fontName: string } => 'fontName' in item && typeof item.fontName === 'string').map(item => item.fontName))].map(name => page.commonObjs.get(name)).map((font: { name?: string; data?: Uint8Array }) => ({ name: font.name, hash: font.data ? createHash('sha256').update(font.data).digest('hex') : undefined })).sort((a, b) => String(a.name).localeCompare(String(b.name)))
+      } finally { await task.destroy() }
+    }
+    const cleanFonts = await fingerprints(clean.pdf)
+    const isolatedFonts = await fingerprints(isolated.pdf)
+    expect(isolatedFonts).toEqual(cleanFonts)
+    expect(isolatedFonts.map(font => font.name?.replace(/^[A-Z]{6}\+/, '')).sort()).toEqual(['Lato-Bold', 'Lato-Regular'])
+  } finally {
+    for (const [key, value] of previous) value === undefined ? delete process.env[key] : process.env[key] = value
+  }
+}, 60_000)
 
 test('actual compiler refuses unsupported Arabic and multipage body output', async () => {
   await expect(compiler.compile({ ...canonical(), paragraphs: ['مرحبا بالعالم'] })).rejects.toThrow(/unsupported|characters/i)
@@ -124,7 +168,7 @@ test('asset verification runs before a warm-cache return and rejects changed tem
   await expect(local.compile(letter)).rejects.toThrow(/missing or damaged/i)
 }, 120_000)
 
-test('manifest traversal paths are rejected before compilation', async () => {
+test('manifest tampering with a traversal path is refused by the pinned-manifest digest gate', async () => {
   const app = join(root, 'invalid-manifest-app')
   await cp(templateRoot, app, { recursive: true })
   const manifestPath = join(app, 'assets.json')
