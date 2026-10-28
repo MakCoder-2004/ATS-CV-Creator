@@ -21,32 +21,33 @@
 .cover-letter-finding { padding: 12px; border-left: 3px solid var(--warning); background: var(--warning-surface); color: var(--warning-ink); overflow-wrap: anywhere; }
 .cover-letter-layout-note,
 .cover-letter-limitation { color: var(--muted); font-size: 13px; line-height: 1.55; }
-.cover-letter-review .paper.cover-letter-paper { width: min(100%, 612px); min-width: 0; min-height: 0; aspect-ratio: 612 / 792; padding: 32px; background: #fff; color: #202838; border: 1px solid #d8dfea; font: 14.667px/1.4 Lato, Arial, sans-serif; color-scheme: light; overflow-wrap: anywhere; }
+.cover-letter-review .paper.cover-letter-paper { --paper-ink: #202838; --paper-muted: #475569; --paper-rule: #8795a5; --paper-selected: #f3f6fe; --paper-accent: #315dcc; width: min(100%, 612px); min-width: 0; min-height: 0; aspect-ratio: 612 / 792; padding: 32px; background: #fff; color: var(--paper-ink); border: 1px solid var(--paper-rule); font: 14.667px/1.4 Lato, Arial, sans-serif; color-scheme: light; overflow-wrap: anywhere; }
 .cover-letter-paper-header { display: grid; gap: 3px; text-align: center; }
 .cover-letter-paper-header strong { font: 600 22px/1.2 Lato, Arial, sans-serif; }
-.cover-letter-paper-header span { color: #475569; }
+.cover-letter-paper-header span { color: var(--paper-muted); }
 .cover-letter-date { margin-top: 28px; }
 .cover-letter-subject { margin-top: 18px; }
 .cover-letter-greeting { margin-top: 22px; }
 .cover-letter-paragraphs { display: grid; gap: 14px; margin-top: 14px; }
 .cover-letter-paragraph-review { min-width: 0; }
 .cover-letter-body-paragraph { white-space: pre-wrap; }
-.cover-letter-sources { display: grid; gap: 8px; margin-top: 10px; padding: 10px 12px; border-left: 2px solid var(--link); background: #f3f5f8; color: #202838; font: 13px/1.5 'Manrope Variable', sans-serif; }
+.cover-letter-sources { display: grid; gap: 8px; margin-top: 10px; padding: 10px 12px; border-left: 2px solid var(--paper-accent); background: var(--paper-selected); color: var(--paper-ink); font: 13px/1.5 'Manrope Variable', sans-serif; }
 .cover-letter-sources h3 { margin: 0; font: 650 13px/1.5 'Manrope Variable', sans-serif; }
-.cover-letter-sources blockquote { margin: 0; padding-top: 8px; border-top: 1px solid #d8dfea; }
+.cover-letter-sources blockquote { margin: 0; padding-top: 8px; border-top: 1px solid var(--paper-rule); }
 .cover-letter-sources blockquote p { margin-top: 4px; white-space: pre-wrap; }
 .cover-letter-control-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
 .cover-letter-control-row button { min-height: 44px; white-space: normal; }
-.cover-letter-acknowledged { align-self: center; color: var(--success); font-weight: 650; }
+.cover-letter-acknowledged { align-self: center; color: var(--paper-accent, #315dcc); font-weight: 650; }
 .cover-letter-paragraph-review form,
 .cover-letter-recipient-form { display: grid; gap: 8px; min-width: 0; }
 .cover-letter-paragraph-review form label,
 .cover-letter-recipient-form label { font-weight: 650; }
 .cover-letter-paragraph-review textarea,
-.cover-letter-recipient-form input { width: 100%; min-width: 0; min-height: 44px; padding: 10px 12px; border: 1px solid var(--control-border); border-radius: 6px; background: var(--surface); color: var(--ink); font: inherit; }
+.cover-letter-paragraph-review textarea,
+.cover-letter-recipient-form input { width: 100%; min-width: 0; min-height: 44px; padding: 10px 12px; border: 1px solid var(--paper-rule, #8795a5); border-radius: 6px; background: #fff; color: var(--paper-ink, #202838); font: inherit; }
 .cover-letter-paragraph-review textarea { min-height: 112px; resize: vertical; }
 .cover-letter-paragraph-review textarea:focus-visible,
-.cover-letter-recipient-form input:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+.cover-letter-recipient-form input:focus-visible { outline: 3px solid var(--paper-accent, #315dcc); outline-offset: 2px; }
 .cover-letter-paragraph-review form [role=alert] { color: var(--error); overflow-wrap: anywhere; }
 .cover-letter-recipient-form p,
 .cover-letter-action-bar > p { color: var(--muted); font-size: 13px; line-height: 1.55; }
@@ -60,9 +61,11 @@
 .cover-letter-action-bar { position: sticky; top: 8px; z-index: 4; display: grid; gap: 12px; padding: 16px 20px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
 .cover-letter-action-status { display: flex; flex-wrap: wrap; gap: 8px 16px; color: var(--muted); }
 .cover-letter-action-bar button:disabled { cursor: not-allowed; opacity: .55; }
+.cover-letter-review :is(button, input, textarea) { scroll-margin-top: calc(var(--cover-letter-review-bar-height, 0px) + 16px); }
 .cover-letter-review button:focus-visible,
 .cover-letter-document-selector button:focus-visible,
 .cover-letter-run-option input:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
+.cover-letter-paper button:focus-visible { outline-color: var(--paper-accent); }
 @media (max-width: 760px) {
   .cover-letter-review .paper.cover-letter-paper { padding: 24px; }
   .cover-letter-action-bar { padding: 12px; }

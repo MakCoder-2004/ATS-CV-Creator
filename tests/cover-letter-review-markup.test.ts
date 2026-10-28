@@ -1,9 +1,12 @@
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { expect, test } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { ApplicationDocumentSelector } from '../src/renderer/ApplicationDocumentSelector'
 import { CoverLetterRunOption } from '../src/renderer/CoverLetterRunOption'
 import { CoverLetterReview } from '../src/renderer/CoverLetterReview'
+import { advanceReviewVisit, canBeginParagraphEdit, canBeginRecipientEdit } from '../src/renderer/cover-letter-review-state'
 
 const uid = (n: string) => `${n.repeat(8)}-${n.repeat(4)}-4${n.repeat(3)}-8${n.repeat(3)}-${n.repeat(12)}`
 const revision = {
@@ -94,6 +97,50 @@ test('never renders a mismatched canonical letter as current content', () => {
   const html = renderReview({ canonical: foreign })
   expect(html).not.toContain('Foreign job content must not appear.')
   expect(html).toContain('current document does not match')
+})
+
+test('serializes edit sessions and advances identity epochs across A-B-A visits', () => {
+  const paragraph = { kind: 'paragraph' as const, paragraphId: 'p1' }
+  const recipient = { kind: 'recipient' as const }
+  expect(canBeginRecipientEdit(paragraph)).toBe(false)
+  expect(canBeginParagraphEdit(recipient)).toBe(false)
+  expect(canBeginRecipientEdit(null)).toBe(true)
+  expect(canBeginParagraphEdit(null)).toBe(true)
+  const visitA = { identity: 'A', epoch: 0 }
+  const visitB = advanceReviewVisit(visitA, 'B')
+  const visitAAgain = advanceReviewVisit(visitB, 'A')
+  expect(visitAAgain.epoch).toBe(2)
+  expect(advanceReviewVisit(visitAAgain, 'A')).toEqual(visitAAgain)
+})
+
+test('places the sticky action bar before the paper in review markup', () => {
+  const html = renderReview()
+  expect(html.indexOf('cover-letter-action-bar')).toBeLessThan(html.indexOf('cover-letter-paper'))
+})
+
+test('uses paper palette colors with WCAG AA contrast for paper text and focus', () => {
+  const css = readFileSync(resolve(process.cwd(), 'src/renderer/cover-letter-review.css'), 'utf8')
+  const match = (name: string) => {
+    const found = css.match(new RegExp(`--paper-${name}:\\s*(#[0-9a-fA-F]{6})`))
+    expect(found, `paper ${name} token`).toBeTruthy()
+    return found![1]
+  }
+  const luminance = (hex: string) => {
+    const channels = hex.slice(1).match(/../g)!.map(channel => parseInt(channel, 16) / 255).map(value => value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4)
+    return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2]
+  }
+  const contrast = (a: string, b: string) => {
+    const [high, low] = [luminance(a), luminance(b)].sort((x, y) => y - x)
+    return (high + 0.05) / (low + 0.05)
+  }
+  const paperInk = match('ink')
+  const paperAccent = match('accent')
+  const paperSelected = match('selected')
+  expect(contrast(paperInk, '#ffffff')).toBeGreaterThanOrEqual(4.5)
+  expect(contrast(match('muted'), '#ffffff')).toBeGreaterThanOrEqual(4.5)
+  expect(contrast(paperAccent, '#ffffff')).toBeGreaterThanOrEqual(4.5)
+  expect(contrast(paperInk, paperSelected)).toBeGreaterThanOrEqual(4.5)
+  expect(contrast(paperAccent, paperSelected)).toBeGreaterThanOrEqual(4.5)
 })
 
 test('shows action status and does not imply approval from a source acknowledgment', () => {

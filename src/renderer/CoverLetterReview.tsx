@@ -1,6 +1,8 @@
-import { useRef, useState } from 'react'
+import { useRef, useState, useLayoutEffect } from 'react'
 import type { CoverLetterRevision } from '../shared/cover-letter'
 import type { CanonicalCoverLetter } from '../shared/cover-letter-document'
+import { advanceReviewVisit, canBeginParagraphEdit, canBeginRecipientEdit } from './cover-letter-review-state'
+import type { EditSession } from './cover-letter-review-state'
 import './cover-letter-review.css'
 
 export type CoverLetterCheckStatus = 'idle' | 'pending' | 'passed' | 'issues' | 'error'
@@ -39,14 +41,32 @@ const fitLabel: Record<CoverLetterFitStatus, string> = {
 export function CoverLetterReview(props: CoverLetterReviewProps) {
   const { jobId, sourceRevisionId, letter, canonical, readiness, busy } = props
   const identity = letter ? `${jobId}:${letter.id}:${letter.revision}:${sourceRevisionId ?? 'missing'}` : `${jobId}:missing:${sourceRevisionId ?? 'missing'}`
-  const currentIdentity = useRef(identity)
-  currentIdentity.current = identity
+  const visit = useRef({ identity, epoch: 0 })
+  visit.current = advanceReviewVisit(visit.current, identity)
+  const visitKey = `${identity}@${visit.current.epoch}`
+  const currentIdentity = useRef(visitKey)
+  currentIdentity.current = visitKey
+  const actionBarRef = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => {
+    const bar = actionBarRef.current
+    if (!bar || typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(entries => {
+      const height = entries[0]?.contentRect.height
+      if (height) (bar.closest('.cover-letter-review') as HTMLElement | null)?.style.setProperty('--cover-letter-review-bar-height', `${Math.ceil(height)}px`)
+    })
+    observer.observe(bar)
+    return () => observer.disconnect()
+  }, [])
   const [local, setLocal] = useState<LocalState | null>(null)
-  const localState = local?.identity === identity ? local : null
+  const localState = local?.identity === visitKey ? local : null
   const [editingId, setEditingId] = useState<{ identity: string; paragraphId: string } | null>(null)
-  const activeEdit = editingId?.identity === identity ? editingId.paragraphId : null
+  const activeEdit = editingId?.identity === visitKey ? editingId.paragraphId : null
   const saveParagraphText = localState?.paragraphId === activeEdit ? localState.text : undefined
   const recipientDraft = localState?.recipient ?? letter?.recipient ?? ''
+  const recipientSession = localState?.recipient !== undefined
+  const recipientDirty = Boolean(letter && recipientSession && localState?.recipient?.trim() !== (letter.recipient ?? ''))
+  const editSession: EditSession = activeEdit ? { kind: 'paragraph', paragraphId: activeEdit } : localState?.recipient !== undefined ? { kind: 'recipient' } : null
+  const unsavedEdit = Boolean(activeEdit || recipientDirty)
   const pending = busy || Boolean(localState?.pending)
   const mismatch = Boolean(letter && (letter.jobId !== jobId || !sourceRevisionId || letter.cvRevisionId !== sourceRevisionId || !canonical || canonical.jobId !== jobId || canonical.sourceRevisionId !== letter.id || canonical.revision !== letter.revision || canonical.paragraphs.length !== letter.paragraphs.length || canonical.paragraphs.some((text, index) => text !== letter.paragraphs[index]?.text)))
   const boundLetter = letter && !mismatch ? letter : null
@@ -56,8 +76,8 @@ export function CoverLetterReview(props: CoverLetterReviewProps) {
   const actionInput = boundLetter ? { jobId, letterId: boundLetter.id } : null
 
   const saveParagraph = async (paragraphId: string, fallback: string) => {
-    if (!actionInput || pending) return
-    const expectedIdentity = identity
+    if (!actionInput || pending || !canBeginParagraphEdit(editSession) || recipientDirty) return
+    const expectedIdentity = visitKey
     const text = local?.identity === expectedIdentity && local.paragraphId === paragraphId ? local.text ?? fallback : fallback
     setLocal({ identity: expectedIdentity, paragraphId, text, pending: true })
     try {
@@ -73,8 +93,8 @@ export function CoverLetterReview(props: CoverLetterReviewProps) {
 
   const saveRecipient = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    if (!actionInput || pending) return
-    const expectedIdentity = identity
+    if (!actionInput || pending || !canBeginRecipientEdit(editSession)) return
+    const expectedIdentity = visitKey
     const recipient = recipientDraft.trim() || null
     setLocal({ identity: expectedIdentity, recipient: recipientDraft, pending: true })
     try {
@@ -86,8 +106,8 @@ export function CoverLetterReview(props: CoverLetterReviewProps) {
   }
 
   const invoke = async (callback: (input: CoverLetterActionInput) => Promise<void>) => {
-    if (!actionInput || pending) return
-    const expectedIdentity = identity
+    if (!actionInput || pending || unsavedEdit) return
+    const expectedIdentity = visitKey
     if (currentIdentity.current !== expectedIdentity) return
     setLocal(previous => ({ ...(previous?.identity === expectedIdentity ? previous : { identity: expectedIdentity }), pending: true, error: undefined }))
     try {
@@ -99,8 +119,8 @@ export function CoverLetterReview(props: CoverLetterReviewProps) {
   }
 
   const acknowledge = async (paragraphId: string, letterId: string) => {
-    const expectedIdentity = identity
-    if (pending || currentIdentity.current !== expectedIdentity) return
+    const expectedIdentity = visitKey
+    if (pending || unsavedEdit || currentIdentity.current !== expectedIdentity) return
     setLocal(previous => ({ ...(previous?.identity === expectedIdentity ? previous : { identity: expectedIdentity }), pending: true, error: undefined }))
     try {
       await props.onAcknowledge({ jobId, letterId, paragraphId, acknowledged: true })
@@ -118,6 +138,16 @@ export function CoverLetterReview(props: CoverLetterReviewProps) {
       {boundLetter?.findings.map((finding, index) => <p className="cover-letter-finding" key={`${finding.code}-${index}`}>Issue to resolve: {finding.message}</p>)}
     </div>
 
+    <div ref={actionBarRef} className="cover-letter-action-bar" aria-label="Cover letter actions">
+      <p>Checks and approval apply only to this cover letter. Approval is a separate decision from CV approval.</p>
+      {unsavedEdit && <p role="status">Save or cancel your current edit before running checks or approval. Unsaved changes are not checked.</p>}
+      <div className="cover-letter-action-status" aria-live="polite"><span>Issues: {statusLabel[props.checkStatus]}</span><span>Page fit: {fitLabel[props.fitStatus]}</span>{readiness.reason && <span>{readiness.reason}</span>}</div>
+      <div className="cover-letter-control-row">
+        <button className="secondary-button" type="button" disabled={!actionInput || pending || mismatch || unsavedEdit || props.checkStatus === 'pending'} onClick={() => void invoke(props.onCheck)}>Check for issues</button>
+        <button className="secondary-button" type="button" disabled={!actionInput || pending || mismatch || unsavedEdit || props.fitStatus === 'pending'} onClick={() => void invoke(props.onMeasureFit)}>Check one-page fit</button>
+        <button className="primary-button" type="button" disabled={!actionInput || pending || mismatch || unsavedEdit || !readiness.canApprove} onClick={() => void invoke(props.onApprove)}>Approve cover letter</button>
+      </div>
+    </div>
     {boundLetter && boundCanonical ? <>
       <p className="cover-letter-layout-note">Structured review only. This layout is not the compiled PDF or a pagination check.</p>
       <article className="paper paper--letter paper--lato cover-letter-paper" aria-label="Cover letter structured review">
@@ -139,13 +169,13 @@ export function CoverLetterReview(props: CoverLetterReviewProps) {
             return <section className="cover-letter-paragraph-review" key={paragraph.id} aria-label={`Paragraph ${index + 1} review`}>
               {isEditing ? <form onSubmit={event => { event.preventDefault(); void saveParagraph(paragraph.id, paragraph.text) }}>
                 <label htmlFor={`cover-letter-wording-${index}`}>Paragraph {index + 1} wording</label>
-                <textarea id={`cover-letter-wording-${index}`} value={text} disabled={pending} onChange={event => setLocal({ identity, paragraphId: paragraph.id, text: event.currentTarget.value })} />
+                <textarea id={`cover-letter-wording-${index}`} value={text} disabled={pending} onChange={event => setLocal({ identity: visitKey, paragraphId: paragraph.id, text: event.currentTarget.value })} />
                 {localState?.error && localState.paragraphId === paragraph.id && <p role="alert">{localState.error}</p>}
                 <div className="cover-letter-control-row"><button className="primary-button" type="submit" disabled={pending || !text.trim()}>Save wording</button><button className="secondary-button" type="button" disabled={pending} onClick={() => { setEditingId(null); setLocal(null) }}>Cancel editing</button></div>
               </form> : <>
                 <p className="cover-letter-body-paragraph">{paragraph.text}</p>
-                <div className="cover-letter-control-row"><button className="secondary-button" type="button" disabled={pending} onClick={() => { setEditingId({ identity, paragraphId: paragraph.id }); setLocal({ identity, paragraphId: paragraph.id, text: paragraph.text }) }}>Edit paragraph {index + 1}</button>
-                  {acknowledged ? <span className="cover-letter-acknowledged">Source reviewed</span> : <button className="secondary-button" type="button" disabled={pending} onClick={() => void acknowledge(paragraph.id, boundLetter.id)}>Acknowledge sources for paragraph {index + 1}</button>}</div>
+                <div className="cover-letter-control-row"><button className="secondary-button" type="button" disabled={pending || recipientSession} onClick={() => { if (!canBeginParagraphEdit(editSession) || recipientDirty) return; setEditingId({ identity: visitKey, paragraphId: paragraph.id }); setLocal({ identity: visitKey, paragraphId: paragraph.id, text: paragraph.text }) }}>Edit paragraph {index + 1}</button>
+                  {acknowledged ? <span className="cover-letter-acknowledged">Source reviewed</span> : <button className="secondary-button" type="button" disabled={pending || unsavedEdit} onClick={() => void acknowledge(paragraph.id, boundLetter.id)}>Acknowledge sources for paragraph {index + 1}</button>}</div>
               </>}
               <div className="cover-letter-sources" aria-label={`Sources for paragraph ${index + 1}`}>
                 <h3>Source passages for paragraph {index + 1}</h3>
@@ -160,21 +190,12 @@ export function CoverLetterReview(props: CoverLetterReviewProps) {
       <p className="cover-letter-limitation">Automated checks cannot prove semantic truth. A source acknowledgment records your decision; it does not prove that wording is accurate.</p>
       <form className="cover-letter-recipient-form" onSubmit={event => { void saveRecipient(event) }}>
         <label htmlFor="cover-letter-recipient">Recipient name (optional)</label>
-        <input id="cover-letter-recipient" value={recipientDraft} disabled={pending} onChange={event => setLocal({ identity, recipient: event.currentTarget.value })} aria-describedby="cover-letter-recipient-help" />
+        <input id="cover-letter-recipient" value={recipientDraft} disabled={pending || Boolean(activeEdit)} onChange={event => setLocal({ identity: visitKey, recipient: event.currentTarget.value })} aria-describedby="cover-letter-recipient-help" />
         <p id="cover-letter-recipient-help">This name stays on this device and is not sent to Pi. No saved job contacts are selected automatically.</p>
-        <button className="secondary-button" type="submit" disabled={pending || recipientDraft.trim() === (boundLetter.recipient ?? '')}>Save recipient</button>
+        <div className="cover-letter-control-row"><button className="secondary-button" type="submit" disabled={pending || Boolean(activeEdit) || recipientDraft.trim() === (boundLetter.recipient ?? '')}>Save recipient</button>{recipientSession && <button className="secondary-button" type="button" disabled={pending} onClick={() => setLocal(null)}>Cancel recipient edit</button>}</div>
       </form>
       <p className="cover-letter-ack-count" role="status">{acknowledgedCount} of {boundLetter.paragraphs.length} paragraphs acknowledged</p>
     </> : <div className="cover-letter-unavailable" role="status"><h2>{letter ? 'Cover letter needs review' : 'No cover letter available'}</h2><p>{mismatch ? 'The available letter is stale or its current document does not match. The host must provide a current letter before review.' : props.message || 'The CV remains available for its independent review.'}</p></div>}
 
-    <div className="cover-letter-action-bar" aria-label="Cover letter actions">
-      <p>Checks and approval apply only to this cover letter. Approval is a separate decision from CV approval.</p>
-      <div className="cover-letter-action-status" aria-live="polite"><span>Issues: {statusLabel[props.checkStatus]}</span><span>Page fit: {fitLabel[props.fitStatus]}</span>{readiness.reason && <span>{readiness.reason}</span>}</div>
-      <div className="cover-letter-control-row">
-        <button className="secondary-button" type="button" disabled={!actionInput || pending || mismatch || props.checkStatus === 'pending'} onClick={() => void invoke(props.onCheck)}>Check for issues</button>
-        <button className="secondary-button" type="button" disabled={!actionInput || pending || mismatch || props.fitStatus === 'pending'} onClick={() => void invoke(props.onMeasureFit)}>Check one-page fit</button>
-        <button className="primary-button" type="button" disabled={!actionInput || pending || mismatch || !readiness.canApprove} onClick={() => void invoke(props.onApprove)}>Approve cover letter</button>
-      </div>
-    </div>
   </section>
 }
