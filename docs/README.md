@@ -58,6 +58,8 @@ These documents record earlier questions, proposals, and experiments. They are n
 
 | Document | Scope |
 | --- | --- |
+| [Pi SDK migration plan](plans/pi-sdk-migration.md) | Historical pre-implementation proposal; use current Pi workflow and installed evidence instead. |
+| [Pi Web Access and consent plan](plans/pi-web-access-and-consent.md) | Superseded URL-intake proposal; manual-only intake is current. |
 | [AI job-search adoption plan](research/ai-job-search-adoption-plan.md) | Proposed future capabilities and dependencies, not a shipped product map. |
 | [Upstream AI job-search audit](research/ai-job-search-source-audit.md) | External repository inspection and reuse limits. |
 | [Egypt and MENA discovery](research/egypt-mena-job-discovery.md) | Source and compliance research, not an enabled feed. |

@@ -116,7 +116,7 @@ The compiler bundling seam is now prepared under the scoped non-application file
 
 ## Sources (primary/official)
 
-- Supplied source: [`CV/overleaf template/resume.tex`](../../CV/overleaf%20template/resume.tex), [`custom-commands.tex`](../../CV/overleaf%20template/custom-commands.tex), and [`src/`](../../CV/overleaf%20template/src/).
+- Supplied source (subsequently relocated unchanged): [`CV template/overleaf template/resume.tex`](../../CV%20template/overleaf%20template/resume.tex), [`custom-commands.tex`](../../CV%20template/overleaf%20template/custom-commands.tex), and [`src/`](../../CV%20template/overleaf%20template/src/).
 - pdfTeX manual, glyph-to-Unicode discussion: [pdfTeX manual PDF (TUG/CTAN)](https://tug.ctan.org/systems/doc/pdftex/manual/pdftex-a.pdf).
 - Tectonic’s engine description and limitations: [Introduction](https://tectonic-typesetting.github.io/book/latest/introduction/index.html).
 - Tectonic install, including Windows: [Install Tectonic](https://tectonic-typesetting.github.io/book/latest/getting-started/install.html).
