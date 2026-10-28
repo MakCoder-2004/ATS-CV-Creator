@@ -24,6 +24,10 @@ async function desktopRows(app: ElectronApplication) {
       const firstTitleLine = document.createRange()
       firstTitleLine.selectNodeContents(title)
       const titleLine = firstTitleLine.getClientRects()[0]!
+      const company = row.querySelector('.saved-job-company')!
+      const firstCompanyLine = document.createRange()
+      firstCompanyLine.selectNodeContents(company)
+      const companyLine = firstCompanyLine.getClientRects()[0]!
       const checkbox = row.querySelector('.saved-job-select input')!.getBoundingClientRect()
       const status = row.querySelector('.saved-job-draft-status')!.getBoundingClientRect()
       const actions = row.querySelector('.saved-job-actions')!.getBoundingClientRect()
@@ -32,6 +36,8 @@ async function desktopRows(app: ElectronApplication) {
         return { label: button.textContent?.trim(), left: rect.left, right: rect.right, top: rect.top, width: rect.width, height: rect.height }
       })
       return {
+        title: title.textContent,
+        companyLineCenter: companyLine.top + companyLine.height / 2,
         statusLeft: status.left,
         actionsLeft: actions.left,
         titleLineCenter: titleLine.top + titleLine.height / 2,
@@ -99,6 +105,8 @@ test('saved-job status and actions align for long and short postings at desktop 
     const desktop = await desktopRows(running)
     expect(desktop.rows).toHaveLength(3)
     const firstWidths = desktop.rows[0].buttons.map(button => button.width)
+    const shortRowLayout = desktop.rows.find(row => row.title === 'Analyst')!
+    expect(Math.abs(shortRowLayout.companyLineCenter - shortRowLayout.titleLineCenter)).toBeLessThanOrEqual(2)
     for (const row of desktop.rows) {
       expect(Math.abs(row.statusLeft - desktop.headerStarts[1])).toBeLessThanOrEqual(1)
       expect(Math.abs(row.actionsLeft - desktop.headerStarts[2])).toBeLessThanOrEqual(1)
@@ -171,6 +179,7 @@ test('saved-job status and actions align for long and short postings at desktop 
     await page.screenshot({ path: join(artifacts, 'saved-jobs-375-dark.png'), fullPage: true })
 
     const shortRow = rows.filter({ hasText: 'Analyst' })
+    await shortRow.getByRole('checkbox', { name: 'Select Analyst at Synthetic Company 2' }).check()
     const deleteButton = shortRow.getByRole('button', { name: 'Delete Analyst posting' })
     await deleteButton.click()
     const confirm = page.getByRole('dialog', { name: 'Delete this saved job?' })

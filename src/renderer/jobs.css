@@ -11,9 +11,10 @@
 .saved-jobs-table th:nth-child(2) { width: 160px; }
 .saved-jobs-table th:nth-child(3) { width: 360px; }
 .saved-job-posting { display: grid; grid-template-columns: 32px minmax(0, 1fr); align-items: start; gap: 8px; min-width: 0; }
-.saved-job-posting-copy { display: grid; align-content: start; min-width: 0; line-height: 1.55; }
-.saved-job-posting-copy strong, .saved-job-posting-copy span { display: block; min-width: 0; overflow-wrap: anywhere; }
-.saved-job-posting-copy strong { box-sizing: border-box; min-height: 44px; padding-top: 11px; line-height: 22px; }
+.saved-job-posting-copy { display: flex; align-content: start; align-items: flex-start; flex-wrap: wrap; gap: 0 12px; min-width: 0; line-height: 1.55; }
+.saved-job-posting-copy strong, .saved-job-posting-copy span { min-width: 0; overflow-wrap: anywhere; }
+.saved-job-posting-copy strong, .saved-job-posting-copy .saved-job-company { box-sizing: border-box; min-height: 44px; padding-top: 11px; line-height: 22px; }
+.saved-job-posting-copy .saved-job-contacts { flex-basis: 100%; }
 .saved-job-select { display: grid; width: 32px; min-height: 44px; justify-items: center; align-content: center; }
 .saved-job-select input, .saved-jobs-selection input { width: 18px; height: 18px; margin: 0; accent-color: var(--blue); }
 .saved-jobs-selection { display: flex; align-items: center; gap: 16px; min-width: 0; margin: -16px 0 20px; padding: 12px 16px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
