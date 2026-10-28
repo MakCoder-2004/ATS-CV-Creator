@@ -25,7 +25,8 @@ These files describe the current code or govern changes to it.
 | [Lato font notice](../resources/fonts/lato/README.md) | Font provenance. |
 | [Pi SDK notices](../resources/licenses/README.md) | SDK license text and remaining redistribution review. |
 | [LaTeX license inventory](../resources/latex-licenses/README.md) | Bundled toolchain license inventory and its limits. |
-| [Updated 0.1.0 title replacement](validation/release-0.1.0-title-replacement.md) | Current same-version installer build and checksum; installed verification is a separate gate. |
+| [Installed 0.1.0 title replacement](validation/release-0.1.0-title-installed.md) | Current same-version installed app, isolated native SQLite reopen and selectable compiled-PDF title. |
+| [Updated 0.1.0 title replacement build](validation/release-0.1.0-title-replacement.md) | Current installer build and checksum before installed checks. |
 | [Original 0.1.0 prerelease build](validation/release-0.1.0-candidate.md) | Historical packaging checks and digest for superseded 0.1.0 bytes. |
 | [Earlier installed 0.1.0](validation/release-0.1.0-installed.md) | Historical installed SQLite reopen for the superseded 0.1.0 binary, not the title replacement. |
 | [Spec 75 implementation evidence](validation/spec-75-implementation.md) | Focused paragraph-format checks and open provider and installed gates. |
