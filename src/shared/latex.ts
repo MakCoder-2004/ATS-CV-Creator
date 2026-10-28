@@ -56,7 +56,7 @@ export function renderLatexSections(input: CanonicalDocument): Record<'heading.t
     const icon = /(^|\.)linkedin\.com$/.test(host) ? 'faLinkedin' : /(^|\.)github\.com$/.test(host) ? 'faGithub' : 'faGlobe'
     contact.push(`\\seticon{${icon}} \\ ${link(value.url, value.label)}`)
   }
-  const files = { 'heading.tex': `\\begin{center}\n    \\textbf{\\Huge \\scshape ${escapeLatex(document.identity.name)}} \\\\ \\vspace{1pt}\n    ${contact.join(' \\quad\n    ')}\n\\end{center}\n`, 'education.tex': '', 'experience.tex': '', 'projects.tex': '', 'skills.tex': '' }
+  const files = { 'heading.tex': `\\begin{center}\n    \\textbf{\\Huge \\scshape ${escapeLatex(document.identity.name)}} \\\\ \\vspace{1pt}\n    ${document.identity.cvTitle ? `\\textbf{\\large ${escapeLatex(document.identity.cvTitle)}} \\\\ \\vspace{1pt}\n    ` : ''}${contact.join(' \\quad\n    ')}\n\\end{center}\n`, 'education.tex': '', 'experience.tex': '', 'projects.tex': '', 'skills.tex': '' }
   for (const section of visibleDocumentSections(document)) {
     if (section.name === 'Skills') {
       const groups = groupedDocumentSkills(section.entries).map(group => `        \\textbf{${group.name}}{: ${group.entries.map(entry => escapeLatex(entry.heading)).join(', ')}}`).join(' \\\\\n')

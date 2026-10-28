@@ -19,6 +19,18 @@ test('review markup uses the template section order and isolated escaped Letter 
   expect(html).not.toContain('src="http')
 })
 
+test('new draft CV title appears under the name without reviving historical narrative fields', () => {
+  const citation = { evidenceId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', revision: 1 }
+  const draft = draftRevisionSchema.parse({ id: document.draftId, jobId: document.jobId, revision: 4, pageTarget: 1, status: 'unverified', approved: false, createdAt: new Date(0).toISOString(), progress: 'Review', attempts: 1, lockedFields: { fullName: 'Candidate', experience: [], education: [], projects: [], certificates: [] }, content: { education: [], experience: [], projects: [], skills: [], certificates: [] }, evidence: [{ ...citation, snapshot: { title: 'Software Engineer' } }].map(item => ({ evidenceId: item.evidenceId, revision: item.revision, snapshot: item.snapshot })), cvTitle: { text: 'Software Engineer · Machine Learning', citations: [citation], rationale: 'Saved work supports this focus.', authoredBy: 'model' }, tailoring: { headline: 'Legacy headline', summary: { text: 'Legacy summary', citations: [citation], rationale: 'Legacy' } } })
+  const canonical = createCanonicalDocument(draft, { contact: null, education: [], certificates: [], skills: [], summary: [], languages: [], extras: [] } as never, { experience: [], projects: [] } as never)
+  expect(canonical.identity).toMatchObject({ name: 'Candidate', cvTitle: 'Software Engineer · Machine Learning' })
+  expect(canonical.identity).not.toHaveProperty('headline')
+  expect(canonical.style).toMatchObject({ templateRevision: 4 })
+  expect(canonicalDocumentTextParts(canonical).slice(0, 2)).toEqual(['Candidate', 'Software Engineer · Machine Learning'])
+  expect(renderDocumentHtml(canonical)).toContain('<p class="cv-title">Software Engineer · Machine Learning</p>')
+  expect(renderDocumentHtml(canonical)).not.toContain('Legacy headline')
+})
+
 test('canonical education and experience follow authoritative reverse chronology with stable date ties', () => {
   const citation = { evidenceId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', revision: 1 }
   const draft = {

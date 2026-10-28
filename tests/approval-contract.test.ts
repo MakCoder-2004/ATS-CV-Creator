@@ -21,6 +21,12 @@ async function fixture(regenerationTransport?: (signal: AbortSignal) => Promise<
     if (prompt.includes('Extract only explicit qualifications')) return JSON.stringify({ required: [], preferred: [], tools: [], responsibilities: [], keywords: [] })
     if (prompt.startsWith('Score these numbered')) { const { items } = JSON.parse(prompt.slice(prompt.indexOf('{'))); return JSON.stringify({ relevance: items.map((item: { index: number }) => ({ index: item.index, score: 1, rationale: 'Relevant saved evidence.' })) }) }
     if (prompt.startsWith('Factual repair cycle')) return JSON.stringify({ corrections: [] })
+    if (prompt.startsWith('Suggest one concise professional-focus CV title')) {
+      const { sourceCandidates } = JSON.parse(prompt.slice(prompt.indexOf('{'))) as { sourceCandidates: Array<{ index: number; text: string[] }> }
+      const role = sourceCandidates.find(item => item.text[0] === 'employment' && item.text[1] === 'Engineer')
+      const skill = sourceCandidates.find(item => item.text.includes('TypeScript'))
+      return JSON.stringify({ items: role && skill ? [{ text: 'Engineer · TypeScript', evidence: [role.index, skill.index], rationale: 'Uses a saved role and a cited skill.' }] : [] })
+    }
     if (prompt.startsWith('Propose conservative replacement wording')) {
       if (regenerationTransport) return regenerationTransport(signal)
       const { sourcesByItem } = JSON.parse(prompt.slice(prompt.indexOf('{')))
@@ -164,6 +170,49 @@ test('regeneration proposals require fresh consent, compare without mutation, re
   const accepted = await workspace.api.resolveRegenerationProposal(jobId, third.proposal!.id, 'accept')
   expect(accepted).toMatchObject({ ok: false, message: expect.stringMatching(/PDF page measurement is pending/i), draft: { revision: restored.revision + 1, approved: false, approval: undefined, content: { skills: [{ name: 'TypeScript' }, { name: 'Rust' }] }, checkReport: { passed: true } } })
   expect(await workspace.api.getDocumentFitReport(jobId)).toBeNull()
+})
+
+test('an existing approved CV gets a title only after fresh consent and explicit proposal acceptance', async () => {
+  const { workspace, jobId, prompts } = await fixture(undefined, true)
+  await workspace.api.checkDraft(jobId)
+  await measure(workspace, jobId)
+  expect(await workspace.api.approveDraft(jobId)).toMatchObject({ ok: true })
+  const original = (await workspace.api.getDraft(jobId))!
+  expect(original.cvTitle).toBeUndefined()
+  const preview = await workspace.api.prepareOutboundConsent(jobId)
+  if (!preview.ok) throw new Error(preview.message)
+  const beforeRequests = prompts.length
+  expect(await workspace.api.regenerateDraft(preview.token, { kind: 'title' })).toMatchObject({ ok: false, message: expect.stringMatching(/authorize/i) })
+  expect(prompts).toHaveLength(beforeRequests)
+  expect(await workspace.api.acceptOutboundConsent(preview.token, true, true)).toMatchObject({ ok: true })
+  const suggested = await workspace.api.regenerateDraft(preview.token, { kind: 'title' })
+  expect(suggested).toMatchObject({ ok: true, proposal: { target: { kind: 'title' }, before: [], proposed: [{ text: 'Engineer · TypeScript' }] } })
+  expect(await workspace.api.getDraft(jobId)).toMatchObject({ id: original.id, approved: true })
+  expect((await workspace.api.getDraft(jobId))?.cvTitle).toBeUndefined()
+  expect(prompts.find(prompt => prompt.startsWith('Suggest one concise professional-focus CV title'))).not.toContain('PRIVATE_DRAFT_RATIONALE_CANARY')
+  const accepted = await workspace.api.resolveRegenerationProposal(jobId, suggested.proposal!.id, 'accept')
+  expect(accepted).toMatchObject({ draft: { approved: false, approval: undefined, cvTitle: { text: 'Engineer · TypeScript', authoredBy: 'model' } } })
+  expect((await workspace.api.getCanonicalDocument(jobId))?.identity.cvTitle).toBe('Engineer · TypeScript')
+  expect(await workspace.api.getDocumentFitReport(jobId)).toBeNull()
+  expect(await workspace.api.assertDraftExportable(jobId)).toMatchObject({ ok: false })
+  const titleDraft = (await workspace.api.getDraft(jobId))!
+  const edited = await workspace.api.changeCvTitle({ jobId, draftId: titleDraft.id, title: 'Senior Engineer' })
+  expect(edited).toMatchObject({ ok: true, draft: { cvTitle: { authoredBy: 'user' }, checkReport: { passed: false } } })
+  expect(edited.draft?.checkReport?.findings).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'unsupported-title', itemPath: 'cvTitle' })]))
+  expect(await workspace.api.approveDraft(jobId)).toMatchObject({ ok: false })
+  const removed = await workspace.api.changeCvTitle({ jobId, draftId: edited.draft!.id, title: null })
+  expect(removed).toMatchObject({ ok: true, draft: { approved: false } })
+  expect(removed.draft?.cvTitle).toBeUndefined()
+  expect((await workspace.api.getCanonicalDocument(jobId))?.identity.cvTitle).toBeUndefined()
+  const nextPreview = await workspace.api.prepareOutboundConsent(jobId)
+  if (!nextPreview.ok) throw new Error(nextPreview.message)
+  await workspace.api.acceptOutboundConsent(nextPreview.token, true, true)
+  const staleSuggestion = await workspace.api.regenerateDraft(nextPreview.token, { kind: 'title' })
+  expect(staleSuggestion.proposal?.status).toBe('pending')
+  const changed = await workspace.api.correctDraft({ jobId, section: 'experience', index: 0, text: 'Delivered saved work more clearly.' })
+  expect(changed).toBeTruthy()
+  expect(await workspace.api.resolveRegenerationProposal(jobId, staleSuggestion.proposal!.id, 'accept')).toMatchObject({ ok: false, proposal: { status: 'stale' } })
+  expect((await workspace.api.getDraft(jobId))?.cvTitle).toBeUndefined()
 })
 
 async function seedHistoricalFinding(state: Awaited<ReturnType<typeof fixture>>, itemPath: string) {

@@ -16,6 +16,30 @@ const document: CanonicalDocument = { version: 1, draftId: '11111111-1111-4111-8
   { name: 'Skills', entries: [{ id: 'skills-0', heading: 'C#', skillGroup: 'Languages', text: '', links: [] }, { id: 'skills-1', heading: 'React', skillGroup: 'Technologies', text: '', links: [] }] }
 ], style: { fontFamily: 'Lato', bodyPt: 11, pageSize: 'Letter', background: '#ffffff' } }
 
+test.skipIf(!available)('a CV title appears between name and contact in the compiled selectable PDF', async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), 'cv-title-pdf-'))
+  try {
+    const titled: CanonicalDocument = { ...document, identity: { ...document.identity, cvTitle: 'Software Engineer · Machine Learning' }, style: { fontFamily: 'Lato', templateRevision: 4, bodyPt: 11, pageSize: 'Letter', background: '#ffffff' } }
+    const compiler = createLatexCompiler({ toolchainRoot, templateRoot: resolve('resources/cv-template'), tempRoot })
+    const compiled = await compiler.compile(titled)
+    const inspected = await inspectCompiledPdf(compiled.pdf)
+    expect(inspected.actualPages).toBe(1)
+    expect(() => assertCompiledContent(titled, inspected)).not.toThrow()
+    const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs')
+    const loading = getDocument({ data: new Uint8Array(compiled.pdf) })
+    try {
+      const pdf = await loading.promise, page = await pdf.getPage(1)
+      const items = (await page.getTextContent()).items.filter((item): item is typeof item & { str: string; transform: number[] } => 'str' in item)
+      const name = items.find(item => item.str.includes('Zoë Candidate'))!
+      const title = items.find(item => item.str.includes('Software Engineer · Machine Learning'))!
+      const contact = items.find(item => item.str.includes('zoe@example.test'))!
+      expect(title).toBeDefined()
+      expect(name.transform[5]).toBeGreaterThan(title.transform[5])
+      expect(title.transform[5]).toBeGreaterThan(contact.transform[5])
+    } finally { await loading.destroy() }
+  } finally { await rm(tempRoot, { recursive: true, force: true }) }
+}, 60_000)
+
 test.skipIf(!available)('real bundled pdfLaTeX compiles escaped content into selectable Letter PDF with live links', async () => {
   const tempRoot = await mkdtemp(join(tmpdir(), 'cv-pdf integration '))
   try {

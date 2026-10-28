@@ -222,7 +222,7 @@ test('corrupt recovery snapshots fail closed without dispatch', async () => {
   expect(calls).toBe(0)
 }, 20000)
 
-test.each([1, 2, 3])('legacy recovery v%s remains readable but cannot dispatch under old consent', async version => {
+test.each([1, 2, 3, 4])('legacy recovery v%s remains readable but cannot dispatch under old consent', async version => {
   const directory = mkdtempSync(join(tmpdir(), 'cv-tailor-old-prompt-recovery-')); dirs.push(directory)
   const initial = createWorkbench(directory, undefined, recoveryTransport(async () => { throw Object.assign(new Error('interrupted'), { code: 'ECONNRESET' }) })); opened.push(initial)
   const { jobId, token } = await seed(initial)
@@ -234,9 +234,9 @@ test.each([1, 2, 3])('legacy recovery v%s remains readable but cannot dispatch u
   const row = sqlite.prepare('SELECT snapshot FROM generation_recovery WHERE run_id=?').get(recovery!.runId) as { snapshot: string }
   const snapshot = JSON.parse(row.snapshot)
   snapshot.version = version
-  snapshot.faithfulnessCheck = true
+  if (version < 4) snapshot.faithfulnessCheck = true
   if (version === 1) snapshot.budgets = { minimumSpacingMs: 0, rateLimitAttempts: 100, rateLimitWindowMs: 86400000, configuredDailyLimit: 10000, runLimit: 12, runTimeLimitMs: 300000 }
-  else { snapshot.source.model = { name: 'test/model', providerId: 'test', thinkingLevel: 'medium' }; snapshot.model = { providerId: 'test', modelId: 'test/model', thinkingLevel: 'medium' } }
+  else if (version < 4) { snapshot.source.model = { name: 'test/model', providerId: 'test', thinkingLevel: 'medium' }; snapshot.model = { providerId: 'test', modelId: 'test/model', thinkingLevel: 'medium' } }
   sqlite.prepare('UPDATE generation_recovery SET snapshot=? WHERE run_id=?').run(JSON.stringify(snapshot), recovery!.runId)
   sqlite.close()
   let calls = 0

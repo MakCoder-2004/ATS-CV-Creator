@@ -37,6 +37,9 @@
 .cv-review-mode .review-context { position: sticky; top: var(--review-bar-height); }
 .cv-review-mode .paper-wrap { padding: 20px 16px; }
 .cv-review-mode .paper { font-size: 14.667px; padding: 32px; }
+.cv-review-mode .paper-header > .paper-cv-title { color: var(--paper-ink); font: 700 16px/1.4 Lato, Arial, sans-serif; }
+.cv-review-mode .review-title-toolbar-button { min-height: 40px; padding: 8px; border: 0; background: transparent; color: var(--link); font: 650 12px/1.5 'Manrope Variable', sans-serif; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+.cv-review-mode .review-title-toolbar-button:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
 .cv-review-mode .review-layout-note { line-height: 1.55; margin-bottom: 12px; }
 .review-context-dialog { position: static; width: 100%; max-width: none; margin: 0; padding: 0; border: 1px solid var(--line); border-radius: 8px; color: var(--ink); background: var(--surface); max-height: calc(100dvh - var(--review-bar-height, 200px) - 24px); overflow: auto; }
 .review-context-dialog::backdrop { background: color-mix(in srgb, var(--ink) 55%, transparent); }
@@ -55,6 +58,21 @@
 .cv-review-mode .review-context-dialog :is(.review-inspector-panel, .suggested-skill-review, .draft-inspector, .job-match-panel) h2 { font-size: 16px; }
 .cv-review-mode .review-context-dialog :is(.review-inspector-panel, .suggested-skill-review, .draft-inspector) > p { font-size: 14px; line-height: 1.6; }
 .review-panel-empty { padding: 24px; color: var(--muted); line-height: 1.65; font-size: 14px; }
+.cv-review-mode .review-cv-title { display: grid; gap: 12px; padding: 20px 0; border-bottom: 1px solid var(--line); }
+.cv-review-mode .review-cv-title h3 { margin: 0; font: 700 14px/1.45 'Sora Variable', sans-serif; }
+.cv-review-mode .review-cv-title p, .cv-review-mode .review-cv-title li { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.55; overflow-wrap: anywhere; }
+.cv-review-mode .review-cv-title p strong { color: var(--ink); }
+.cv-review-mode .review-cv-title ul { margin: 0; padding-left: 20px; }
+.cv-review-mode .review-cv-title summary { min-height: 40px; padding: 8px 0; color: var(--link); cursor: pointer; font-size: 13px; }
+.cv-review-mode .review-cv-title summary:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+.cv-review-mode .review-cv-title > button { justify-self: start; min-height: 44px; }
+.cv-review-mode .review-cv-title-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.cv-review-mode .review-cv-title-actions button { min-height: 44px; }
+.cv-review-mode .review-cv-title-form { display: grid; gap: 12px; }
+.cv-review-mode .review-cv-title-form label { display: grid; gap: 8px; font-size: 13px; font-weight: 650; }
+.cv-review-mode .review-cv-title-form input { min-width: 0; width: 100%; min-height: 44px; padding: 8px 12px; border: 1px solid var(--control-border); border-radius: 6px; background: var(--surface); color: var(--ink); font: inherit; }
+.cv-review-mode .review-cv-title-form > div { display: flex; flex-wrap: wrap; gap: 8px; }
+.cv-review-mode .review-cv-title-form button { min-height: 44px; }
 .cv-review-mode .paper-inline-evidence { margin: 8px 0 16px; padding: 12px 16px; border-left: 2px solid var(--paper-accent); background: var(--paper-selected); color: var(--paper-ink); font: 14px/1.5 'Manrope Variable', sans-serif; overflow-wrap: anywhere; }
 .cv-review-mode .paper-inline-evidence .paper-inline-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .cv-review-mode .paper-inline-evidence .paper-inline-heading button { min-height: 40px; border: 0; background: transparent; color: var(--paper-accent); text-decoration: underline; cursor: pointer; }

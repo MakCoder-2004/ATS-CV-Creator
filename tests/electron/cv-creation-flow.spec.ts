@@ -150,8 +150,10 @@ test('visible CV creation reviews new skills, preserves profile evidence, and ex
     }
     expect(pdfText).not.toContain('Not in your profile')
     expect(docx.text.join(' ')).not.toContain('Not in your profile')
-    expect(pdfText.indexOf('Example Systems')).toBeLessThan(pdfText.indexOf('Software Engineer'))
-    expect(docx.text.join(' ').indexOf('Example Systems')).toBeLessThan(docx.text.join(' ').indexOf('Software Engineer'))
+    expect(pdfText.indexOf('Software Engineer')).toBeLessThan(pdfText.indexOf('ada@example.test'))
+    expect(docx.text.join(' ').indexOf('Software Engineer')).toBeLessThan(docx.text.join(' ').indexOf('ada@example.test'))
+    expect(pdfText.indexOf('Example Systems')).toBeLessThan(pdfText.lastIndexOf('Software Engineer'))
+    expect(docx.text.join(' ').indexOf('Example Systems')).toBeLessThan(docx.text.join(' ').lastIndexOf('Software Engineer'))
     const foldedPdfText = pdfText.toLocaleLowerCase()
     expect(foldedPdfText).not.toContain('professional summary')
     expect(foldedPdfText).not.toContain('certificates')

@@ -29,6 +29,15 @@ test('template sections render employer once before locked role and use short co
   expect(files['education.tex']).toBe('')
   expect(files['projects.tex']).toBe('')
 })
+test('grounded CV title compiles beneath the name and escapes special TeX characters', () => {
+  const titled = { ...document, identity: { ...document.identity, cvTitle: 'Software Engineer & ML' } }
+  const heading = renderLatexSections(titled)['heading.tex']
+  expect(heading).toContain('\\textbf{\\large Software Engineer \\& ML} \\\\ \\vspace{1pt}')
+  expect(heading.indexOf('Candidate')).toBeLessThan(heading.indexOf('Software Engineer'))
+  expect(heading.indexOf('Software Engineer')).toBeLessThan(heading.indexOf('mailto:name@example.test'))
+  expect(renderLatexSections(document)['heading.tex']).not.toContain('OLD_HEADLINE')
+})
+
 test('explicit paragraph descriptions compile as prose and legacy descriptions remain bullet items', () => {
   const paragraph = { ...document, sections: [{ ...document.sections[0], entries: [{ ...document.sections[0].entries[0], text: 'Contributed to reliable services with supported deployment practices.', descriptionFormat: 'paragraph' as const }] }] }
   const tex = renderLatexSections(paragraph)['experience.tex']
