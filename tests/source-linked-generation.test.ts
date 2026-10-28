@@ -43,6 +43,23 @@ test('cross-category model citations get one bounded correction request without 
   expect(calls).toHaveLength(3)
 })
 
+test('suggests a grounded professional title without copying the posting or accepting foreign title evidence', async () => {
+  const roleId = randomUUID(), skillId = randomUUID()
+  const items = [
+    { id: roleId, revision: 1, category: 'experience' as const, snapshot: { title: 'Software Engineer', organization: 'Example', description: 'Built ML tooling for a licensed professional engineer.' }, text: '{"title":"Software Engineer","organization":"Example","description":"Built ML tooling for a licensed professional engineer."}' },
+    { id: skillId, revision: 1, category: 'skills' as const, snapshot: { name: 'Machine Learning', category: 'Technical' }, text: '{"name":"Machine Learning","category":"Technical"}' }
+  ]
+  const run = (title: string, evidence: number[]) => runSourceLinkedGraph({ job: { title: 'Machine Learning Developer' }, analysis: { tools: [], keywords: [] }, items, identity: { id: randomUUID(), jobId: randomUUID(), revision: 1, createdAt: new Date(0).toISOString(), lockedFields: { fullName: 'Candidate', experience: [{ evidenceId: roleId, title: 'Software Engineer', organization: 'Example' }], education: [], projects: [], certificates: [] } }, call: async prompt => ({ attempts: 1, value: prompt.startsWith('Score these numbered') ? { relevance: items.map((_, index) => ({ index, score: 1, rationale: 'Related saved fact.' })) } : { cvTitle: { text: title, evidence, rationale: 'Grounded in the saved role and technical skill.' }, education: [], experience: [{ text: 'Built ML tooling.', evidence: [0], rationale: 'Saved role.' }], projects: [], skills: [{ name: 'Machine Learning', evidence: [1], rationale: 'Saved skill.' }] } }) })
+  const grounded = await run('Software Engineer · Machine Learning', [0, 1])
+  expect(grounded.draft.cvTitle).toMatchObject({ text: 'Software Engineer · Machine Learning', authoredBy: 'model', citations: [{ evidenceId: roleId, revision: 1 }, { evidenceId: skillId, revision: 1 }] })
+  expect(grounded.draft.evidence.map(item => item.evidenceId)).toEqual([roleId, skillId])
+  expect((await run('Machine Learning Developer', [0])).draft.cvTitle).toBeUndefined()
+  expect((await run('Data Scientist', [0, 1])).draft.cvTitle).toBeUndefined()
+  expect((await run('Licensed Software Engineer', [0])).draft.cvTitle).toBeUndefined()
+  expect((await run('Professional Engineer', [0])).draft.cvTitle).toBeUndefined()
+  expect((await run('Software Engineer', [99])).draft.cvTitle).toBeUndefined()
+})
+
 test('restores target wording and suggested tool names locally without exposing identifiers in generation requests', async () => {
   const calls: string[] = []
   const source = { id: randomUUID(), revision: 1, category: 'skills' as const, snapshot: { name: 'Google Cloud Platform', category: 'Cloud' }, text: '{"name":"[[EMPLOYER_1]] Cloud Platform","category":"Cloud"}' }
@@ -50,11 +67,12 @@ test('restores target wording and suggested tool names locally without exposing 
     identity: { id: randomUUID(), jobId: randomUUID(), revision: 1, createdAt: new Date().toISOString(), lockedFields: { fullName: 'Candidate', experience: [], education: [], projects: [], certificates: [] } },
     call: async prompt => {
       calls.push(prompt)
-      return { attempts: 1, value: prompt.startsWith('Score these numbered') ? { relevance: [{ index: 0, score: 1, rationale: 'Relevant cloud skill' }] } : { headline: '[[EMPLOYER_1]] Cloud Engineer', summary: { text: 'Uses [[EMPLOYER_1]] Cloud Platform.', evidence: [0], rationale: 'Saved [[EMPLOYER_1]] Cloud Platform skill.' }, education: [], experience: [], projects: [], certificates: [], skills: [{ name: '[[EMPLOYER_1]] Cloud Platform', evidence: [0], rationale: 'Relevant [[EMPLOYER_1]] technology.' }] } }
+      return { attempts: 1, value: prompt.startsWith('Score these numbered') ? { relevance: [{ index: 0, score: 1, rationale: 'Relevant cloud skill' }] } : { cvTitle: { text: '[[EMPLOYER_1]] Cloud Engineer', evidence: [0], rationale: 'Only a skill is saved, not a held engineer role.' }, headline: '[[EMPLOYER_1]] Cloud Engineer', summary: { text: 'Uses [[EMPLOYER_1]] Cloud Platform.', evidence: [0], rationale: 'Saved [[EMPLOYER_1]] Cloud Platform skill.' }, education: [], experience: [], projects: [], certificates: [], skills: [{ name: '[[EMPLOYER_1]] Cloud Platform', evidence: [0], rationale: 'Relevant [[EMPLOYER_1]] technology.' }] } }
     }
   })
   expect(calls.join('\n')).not.toContain('Google')
   expect('tailoring' in result.draft).toBe(false)
+  expect(result.draft.cvTitle).toBeUndefined() // A skill alone cannot establish a held professional role.
   expect(result.draft.content.skills[0]).toMatchObject({ name: 'Google Cloud Platform', rationale: 'Relevant Google technology.' })
   expect(result.draft.suggestedSkills).toEqual([expect.objectContaining({ name: 'Google Kubernetes Engine', postingTerm: 'Google Kubernetes Engine', status: 'pending' })])
 })

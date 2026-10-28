@@ -8,6 +8,7 @@ const hyperlinkParagraph = (links: CanonicalDocumentEntry['links'], alignment: '
 /** Builds an editable, single-column Word document from the approved canonical version. */
 export async function renderCanonicalDocx(document: CanonicalDocument): Promise<Buffer> {
   const paragraphs: Paragraph[] = [new Paragraph({ text: document.identity.name, heading: HeadingLevel.TITLE, alignment: AlignmentType.CENTER, spacing: { after: 40 }, keepNext: true })]
+  if (document.identity.cvTitle) paragraphs.push(new Paragraph({ children: [new TextRun({ text: document.identity.cvTitle, bold: true, size: 24 })], alignment: AlignmentType.CENTER, spacing: { after: 40 }, keepNext: true }))
   if (document.identity.contact.length) paragraphs.push(new Paragraph({ text: document.identity.contact.join(' · '), alignment: AlignmentType.CENTER, spacing: { after: 40 }, keepNext: true }))
   if (document.identity.links.length) paragraphs.push(hyperlinkParagraph(document.identity.links, 'center'))
   for (const section of visibleDocumentSections(document)) {

@@ -8,7 +8,7 @@ import { hasSavedJobApplicationUrlInput, jobRecordSchema, jobSaveResultSchema, j
 import { profileExchangeResultSchema } from '../shared/profile-exchange'
 import { outboundConsentActionSchema, outboundConsentPreviewSchema } from '../shared/outbound-consent-contract'
 import { analysisIdSchema, analysisResultSchema, generationRecoverySchema, recoveryChoiceSchema, type AnalysisResult, type RecoveryChoice } from '../shared/posting-analysis'
-import { addDraftItemInputSchema, draftCorrectionInputSchema, draftGenerationSchema, draftRevisionSchema, suggestedSkillDecisionSchema, draftTailoringCorrectionSchema } from '../shared/draft'
+import { addDraftItemInputSchema, draftCorrectionInputSchema, draftGenerationSchema, draftRevisionSchema, suggestedSkillDecisionSchema, draftTailoringCorrectionSchema, cvTitleChangeSchema } from '../shared/draft'
 import { factualCheckReportSchema } from '../shared/factual-report'
 import { canonicalDocumentSchema, documentFitReportSchema, documentPdfSchema } from '../shared/document'
 import { regenerationProposalSchema, regenerationResultSchema, regenerationTargetSchema } from '../shared/regeneration'
@@ -145,6 +145,7 @@ const api: WorkbenchAPI = Object.freeze({
   async exportDraftDocx(jobId: string) { return z.object({ ok: z.boolean(), cancelled: z.boolean(), message: z.string(), path: z.string().optional() }).strict().parse(await ipcRenderer.invoke('document:export-docx', analysisIdSchema.parse(jobId))) },
   async decideSuggestedSkill(input: Parameters<WorkbenchAPI['decideSuggestedSkill']>[0]) { return draftGenerationSchema.parse(await ipcRenderer.invoke('draft:skill-decision', suggestedSkillDecisionSchema.parse(input))) },
   async correctDraftTailoring(input: Parameters<WorkbenchAPI['correctDraftTailoring']>[0]) { return draftGenerationSchema.parse(await ipcRenderer.invoke('draft:tailoring:correct', draftTailoringCorrectionSchema.parse(input))) },
+  async changeCvTitle(input: Parameters<WorkbenchAPI['changeCvTitle']>[0]) { return draftGenerationSchema.parse(await ipcRenderer.invoke('draft:cv-title:change', cvTitleChangeSchema.parse(input))) },
   async correctDraft(input: Parameters<WorkbenchAPI['correctDraft']>[0]) { const checked = draftCorrectionInputSchema.parse(input); const value = await ipcRenderer.invoke('draft:correct', checked); return value === null ? null : draftRevisionSchema.parse(value) },
   async mutateDraftRecord(input: Parameters<WorkbenchAPI['mutateDraftRecord']>[0]) { return await ipcRenderer.invoke('draft:record:mutate', mutateDraftRecordInputSchema.parse(input)) },
   async addDraftItem(input: Parameters<WorkbenchAPI['addDraftItem']>[0]) { const checked = addDraftItemInputSchema.parse(input); const value = await ipcRenderer.invoke('draft:add-item', checked); return value === null ? null : draftRevisionSchema.parse(value) },

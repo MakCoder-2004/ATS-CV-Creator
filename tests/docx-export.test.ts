@@ -16,6 +16,14 @@ test('legacy version-1 DOCX documents accept and omit empty sections', async () 
   expect(parsed.text).not.toContain('Education')
 })
 
+test('new professional title appears between name and contact in editable Word, without legacy headline', async () => {
+  const titled = canonicalDocumentSchema.parse({ ...canonical, identity: { ...canonical.identity, cvTitle: 'Software Engineer · Machine Learning' } })
+  const text = (await extractCanonicalDocx(await renderCanonicalDocx(titled))).text.join(' ')
+  expect(text.indexOf('Zoë 李')).toBeLessThan(text.indexOf('Software Engineer · Machine Learning'))
+  expect(text.indexOf('Software Engineer · Machine Learning')).toBeLessThan(text.indexOf('zoe@example.test'))
+  expect(text).not.toContain('Senior Engineer')
+})
+
 test('paragraph metadata writes a prose paragraph without changing legacy bullet output', async () => {
   const paragraph = canonicalDocumentSchema.parse({ ...canonical, sections: [{ name: 'Experience', entries: [{ ...canonical.sections[1].entries[0], descriptionFormat: 'paragraph', bullets: undefined }] }] })
   const xml = await (await JSZip.loadAsync(await renderCanonicalDocx(paragraph))).file('word/document.xml')!.async('string')

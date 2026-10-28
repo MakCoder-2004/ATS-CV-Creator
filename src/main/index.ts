@@ -29,7 +29,7 @@ import { registerResearchSearchSettingsIpc } from './research-search-settings-ip
 import { createResearchSearchCredentials, defaultResearchCredentialDirectory } from './research-search-credentials'
 import { outboundConsentActionSchema, outboundConsentPreviewSchema } from '../shared/outbound-consent-contract'
 import { analysisIdSchema, analysisResultSchema, analysisStartInputSchema, generationRecoverySchema, recoveryChoiceSchema } from '../shared/posting-analysis'
-import { addDraftItemInputSchema, draftCorrectionInputSchema, draftGenerationSchema, draftRevisionSchema, suggestedSkillDecisionSchema, draftTailoringCorrectionSchema } from '../shared/draft'
+import { addDraftItemInputSchema, draftCorrectionInputSchema, draftGenerationSchema, draftRevisionSchema, suggestedSkillDecisionSchema, draftTailoringCorrectionSchema, cvTitleChangeSchema } from '../shared/draft'
 import { factualCheckReportSchema } from '../shared/factual-report'
 import { regenerationProposalSchema, regenerationResultSchema, regenerationTargetSchema } from '../shared/regeneration'
 import { mutateDraftRecordInputSchema } from '../shared/draft-records'
@@ -145,6 +145,11 @@ app.whenReady().then(() => {
     if (process.env.CV_TAILOR_SCRIPTED_ANALYSIS === 'recovery' && isTailoring && !recoveryFailureSent) { recoveryFailureSent = true; throw Object.assign(new Error('scripted offline interruption'), { code: 'ECONNRESET' }) }
     if (prompt.startsWith('Factual repair cycle')) return JSON.stringify({ corrections: [] })
     if (prompt.startsWith('Propose conservative replacement wording')) { const { sourcesByItem } = JSON.parse(prompt.slice(prompt.indexOf('{'))); return JSON.stringify({ items: sourcesByItem.map(() => ({ text: 'Rephrased within the authorized evidence.', rationale: 'Rephrased only within the currently cited evidence.' })) }) }
+    if (prompt.startsWith('Suggest one concise professional-focus CV title')) {
+      const { sourceCandidates } = JSON.parse(prompt.slice(prompt.indexOf('{'))) as { sourceCandidates: Array<{ index: number; text: string[] }> }
+      const role = sourceCandidates.find(item => item.text[0] === 'employment' && item.text[1])
+      return JSON.stringify({ items: role ? [{ text: role.text[1], evidence: [role.index], rationale: 'Matches this saved employment title.' }] : [] })
+    }
     if (process.env.CV_TAILOR_SCRIPTED_ANALYSIS === 'retry' && scriptedAttempts === 1) throw { status: 429, retryAfter: 3 }
     if (['generation', 'factual', 'invalid', 'foreign-citation', 'recovery', 'delayed', 'tailored-flow'].includes(process.env.CV_TAILOR_SCRIPTED_ANALYSIS ?? '') && prompt.startsWith('Score these numbered')) {
       const { items } = JSON.parse(prompt.slice(prompt.indexOf('{')))
@@ -166,7 +171,10 @@ app.whenReady().then(() => {
         })
       }
       const skills = selected.filter((item: { category: string }) => item.category === 'skills').map((item: { index: number; text: string }) => ({ name: JSON.parse(item.text).name, evidence: [item.index], rationale: 'Selected from the saved skill inventory.' }))
-      return JSON.stringify({ education: paragraphs('education'), experience: paragraphs('experience'), projects: paragraphs('projects'), skills })
+      const role = selected.find((item: { category: string }) => item.category === 'experience')
+      let title = ''
+      if (role) { try { title = JSON.parse(role.text).title ?? '' } catch { /* No structured held-role title. */ } }
+      return JSON.stringify({ cvTitle: title ? { text: title, evidence: [role.index], rationale: 'Matches a saved employment title relevant to this posting.' } : null, education: paragraphs('education'), experience: paragraphs('experience'), projects: paragraphs('projects'), skills })
     }
     if (process.env.CV_TAILOR_SCRIPTED_ANALYSIS === 'tailored-flow') return JSON.stringify({ required: ['Python', 'RASA', 'Google Cloud Platform', 'NLP'], preferred: ['Docker'], tools: ['Python', 'RASA', 'Google Cloud Platform', 'spaCy', 'Git', 'Docker'], responsibilities: ['Build Python APIs and conversational AI solutions'], keywords: ['Python', 'NLP', 'intent classification', 'model evaluation', 'backend services'] })
     return JSON.stringify({ required: ['TypeScript', 'Kubernetes'], preferred: ['Cloud architecture'], tools: ['TypeScript'], responsibilities: ['Build reliable services'], keywords: ['TypeScript', 'Kubernetes', 'Cloud architecture'] })
@@ -437,6 +445,7 @@ app.whenReady().then(() => {
   ipcMain.handle('draft:export-guard', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected job ID'); return workspace!.api.assertDraftExportable(analysisIdSchema.parse(args[0])) })
   ipcMain.handle('draft:skill-decision', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected a skill review decision'); return draftGenerationSchema.parse(await workspace!.api.decideSuggestedSkill(suggestedSkillDecisionSchema.parse(args[0]))) })
   ipcMain.handle('draft:tailoring:correct', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected tailored wording'); return draftGenerationSchema.parse(await workspace!.api.correctDraftTailoring(draftTailoringCorrectionSchema.parse(args[0]))) })
+  ipcMain.handle('draft:cv-title:change', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected CV title change'); return draftGenerationSchema.parse(await workspace!.api.changeCvTitle(cvTitleChangeSchema.parse(args[0]))) })
   ipcMain.handle('draft:correct', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected correction input'); return await workspace!.api.correctDraft(draftCorrectionInputSchema.parse(args[0])) })
   ipcMain.handle('draft:record:mutate', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected record mutation'); return await workspace!.api.mutateDraftRecord(mutateDraftRecordInputSchema.parse(args[0])) })
   ipcMain.handle('draft:add-item', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected draft item input'); return await workspace!.api.addDraftItem(addDraftItemInputSchema.parse(args[0])) })

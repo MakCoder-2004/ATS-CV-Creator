@@ -1,0 +1,75 @@
+import { test, expect, _electron as electron } from '@playwright/test'
+import { mkdtempSync } from 'node:fs'
+import { rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
+test('Review shows a grounded CV title and only changes a saved CV after consent and acceptance', async () => {
+  test.setTimeout(120000)
+  const userData = mkdtempSync(join(tmpdir(), 'cv-tailor-title-'))
+  let app: Awaited<ReturnType<typeof electron.launch>> | undefined
+  try {
+    app = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData, CV_TAILOR_SCRIPTED_ANALYSIS: 'generation' } })
+    const page = await app.firstWindow()
+    await page.setViewportSize({ width: 1440, height: 900 })
+    await expect(page.locator('[data-ui-ready="true"]')).toBeVisible()
+    await page.evaluate(async () => {
+      await window.workbench.saveContact({ fullName: 'Synthetic Candidate', headline: 'Old profile headline', email: 'candidate@example.test' })
+      await window.workbench.saveExperience({ kind: 'employment', title: 'Operations Analyst', organization: 'Example Freight', description: 'Prepared operations dashboards and checked shipment records.' })
+      await window.workbench.saveSkill({ name: 'SQL', category: 'Languages' })
+      const job = await window.workbench.saveJob({ title: 'Operations Data Analyst', company: 'Example Co', description: 'Prepare weekly reports and inspect operational trends.' })
+      if (!job.ok) throw new Error(job.error.message)
+    })
+    await page.reload()
+    await expect(page.locator('[data-ui-ready="true"]')).toBeVisible()
+    await page.locator('.sidebar-job-items').getByRole('button', { name: /Operations Data Analyst/ }).click()
+    await page.getByRole('button', { name: 'Inspect outgoing data' }).click()
+    const flow = page.getByRole('region', { name: 'Tailoring workflow' })
+    await flow.getByRole('button', { name: 'Authorize and start this run' }).click()
+    await flow.getByRole('button', { name: 'Generate tailored draft' }).click()
+    const paper = page.getByRole('article', { name: 'Draft CV review layout' })
+    await expect(paper.locator('.paper-cv-title')).toHaveText('Operations Analyst', { timeout: 30000 })
+    await expect(paper.locator('.paper-cv-title')).toHaveCSS('font-size', '16px')
+    await expect(paper).not.toContainText('Old profile headline')
+    await expect(paper.locator('.paper-cv-title')).not.toHaveText('Operations Data Analyst')
+    await page.getByRole('region', { name: 'CV document' }).getByRole('button', { name: 'Review CV title' }).click()
+    const titleReview = page.getByRole('region', { name: 'CV title review' })
+    await expect(titleReview).toContainText('Example Freight')
+    await titleReview.getByText('Read source wording').click()
+    await expect(titleReview).toContainText('Prepared operations dashboards and checked shipment records.')
+    await page.screenshot({ path: 'test-results/cv-title-review.png' })
+    await titleReview.getByRole('button', { name: 'Edit CV title' }).click()
+    await titleReview.getByRole('textbox', { name: 'CV title for this CV' }).fill('Senior Operations Analyst')
+    await titleReview.getByRole('button', { name: 'Save CV title' }).click()
+    await expect(paper.locator('.paper-cv-title')).toHaveText('Senior Operations Analyst')
+    await expect(page.getByRole('button', { name: 'Approve CV' })).toBeDisabled()
+    await expect(titleReview).toContainText('Edited by you for this CV')
+    await titleReview.getByRole('button', { name: 'Remove CV title' }).click()
+    await expect(paper.locator('.paper-cv-title')).toHaveCount(0)
+    await expect(page.getByRole('region', { name: 'CV document' }).getByRole('button', { name: 'Suggest CV title' })).toBeVisible()
+
+    await titleReview.getByRole('button', { name: 'Suggest CV title', exact: true }).click()
+    const share = page.getByText('What will be shared for this suggestion')
+    await expect(share).toBeVisible()
+    await expect(page.getByText('Target: CV title')).toBeVisible()
+    await expect(page.getByRole('region', { name: 'Compare suggestion' })).toHaveCount(0)
+    await page.getByRole('button', { name: 'Authorize and propose' }).click()
+    const proposal = page.getByRole('region', { name: 'Compare suggestion' })
+    await expect(proposal).toContainText('Operations Analyst')
+    await expect(paper.locator('.paper-cv-title')).toHaveCount(0)
+    await proposal.getByRole('button', { name: 'Use this CV title' }).click()
+    await expect(paper.locator('.paper-cv-title')).toHaveText('Operations Analyst')
+    await expect(page.getByRole('button', { name: 'Approve CV' })).toBeDisabled()
+
+    await page.setViewportSize({ width: 375, height: 812 })
+    await page.getByRole('region', { name: 'CV document' }).getByRole('button', { name: 'Review CV title' }).click()
+    const details = page.getByRole('dialog', { name: 'Review details' })
+    await expect(details.getByRole('region', { name: 'CV title review' })).toBeVisible()
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+    await page.keyboard.press('Escape')
+    await expect(details).not.toBeVisible()
+  } finally {
+    await app?.close().catch(() => {})
+    await rm(userData, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 })
+  }
+})

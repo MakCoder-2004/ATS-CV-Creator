@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { draftContentSchema, type DraftRevision } from '../shared/draft'
+import { cvTitleHasHeldRoleAnchor, cvTitleUnsupportedTerms, draftContentSchema, type DraftRevision } from '../shared/draft'
 import { factualCheckReportSchema, type FactualFinding } from '../shared/factual-report'
 
 const normalized = (value: string) => value.normalize('NFKC').toLocaleLowerCase().replace(/[^\p{L}\p{N}%$€£]+/gu, ' ').trim()
@@ -29,6 +29,25 @@ export function checkDraftFacts(draft: DraftRevision, options: { includeSkillDec
       const term = new RegExp(`(?<![\\p{L}\\p{N}])${escaped}(?![\\p{L}\\p{N}])`, 'iu')
       if (term.test(text) && !term.test(citedText)) findings.push({ code: 'unsupported-skill', itemPath, message: `Posting skill “${suggestion.name}” is not supported by this wording’s cited career facts.`, correction: 'Remove the unsupported skill from this description or add genuine supporting facts to your profile and create a new CV. A skill confirmation does not establish past usage.' })
     }
+  }
+  if (draft.cvTitle) {
+    const itemPath = 'cvTitle'
+    const cited = draft.cvTitle.citations.map(citation => ({ citation, source: evidence.get(citation.evidenceId) }))
+    for (const { citation, source } of cited) {
+      if (!source) findings.push({ code: 'foreign-citation', itemPath, evidenceId: citation.evidenceId, message: 'The CV title cites evidence outside this draft.', correction: 'Suggest a title from current career facts or remove this title.' })
+      else if (source.revision !== citation.revision) findings.push({ code: 'invalid-citation', itemPath, evidenceId: citation.evidenceId, message: 'The CV title cites an outdated evidence revision.', correction: 'Suggest a title from current career facts or remove this title.' })
+    }
+    const citedValues = cited.flatMap(({ source }) => source ? strings(source.snapshot) : [])
+    const citedText = citedValues.join(' ')
+    checkPostingSkills(draft.cvTitle.text, citedText, itemPath)
+    const heldRoles = draft.lockedFields.experience.filter(role => cited.some(({ citation }) => (role.sourceIds ?? [role.evidenceId]).includes(citation.evidenceId))).map(role => role.title)
+    if (!cvTitleHasHeldRoleAnchor(draft.cvTitle.text, heldRoles)) findings.push({ code: 'unsupported-title', itemPath, message: 'The CV title claims a professional role not grounded in a cited held role.', correction: 'Use a supported professional focus or remove the title.' })
+    const unsupportedTerms = cvTitleUnsupportedTerms(draft.cvTitle.text, citedValues, heldRoles)
+    if (unsupportedTerms.length) findings.push({ code: 'unsupported-title', itemPath, message: `The CV title includes wording not supported by its cited career facts: ${unsupportedTerms.join(', ')}.`, correction: 'Use wording from the cited facts, or remove this title.' })
+    const heldTitles = heldRoles.join(' ')
+    for (const term of draft.cvTitle.text.match(/\b(?:senior|staff|principal|lead|director|chief|head)\b/giu) ?? []) if (!new RegExp(`\\b${term}\\b`, 'iu').test(heldTitles)) findings.push({ code: 'unsupported-title', itemPath, message: `The CV title uses “${term}” without a matching held title in the cited career facts.`, correction: 'Remove the unsupported seniority label or use a title supported by your saved career facts.' })
+    const sourceNumbers = new Set(numericExpressions(citedText))
+    for (const expression of numericExpressions(draft.cvTitle.text)) if (!sourceNumbers.has(expression)) findings.push({ code: 'unsupported-number', itemPath, evidenceId: cited[0]?.citation.evidenceId, message: `The CV title includes a number not found in its cited career facts: “${expression}”.`, correction: 'Remove the unsupported number from the title.' })
   }
   const parents = new Map<string, string>()
   for (const parent of [...draft.lockedFields.experience, ...draft.lockedFields.projects]) for (const sourceId of parent.sourceIds ?? [parent.evidenceId]) parents.set(sourceId, parent.evidenceId)

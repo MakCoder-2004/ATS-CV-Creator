@@ -2,6 +2,7 @@ import { z } from 'zod'
 import { draftCitationSchema } from './draft'
 
 export const regenerationTargetSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('title') }).strict(),
   z.object({ kind: z.literal('section'), section: z.enum(['education', 'experience', 'projects', 'skills', 'certificates']) }).strict(),
   z.object({ kind: z.literal('paragraph'), section: z.enum(['education', 'experience', 'projects', 'skills', 'certificates']), index: z.number().int().nonnegative() }).strict()
 ])

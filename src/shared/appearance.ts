@@ -95,6 +95,7 @@ export interface WorkbenchAPI {
   exportDraftDocx(jobId: string): Promise<{ ok: boolean; cancelled: boolean; message: string; path?: string }>
   decideSuggestedSkill(input: SuggestedSkillDecision): Promise<{ ok: boolean; message: string; draft?: DraftRevision }>
   correctDraftTailoring(input: DraftTailoringCorrection): Promise<{ ok: boolean; message: string; draft?: DraftRevision }>
+  changeCvTitle(input: import('./draft').CvTitleChange): Promise<{ ok: boolean; message: string; draft?: DraftRevision }>
   correctDraft(input: DraftCorrectionInput): Promise<DraftRevision | null>
   mutateDraftRecord(input: MutateDraftRecordInput): Promise<MutateDraftRecordResult>
   addDraftItem(input: AddDraftItemInput): Promise<DraftRevision | null>
