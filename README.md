@@ -2,7 +2,7 @@
 
 A Windows desktop workbench for turning your own career facts and a manually saved job posting into a tailored CV you can inspect before exporting. Profile and job records stay in your local workspace; model work uses your chosen Pi provider **only after you review the outgoing text and authorize that run**. The app does not fetch job postings or guarantee an ATS or hiring outcome.
 
-![CV Tailor Review evidence screen showing a fictional CV, selected wording, inline source, and review controls](docs/images/review-evidence.png)
+![CV Tailor Review evidence screen showing a fictional CV with a professional title, selected wording, source details, and review controls](docs/images/review-evidence.png)
 
 *Screenshot of the real development app with a fictional, scripted test fixture. No personal CV or live provider result is shown.*
 
