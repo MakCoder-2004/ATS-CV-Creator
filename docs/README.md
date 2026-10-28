@@ -25,6 +25,7 @@ These files describe the current code or govern changes to it.
 | [Lato font notice](../resources/fonts/lato/README.md) | Font provenance. |
 | [Pi SDK notices](../resources/licenses/README.md) | SDK license text and remaining redistribution review. |
 | [LaTeX license inventory](../resources/latex-licenses/README.md) | Bundled toolchain license inventory and its limits. |
+| [Private 0.1.0 prerelease candidate](validation/release-0.1.0-candidate.md) | Current installer build, unpacked smoke, checksum and remaining installed/provider/legal gates after the version reset. |
 | [Spec 75 implementation evidence](validation/spec-75-implementation.md) | Focused paragraph-format checks and open provider and installed gates. |
 | [Integrated spec fixes](validation/specs-integration-fixes.md) | Root causes, fixture corrections, and focused verification after the integrated Node test failures. |
 | [Stage D temporary research integration](validation/universal-research-stage-d.md) | Development checks for reviewed source rights, full/provisional Pi analysis and remaining release gates; not installed-app proof. |
