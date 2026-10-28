@@ -10,7 +10,7 @@ A Windows desktop workbench for turning your own career facts and a manually sav
 
 **Direct download:** [CV-Tailor-Setup-0.1.0.exe](https://github.com/MakCoder-2004/ATS-CV-Creator/releases/download/v0.1.0/CV-Tailor-Setup-0.1.0.exe) (Windows). [Release details and checksum](https://github.com/MakCoder-2004/ATS-CV-Creator/releases/tag/v0.1.0).
 
-The v0.1.0 prerelease installer is **unsigned** and has passed build and unpacked-app checks, but **has not been installed and validated**. Windows may warn about an unknown publisher. Version 0.1.0 resets numbering from 0.6.2; do not assume it will automatically upgrade an existing installation. Back up your workspace and exported files before replacing one.
+The v0.1.0 prerelease installer is **unsigned**. Its installed app passed an isolated native-SQLite save/reopen check on Windows; real-provider and installed PDF/DOCX export checks remain open. Windows may warn about an unknown publisher. Version 0.1.0 resets numbering from 0.6.2; do not assume it will automatically upgrade an existing installation. Back up your workspace and exported files before replacing one.
 
 1. **My profile:** enter your contact details, education, experience, projects and skills. You can also upload a text PDF or DOCX, inspect proposed facts and apply only those you accept; a local import route remains available without Pi.
 2. **Saved jobs:** enter a job title, company and the complete posting text. Optional contacts are entered by you, not discovered or sent to a model. Jobs are saved on this device; there is no job URL fetch or “Open original” action.
@@ -46,8 +46,8 @@ npm run test:electron   # Rebuild native SQLite for Electron; run Playwright
 npm run dist:win        # Verify and build an NSIS installer in release/
 ```
 
-Node and Electron use different SQLite native ABIs; run their checks in that order rather than concurrently. The compiler is bundled into the installer, so end users do not need a separate TeX installation. [The v0.1.0 build record](docs/validation/release-0.1.0-candidate.md) distinguishes packaged checks from still-pending installed-app and real-provider verification.
+Node and Electron use different SQLite native ABIs; run their checks in that order rather than concurrently. The compiler is bundled into the installer, so end users do not need a separate TeX installation. [The v0.1.0 build record](docs/validation/release-0.1.0-candidate.md) covers packaging; the separate [installed-app check](docs/validation/release-0.1.0-installed.md) records SQLite reopen and its remaining provider/export limits.
 
 ## Rights and release status
 
-The application is marked **UNLICENSED**: public source visibility does not grant permission to reuse or redistribute this project's code. Third-party components carry their own terms. The [Pi notices](resources/licenses/README.md) and [LaTeX inventory](resources/latex-licenses/README.md) are incomplete as a public redistribution review; the unsigned prerelease is not a claim of licensing clearance or installed acceptance. Do not redistribute the installer without reviewing its included notices and applicable obligations.
+The application is marked **UNLICENSED**: public source visibility does not grant permission to reuse or redistribute this project's code. Third-party components carry their own terms. The [Pi notices](resources/licenses/README.md) and [LaTeX inventory](resources/latex-licenses/README.md) are incomplete as a public redistribution review; the unsigned prerelease is not a claim of licensing clearance or a complete installed-workflow acceptance. Do not redistribute the installer without reviewing its included notices and applicable obligations.
