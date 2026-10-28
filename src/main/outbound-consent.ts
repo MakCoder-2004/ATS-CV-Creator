@@ -16,10 +16,11 @@ export function createOutboundConsentEngine() {
       return record
     },
     restoreConsent(record: ConsentRecord): void {
-      const purpose = coverLetterPurposeSchema.parse(record.purpose ?? 'cv')
-      const scopeHash = String(record.scopeHash)
-      if (!record.id || !record.runId || !scopeHash || !record.createdAt || record.revoked || record.purposeVersion !== 1 || record.purposeHash !== purposeHash(scopeHash, purpose)) throw new Error('Persisted consent is invalid or revoked.')
-      records.set(record.id, { ...record, purposeVersion: 1, purpose, purposeHash: purposeHash(scopeHash, purpose) })
+      if (!record || typeof record !== 'object' || Array.isArray(record)) throw new Error('Persisted consent is invalid or revoked.')
+      const purpose = coverLetterPurposeSchema.parse(record.purpose)
+      const fields = ['createdAt', 'id', 'purpose', 'purposeHash', 'purposeVersion', 'revoked', 'runId', 'scopeHash']
+      if (Object.keys(record).sort().join(',') !== fields.join(',') || !/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(record.id) || !/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(record.runId) || !/^[a-f0-9]{64}$/.test(record.scopeHash) || !/^\d{4}-\d\d-\d\dT/.test(record.createdAt) || !Number.isFinite(Date.parse(record.createdAt)) || record.revoked !== false || record.purposeVersion !== 1 || !/^[a-f0-9]{64}$/.test(record.purposeHash) || record.purposeHash !== purposeHash(record.scopeHash, purpose)) throw new Error('Persisted consent is invalid or revoked.')
+      records.set(record.id, { ...record, purpose, purposeHash: purposeHash(record.scopeHash, purpose) })
     },
     revoke(consentId: string): void {
       const record = records.get(consentId)

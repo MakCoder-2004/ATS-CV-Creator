@@ -140,6 +140,11 @@ test('released version-2 backups upgrade optional posting details to honest unkn
   if (!saved.ok) throw new Error('Job fixture failed')
   const old = JSON.parse(workbench.backup.createBackup())
   old.version = 2
+  delete old.tables.cover_letter_revisions
+  delete old.tables.cover_letter_operations
+  old.tables.schema_migrations.rows = old.tables.schema_migrations.rows.filter((row: { version: number }) => row.version < 10)
+  old.tables.outbound_consents.schema = 'CREATE TABLE outbound_consents (id TEXT PRIMARY KEY, run_id TEXT NOT NULL UNIQUE, scope_hash TEXT NOT NULL, created_at TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0)'
+  for (const row of old.tables.outbound_consents.rows) { delete row.job_id; delete row.purpose_version; delete row.purpose; delete row.purpose_hash }
   for (const row of old.tables.jobs.rows) {
     const job = JSON.parse(row.data)
     delete job.contacts
@@ -174,6 +179,34 @@ test('captured public v3 backup restores synthetic profile, job and contact data
   const reopened = open(dir)
   expect((await reopened.api.getProfile()).contact).toMatchObject({ fullName: 'Fixture Candidate' })
   expect(await reopened.api.listJobs()).toMatchObject([{ title: 'Software Engineer' }])
+})
+
+test('authentic pre-migration-10 v3 consent rows without job ownership still upgrade', async () => {
+  const { workbench } = fixture()
+  const backup = JSON.parse(readFileSync(join(process.cwd(), 'tests/fixtures/cover-letter-legacy-v3.json'), 'utf8'))
+  backup.tables.schema_migrations.rows = backup.tables.schema_migrations.rows.filter((row: { version: number }) => row.version < 10)
+  backup.tables.outbound_consents.schema = backup.tables.outbound_consents.schema.replace(', job_id TEXT)', ')')
+  for (const row of backup.tables.outbound_consents.rows) delete row.job_id
+  const preview = workbench.backup.previewRestore(JSON.stringify(backup))
+  workbench.backup.applyRestore(preview.token, content => content)
+  expect((await workbench.api.getProfile()).contact).toMatchObject({ fullName: 'Fixture Candidate' })
+  const parentGateShape = JSON.parse(readFileSync(join(process.cwd(), 'tests/fixtures/cover-letter-legacy-v3.json'), 'utf8'))
+  parentGateShape.tables.schema_migrations.rows = parentGateShape.tables.schema_migrations.rows.filter((row: { version: number }) => row.version < 10)
+  parentGateShape.tables.outbound_consents.schema = parentGateShape.tables.outbound_consents.schema.replace(', job_id TEXT)', ')')
+  const parentPreview = workbench.backup.previewRestore(JSON.stringify(parentGateShape))
+  workbench.backup.applyRestore(parentPreview.token, content => content)
+  expect((await workbench.api.getProfile()).contact).toMatchObject({ fullName: 'Fixture Candidate' })
+})
+
+test('version-2 migration refuses unknown consent SQL before rewriting it', async () => {
+  const { workbench } = fixture()
+  const backup = JSON.parse(workbench.backup.createBackup())
+  backup.version = 2
+  delete backup.tables.cover_letter_revisions
+  delete backup.tables.cover_letter_operations
+  backup.tables.schema_migrations.rows = backup.tables.schema_migrations.rows.filter((row: { version: number }) => row.version < 10)
+  backup.tables.outbound_consents.schema = 'CREATE TABLE outbound_consents (laundered_sql TEXT)'
+  expect(() => workbench.backup.previewRestore(JSON.stringify(backup))).toThrow(/schema|incompatible/i)
 })
 
 test('captured v3 backup refuses a changed consent schema before migration', async () => {

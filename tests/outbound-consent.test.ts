@@ -88,6 +88,25 @@ describe('outbound consent public contract', () => {
     expect(() => engine.authorizePayload('short-name', bundle, { text: 'AI' })).toThrow(/identifier|authorized/i)
   })
 
+  it('rejects missing, partial, and malformed restored purpose commitments', () => {
+    const bundle = prepareOutboundBundle(source)
+    const engine = createOutboundConsentEngine()
+    const valid = engine.grantConsent('12345678-1234-4234-8234-123456789012', bundle, { accepted: true, privacyAcknowledged: true })
+    const complete = { ...valid }
+    expect(() => engine.restoreConsent(complete)).not.toThrow()
+    for (const field of ['purposeVersion', 'purpose', 'purposeHash'] as const) {
+      const partial = { ...valid } as Record<string, unknown>
+      delete partial[field]
+      expect(() => engine.restoreConsent(partial as never)).toThrow(/invalid|purpose/i)
+    }
+    for (const malformed of [
+      { ...valid, purpose: 'cv+cover-letter', purposeHash: valid.purposeHash },
+      { ...valid, purposeVersion: 2 },
+      { ...valid, purpose: 'invalid' },
+      { ...valid, purposeHash: 'f'.repeat(64) },
+    ]) expect(() => engine.restoreConsent(malformed as never)).toThrow(/invalid|purpose/i)
+  })
+
   it('requires explicit per-run consent and binds model configuration and exact evidence/job revisions', () => {
     const engine = createOutboundConsentEngine()
     const bundle = prepareOutboundBundle(source)

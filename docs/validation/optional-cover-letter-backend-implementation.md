@@ -16,7 +16,7 @@ This is a bounded implementation checkpoint, not evidence that the cover-letter 
 
 **Change:** main freezes the selected purpose and stores its version, purpose, and SHA-256 commitment with the existing scope hash. Preparing a different purpose expires older previews. Letter-only consent cannot start posting analysis or generate a CV. Corrupt stored purpose metadata is revoked and attenuated to CV-only. CV input scope construction and `generateDraft` remain unchanged.
 
-Migration 12 adds `cover_letter_revisions` and `cover_letter_operations`. The v4 backup inventory contains both tables. Restoring authentic v3 backups adds only the known empty letter tables and CV-only consent metadata. The v3 inventory, ledger, table SQL, and row columns are checked against the captured pre-change fixture before schema transforms. The old warning literal and v1-v3 transforms remain intact. Startup converts stranded prepared operations to cancelled and dispatched operations to uncertain. Historical uncertain operations do not hold job deletion.
+Migration 12 adds `cover_letter_revisions` and `cover_letter_operations`. The v4 backup inventory contains both tables. Restoring authentic v3 backups adds only the known empty letter tables and CV-only consent metadata. The v3 inventory, known ledger variants, table SQL, and row columns are checked before schema transforms. The validator also accepts the released pre-migration-10 consent shape, including its known row-column variant. The old warning literal and v1-v3 transforms remain intact. Startup converts stranded prepared operations to cancelled and dispatched operations to uncertain. Historical uncertain operations do not hold job deletion.
 
 **Evidence:** `tests/fixtures/cover-letter-legacy-v3.json` was captured with the public `createWorkbench` and `backup.createBackup` before schema changes. `tests/workspace-backup.test.ts` restores it, checks CV-only consent metadata, and refuses altered consent SQL. `tests/outbound-consent-workbench.test.ts` verifies purpose freezing, stale-preview rejection, letter-only CV-task refusal, and corrupt-metadata revocation. `tests/workspace-backup.test.ts`, `tests/workspace-backup-legacy-import.test.ts`, `tests/workspace-backup-engine.test.ts`, and `tests/transactional-job-deletion.test.ts` cover v4 inventory, compatibility transforms, capacity rollback, ownership, deletion isolation, and offline reopen. Logs are under `.audit/cover-letter-backend/`.
 
@@ -30,9 +30,19 @@ Migration 12 adds `cover_letter_revisions` and `cover_letter_operations`. The v4
 
 ## Current gates and limits
 
-`npm test` passed 366 tests in 65 files after rebuilding this worktree's `better-sqlite3`. `npm run typecheck` and `npm run build` passed. Command output is saved under `.audit/cover-letter-backend/`.
+The original implementation checkpoint passed 366 tests in 65 files. Review corrections later passed 369 tests in 65 files after rebuilding this worktree's `better-sqlite3`. The latest typecheck, build, and documentation-link checks passed. Logs are saved under `.audit/cover-letter-backend/` and `.audit/cover-letter-backend-review-fixes/`.
 
 This is not the full cover-letter feature. There is no requested-documents generation wrapper, letter provider dispatch, durable dispatch-intent lifecycle writer, factual-support validator for generated paragraphs, real PDF fit measurement, compiler, PDF or DOCX export, renderer implementation, or visible Electron acceptance. Since no main-generated letter fit can be measured in this unit, approval always refuses. These remain separate units under the accepted plan.
+
+## Bounded review corrections
+
+The legacy preflight now accepts the captured v3 form and the known pre-migration-10 schema and ledger combinations. Unknown consent SQL, row columns, and incompatible migration history fail before a transform can replace them. The v1-v2 job transforms and static legacy hashes remain unchanged.
+
+The backup boundary now requires each letter's `cvRevisionId` to resolve to a draft row owned by the same job. Restore clears approval, fit, and acknowledgments for every letter while retaining its content, bound sources, and findings. The restore-success message tells users to review restored letter content and sources again. The released backup warning literal is unchanged. This does not treat a hash as proof of human reading or measurement.
+
+`restoreConsent` now rejects incomplete or malformed purpose records instead of defaulting a partial record to CV-only. The existing recovery path supplies a complete CV-only record.
+
+**Regression evidence:** `.audit/cover-letter-backend-review-fixes/red.log` records failing pre-fix tests for legacy migration history, consent SQL laundering, missing CV ownership, and partial purpose restoration. `restore-authority-red.log` records the failed restore-authority assertion when attenuation was temporarily removed. `focused-green.log` records 24 passing focused tests. `full-tests.log` records 369 passing tests in 65 files. The supplied Sol repro could not run because `E:/cv-tailor-review-sol-3aea568/review.ts` is absent from this worktree; the isolated behavioral regressions cover its five findings.
 
 ## Commit sequence and environment
 

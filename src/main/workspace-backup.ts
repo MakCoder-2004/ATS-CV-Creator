@@ -270,10 +270,11 @@ export function createWorkspaceBackupEngine(db: Database.Database, maxBackupByte
       const consent = consentRecords.get(operation.consentId)
       if (!consent || consent.run_id !== operation.parentRunId || consent.job_id !== operation.jobId || consent.purpose === 'cv' || consent.purpose_hash !== operation.purposeHash) fail('cover_letter_operations')
     }
+    const draftOwners = new Map((rows.draft_revisions?.rows ?? []).map(row => [String(row.id), String(row.job_id)]))
     for (const row of rows.cover_letter_revisions?.rows ?? []) {
       const letter = coverLetterRevisionSchema.parse(parseJson('cover_letter_revisions', row.data as string))
       const operation = operationRecords.get(letter.operationId)
-      if (!operation || operation.jobId !== letter.jobId || operation.parentRunId !== letter.parentRunId || operation.status !== 'saved') fail('cover_letter_revisions')
+      if (!operation || operation.jobId !== letter.jobId || operation.parentRunId !== letter.parentRunId || operation.status !== 'saved' || draftOwners.get(letter.cvRevisionId) !== letter.jobId) fail('cover_letter_revisions')
     }
     for (const row of rows.outbound_consents?.rows ?? []) {
       const purpose = coverLetterPurposeSchema.safeParse(row.purpose)
@@ -310,20 +311,40 @@ export function createWorkspaceBackupEngine(db: Database.Database, maxBackupByte
     if (!result.success) throw new Error('Backup is invalid or incompatible.')
     let backup = result.data
     const incomingVersion = backup.version
+    const consentTable = backup.tables.outbound_consents
+    const migrationVersions = backup.tables.schema_migrations?.rows.map(row => Number(row.version)).sort((a, b) => a - b)
+    const oldConsentSchema = legacyV3TableSchemas.outbound_consents
+    const preOwnershipConsentSchema = oldConsentSchema.replace(', job_id TEXT)', ')')
+    const oldConsentColumns = ['id', 'run_id', 'scope_hash', 'created_at', 'revoked']
+    const preOwnershipConsentColumns = [...oldConsentColumns, 'job_id']
+    const hasMigration10 = migrationVersions?.includes(10) ?? false
+    const hasMigration11 = migrationVersions?.includes(11) ?? false
+    if (incomingVersion <= 3 && consentTable) {
+      const allowedLegacy = [
+        { schema: oldConsentSchema, rowColumns: [preOwnershipConsentColumns] },
+        { schema: preOwnershipConsentSchema, rowColumns: [oldConsentColumns, preOwnershipConsentColumns] },
+      ]
+      const legacyShape = allowedLegacy.find(candidate => candidate.schema === consentTable.schema)
+      const currentPurposeShape = consentTable.schema === tableSchema('outbound_consents') && hasMigration10 && hasMigration11
+      if (!legacyShape && !currentPurposeShape) throw new Error('Backup legacy consent schema is incompatible.')
+      if (legacyShape && ((incomingVersion === 3 && hasMigration10 !== (legacyShape.schema === oldConsentSchema)) || consentTable.rows.some(row => !legacyShape.rowColumns.some(columns => JSON.stringify(Object.keys(row).sort()) === JSON.stringify([...columns].sort()))))) throw new Error('Backup legacy consent rows or migration history are incompatible.')
+    }
     if (incomingVersion === 3) {
       const names = Object.keys(backup.tables).sort()
       const expectedNames = Object.keys(legacyV3TableSchemas).sort()
-      const versions = backup.tables.schema_migrations?.rows.map(row => Number(row.version)).sort((a, b) => a - b)
-      const acceptedLedgers = [[1, 2, 3, 4, 5, 6, 7, 8, 10], [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]]
+      const versions = migrationVersions
+      const acceptedLedgers = [[1, 2, 3, 4, 5, 6, 7, 8], [1, 2, 3, 4, 5, 6, 7, 8, 9], [1, 2, 3, 4, 5, 6, 7, 8, 10], [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]]
       if (JSON.stringify(names) !== JSON.stringify(expectedNames) || !versions || !acceptedLedgers.some(ledger => JSON.stringify(ledger) === JSON.stringify(versions))) throw new Error('Backup v3 inventory or migration history is incompatible.')
       const legacy = new Database(':memory:')
       try {
         for (const name of expectedNames) {
           const item = backup.tables[name]
-          if (item.schema !== legacyV3TableSchemas[name]) throw new Error(`Backup v3 schema is incompatible: ${name}`)
+          const acceptedSchemas = name === 'outbound_consents' && !hasMigration10 ? [preOwnershipConsentSchema] : [legacyV3TableSchemas[name]]
+          if (!acceptedSchemas.includes(item.schema)) throw new Error(`Backup v3 schema is incompatible: ${name}`)
           legacy.exec(item.schema)
           const columns = (legacy.pragma(`table_info("${name}")`) as Array<{ name: string }>).map(column => column.name).sort()
-          for (const row of item.rows) if (JSON.stringify(Object.keys(row).sort()) !== JSON.stringify(columns)) throw new Error(`Backup v3 row columns are incompatible: ${name}`)
+          const acceptedRowColumns = name === 'outbound_consents' && !hasMigration10 ? [columns, preOwnershipConsentColumns.slice().sort()] : [columns]
+          for (const row of item.rows) if (!acceptedRowColumns.some(expected => JSON.stringify(Object.keys(row).sort()) === JSON.stringify(expected))) throw new Error(`Backup v3 row columns are incompatible: ${name}`)
         }
       } finally { legacy.close() }
     }
@@ -448,6 +469,11 @@ export function createWorkspaceBackupEngine(db: Database.Database, maxBackupByte
       backup = upgraded
     } else if (backup.tables.schema_migrations?.rows.some(row => row.version === 12)) {
       backup.version = 4
+    }
+    for (const row of backup.tables.cover_letter_revisions?.rows ?? []) {
+      const letter = coverLetterRevisionSchema.parse(parseJson('cover_letter_revisions', String(row.data)))
+      const { fit: _fit, approvedAt: _approvedAt, ...reviewed } = letter
+      row.data = JSON.stringify({ ...reviewed, acknowledgments: {}, approved: false })
     }
     const expected = actualTables().sort()
     const names = Object.keys(backup.tables).sort()
