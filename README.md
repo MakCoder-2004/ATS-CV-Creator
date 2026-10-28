@@ -23,20 +23,11 @@ Checks can miss factual errors. Review the wording and citations yourself. When 
 
 ## How it is made
 
-```text
-React + TypeScript renderer (Tailor CV, Saved jobs, My profile, Settings)
-                │ named, validated window.workbench methods
-                ▼
-       Isolated Electron preload bridge
-                │ trusted IPC, shared Zod contracts
-                ▼
-          Electron main process
-        ├─ SQLite (local records, revisions, consent and checkpoints)
-        ├─ Pi SDK / LangGraph (authorized, source-linked generation)
-        └─ Bundled pdfLaTeX template + DOCX export
-```
+![Workflow from a manually saved job posting and career facts through one-run Pi authorization, cited CV generation, review, approval and export](docs/images/job-posting-workflow.png)
 
-The renderer has no direct filesystem or Node access. Main validates IPC callers and input, stores revisions in native SQLite and owns provider requests, native dialogs and document compilation. The model proposes content; it does not write executable LaTeX or approve a CV. See [architecture](docs/architecture.md) for process boundaries, [the glossary](GLOSSARY.md) for domain language and [development checks](docs/development.md) for build and validation.
+[Open the full-size workflow diagram](docs/images/job-posting-workflow.png).
+
+This diagram shows the user workflow. Under the hood, a React and TypeScript renderer calls named, validated methods through an isolated Electron preload bridge. Trusted main-process IPC owns native SQLite, authorized Pi SDK and LangGraph requests, and bundled pdfLaTeX and DOCX export. The renderer has no direct filesystem or Node access. The model proposes content; it does not write executable LaTeX or approve a CV. See [architecture](docs/architecture.md) for process boundaries, [the glossary](GLOSSARY.md) for domain language and [development checks](docs/development.md) for build and validation.
 
 ## Design system
 
