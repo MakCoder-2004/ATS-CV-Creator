@@ -99,6 +99,7 @@ These reports record tests, artifacts, and claims at the stated version or issue
 - [CV flow preview](../prototypes/cv-tailor-ui/CV-FLOW-PREVIEW.md) records a throwaway interaction exploration.
 - [Design notes](../prototypes/cv-tailor-ui/docs/DESIGN.md), [feedback](../prototypes/cv-tailor-ui/docs/FEEDBACK.md), and [inspection record](../prototypes/cv-tailor-ui/docs/INSPECTION.md) record earlier design choices and checks.
 - [Screenshots](../prototypes/cv-tailor-ui/docs/SCREENSHOTS.md), [handoff](../prototypes/cv-tailor-ui/docs/HANDOFF.md), and [ticket index](../prototypes/cv-tailor-ui/docs/TICKETS.md) retain visual evidence and publication context.
+- [Review evidence gallery](../prototypes/review-evidence-gallery/README.md) is a standalone, fictional browser exploration. Its [design handoff](../prototypes/review-evidence-gallery/IMPLEMENTATION-HANDOFF.md) records the approved Inline evidence choice; the production behavior and gates are described in [implemented workflows](workflows.md).
 
 ## Keep this map current
 

@@ -1,6 +1,6 @@
 # Approved review-evidence refinement — implementation handoff
 
-**Status: PROTOTYPE ONLY.** The approved choice is **Inline evidence** (gallery variant 1), after CSS tweaks. Variants 2–5 are alternatives, not approved. This handoff records the design for implementation; it does not change production, update an issue, or authorize a merge.
+**Historical design handoff (prototype-only at the time).** The approved choice is **Inline evidence** (gallery variant 1), after CSS tweaks. Variants 2–5 are alternatives, not approved. This handoff records the original design decision; current production behavior and gates are documented in [`docs/workflows.md`](../../docs/workflows.md) and [`design system/pages.md`](../../design%20system/pages.md).
 
 ## Goal and approved behavior
 
@@ -14,7 +14,7 @@ Reduce the cramped, misaligned feel of Review details while keeping the existing
 
 ## Production boundary and implementation map
 
-The gallery is static HTML with fictional fixture content and demo-only actions; its CSS/JS demonstrate layout and interaction intent, not production behavior. Build against existing production data and gates—do not transplant its fake check, fit, approval, or export states. The current design-system review contract specifies an optional 304px details column at 1200px and requested dialog below; the approved 660px paper-track/remaining-width column and inline source placement intentionally differ. Update the relevant `design system/pages.md` and, if needed, `design system/tokens.md` in the implementation change so the contract and responsive threshold describe the approved behavior.
+The gallery is static HTML with fictional fixture content and demo-only actions; its CSS/JS demonstrate layout and interaction intent, not production behavior. Build against existing production data and gates—do not transplant its fake check, fit, approval, or export states. At handoff time the design-system review contract specified an optional 304px details column at 1200px and requested dialog below. The 660px paper-track/remaining-width column and inline source placement intentionally differed; the current page and token contracts now describe the implemented responsive behavior.
 
 Likely production touchpoints:
 
