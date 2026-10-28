@@ -8,7 +8,9 @@ A Windows desktop workbench for turning your own career facts and a manually sav
 
 ## Get started on Windows
 
-The [v0.1.0 prerelease installer](https://github.com/MakCoder-2004/ATS-CV-Creator/releases/tag/v0.1.0) is **unsigned** and has passed build and unpacked-app checks, but **has not been installed and validated**. Windows may warn about an unknown publisher. Version 0.1.0 resets numbering from 0.6.2; do not assume it will automatically upgrade an existing installation. Back up your workspace and exported files before replacing one.
+**Direct download:** [CV-Tailor-Setup-0.1.0.exe](https://github.com/MakCoder-2004/ATS-CV-Creator/releases/download/v0.1.0/CV-Tailor-Setup-0.1.0.exe) (Windows). [Release details and checksum](https://github.com/MakCoder-2004/ATS-CV-Creator/releases/tag/v0.1.0).
+
+The v0.1.0 prerelease installer is **unsigned** and has passed build and unpacked-app checks, but **has not been installed and validated**. Windows may warn about an unknown publisher. Version 0.1.0 resets numbering from 0.6.2; do not assume it will automatically upgrade an existing installation. Back up your workspace and exported files before replacing one.
 
 1. **My profile:** enter your contact details, education, experience, projects and skills. You can also upload a text PDF or DOCX, inspect proposed facts and apply only those you accept; a local import route remains available without Pi.
 2. **Saved jobs:** enter a job title, company and the complete posting text. Optional contacts are entered by you, not discovered or sent to a model. Jobs are saved on this device; there is no job URL fetch or “Open original” action.
