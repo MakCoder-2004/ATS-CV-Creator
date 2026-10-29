@@ -21,7 +21,10 @@ type Options = {
   onAttemptComplete?: (runId: string, succeeded: boolean) => void
   onProgress?: (runId: string, jobId: string, progress: string, attempts: number) => void
 }
+/** Main-held, single-use child context. Never accepted from IPC. */
+export interface LetterTaskContext { operationId: string; beforeDispatch: () => void }
 type Request = AnalysisInput & { consentId: string }
+type GenerationRequest = Request & { letterTask?: LetterTaskContext }
 
 const cancelledError = () => new AnalysisError('CANCELLED', 'Analysis cancelled.')
 const safeFailure = (error: unknown): AnalysisError => {
@@ -46,7 +49,7 @@ export function createAnalysisDispatcher(options: Options) {
   const cancel = (runId: string) => { cancelled.add(runId); active.get(runId)?.abort() }
   const isCancelled = (runId: string) => cancelled.has(runId)
 
-  async function execute(input: Request, schema: ZodTypeAny, prompt: string, maxTokens?: number, maxResponseChars = MAX_RESPONSE_CHARS): Promise<{ text: string; attempts: number }> {
+  async function execute(input: GenerationRequest, schema: ZodTypeAny, prompt: string, maxTokens?: number, maxResponseChars = MAX_RESPONSE_CHARS): Promise<{ text: string; attempts: number }> {
     if (!input.runId || !input.jobId || !input.prompt.trim() || !input.consentId || authorizations.get(input.runId) !== input.consentId) {
       throw new AnalysisError('PROVIDER', 'This request requires valid accepted outgoing-data consent.')
     }
@@ -67,13 +70,14 @@ export function createAnalysisDispatcher(options: Options) {
       check()
       options.onProgress?.(input.runId, input.jobId, 'Preparing the authorized provider request.', attempts)
       const timestamp = now()
-      options.onAttempt?.(timestamp, input.runId)
+      if (input.letterTask) { check(); input.letterTask.beforeDispatch() }
+      else options.onAttempt?.(timestamp, input.runId)
       dispatched.push(timestamp)
       attempts++
       try {
         const text = await options.transport.generate({ model: input.model, prompt, signal: controller.signal, responseSchema: schema, ...(maxTokens ? { maxTokens } : {}), maxResponseChars: outputLimit })
         responseReceived = true
-        options.onAttemptComplete?.(input.runId, true)
+        if (!input.letterTask) options.onAttemptComplete?.(input.runId, true)
         check()
         if (Buffer.byteLength(text, 'utf8') > outputLimit) throw new AnalysisError('PROVIDER', 'The provider response exceeded the task output limit.')
         let decoded: unknown
@@ -82,7 +86,7 @@ export function createAnalysisDispatcher(options: Options) {
         if (!parsed.success) throw new AnalysisError('MALFORMED', 'The provider response did not match the required format.')
         return JSON.stringify(parsed.data)
       } catch (error) {
-        if (!responseReceived) options.onAttemptComplete?.(input.runId, false)
+        if (!responseReceived && !input.letterTask) options.onAttemptComplete?.(input.runId, false)
         throw error
       }
     })
@@ -118,7 +122,7 @@ export function createAnalysisDispatcher(options: Options) {
     }
   }
 
-  async function generate(input: Request & { responseSchema: ZodTypeAny; retryProviderFailures?: boolean; maxTokens?: number; maxResponseChars?: number }): Promise<{ text: string; attempts: number }> {
+  async function generate(input: GenerationRequest & { responseSchema: ZodTypeAny; retryProviderFailures?: boolean; maxTokens?: number; maxResponseChars?: number }): Promise<{ text: string; attempts: number }> {
     return execute(input, input.responseSchema, input.prompt, input.maxTokens, input.maxResponseChars)
   }
   return { authorize, cancel, isCancelled, analyze, generate }

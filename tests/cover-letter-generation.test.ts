@@ -1,0 +1,270 @@
+import { afterEach, expect, test } from 'vitest'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { randomUUID } from 'node:crypto'
+import Database from 'better-sqlite3'
+import { createWorkbench } from '../src/main/workbench'
+import { AnalysisError, type AnalysisTransport } from '../src/main/posting-analysis'
+import type { CoverLetterPurpose } from '../src/shared/cover-letter'
+import type { PiModelRuntime } from '../src/main/pi-model'
+import type { Api, Model } from '@earendil-works/pi-ai'
+import { registerWorkspaceBackupRowSizer } from '../src/main/workspace-backup'
+
+const model = { id: 'author/chat', provider: 'sample', name: 'Synthetic chat', api: 'openai-completions', baseUrl: 'https://example.invalid', input: ['text'], reasoning: true, contextWindow: 16384, maxTokens: 8192, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } } as Model<Api>
+const validLetter = () => JSON.stringify({ paragraphs: [{ text: 'I use TypeScript.', citations: [{ ordinal: 1 }] }] })
+function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done }); return { promise, resolve } }
+const opened: ReturnType<typeof createWorkbench>[] = [], dirs: string[] = []
+afterEach(() => { opened.splice(0).forEach(w => w.close()); dirs.splice(0).forEach(d => rmSync(d, { recursive: true, force: true })) })
+async function fixture(purpose: CoverLetterPurpose = 'cv+cover-letter', letter: (input: Parameters<AnalysisTransport['generate']>[0]) => Promise<string> = async () => validLetter(), options: { pi?: boolean; beforeLetterAuth?: () => Promise<void>; cvResponse?: unknown; failCvOnce?: boolean } = {}) {
+  const dir = mkdtempSync(join(tmpdir(), 'letter-generation-')); dirs.push(dir)
+  const prompts: string[] = []
+  const transport: AnalysisTransport = { async generate(input) {
+    const { prompt } = input; prompts.push(prompt)
+    if (prompt.startsWith('Extract only explicit')) return JSON.stringify({ required: [], preferred: [], tools: ['Rust'], responsibilities: [], keywords: [] })
+    if (prompt.startsWith('Score these numbered')) return JSON.stringify({ relevance: [{ index: 0, score: 1, rationale: 'Saved skill.' }] })
+    if (prompt.startsWith('Write one cover letter')) return letter(input)
+    if (options.failCvOnce) { options.failCvOnce = false; throw new AnalysisError('OFFLINE', 'Synthetic CV interruption.') }
+    return JSON.stringify(options.cvResponse ?? { education: [], experience: [], projects: [], skills: [{ name: 'TypeScript', evidence: [0], rationale: 'Saved skill.' }] })
+  } }
+  let letterAuthHeld = false
+  const runtime = {
+    getProviders: () => [{ id: model.provider, getModels: () => [model] }], getPhysicalModel: () => model, getAvailable: async () => [model],
+    getAuth: async () => { if (prompts.length === 3 && !letterAuthHeld) { letterAuthHeld = true; await options.beforeLetterAuth?.() } return { source: 'synthetic' } },
+    completeSimple: async (_model: unknown, context: { messages: Array<{ content: string }> }, request: { signal: AbortSignal }) => ({ role: 'assistant', provider: model.provider, model: model.id, stopReason: 'stop', content: [{ type: 'text', text: await transport.generate({ model: model.id, prompt: context.messages.at(-1)!.content, signal: request.signal, responseSchema: {} as never }) }], usage: { output: 28 } }),
+  } as unknown as PiModelRuntime
+  const wb = options.pi ? createWorkbench(dir, undefined, undefined, undefined, runtime) : createWorkbench(dir, undefined, transport); opened.push(wb)
+  if (options.pi) await wb.api.setPiModel({ reference: 'sample/author/chat', thinkingLevel: 'low' })
+  await wb.api.saveContact({ fullName: 'PRIVATE_CANDIDATE', email: 'private@example.test' })
+  await wb.api.saveSkill({ name: 'TypeScript', category: 'Programming' })
+  const job = await wb.api.saveJob({ title: 'Developer', company: 'PRIVATE_COMPANY', description: 'Build services with Rust.', contacts: [{ id: randomUUID(), name: 'PRIVATE_SAVED_CONTACT', role: 'Recruiter', profileUrl: 'https://example.com/private-contact' }] })
+  if (!job.ok) throw new Error(job.error.message)
+  const preview = await wb.api.prepareOutboundConsent(job.value.id, purpose)
+  if (!preview.ok) throw new Error(preview.message)
+  expect((await wb.api.acceptOutboundConsent(preview.token, true, true)).ok).toBe(true)
+  if (purpose !== 'cover-letter-only') expect((await wb.api.startAnalysis(preview.token)).status).toBe('complete')
+  const rows = (table: string) => { const db = new Database(join(dir, 'workbench.sqlite')); try { return db.prepare(`SELECT * FROM ${table}`).all() as Record<string, unknown>[] } finally { db.close() } }
+  const mutate = (sql: string) => { const db = new Database(join(dir, 'workbench.sqlite')); registerWorkspaceBackupRowSizer(db); try { db.exec(sql) } finally { db.close() } }
+  return { wb, dir, token: preview.token, jobId: job.value.id, prompts, rows, mutate, transport }
+}
+
+test('public opt-out preserves real CV pipeline and creates zero letter calls or rows', async () => {
+  const f = await fixture('cv')
+  const result = await f.wb.api.generateRequestedDocuments(f.token, 1)
+  expect(result).toMatchObject({ cv: { ok: true, draft: { content: { skills: [{ name: 'TypeScript' }] } } }, letter: { status: 'not-requested' } })
+  expect(f.prompts).toHaveLength(3)
+  expect(f.rows('cover_letter_operations')).toHaveLength(0)
+  expect(await f.wb.api.getCoverLetter(f.jobId)).toBeNull()
+})
+
+test('public opt-in saves one independent letter after real CV despite pending skill review', async () => {
+  const f = await fixture()
+  const result = await f.wb.api.generateRequestedDocuments(f.token, 1)
+  expect(result.cv.ok).toBe(true)
+  expect(result.cv.draft?.suggestedSkills).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'Rust', status: 'pending' })]))
+  expect(result.letter.status).toBe('saved')
+  const saved = await f.wb.api.getCoverLetter(f.jobId)
+  expect(saved).toMatchObject({ cvRevisionId: result.cv.draft?.id, paragraphs: [{ text: 'I use TypeScript.' }], approved: false, acknowledgments: {}, findings: [] })
+  expect(saved?.bindings.sources[0]).toMatchObject({ category: 'skill', heading: 'TypeScript' })
+  expect(saved?.fit).toBeUndefined()
+  for (const secret of ['PRIVATE_CANDIDATE', 'private@example.test', 'PRIVATE_COMPANY', 'PRIVATE_SAVED_CONTACT', 'https://example.com/private-contact', saved!.bindings.sources[0].evidenceId, result.cv.draft!.id]) expect(f.prompts[3]).not.toContain(secret)
+  expect(f.rows('cover_letter_operations')).toHaveLength(1)
+  expect(f.rows('analysis_attempts')).toHaveLength(3)
+  expect(f.rows('provider_attempt_outcomes')).toHaveLength(3)
+  const again = await f.wb.api.generateRequestedDocuments(f.token, 1)
+  expect(again.cv.ok).toBe(false)
+  expect(f.prompts).toHaveLength(4)
+  expect(f.rows('draft_revisions')).toHaveLength(1)
+  const backup = JSON.parse(f.wb.backup.createBackup())
+  expect(JSON.stringify(backup)).toContain('I use TypeScript.')
+  const operationRow = backup.tables.cover_letter_operations.rows[0]
+  const operation = JSON.parse(operationRow.data)
+  expect(operation.initialBinding.cvRevisionId).toBe(result.cv.draft?.id)
+  operation.initialBinding.cvRevisionId = randomUUID()
+  operationRow.data = JSON.stringify(operation)
+  expect(() => f.wb.backup.previewRestore(JSON.stringify(backup))).toThrow(/cover_letter_operations/)
+})
+
+for (const [name, response] of [
+  ['foreign', { paragraphs: [{ text: 'I use TypeScript.', citations: [{ ordinal: 999 }] }] }],
+  ['schema', { paragraphs: [{ text: 'I use TypeScript.', citations: [{ ordinal: 1 }], approved: true }] }],
+  ['number', { paragraphs: [{ text: 'I have 42 years using TypeScript.', citations: [{ ordinal: 1 }] }] }],
+  ['skill', { paragraphs: [{ text: 'I use Rust.', citations: [{ ordinal: 1 }] }] }],
+] as const) test(`invalid ${name} letter never replaces or rolls back real CV`, async () => {
+  const f = await fixture('cv+cover-letter', async () => JSON.stringify(response))
+  const result = await f.wb.api.generateRequestedDocuments(f.token, 1)
+  expect(result.cv).toMatchObject({ ok: true, draft: { content: { skills: [{ name: 'TypeScript' }] } } })
+  expect(result.letter.status).toBe('failed')
+  expect(await f.wb.api.getCoverLetter(f.jobId)).toBeNull()
+  expect((await f.wb.api.getDraft(f.jobId))?.id).toBe(result.cv.draft?.id)
+  expect(f.prompts).toHaveLength(4)
+})
+
+test('durable intent and committed CV exist before the physical letter request; ownership excludes duplicates through settlement', async () => {
+  const entered = deferred<void>(), settle = deferred<string>()
+  const f = await fixture('cv+cover-letter', async () => { entered.resolve(); return settle.promise })
+  const resultPromise = f.wb.api.generateRequestedDocuments(f.token)
+  await entered.promise
+  expect(f.rows('cover_letter_operations')[0].status).toBe('dispatched')
+  expect(await f.wb.api.getDraft(f.jobId)).not.toBeNull()
+  expect(f.wb.hasActiveWork()).toBe(true)
+  expect(() => f.wb.beginJobOperation(f.jobId, 'export')).toThrow(/active/i)
+  expect((await f.wb.api.generateDraft(f.token)).ok).toBe(false)
+  expect((await f.wb.api.generateRequestedDocuments(f.token)).cv.ok).toBe(false)
+  await expect(f.wb.api.startAnalysis(f.token)).rejects.toThrow(/active/i)
+  expect(() => f.wb.backup.createBackup()).toThrow(/active/i)
+  await f.wb.api.cancelAnalysis(f.jobId)
+  expect(f.wb.hasActiveWork()).toBe(true)
+  expect((await f.wb.api.previewJobDeletion([f.jobId])).ok).toBe(false)
+  settle.resolve(validLetter())
+  const result = await resultPromise
+  expect(result).toMatchObject({ cv: { ok: true }, letter: { status: 'cancelled' } })
+  expect(await f.wb.api.getCoverLetter(f.jobId)).toBeNull()
+  expect(f.rows('draft_revisions')).toHaveLength(1)
+  expect(f.wb.hasActiveWork()).toBe(false)
+})
+
+test('changed profile while provider is unsettled discards late letter, never the CV', async () => {
+  const entered = deferred<void>(), settle = deferred<string>()
+  const f = await fixture('cv+cover-letter', async () => { entered.resolve(); return settle.promise })
+  const work = f.wb.api.generateRequestedDocuments(f.token)
+  await entered.promise
+  await f.wb.api.saveSkill({ name: 'Python', category: 'Programming' })
+  settle.resolve(validLetter())
+  const result = await work
+  expect(result).toMatchObject({ cv: { ok: true }, letter: { status: 'uncertain' } })
+  expect(await f.wb.api.getCoverLetter(f.jobId)).toBeNull()
+  expect((await f.wb.api.getDraft(f.jobId))?.id).toBe(result.cv.draft?.id)
+  expect(f.prompts).toHaveLength(4)
+})
+
+for (const change of ['purpose', 'scope', 'cancel', 'model', 'cv', 'capacity'] as const) test(`physical post-auth ${change} fence sends zero letters and retains the CV`, async () => {
+  const entered = deferred<void>(), settle = deferred<void>()
+  const f = await fixture('cv+cover-letter', undefined, { pi: true, beforeLetterAuth: async () => { entered.resolve(); await settle.promise } })
+  const work = f.wb.api.generateRequestedDocuments(f.token)
+  await entered.promise
+  expect(f.prompts).toHaveLength(3)
+  expect(f.rows('cover_letter_operations')[0].status).toBe('prepared')
+  if (change === 'purpose') f.mutate("UPDATE outbound_consents SET purpose='cv'")
+  if (change === 'scope') await f.wb.api.saveSkill({ name: 'Python', category: 'Programming' })
+  if (change === 'cancel') await f.wb.api.cancelOutboundConsent(f.token)
+  if (change === 'model') {
+    await expect(f.wb.api.setPiModel({ reference: 'sample/author/chat', thinkingLevel: 'high' })).rejects.toThrow(/current model request/i)
+    f.mutate("UPDATE settings SET value=json_set(value,'$.thinkingLevel','high') WHERE key='pi-model'")
+  }
+  if (change === 'cv') { const current = await f.wb.api.getDraft(f.jobId); if (!current) throw new Error('No committed CV'); expect((await f.wb.api.changeCvTitle({ jobId: f.jobId, draftId: current.id, title: null })).ok).toBe(true) }
+  if (change === 'capacity') f.mutate(`UPDATE cv_workspace_backup_state SET max_bytes=${(await f.wb.api.getWorkspaceBackupStatus()).bytes}`)
+  settle.resolve()
+  const result = await work
+  expect(result.cv.ok).toBe(true)
+  expect(result.letter.status).not.toBe('saved')
+  expect(f.prompts).toHaveLength(3)
+  expect(await f.wb.api.getCoverLetter(f.jobId)).toBeNull()
+  expect(f.rows('draft_revisions').length).toBeGreaterThanOrEqual(1)
+}, 20_000)
+
+test('letter save capacity failure rolls back letter only, leaves consumed uncertainty and does not replay', async () => {
+  const entered = deferred<void>(), settle = deferred<string>()
+  const f = await fixture('cv+cover-letter', async () => { entered.resolve(); return settle.promise })
+  const work = f.wb.api.generateRequestedDocuments(f.token)
+  await entered.promise
+  f.mutate(`UPDATE cv_workspace_backup_state SET max_bytes=${(await f.wb.api.getWorkspaceBackupStatus()).bytes + 10}`)
+  settle.resolve(validLetter())
+  const result = await work
+  expect(result).toMatchObject({ cv: { ok: true }, letter: { status: 'uncertain' } })
+  expect(f.rows('cover_letter_revisions')).toHaveLength(0)
+  expect(f.rows('cover_letter_operations')[0].status).toBe('uncertain')
+  expect((await f.wb.api.generateRequestedDocuments(f.token)).cv.ok).toBe(false)
+  expect(f.prompts).toHaveLength(4)
+})
+
+test('provider failure is independent and no repair or retry is dispatched', async () => {
+  const f = await fixture('cv+cover-letter', async () => { throw new Error('provider failure') })
+  expect(await f.wb.api.generateRequestedDocuments(f.token)).toMatchObject({ cv: { ok: true }, letter: { status: 'uncertain' } })
+  expect(f.prompts).toHaveLength(4)
+  expect(f.rows('draft_revisions')).toHaveLength(1)
+})
+
+test('CV validation-failure empty branch cannot authorize a letter', async () => {
+  const f = await fixture('cv+cover-letter', undefined, { cvResponse: { education: [], experience: [], projects: [], skills: [{ name: 'TypeScript', evidence: [999], rationale: 'Foreign.' }] } })
+  const result = await f.wb.api.generateRequestedDocuments(f.token)
+  expect(result.cv).toMatchObject({ ok: true, draft: { content: { skills: [] } } })
+  expect(result.letter.status).toBe('not-started')
+  expect(f.rows('cover_letter_operations')).toHaveLength(0)
+  expect(f.prompts.some(p => p.startsWith('Write one cover letter'))).toBe(false)
+})
+
+test('letter-only purpose never authorizes the initial CV wrapper or legacy public CV path', async () => {
+  const f = await fixture('cover-letter-only')
+  expect((await f.wb.api.generateRequestedDocuments(f.token)).cv.ok).toBe(false)
+  expect((await f.wb.api.generateDraft(f.token)).ok).toBe(false)
+  await expect(f.wb.api.startAnalysis(f.token)).rejects.toThrow(/cover letter only/i)
+  expect(f.prompts).toHaveLength(0)
+})
+
+test('old public CV path with opt-in consent remains strictly CV-only and cannot later be wrapped', async () => {
+  const f = await fixture()
+  expect((await f.wb.api.generateDraft(f.token)).ok).toBe(true)
+  expect((await f.wb.api.generateRequestedDocuments(f.token)).cv.ok).toBe(false)
+  expect(f.prompts).toHaveLength(3)
+  expect(f.rows('cover_letter_operations')).toHaveLength(0)
+})
+
+test('generated letter reopens offline, restore revokes authority, and imported passages cannot piggyback on valid source IDs', async () => {
+  const f = await fixture()
+  const generated = await f.wb.api.generateRequestedDocuments(f.token)
+  expect(generated.letter.status).toBe('saved')
+  const letter = await f.wb.api.getCoverLetter(f.jobId)
+  expect((await f.wb.api.checkCoverLetter(f.jobId)).ok).toBe(true)
+  const backup = JSON.parse(f.wb.backup.createBackup())
+  f.wb.close(); opened.splice(opened.indexOf(f.wb), 1)
+  const reopened = createWorkbench(f.dir, undefined, { generate: async () => { throw new Error('Offline: no call allowed') } }); opened.push(reopened)
+  expect(await reopened.api.getCoverLetter(f.jobId)).toEqual(letter)
+  const row = backup.tables.cover_letter_revisions.rows[0]
+  const forged = JSON.parse(row.data)
+  forged.bindings.sources[0].passage = 'Invented private source passage attached to an otherwise genuine saved skill ID.'
+  row.data = JSON.stringify(forged)
+  const restore = reopened.backup.previewRestore(JSON.stringify(backup))
+  reopened.backup.applyRestore(restore.token, content => content)
+  expect(await reopened.api.checkCoverLetter(f.jobId)).toMatchObject({ ok: false, message: expect.stringMatching(/source passage/) })
+  expect((await reopened.api.generateRequestedDocuments(f.token)).cv.ok).toBe(false)
+  expect((await reopened.api.getDraft(f.jobId))?.id).toBe(generated.cv.draft?.id)
+})
+
+test('local recipient and prior letter prose never enter a later generation request', async () => {
+  const f = await fixture()
+  await f.wb.api.generateRequestedDocuments(f.token)
+  const letter = await f.wb.api.getCoverLetter(f.jobId)
+  if (!letter) throw new Error('Missing generated letter')
+  expect((await f.wb.api.editCoverLetter({ jobId: f.jobId, letterId: letter.id, recipient: 'PRIVATE_LOCAL_RECIPIENT', paragraphs: letter.paragraphs.map(p => ({ ...p, text: 'PRIVATE_LOCAL_LETTER_PROSE' })) })).ok).toBe(true)
+  const preview = await f.wb.api.prepareOutboundConsent(f.jobId, 'cv+cover-letter')
+  if (!preview.ok) throw new Error(preview.message)
+  await f.wb.api.acceptOutboundConsent(preview.token, true, true)
+  await f.wb.api.startAnalysis(preview.token)
+  expect((await f.wb.api.generateRequestedDocuments(preview.token)).letter.status).toBe('saved')
+  expect(f.prompts.join('\n')).not.toContain('PRIVATE_LOCAL_RECIPIENT')
+  expect(f.prompts.join('\n')).not.toContain('PRIVATE_LOCAL_LETTER_PROSE')
+})
+
+test('CV v5 recovery of an originally opt-in run uses only the old CV path and never schedules a letter', async () => {
+  const f = await fixture('cv+cover-letter', undefined, { failCvOnce: true })
+  expect(await f.wb.api.generateRequestedDocuments(f.token)).toMatchObject({ cv: { ok: false }, letter: { status: 'not-started' } })
+  const recovery = await f.wb.api.getGenerationRecovery(f.jobId)
+  if (!recovery) throw new Error('Missing recovery fixture')
+  f.wb.close(); opened.splice(opened.indexOf(f.wb), 1)
+  const reopened = createWorkbench(f.dir, undefined, f.transport); opened.push(reopened)
+  expect((await reopened.api.resumeGeneration(recovery.runId, 'retry-uncertain')).ok).toBe(true)
+  expect(await reopened.api.getCoverLetter(f.jobId)).toBeNull()
+  expect(f.rows('cover_letter_operations')).toHaveLength(0)
+  expect(f.prompts.some(prompt => prompt.startsWith('Write one cover letter'))).toBe(false)
+})
+
+test('uncertain child is durable on reopen but never a permanent live deletion lock', async () => {
+  const f = await fixture('cv+cover-letter', async () => { throw new Error('Uncertain provider') })
+  expect((await f.wb.api.generateRequestedDocuments(f.token)).letter.status).toBe('uncertain')
+  expect((await f.wb.api.previewJobDeletion([f.jobId])).ok).toBe(true)
+  f.wb.close(); opened.splice(opened.indexOf(f.wb), 1)
+  const reopened = createWorkbench(f.dir, undefined, { generate: async () => { throw new Error('No replay') } }); opened.push(reopened)
+  expect((await reopened.api.previewJobDeletion([f.jobId])).ok).toBe(true)
+  expect((await reopened.api.generateRequestedDocuments(f.token)).cv.ok).toBe(false)
+})

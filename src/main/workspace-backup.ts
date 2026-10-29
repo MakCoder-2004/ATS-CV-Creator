@@ -265,16 +265,23 @@ export function createWorkspaceBackupEngine(db: Database.Database, maxBackupByte
       operationRecords.set(operation.id, operation)
     }
     const consentRecords = new Map((rows.outbound_consents?.rows ?? []).map(row => [String(row.id), row]))
+    const draftOwners = new Map((rows.draft_revisions?.rows ?? []).map(row => [String(row.id), String(row.job_id)]))
+    const initialParents = new Set<string>()
     for (const row of rows.cover_letter_operations?.rows ?? []) {
       const operation = operationRecords.get(String(row.id))!
       const consent = consentRecords.get(operation.consentId)
       if (!consent || consent.run_id !== operation.parentRunId || consent.job_id !== operation.jobId || consent.purpose === 'cv' || consent.purpose_hash !== operation.purposeHash) fail('cover_letter_operations')
+      if (operation.initialBinding) {
+        if (consent?.purpose !== 'cv+cover-letter' || consent.scope_hash !== operation.initialBinding.scopeHash || draftOwners.get(operation.initialBinding.cvRevisionId) !== operation.jobId || initialParents.has(operation.parentRunId)) fail('cover_letter_operations')
+        initialParents.add(operation.parentRunId)
+      }
     }
-    const draftOwners = new Map((rows.draft_revisions?.rows ?? []).map(row => [String(row.id), String(row.job_id)]))
     for (const row of rows.cover_letter_revisions?.rows ?? []) {
       const letter = coverLetterRevisionSchema.parse(parseJson('cover_letter_revisions', row.data as string))
       const operation = operationRecords.get(letter.operationId)
       if (!operation || operation.jobId !== letter.jobId || operation.parentRunId !== letter.parentRunId || operation.status !== 'saved' || draftOwners.get(letter.cvRevisionId) !== letter.jobId) fail('cover_letter_revisions')
+      const binding = operation?.initialBinding
+      if (binding && (binding.cvRevisionId !== letter.cvRevisionId || binding.scopeHash !== letter.bindings.scopeHash || binding.modelHash !== letter.bindings.modelHash || binding.postingUpdatedAt !== letter.bindings.postingUpdatedAt)) fail('cover_letter_revisions')
     }
     for (const row of rows.outbound_consents?.rows ?? []) {
       const purpose = coverLetterPurposeSchema.safeParse(row.purpose)

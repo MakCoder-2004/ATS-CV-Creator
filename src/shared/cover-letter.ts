@@ -71,6 +71,7 @@ export const coverLetterOperationSchema = z.object({
   parentRunId: uuidSchema,
   consentId: uuidSchema,
   purposeHash: digestSchema,
+  initialBinding: z.object({ cvRevisionId: uuidSchema, scopeHash: digestSchema, modelHash: digestSchema, postingUpdatedAt: z.string().datetime() }).strict().optional(),
   status: z.enum(['prepared', 'dispatched', 'saved', 'failed', 'cancelled', 'uncertain']),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
@@ -84,6 +85,7 @@ export const coverLetterOutcomeSchema = z.discriminatedUnion('status', [
   z.object({ status: z.enum(['failed', 'cancelled', 'uncertain']), message: z.string().min(1).max(500) }).strict(),
 ])
 export const requestedDocumentsResultSchema = z.object({ cv: draftGenerationSchema, letter: coverLetterOutcomeSchema }).strict()
+export type RequestedDocumentsResult = z.infer<typeof requestedDocumentsResultSchema>
 
 export const coverLetterAcknowledgmentSchema = z.object({ jobId: uuidSchema, letterId: uuidSchema, paragraphId: uuidSchema, acknowledged: z.literal(true) }).strict()
 export type CoverLetterAcknowledgment = z.infer<typeof coverLetterAcknowledgmentSchema>

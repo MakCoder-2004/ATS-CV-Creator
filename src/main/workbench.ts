@@ -16,8 +16,10 @@ import { hasSavedJobApplicationUrlInput, jobInputSchema, jobRecordSchema, jobSav
 import type { JobRecord } from '../shared/jobs'
 import { profileExchangeSchema, type ProfileExchange } from '../shared/profile-exchange'
 import { prepareOutboundBundle, type ConsentSource, type EvidenceScopeRevision, type OutboundBundle, type OutboundPayload } from '../shared/outbound-consent'
-import { coverLetterAcknowledgmentMaterial, coverLetterAcknowledgmentSchema, coverLetterActionResultSchema, coverLetterEditSchema, coverLetterOperationSchema, coverLetterPurposeSchema, coverLetterRecipientSchema, coverLetterRevisionSchema, type CoverLetterPurpose } from '../shared/cover-letter'
+import { coverLetterAcknowledgmentMaterial, coverLetterAcknowledgmentSchema, coverLetterActionResultSchema, coverLetterEditSchema, coverLetterOperationSchema, coverLetterPurposeSchema, coverLetterRecipientSchema, coverLetterRevisionSchema, requestedDocumentsResultSchema, type RequestedDocumentsResult, type CoverLetterOperation, type CoverLetterPurpose } from '../shared/cover-letter'
 import { createOutboundConsentEngine } from './outbound-consent'
+import { prepareCoverLetterSources, validateCoverLetterResponse } from './cover-letter-generation'
+import { coverLetterModelResponseSchema } from '../shared/cover-letter'
 import type { OutboundConsentAction, OutboundConsentPreview } from '../shared/outbound-consent-contract'
 import { regenerationProposalSchema, regenerationTargetSchema, type RegenerationTarget, type RegenerationProposal } from '../shared/regeneration'
 import { outboundConsentActionSchema, outboundConsentPreviewSchema } from '../shared/outbound-consent-contract'
@@ -267,7 +269,8 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
     return { ok: true, data }
   }
   const outboundEngine = createOutboundConsentEngine()
-  const pendingOutbound = new Map<string, { jobId: string; source: ConsentSource; bundle: OutboundBundle; runId: string; purpose: CoverLetterPurpose; consentId?: string }>()
+  type PendingOutbound = { jobId: string; source: ConsentSource; bundle: OutboundBundle; runId: string; purpose: CoverLetterPurpose; consentId?: string }
+  const pendingOutbound = new Map<string, PendingOutbound>()
   const currentAnalysis = new Map<string, ReturnType<typeof analysisResultSchema.parse>>()
   const saveAnalysisState = (input: unknown) => {
     const parsed = analysisResultSchema.parse(input)
@@ -296,9 +299,12 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
   const recoveredRunIds = new Set<string>()
   const deletionPreviews = new Map<string, { ids: string[]; fingerprint: string }>()
   const externalJobOperations = new Map<string, string>()
+  const requestedDocumentOwners = new Map<string, symbol>()
+  const requestedRunByJob = new Map<string, string>()
+  const startedDocumentRuns = new Set<string>()
   const beginJobOperation = (jobId: string, action: string) => {
     if (!uuidSchema.safeParse(jobId).success || !db.prepare('SELECT 1 FROM jobs WHERE id=?').get(jobId)) throw new Error('This saved job is no longer available.')
-    if (activeAnalysisByJob.has(jobId)) throw new Error('Stop the active model request before starting this job operation.')
+    if (activeAnalysisByJob.has(jobId) || requestedDocumentOwners.has(jobId)) throw new Error('Stop the active model request before starting this job operation.')
     if (externalJobOperations.has(jobId)) throw new Error(`Finish ${externalJobOperations.get(jobId)} before starting ${action}.`)
     externalJobOperations.set(jobId, action)
     return () => { if (externalJobOperations.get(jobId) === action) externalJobOperations.delete(jobId) }
@@ -434,6 +440,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       try {
         const operation = coverLetterOperationSchema.parse(JSON.parse(String(row.data)))
         if (operation.id !== row.id || operation.jobId !== row.job_id || operation.parentRunId !== row.parent_run_id || operation.consentId !== row.consent_id || operation.status !== row.status) return null
+        if (operation.initialBinding && !db.prepare('SELECT 1 FROM draft_revisions WHERE id=? AND job_id=?').get(operation.initialBinding.cvRevisionId, operation.jobId)) return null
       } catch { return null }
     }
     const ownedConsents = values('outbound_consents', 'job_id', ids) as Array<{ run_id: string }>
@@ -445,7 +452,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
     const pending = [...pendingOutbound.entries()].filter(([, item]) => ids.includes(item.jobId)).map(([token, item]) => [token, item.jobId, item.runId, item.consentId]).sort((a, b) => String(a[0]).localeCompare(String(b[0])))
     return { jobs: selected as Array<{ id: string; data: string }>, owned, runIds, fingerprint: createHash('sha256').update(JSON.stringify({ selected, owned, pending })).digest('hex') }
   }
-  const deletionBusy = (ids: string[]) => ids.find(id => unsettledRunsByJob.has(id) || externalJobOperations.has(id) || db.prepare("SELECT 1 FROM cover_letter_operations WHERE job_id=? AND status IN ('prepared','dispatched') LIMIT 1").get(id))
+  const deletionBusy = (ids: string[]) => ids.find(id => requestedDocumentOwners.has(id) || unsettledRunsByJob.has(id) || externalJobOperations.has(id))
   const readCoverLetter = (jobId: string): ReturnType<typeof coverLetterRevisionSchema.parse> | null => {
     const row = db.prepare('SELECT data FROM cover_letter_revisions WHERE job_id=? ORDER BY revision DESC LIMIT 1').get(jobId) as { data: string } | undefined
     return row ? coverLetterRevisionSchema.parse(JSON.parse(row.data)) : null
@@ -455,24 +462,294 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
     if (!source) return 'The saved job or Pi model is no longer available.'
     const bundle = prepareOutboundBundle(source)
     if (letter.bindings.scopeHash !== bundle.scopeHash || letter.bindings.postingUpdatedAt !== source.job.revision || letter.bindings.modelHash !== createHash('sha256').update(JSON.stringify(source.model)).digest('hex')) return 'The job, profile, model, or source scope changed. Review a new letter before approval.'
-    const available = new Map<string, { revision: number; category: string; parentId?: string }>()
-    const add = (id: string, revision: number, category: string, parentId?: string) => available.set(id, { revision, category, ...(parentId ? { parentId } : {}) })
-    const profile = readProfile(), experience = readExperience()
-    profile.skills.forEach(item => add(item.id, item.revision, 'skill'))
-    profile.education.forEach(item => add(item.id, item.revision, 'education'))
-    experience.experience.forEach(item => { add(item.id, item.revision, 'experience'); item.factualItems.forEach(child => add(child.id, child.revision, 'experience', item.id)) })
-    experience.projects.forEach(item => { add(item.id, item.revision, 'project'); item.factualItems.forEach(child => add(child.id, child.revision, 'project', item.id)); item.technologies.forEach(child => add(child.id, child.revision, 'project', item.id)) })
+    let currentSources: ReturnType<typeof prepareCoverLetterSources>['local']
+    try { currentSources = prepareCoverLetterSources(source, bundle).local } catch { return 'Current career fact passages could not be resolved safely.' }
     for (const bound of letter.bindings.sources) {
-      const current = available.get(bound.evidenceId)
-      if (!current || current.revision !== bound.revision || current.category !== bound.category || current.parentId !== bound.parentId) return 'A cited career fact changed or disappeared. Review the source passages again.'
+      const current = currentSources.find(item => item.evidenceId === bound.evidenceId)
+      // The earlier backend stored this deterministic saved-skill label, not a frozen JSON passage.
+      const legacySkillPassage = current?.category === 'skill' && bound.passage === `Saved ${current.heading} skill.`
+      if (!current || current.revision !== bound.revision || current.category !== bound.category || current.parentId !== bound.parentId || current.heading !== bound.heading || current.passage !== bound.passage && !legacySkillPassage) return 'A cited career fact or its source passage changed or disappeared. Review the source passages again.'
     }
     const operation = db.prepare('SELECT data FROM cover_letter_operations WHERE id=? AND job_id=? AND parent_run_id=? AND status=?').get(letter.operationId, letter.jobId, letter.parentRunId, 'saved') as { data: string } | undefined
     if (!operation) return 'The cover-letter operation is missing or unsettled.'
+    const recorded = coverLetterOperationSchema.safeParse(JSON.parse(operation.data))
+    if (!recorded.success || recorded.data.id !== letter.operationId || recorded.data.jobId !== letter.jobId || recorded.data.parentRunId !== letter.parentRunId || recorded.data.status !== 'saved') return 'The cover-letter operation identity is invalid.'
+    const binding = recorded.data.initialBinding
+    if (binding && (binding.cvRevisionId !== letter.cvRevisionId || binding.scopeHash !== letter.bindings.scopeHash || binding.modelHash !== letter.bindings.modelHash || binding.postingUpdatedAt !== letter.bindings.postingUpdatedAt)) return 'The cover-letter operation source binding is invalid.'
     const draft = db.prepare('SELECT 1 FROM draft_revisions WHERE id=? AND job_id=?').get(letter.cvRevisionId, letter.jobId)
     if (!draft) return 'The originating CV revision is missing.'
     return null
   }
   const acknowledgmentHash = (paragraph: ReturnType<typeof coverLetterRevisionSchema.parse>['paragraphs'][number], sources: ReturnType<typeof coverLetterRevisionSchema.parse>['bindings']['sources']) => createHash('sha256').update(coverLetterAcknowledgmentMaterial(paragraph, sources)).digest('hex')
+  const generateDraftCore = async (token: string, pageTarget: 1 | 2 = 1, resumeRunId?: string, owner?: symbol): Promise<Awaited<ReturnType<WorkbenchStorageAPI['generateDraft']>>> => {
+      if (pageTarget !== 1 && pageTarget !== 2) return { ok: false, message: 'Choose a one- or two-page target.' }
+      const pending = pendingOutbound.get(token)
+      if (!pending?.consentId) return { ok: false, message: 'Review and authorize this exact outgoing bundle before generation.' }
+      if (pending.purpose === 'cover-letter-only') return { ok: false, message: 'This authorization permits a cover letter only, not CV generation.' }
+      if (requestedDocumentOwners.has(pending.jobId) && requestedDocumentOwners.get(pending.jobId) !== owner) return { ok: false, message: 'Finish the active requested-document operation before generating.' }
+      if (externalJobOperations.has(pending.jobId)) return { ok: false, message: `Finish ${externalJobOperations.get(pending.jobId)} before generating.` }
+      const recoveryRow = resumeRunId ? db.prepare('SELECT snapshot, status FROM generation_recovery WHERE run_id=? AND job_id=?').get(resumeRunId, pending.jobId) as { snapshot: string; status: string } | undefined : undefined
+      if (resumeRunId && unsettledRunsByJob.get(pending.jobId)?.has(resumeRunId)) return { ok: false, message: 'The earlier provider response has not settled. Wait before reviewing recovery.' }
+      if (resumeRunId && (!recoveryRow || !['running','paused'].includes(recoveryRow.status) || pending.runId !== resumeRunId)) return { ok: false, message: 'This saved run is no longer resumable.' }
+      let frozen: ReturnType<typeof generationRecoverySnapshotSchema.parse> | undefined
+      if (recoveryRow) {
+        try { frozen = generationRecoverySnapshotSchema.parse(JSON.parse(recoveryRow.snapshot)) }
+        catch { return { ok: false, message: 'The saved recovery snapshot is corrupt or incompatible. No requests were sent; cancel this run and inspect the source data.' } }
+        if (frozen.version !== 5 || (!scriptedTransport && !isDeepStrictEqual(frozen.model, readPiSelection()))) return { ok: false, message: 'This saved run uses an earlier generation contract or its Pi model changed. Review outgoing data, authorize a fresh run, analyze the posting, then generate again. No previous request was replayed.' }
+        if (frozen.runId !== resumeRunId || frozen.jobId !== pending.jobId || frozen.consentId !== pending.consentId || frozen.scopeHash !== pending.bundle.scopeHash) return { ok: false, message: 'Saved run identity or consent no longer matches this recovery request. No requests were sent.' }
+      }
+      const latestScope = resumeRunId ? null : currentConsentSource(pending.jobId)
+      if (!resumeRunId && (!latestScope || prepareOutboundBundle(latestScope).scopeHash !== pending.bundle.scopeHash)) return { ok: false, message: 'Your job, profile, or model settings changed after consent. Review the outgoing data again.' }
+      const analysis = frozen?.analysis ?? await api.getAnalysis(pending.jobId)
+      if (!analysis || analysis.status !== 'complete' || !analysis.analysis) return { ok: false, message: 'Complete posting analysis before generating a draft.' }
+      if (!resumeRunId && (!startedAnalysisTokens.has(token) || analysis.runId !== pending.runId)) return { ok: false, message: 'Complete posting analysis for this run before generating a draft. Saved analysis can be reused without another provider request.' }
+      if (activeAnalysisByJob.has(pending.jobId)) return { ok: false, message: 'Generation is already active for this saved job.' }
+      const job = frozen?.job ?? await api.openJob(pending.jobId)
+      if (!job) return { ok: false, message: 'The saved job is unavailable.' }
+      if (!resumeRunId) {
+        const latestScopeAfterAsync = currentConsentSource(pending.jobId)
+        if (!latestScopeAfterAsync || prepareOutboundBundle(latestScopeAfterAsync).scopeHash !== pending.bundle.scopeHash) return { ok: false, message: 'Your job, profile, or model settings changed after consent. Review the outgoing data again.' }
+      }
+      if (requestedDocumentOwners.has(pending.jobId) && requestedDocumentOwners.get(pending.jobId) !== owner) return { ok: false, message: 'Finish the active requested-document operation before generating.' }
+      const profile = frozen?.profile ?? readProfile(), experience = frozen?.experience ?? readExperience()
+      const draftInputs = frozen?.draftInputs ?? prepareDraftInputs(profile, experience)
+      const items = draftInputs.items
+      const approvedPayload = authorizeOutboundPayload<OutboundPayload>(pending.runId, pending.bundle.outgoing)
+      const minimizeGeneratedPrompt = (text: string) => {
+        const prompt = pending.bundle.minimizeIdentifiers(text)
+        if (pending.bundle.containsRestoredIdentifier(prompt)) throw new Error('Generated wording still contains a local identifier. No model request was sent.')
+        return prompt
+      }
+      const scrubbed = new Map<string, string>()
+      profile.education.forEach((item, i) => { const safe = approvedPayload.profile.education[i]; if (safe) scrubbed.set(item.id, JSON.stringify(safe)) })
+      experience.experience.forEach((item, i) => { const safe = approvedPayload.profile.experience[i]; if (safe) { scrubbed.set(item.id, JSON.stringify(safe)); item.factualItems.forEach((fact, n) => scrubbed.set(fact.id, safe.evidence[n] ?? '')) } })
+      experience.projects.forEach((item, i) => { const safe = approvedPayload.profile.projects[i]; if (safe) { scrubbed.set(item.id, JSON.stringify(safe)); item.factualItems.forEach((fact, n) => scrubbed.set(fact.id, safe.evidence[n] ?? '')); item.technologies.forEach((fact, n) => scrubbed.set(fact.id, safe.technologies[n] ?? '')) } })
+      profile.skills.forEach((item, i) => { const safe = approvedPayload.profile.skills[i]; if (safe) scrubbed.set(item.id, JSON.stringify(safe)) })
+      profile.certificates.forEach((item, i) => { const safe = approvedPayload.profile.certificates[i]; if (safe) scrubbed.set(item.id, JSON.stringify(safe)) })
+      const safeItems = frozen?.safeItems ?? items.map(item => ({ ...item, text: scrubbed.get(item.id) ?? '' })).filter(item => item.text)
+      const failedDraftIdentity = frozen?.identity ?? { id: randomUUID(), jobId: pending.jobId, revision: ((db.prepare('SELECT MAX(revision) AS revision FROM draft_revisions WHERE job_id = ?').get(pending.jobId) as { revision: number | null }).revision ?? 0) + 1, targetPostingUpdatedAt: pending.source.job.revision, createdAt: new Date().toISOString(), lockedFields: draftInputs.lockedFields }
+      if (!resumeRunId) {
+        const data = { runId: pending.runId, jobId: pending.jobId, consentId: pending.consentId, scopeHash: pending.bundle.scopeHash, analysis, job, profile, experience, draftInputs, safeItems, identity: failedDraftIdentity, pageTarget, source: pending.source }
+        const sourceModel = pending.source.model
+        const snapshot = generationRecoverySnapshotSchema.parse(scriptedTransport
+          ? { ...data, version: 5 }
+          : { ...data, version: 5, model: piModelSelectionSchema.parse({ providerId: sourceModel.providerId, modelId: sourceModel.name, thinkingLevel: sourceModel.thinkingLevel }) })
+        db.prepare('INSERT OR REPLACE INTO generation_recovery (run_id,job_id,consent_id,scope_hash,status,snapshot,updated_at) VALUES (?,?,?,?,?,?,?)').run(pending.runId,pending.jobId,pending.consentId,pending.bundle.scopeHash,'running',JSON.stringify(snapshot),new Date().toISOString())
+      }
+      else db.prepare("UPDATE generation_recovery SET status='running',updated_at=? WHERE run_id=?").run(new Date().toISOString(), resumeRunId)
+      activeAnalysisByJob.set(pending.jobId, pending.runId)
+      beginPhysicalRun(pending.jobId, pending.runId)
+      try {
+        const result = await runSourceLinkedGraph({ job: approvedPayload.job, analysis: analysis.analysis, items: safeItems, savedSkillNames: profile.skills.map(skill => skill.name), sourceJobRevision: pending.source.job.revision, pageTarget, restoreText: pending.bundle.restoreIdentifiers, checkpointer: graphCheckpointer, threadId: pending.runId, resume: Boolean(resumeRunId), onProgress: (progress, generationStep, completedSteps) => { if (activeAnalysisByJob.get(pending.jobId) !== pending.runId || dispatcher.isCancelled(pending.runId)) return; const observed = (db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id = ?').get(pending.runId) as { count: number }).count; saveAnalysisState({ jobId: pending.jobId, runId: pending.runId, status: 'running', analysis: analysis.analysis, progress, attempts: observed, cacheHit: analysis.cacheHit, generationStep, completedSteps }) }, identity: failedDraftIdentity, call: async (prompt, responseSchema) => {
+          authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
+          const generated = await dispatcher.generate({ runId: pending.runId, jobId: pending.jobId, model: transportModel(pending.source.model.name), prompt, consentId: pending.consentId!, responseSchema })
+          authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
+          return { value: responseSchema.parse(JSON.parse(generated.text)), attempts: generated.attempts }
+        } })
+        authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
+        const saveGenerationStep = (step: 'verify-claims' | 'check-document', progress: string, completed: string[]) => { if (activeAnalysisByJob.get(pending.jobId) !== pending.runId || dispatcher.isCancelled(pending.runId)) return; const observed = (db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id = ?').get(pending.runId) as { count: number }).count; saveAnalysisState({ jobId: pending.jobId, runId: pending.runId, status: 'running', analysis: analysis.analysis, progress, attempts: observed, cacheHit: analysis.cacheHit, generationStep: step, completedSteps: completed }) }
+        saveGenerationStep('verify-claims', 'Checking generated claims against frozen evidence.', ['parse-posting', 'score-evidence', 'select-content', 'tailor-paragraphs'])
+        const repairSchema = z.object({ corrections: z.array(z.object({ section: z.enum(['education', 'experience', 'projects', 'skills', 'certificates']), index: z.number().int().nonnegative(), text: z.string().trim().min(1).max(3000), citations: z.array(z.object({ evidenceId: uuidSchema, revision: z.number().int().positive() }).strict()).min(1) }).strict()).max(1) }).strict()
+        let report = checkDraftFacts(result.draft, { includeSkillDecisions: false })
+        let repairAttempts = 0
+        const hasRepairableContentFinding = () => report.findings.some(finding => /^(education|experience|projects|skills|certificates)\[\d+\]/.test(finding.itemPath))
+        for (let cycle = 0; cycle < 2 && !report.passed && hasRepairableContentFinding(); cycle++) {
+          const failedItems = report.findings.map(finding => {
+            const found = /^(education|experience|projects|skills|certificates)\[(\d+)\]/.exec(finding.itemPath)
+            if (!found) return { finding }
+            const section = found[1] as keyof DraftRevision['content'], index = Number(found[2]), item = result.draft.content[section][index]
+            return { finding, section, index, text: item && ('text' in item ? item.text : item.name), citedEvidence: item?.citations.map(citation => ({ ...citation, text: safeItems.find(source => source.id === citation.evidenceId)?.text ?? '' })) }
+          })
+          authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
+          const repair = await dispatcher.generate({ runId: pending.runId, jobId: pending.jobId, model: transportModel(pending.source.model.name), consentId: pending.consentId!, responseSchema: repairSchema, prompt: minimizeGeneratedPrompt(`Factual repair cycle ${cycle + 1} of 2. Correct only the listed failing draft items using only their cited evidence. Preserve every unaffected item. Never infer facts or use uncited evidence. Return corrections for failed item paths only; keep citation IDs/revisions from the supplied evidence. If no safe correction is possible, remove that item by returning no correction for it.\n${JSON.stringify({ findings: failedItems })}`) })
+          authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
+          repairAttempts += repair.attempts
+          const response = repairSchema.parse(JSON.parse(repair.text))
+          for (const correction of response.corrections) {
+            const section = [...result.draft.content[correction.section]], prior = section[correction.index]
+            if (!prior || !correction.citations.every(citation => result.draft.evidence.some(source => source.evidenceId === citation.evidenceId && source.revision === citation.revision) && safeItems.some(source => source.id === citation.evidenceId && source.category === correction.section))) continue
+            const restored = pending.bundle.restoreIdentifiers(correction.text)
+            if ((correction.section === 'experience' || correction.section === 'projects') && !isGeneratedDescriptionParagraph(restored)) continue
+            section[correction.index] = 'text' in prior ? { ...prior, text: restored, citations: correction.citations } : { ...prior, name: restored, citations: correction.citations }
+            result.draft.content = { ...result.draft.content, [correction.section]: section }
+          }
+          result.draft.attempts += repair.attempts
+          report = checkDraftFacts(result.draft, { includeSkillDecisions: false })
+        }
+        let coverageRepairAttempts = 0
+        if (report.passed) {
+          const opportunities = supportedCoverageTerms(analysis.analysis, result.draft)
+          if (opportunities.length) {
+            const opportunity = opportunities[0]
+            const eligible = opportunity.eligible[0]
+            const priorItem = result.draft.content[eligible.section][eligible.index]
+            const priorText = 'text' in priorItem ? priorItem.text : priorItem.name
+            authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
+            const coverageRepair = await dispatcher.generate({ runId: pending.runId, jobId: pending.jobId, model: transportModel(pending.source.model.name), consentId: pending.consentId!, responseSchema: repairSchema, prompt: minimizeGeneratedPrompt(`Supported-keyword coverage repair (single exact item). Add only the explicitly supported term to this authored text. Preserve all existing wording, responsibility, scope, ownership, skill level, certainty, and citations exactly; do not change any other item. Return zero or one correction, only for the supplied section/index.\n${JSON.stringify({ opportunity: { qualification: opportunity.qualification, matchedAs: opportunity.matchedAs, section: eligible.section, index: eligible.index, evidenceId: eligible.evidenceId, revision: eligible.revision }, text: priorText, evidence: safeItems.find(source => source.id === eligible.evidenceId)?.text })}`) })
+            authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
+            coverageRepairAttempts = coverageRepair.attempts
+            const response = repairSchema.parse(JSON.parse(coverageRepair.text))
+            for (const correction of response.corrections) {
+              if (correction.section !== eligible.section || correction.index !== eligible.index) continue
+              const section = [...result.draft.content[eligible.section]], prior = section[eligible.index]
+              const expectedCitation = { evidenceId: eligible.evidenceId, revision: eligible.revision }
+              if (!prior || correction.citations.length !== 1 || correction.citations[0].evidenceId !== expectedCitation.evidenceId || correction.citations[0].revision !== expectedCitation.revision) continue
+              const priorText = 'text' in prior ? prior.text : prior.name
+              const term = escapeCoverageTerm(opportunity.matchedAs)
+              const withoutTerm = correction.text.replace(new RegExp(`(?:^|\\s)${term}(?=$|\\s)`, 'iu'), ' ').replace(/\s+/g, ' ').trim()
+              if (withoutTerm !== pending.bundle.minimizeIdentifiers(priorText).replace(/\s+/g, ' ').trim()) continue
+              const restored = pending.bundle.restoreIdentifiers(correction.text)
+              if ((eligible.section === 'experience' || eligible.section === 'projects') && !isGeneratedDescriptionParagraph(restored)) continue
+              section[eligible.index] = 'text' in prior ? { ...prior, text: restored } : { ...prior, name: restored }
+              result.draft.content = { ...result.draft.content, [eligible.section]: section }
+            }
+            result.draft.attempts += coverageRepair.attempts
+            report = checkDraftFacts(result.draft, { includeSkillDecisions: false })
+          }
+        }
+        const coverage = { ...qualificationCoverage(analysis.runId ?? analysis.jobId, analysis.displayAnalysis ?? analysis.analysis, result.draft, draftInputs.items.map(item => ({ evidenceId: item.id, revision: item.revision, snapshot: item.snapshot }))), repairAttempts: coverageRepairAttempts }
+        if ((['experience', 'projects'] as const).some(section => result.draft.content[section].some(item => item.descriptionFormat === 'paragraph' && !isGeneratedDescriptionParagraph(item.text)))) throw new Error('Final generated paragraphs failed their format contract.')
+        saveGenerationStep('check-document', 'Checking draft structure and document readiness.', ['parse-posting', 'score-evidence', 'select-content', 'tailor-paragraphs', 'verify-claims'])
+        report = checkDraftFacts(result.draft)
+        const previousRow = db.prepare('SELECT data FROM draft_revisions WHERE job_id = ? ORDER BY revision DESC LIMIT 1').get(pending.jobId) as { data: string } | undefined
+        if (previousRow) {
+          // A fresh valid generation resolves earlier schema failures, not an unchanged semantic warning.
+          report = preserveKnownFindings(report, draftRevisionSchema.parse(JSON.parse(previousRow.data)), result.draft, false)
+        }
+        const findings = report.findings
+        const totalAttempts = result.attempts + repairAttempts + coverageRepairAttempts
+        const mergedReport = factualCheckReportSchema.parse({ ...report, passed: findings.length === 0, findings })
+        if (dispatcher.isCancelled(pending.runId) || activeAnalysisByJob.get(pending.jobId) !== pending.runId) {
+          const stillCurrent = activeAnalysisByJob.get(pending.jobId) === pending.runId
+          if (stillCurrent) activeAnalysisByJob.delete(pending.jobId)
+          if (stillCurrent) saveAnalysisState({ jobId: pending.jobId, runId: pending.runId, status: 'cancelled', analysis: analysis.analysis, progress: 'Generation cancelled. A late response was discarded; no draft changes were saved.', attempts: (db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id = ?').get(pending.runId) as { count: number }).count, cacheHit: analysis.cacheHit })
+          db.prepare("UPDATE generation_recovery SET status='cancelled',updated_at=? WHERE run_id=?").run(new Date().toISOString(), pending.runId)
+          return { ok: false, message: 'Generation was cancelled. Its late response was discarded; no draft changes were saved.' }
+        }
+        const scopeNotice = workingTextScopeNotice(pending.jobId)
+        const checkedDraft = draftRevisionSchema.parse({ ...result.draft, status: findings.length ? 'blocked' : 'unverified', checkReport: mergedReport, coverage, attempts: totalAttempts, progress: `${findings.length ? `Draft saved for its ${result.draft.pageTarget}-page target; blocked by ${findings.length} unresolved finding(s).` : `${result.draft.progress} Automated checks passed. Human review remains required.`}${scopeNotice}` })
+        result.draft = checkedDraft
+        const tx = db.transaction(() => { db.prepare('INSERT INTO draft_revisions (id,job_id,revision,data) VALUES (?,?,?,?)').run(result.draft.id, result.draft.jobId, result.draft.revision, JSON.stringify(result.draft)); db.prepare('UPDATE provider_attempt_outcomes SET checkpointed_at=? WHERE run_id=? AND checkpointed_at IS NULL').run(new Date().toISOString(), pending.runId); db.prepare("UPDATE generation_recovery SET status='complete',updated_at=? WHERE run_id=?").run(new Date().toISOString(), pending.runId) })
+        tx()
+        if (activeAnalysisByJob.get(pending.jobId) === pending.runId) activeAnalysisByJob.delete(pending.jobId)
+        saveAnalysisState({ jobId: pending.jobId, runId: pending.runId, status: 'complete', analysis: analysis.analysis, progress: result.draft.progress, attempts: analysis.attempts + totalAttempts, cacheHit: analysis.cacheHit, generationStep: 'check-document', completedSteps: ['parse-posting', 'score-evidence', 'select-content', 'tailor-paragraphs', 'verify-claims', 'check-document'] })
+        return { ok: true, message: `${result.draft.status === 'blocked' ? 'Draft saved locally, editable, and blocked by factual findings.' : 'Draft saved locally. It is unverified and unapproved.'}${scopeNotice}`, draft: result.draft }
+      } catch (error) {
+        if (activeAnalysisByJob.get(pending.jobId) !== pending.runId) {
+          db.prepare("UPDATE generation_recovery SET status='cancelled',updated_at=? WHERE run_id=?").run(new Date().toISOString(), pending.runId)
+          return { ok: false, message: 'Generation was cancelled. Its late response was discarded; no draft changes were saved.' }
+        }
+        activeAnalysisByJob.delete(pending.jobId)
+        const cancelled = error instanceof AnalysisError && error.code === 'CANCELLED'
+        const observedAttempts = (db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id = ?').get(pending.runId) as { count: number }).count
+        const message = cancelled ? 'Draft generation was cancelled. No generated wording was retained.' : 'The generated response could not be safely validated. No model wording was retained; author a correction in the blocked draft or retry.'
+        if (error instanceof IncompatibleGenerationCheckpointError) {
+          db.prepare("UPDATE generation_recovery SET status='cancelled',updated_at=? WHERE run_id=?").run(new Date().toISOString(), pending.runId)
+          const priorProgress = currentAnalysis.get(pending.jobId)
+          saveAnalysisState({ jobId: pending.jobId, runId: pending.runId, status: 'failed', analysis: analysis.analysis, progress: error.message, attempts: observedAttempts, error: error.message, cacheHit: analysis.cacheHit, ...(priorProgress?.runId === pending.runId ? { generationStep: priorProgress.generationStep, completedSteps: priorProgress.completedSteps } : {}) })
+          return { ok: false, message: error.message }
+        }
+        const validationFailure = error instanceof SyntaxError || error instanceof z.ZodError || error instanceof CitationValidationError
+        if (validationFailure) {
+          const failed = draftRevisionSchema.parse({ ...failedDraftIdentity, pageTarget, status: 'blocked', approved: false, content: { education: [], experience: [], projects: [], skills: [], certificates: [] }, evidence: safeItems.map(item => ({ evidenceId: item.id, revision: item.revision, snapshot: item.snapshot })), progress: 'Generation failed validation; model output was discarded. This empty draft is editable only by adding locally authored content and remains blocked pending factual checks.', attempts: observedAttempts })
+          const code = error instanceof CitationValidationError ? error.finding : 'schema'
+          let report = factualCheckReportSchema.parse({ ...checkDraftFacts(failed), passed: false, findings: [{ code, itemPath: 'generation', message: code === 'foreign-citation' ? 'The response referenced evidence outside the selected authorized sources. Model output was discarded.' : 'The tailored response did not match the required structured schema. Model output was discarded.', correction: 'Author or correct draft wording using the saved evidence revisions, then run factual checks.' }] })
+          const previousRow = db.prepare('SELECT data FROM draft_revisions WHERE job_id = ? ORDER BY revision DESC LIMIT 1').get(pending.jobId) as { data: string } | undefined
+          if (previousRow) {
+            const previous = draftRevisionSchema.parse(JSON.parse(previousRow.data))
+            // Discarded model output cannot prove that any earlier flagged wording was corrected.
+            report = preserveKnownFindings(report, previous, previous, false)
+          }
+          const blocked = draftRevisionSchema.parse({ ...failed, checkReport: report })
+          db.transaction(() => {
+            db.prepare('INSERT INTO draft_revisions (id,job_id,revision,data) VALUES (?,?,?,?)').run(blocked.id, blocked.jobId, blocked.revision, JSON.stringify(blocked))
+            db.prepare('UPDATE provider_attempt_outcomes SET checkpointed_at=? WHERE run_id=? AND checkpointed_at IS NULL').run(new Date().toISOString(), pending.runId)
+            db.prepare("UPDATE generation_recovery SET status='complete',updated_at=? WHERE run_id=?").run(new Date().toISOString(), pending.runId)
+          })()
+          const priorProgress = currentAnalysis.get(pending.jobId)
+          saveAnalysisState({ jobId: pending.jobId, runId: pending.runId, status: 'complete', analysis: analysis.analysis, progress: blocked.progress, attempts: observedAttempts, cacheHit: analysis.cacheHit, generationStep: priorProgress?.runId === pending.runId ? priorProgress.generationStep : 'parse-posting', completedSteps: priorProgress?.runId === pending.runId ? priorProgress.completedSteps : ['parse-posting'] })
+          return { ok: true, message: 'A blocked draft was saved; no invalid model output was retained.', draft: blocked }
+        }
+        const knownInvalid = error instanceof AnalysisError && error.code === 'MALFORMED'
+        const paused = error instanceof AnalysisError && ['BUDGET','TIMEOUT','OFFLINE','PROVIDER','INVALID_KEY'].includes(error.code)
+        const safeMessage = cancelled ? message : error instanceof AnalysisError ? error.message : error instanceof Error && /scope|authorization|stale|changed/i.test(error.message) ? 'Your authorized scope changed during generation. Review the outgoing data and try again.' : 'Draft generation failed safely. No draft was created; check authorization, connection, and model settings before retrying.'
+        if (knownInvalid) db.transaction(() => {
+          db.prepare("UPDATE generation_recovery SET status='cancelled',updated_at=? WHERE run_id=?").run(new Date().toISOString(), pending.runId)
+          db.prepare('UPDATE provider_attempt_outcomes SET checkpointed_at=? WHERE run_id=? AND checkpointed_at IS NULL').run(new Date().toISOString(), pending.runId)
+        })()
+        else if (resumeRunId || !validationFailure) db.prepare('UPDATE generation_recovery SET status=?,updated_at=? WHERE run_id=?').run(cancelled ? 'cancelled' : paused ? 'paused' : 'running', new Date().toISOString(), pending.runId)
+        const priorProgress = currentAnalysis.get(pending.jobId)
+        saveAnalysisState({ jobId: pending.jobId, runId: pending.runId, status: cancelled ? 'cancelled' : 'failed', analysis: analysis.analysis, progress: safeMessage, attempts: observedAttempts, error: safeMessage, cacheHit: analysis.cacheHit, ...(priorProgress?.runId === pending.runId ? { generationStep: priorProgress.generationStep, completedSteps: priorProgress.completedSteps } : {}) })
+        return { ok: false, message: safeMessage }
+      } finally { endPhysicalRun(pending.jobId, pending.runId) }
+    }
+  const generateInitialLetter = async (token: string, cv: DraftRevision, owner: symbol, pending: PendingOutbound): Promise<RequestedDocumentsResult['letter']> => {
+    const purposeHash = createHash('sha256').update(JSON.stringify({ version: 1, scopeHash: pending.bundle.scopeHash, purpose: 'cv+cover-letter' })).digest('hex')
+    const modelHash = createHash('sha256').update(JSON.stringify(pending.source.model)).digest('hex')
+    let operation: CoverLetterOperation | undefined
+    let physicallyDispatched = false
+    const assertCurrent = () => {
+      if (requestedDocumentOwners.get(pending.jobId) !== owner || requestedRunByJob.get(pending.jobId) !== pending.runId || pendingOutbound.get(token) !== pending || dispatcher.isCancelled(pending.runId)) throw new AnalysisError('CANCELLED', 'The cover-letter operation was cancelled.')
+      if (pending.purpose !== 'cv+cover-letter' || recoveredRunIds.has(pending.runId)) throw new Error('This run does not authorize a cover letter.')
+      const grant = db.prepare("SELECT 1 FROM outbound_consents WHERE id=? AND run_id=? AND job_id=? AND scope_hash=? AND purpose_version=1 AND purpose='cv+cover-letter' AND purpose_hash=? AND revoked=0").get(pending.consentId, pending.runId, pending.jobId, pending.bundle.scopeHash, purposeHash)
+      if (!grant) throw new Error('Current cover-letter consent is unavailable.')
+      authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
+      const current = db.prepare('SELECT id FROM draft_revisions WHERE job_id=? ORDER BY revision DESC LIMIT 1').get(pending.jobId) as { id: string } | undefined
+      if (current?.id !== cv.id) throw new Error('The originating CV changed during letter generation.')
+      const source = currentConsentSource(pending.jobId)
+      if (!source || source.job.revision !== cv.targetPostingUpdatedAt || createHash('sha256').update(JSON.stringify(source.model)).digest('hex') !== modelHash) throw new Error('The posting or model changed during letter generation.')
+      return source
+    }
+    const writeOperation = (next: CoverLetterOperation) => {
+      const data = coverLetterOperationSchema.parse(next)
+      db.prepare('INSERT INTO cover_letter_operations(id,job_id,parent_run_id,consent_id,status,data,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,data=excluded.data,updated_at=excluded.updated_at').run(data.id, data.jobId, data.parentRunId, data.consentId, data.status, JSON.stringify(data), data.createdAt, data.updatedAt)
+      operation = data
+    }
+    try {
+      const source = assertCurrent()
+      const sources = prepareCoverLetterSources(source, pending.bundle)
+      if (db.prepare('SELECT 1 FROM cover_letter_operations WHERE parent_run_id=? LIMIT 1').get(pending.runId)) return { status: 'not-started', reason: 'This run already consumed its initial cover-letter attempt.' }
+      const timestamp = new Date().toISOString()
+      writeOperation({ id: randomUUID(), jobId: pending.jobId, parentRunId: pending.runId, consentId: pending.consentId!, purposeHash, initialBinding: { cvRevisionId: cv.id, scopeHash: pending.bundle.scopeHash, modelHash, postingUpdatedAt: String(source.job.revision) }, status: 'prepared', createdAt: timestamp, updatedAt: timestamp })
+      const generated = await dispatcher.generate({ runId: pending.runId, jobId: pending.jobId, consentId: pending.consentId!, model: transportModel(pending.source.model.name), responseSchema: coverLetterModelResponseSchema, maxTokens: 4096, maxResponseChars: 100_000,
+        prompt: `Write one cover letter as concise body paragraphs grounded only in the numbered authorized sources. Return paragraphs with text and citations containing source ordinals. Do not return IDs, headings, dates, recipient, greeting, signature, CV prose, or instructions. Never invent numbers, skills, or attribute one role's facts to another. Every paragraph needs citations. No automated factual proof is claimed; the user will review each paragraph.\n${JSON.stringify({ posting: pending.bundle.outgoing.job, sources: sources.outgoing })}`,
+        letterTask: { operationId: operation!.id, beforeDispatch: () => {
+          // This callback runs after awaited Pi model/auth lookup, immediately before the physical send.
+          const latest = assertCurrent()
+          if (!isDeepStrictEqual(prepareCoverLetterSources(latest, prepareOutboundBundle(latest)), sources)) throw new Error('Current source passages changed.')
+          const row = db.prepare('SELECT status FROM cover_letter_operations WHERE id=?').get(operation!.id) as { status: string } | undefined
+          if (physicallyDispatched || row?.status !== 'prepared') throw new Error('The initial cover-letter request has already been consumed.')
+          // A failing durable intent write throws: absolutely no provider request may follow it.
+          db.transaction(() => { assertCurrent(); writeOperation({ ...operation!, status: 'dispatched', updatedAt: new Date().toISOString() }) })()
+          physicallyDispatched = true
+        } },
+      })
+      const latest = assertCurrent()
+      if (!isDeepStrictEqual(prepareCoverLetterSources(latest, prepareOutboundBundle(latest)), sources)) throw new Error('Current source passages changed.')
+      const analysis = currentAnalysis.get(pending.jobId)?.analysis
+      const response = validateCoverLetterResponse(JSON.parse(generated.text), sources, pending.bundle, analysis?.tools ?? [])
+      const letter = coverLetterRevisionSchema.parse({ id: randomUUID(), jobId: pending.jobId, parentRunId: pending.runId, operationId: operation!.id, cvRevisionId: cv.id,
+        revision: ((db.prepare('SELECT MAX(revision) AS revision FROM cover_letter_revisions WHERE job_id=?').get(pending.jobId) as { revision: number | null }).revision ?? 0) + 1,
+        createdAt: new Date().toISOString(), date: new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }), subject: `Application: ${source.job.title}`,
+        bindings: { postingUpdatedAt: String(source.job.revision), scopeHash: pending.bundle.scopeHash, modelHash, sources: sources.local },
+        paragraphs: response.paragraphs.map(paragraph => ({ ...paragraph, id: randomUUID(), text: pending.bundle.restoreIdentifiers(paragraph.text) })), findings: [], acknowledgments: {}, approved: false })
+      db.transaction(() => {
+        const current = assertCurrent()
+        if (!isDeepStrictEqual(prepareCoverLetterSources(current, prepareOutboundBundle(current)), sources)) throw new Error('Current source passages changed.')
+        db.prepare('INSERT INTO cover_letter_revisions(id,job_id,revision,data) VALUES(?,?,?,?)').run(letter.id, letter.jobId, letter.revision, JSON.stringify(letter))
+        writeOperation({ ...operation!, status: 'saved', updatedAt: new Date().toISOString() })
+      })()
+      return { status: 'saved', letter }
+    } catch (error) {
+      const cancelled = dispatcher.isCancelled(pending.runId) || pendingOutbound.get(token) !== pending || error instanceof AnalysisError && error.code === 'CANCELLED'
+      const invalid = error instanceof z.ZodError || error instanceof SyntaxError || error instanceof AnalysisError && error.code === 'MALFORMED' || error instanceof Error && /unsupported|citation|attributes|named source|unauthorized identifier/i.test(error.message)
+      const status = cancelled ? 'cancelled' : physicallyDispatched && !invalid ? 'uncertain' : 'failed'
+      if (operation) {
+        try { writeOperation({ ...operation, status, updatedAt: new Date().toISOString() }) } catch { /* Durable prepared/dispatched intent still prevents automatic replay after a capacity/write failure. */ }
+      }
+      return { status, message: cancelled ? 'Cover-letter generation was cancelled. The saved CV is unchanged; any late letter was discarded.' : status === 'uncertain' ? 'The letter request may have completed, but no current letter was saved. The CV is unchanged. No request will be replayed automatically.' : 'The cover letter could not be safely generated or saved. The saved CV is unchanged. No automatic retry was made.' }
+    }
+  }
   const api: WorkbenchStorageAPI = {
     async getWorkspaceBackupStatus() { return backupEngine.readBackupStatus() },
     async getSettings() {
@@ -505,7 +782,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       } catch { throw new Error('Pi sign-in could not be checked. Open Pi outside CV Tailor and try again.') }
       if (!authenticated) throw new Error('Pi has no local sign-in for this model. Sign in with Pi outside CV Tailor.')
       if (!isDeepStrictEqual(readPiSelection(), selection)) {
-        if (activeAnalysisByJob.size || activeProfileAiRuns.size) throw new Error('Cancel the current model request before changing the Pi model.')
+        if (requestedDocumentOwners.size || activeAnalysisByJob.size || activeProfileAiRuns.size) throw new Error('Cancel the current model request before changing the Pi model.')
         db.transaction(() => {
           saveSetting('pi-model', JSON.stringify(selection))
           db.prepare('UPDATE outbound_consents SET revoked=1 WHERE revoked=0').run()
@@ -983,7 +1260,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
         const acceptedRevision = changed ? { ...parsed.data, optionalDetails: acceptedOptionalDetails, revision: (priorRevisions.at(-1)?.revision ?? 0) + 1, acceptedAt: now, provenance: 'manual' as const } : undefined
         const revisions = acceptedRevision ? [...priorRevisions, acceptedRevision] : priorRevisions
         if (changed && revisions.length > MAX_POSTING_REVISIONS && !backupStatus.legacyOverCap) return jobSaveResultSchema.parse({ ok: false, error: { code: 'REVISION_LIMIT', message: `This saved job reached the ${MAX_POSTING_REVISIONS}-revision history limit. Nothing was changed and no history was deleted.`, fieldErrors: { description: 'The revision limit was reached. Existing posting history remains intact.' } } })
-        if (changed && input.id && (activeAnalysisByJob.has(input.id) || externalJobOperations.has(input.id))) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'A provider operation is active for this saved job. Cancel it before changing the posting.' } })
+        if (changed && input.id && (requestedDocumentOwners.has(input.id) || activeAnalysisByJob.has(input.id) || externalJobOperations.has(input.id))) return jobSaveResultSchema.parse({ ok: false, error: { code: 'CONFLICT', message: 'A provider operation is active for this saved job. Cancel it before changing the posting.' } })
         const record = jobRecordSchema.parse({ ...parsed.data, optionalDetails: acceptedOptionalDetails, contacts: contacts ?? prior?.contacts ?? [], id: input.id ?? randomUUID(), createdAt: existingRow?.created_at ?? now, updatedAt: changed ? now : prior!.updatedAt, provenance: changed ? 'manual' : prior?.provenance ?? 'manual', sourceSnapshot: prior?.sourceSnapshot ?? null, sourceHistory: prior?.sourceHistory ?? [], revisions })
         const serializedRecord = JSON.stringify(record)
         if (Buffer.byteLength(serializedRecord, 'utf8') > MAX_JOB_RECORD_UTF8_BYTES && (!backupStatus.legacyOverCap || !existingRow || Buffer.byteLength(serializedRecord, 'utf8') >= Buffer.byteLength(existingRow.data, 'utf8'))) return jobSaveResultSchema.parse({ ok: false, error: { code: 'HISTORY_SIZE_LIMIT', message: 'This saved job and its complete revision history exceed the 4 MiB per-job backup limit. Nothing was changed and no history was deleted.', fieldErrors: { description: 'Review the posting revision history limit; existing versions remain intact.' } } })
@@ -1063,7 +1340,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
         }
         for (const row of deleted.owned.outbound_consents) outboundEngine.revoke(row.id as string)
         for (const id of preview.ids) currentAnalysis.delete(id)
-        for (const runId of deleted.runIds) recoveredRunIds.delete(runId)
+        for (const runId of deleted.runIds) { recoveredRunIds.delete(runId); startedDocumentRuns.delete(runId) }
         for (const [key, value] of deletionPreviews) if (value.ids.some(id => preview.ids.includes(id))) deletionPreviews.delete(key)
         return jobDeletionResultSchema.parse({ ok: true, message: 'Selected saved jobs and their local CV work were deleted.', deletedCount: preview.ids.length })
       } catch (error) {
@@ -1085,7 +1362,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       const source = currentConsentSource(jobId)
       if (!source) return outboundConsentPreviewSchema.parse({ ok: false, message: scriptedTransport ? 'That saved job is unavailable. Choose another job.' : 'Choose an available Pi model and thinking level in Settings before reviewing outgoing data.' })
       const replacingPurpose = [...pendingOutbound.values()].some(prior => prior.jobId === jobId && prior.purpose !== purpose.data)
-      if (replacingPurpose && (unsettledRunsByJob.has(jobId) || activeAnalysisByJob.has(jobId))) return outboundConsentPreviewSchema.parse({ ok: false, message: 'Cancel or finish the active job operation before changing document purpose.' })
+      if (replacingPurpose && (requestedDocumentOwners.has(jobId) || unsettledRunsByJob.has(jobId) || activeAnalysisByJob.has(jobId))) return outboundConsentPreviewSchema.parse({ ok: false, message: 'Cancel or finish the active job operation before changing document purpose.' })
       for (const [priorToken, prior] of pendingOutbound) if (prior.jobId === jobId && prior.purpose !== purpose.data) {
         if (prior.consentId) {
           outboundEngine.revoke(prior.consentId)
@@ -1129,6 +1406,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       const pending = pendingOutbound.get(token)
       if (!pending?.consentId) throw new Error('Review and authorize this exact outgoing bundle before analysis.')
       if (pending.purpose === 'cover-letter-only') throw new Error('This authorization permits a cover letter only, not posting analysis.')
+      if (requestedDocumentOwners.has(pending.jobId)) throw new Error('Finish the active document operation before starting analysis.')
       if (externalJobOperations.has(pending.jobId)) throw new Error(`Finish ${externalJobOperations.get(pending.jobId)} before starting analysis.`)
       const latestSource = currentConsentSource(pending.jobId)
       if (!latestSource || prepareOutboundBundle(latestSource).scopeHash !== pending.bundle.scopeHash) throw new Error('The job, profile, Pi model, or thinking level changed after consent. Review outgoing data and authorize a new run.')
@@ -1176,208 +1454,36 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       } finally { endPhysicalRun(pending.jobId, pending.runId) }
     },
     async generateDraft(token: string, pageTarget: 1 | 2 = 1, resumeRunId?: string) {
-      if (pageTarget !== 1 && pageTarget !== 2) return { ok: false, message: 'Choose a one- or two-page target.' }
+      return generateDraftCore(token, pageTarget, resumeRunId)
+    },
+    async generateRequestedDocuments(token: string, pageTarget: 1 | 2 = 1) {
       const pending = pendingOutbound.get(token)
-      if (!pending?.consentId) return { ok: false, message: 'Review and authorize this exact outgoing bundle before generation.' }
-      if (pending.purpose === 'cover-letter-only') return { ok: false, message: 'This authorization permits a cover letter only, not CV generation.' }
-      if (externalJobOperations.has(pending.jobId)) return { ok: false, message: `Finish ${externalJobOperations.get(pending.jobId)} before generating.` }
-      const recoveryRow = resumeRunId ? db.prepare('SELECT snapshot, status FROM generation_recovery WHERE run_id=? AND job_id=?').get(resumeRunId, pending.jobId) as { snapshot: string; status: string } | undefined : undefined
-      if (resumeRunId && unsettledRunsByJob.get(pending.jobId)?.has(resumeRunId)) return { ok: false, message: 'The earlier provider response has not settled. Wait before reviewing recovery.' }
-      if (resumeRunId && (!recoveryRow || !['running','paused'].includes(recoveryRow.status) || pending.runId !== resumeRunId)) return { ok: false, message: 'This saved run is no longer resumable.' }
-      let frozen: ReturnType<typeof generationRecoverySnapshotSchema.parse> | undefined
-      if (recoveryRow) {
-        try { frozen = generationRecoverySnapshotSchema.parse(JSON.parse(recoveryRow.snapshot)) }
-        catch { return { ok: false, message: 'The saved recovery snapshot is corrupt or incompatible. No requests were sent; cancel this run and inspect the source data.' } }
-        if (frozen.version !== 5 || (!scriptedTransport && !isDeepStrictEqual(frozen.model, readPiSelection()))) return { ok: false, message: 'This saved run uses an earlier generation contract or its Pi model changed. Review outgoing data, authorize a fresh run, analyze the posting, then generate again. No previous request was replayed.' }
-        if (frozen.runId !== resumeRunId || frozen.jobId !== pending.jobId || frozen.consentId !== pending.consentId || frozen.scopeHash !== pending.bundle.scopeHash) return { ok: false, message: 'Saved run identity or consent no longer matches this recovery request. No requests were sent.' }
-      }
-      const latestScope = resumeRunId ? null : currentConsentSource(pending.jobId)
-      if (!resumeRunId && (!latestScope || prepareOutboundBundle(latestScope).scopeHash !== pending.bundle.scopeHash)) return { ok: false, message: 'Your job, profile, or model settings changed after consent. Review the outgoing data again.' }
-      const analysis = frozen?.analysis ?? await this.getAnalysis(pending.jobId)
-      if (!analysis || analysis.status !== 'complete' || !analysis.analysis) return { ok: false, message: 'Complete posting analysis before generating a draft.' }
-      if (!resumeRunId && (!startedAnalysisTokens.has(token) || analysis.runId !== pending.runId)) return { ok: false, message: 'Complete posting analysis for this run before generating a draft. Saved analysis can be reused without another provider request.' }
-      if (activeAnalysisByJob.has(pending.jobId)) return { ok: false, message: 'Generation is already active for this saved job.' }
-      const job = frozen?.job ?? await this.openJob(pending.jobId)
-      if (!job) return { ok: false, message: 'The saved job is unavailable.' }
-      if (!resumeRunId) {
-        const latestScopeAfterAsync = currentConsentSource(pending.jobId)
-        if (!latestScopeAfterAsync || prepareOutboundBundle(latestScopeAfterAsync).scopeHash !== pending.bundle.scopeHash) return { ok: false, message: 'Your job, profile, or model settings changed after consent. Review the outgoing data again.' }
-      }
-      const profile = frozen?.profile ?? readProfile(), experience = frozen?.experience ?? readExperience()
-      const draftInputs = frozen?.draftInputs ?? prepareDraftInputs(profile, experience)
-      const items = draftInputs.items
-      const approvedPayload = authorizeOutboundPayload<OutboundPayload>(pending.runId, pending.bundle.outgoing)
-      const minimizeGeneratedPrompt = (text: string) => {
-        const prompt = pending.bundle.minimizeIdentifiers(text)
-        if (pending.bundle.containsRestoredIdentifier(prompt)) throw new Error('Generated wording still contains a local identifier. No model request was sent.')
-        return prompt
-      }
-      const scrubbed = new Map<string, string>()
-      profile.education.forEach((item, i) => { const safe = approvedPayload.profile.education[i]; if (safe) scrubbed.set(item.id, JSON.stringify(safe)) })
-      experience.experience.forEach((item, i) => { const safe = approvedPayload.profile.experience[i]; if (safe) { scrubbed.set(item.id, JSON.stringify(safe)); item.factualItems.forEach((fact, n) => scrubbed.set(fact.id, safe.evidence[n] ?? '')) } })
-      experience.projects.forEach((item, i) => { const safe = approvedPayload.profile.projects[i]; if (safe) { scrubbed.set(item.id, JSON.stringify(safe)); item.factualItems.forEach((fact, n) => scrubbed.set(fact.id, safe.evidence[n] ?? '')); item.technologies.forEach((fact, n) => scrubbed.set(fact.id, safe.technologies[n] ?? '')) } })
-      profile.skills.forEach((item, i) => { const safe = approvedPayload.profile.skills[i]; if (safe) scrubbed.set(item.id, JSON.stringify(safe)) })
-      profile.certificates.forEach((item, i) => { const safe = approvedPayload.profile.certificates[i]; if (safe) scrubbed.set(item.id, JSON.stringify(safe)) })
-      const safeItems = frozen?.safeItems ?? items.map(item => ({ ...item, text: scrubbed.get(item.id) ?? '' })).filter(item => item.text)
-      const failedDraftIdentity = frozen?.identity ?? { id: randomUUID(), jobId: pending.jobId, revision: ((db.prepare('SELECT MAX(revision) AS revision FROM draft_revisions WHERE job_id = ?').get(pending.jobId) as { revision: number | null }).revision ?? 0) + 1, targetPostingUpdatedAt: pending.source.job.revision, createdAt: new Date().toISOString(), lockedFields: draftInputs.lockedFields }
-      if (!resumeRunId) {
-        const data = { runId: pending.runId, jobId: pending.jobId, consentId: pending.consentId, scopeHash: pending.bundle.scopeHash, analysis, job, profile, experience, draftInputs, safeItems, identity: failedDraftIdentity, pageTarget, source: pending.source }
-        const sourceModel = pending.source.model
-        const snapshot = generationRecoverySnapshotSchema.parse(scriptedTransport
-          ? { ...data, version: 5 }
-          : { ...data, version: 5, model: piModelSelectionSchema.parse({ providerId: sourceModel.providerId, modelId: sourceModel.name, thinkingLevel: sourceModel.thinkingLevel }) })
-        db.prepare('INSERT OR REPLACE INTO generation_recovery (run_id,job_id,consent_id,scope_hash,status,snapshot,updated_at) VALUES (?,?,?,?,?,?,?)').run(pending.runId,pending.jobId,pending.consentId,pending.bundle.scopeHash,'running',JSON.stringify(snapshot),new Date().toISOString())
-      }
-      else db.prepare("UPDATE generation_recovery SET status='running',updated_at=? WHERE run_id=?").run(new Date().toISOString(), resumeRunId)
-      activeAnalysisByJob.set(pending.jobId, pending.runId)
-      beginPhysicalRun(pending.jobId, pending.runId)
+      const refused = (message: string): RequestedDocumentsResult => requestedDocumentsResultSchema.parse({ cv: { ok: false, message }, letter: { status: 'not-started', reason: message } })
+      if (pageTarget !== 1 && pageTarget !== 2) return refused('Choose a one- or two-page target.')
+      if (!pending?.consentId || pending.purpose === 'cover-letter-only' || recoveredRunIds.has(pending.runId)) return refused('Review and authorize an initial CV document run before generation.')
+      if (requestedDocumentOwners.has(pending.jobId) || unsettledRunsByJob.has(pending.jobId) || activeAnalysisByJob.has(pending.jobId) || externalJobOperations.has(pending.jobId)) return refused('Finish the active job operation before generating requested documents.')
+      if (startedDocumentRuns.has(pending.runId) || db.prepare('SELECT 1 FROM generation_recovery WHERE run_id=?').get(pending.runId) || db.prepare('SELECT 1 FROM cover_letter_operations WHERE parent_run_id=?').get(pending.runId)) return refused('This accepted run has already consumed its initial document generation.')
+      const owner = Symbol('requested documents')
+      requestedDocumentOwners.set(pending.jobId, owner)
+      requestedRunByJob.set(pending.jobId, pending.runId)
+      startedDocumentRuns.add(pending.runId)
       try {
-        const result = await runSourceLinkedGraph({ job: approvedPayload.job, analysis: analysis.analysis, items: safeItems, savedSkillNames: profile.skills.map(skill => skill.name), sourceJobRevision: pending.source.job.revision, pageTarget, restoreText: pending.bundle.restoreIdentifiers, checkpointer: graphCheckpointer, threadId: pending.runId, resume: Boolean(resumeRunId), onProgress: (progress, generationStep, completedSteps) => { if (activeAnalysisByJob.get(pending.jobId) !== pending.runId || dispatcher.isCancelled(pending.runId)) return; const observed = (db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id = ?').get(pending.runId) as { count: number }).count; saveAnalysisState({ jobId: pending.jobId, runId: pending.runId, status: 'running', analysis: analysis.analysis, progress, attempts: observed, cacheHit: analysis.cacheHit, generationStep, completedSteps }) }, identity: failedDraftIdentity, call: async (prompt, responseSchema) => {
-          authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
-          const generated = await dispatcher.generate({ runId: pending.runId, jobId: pending.jobId, model: transportModel(pending.source.model.name), prompt, consentId: pending.consentId!, responseSchema })
-          authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
-          return { value: responseSchema.parse(JSON.parse(generated.text)), attempts: generated.attempts }
-        } })
-        authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
-        const saveGenerationStep = (step: 'verify-claims' | 'check-document', progress: string, completed: string[]) => { if (activeAnalysisByJob.get(pending.jobId) !== pending.runId || dispatcher.isCancelled(pending.runId)) return; const observed = (db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id = ?').get(pending.runId) as { count: number }).count; saveAnalysisState({ jobId: pending.jobId, runId: pending.runId, status: 'running', analysis: analysis.analysis, progress, attempts: observed, cacheHit: analysis.cacheHit, generationStep: step, completedSteps: completed }) }
-        saveGenerationStep('verify-claims', 'Checking generated claims against frozen evidence.', ['parse-posting', 'score-evidence', 'select-content', 'tailor-paragraphs'])
-        const repairSchema = z.object({ corrections: z.array(z.object({ section: z.enum(['education', 'experience', 'projects', 'skills', 'certificates']), index: z.number().int().nonnegative(), text: z.string().trim().min(1).max(3000), citations: z.array(z.object({ evidenceId: uuidSchema, revision: z.number().int().positive() }).strict()).min(1) }).strict()).max(1) }).strict()
-        let report = checkDraftFacts(result.draft, { includeSkillDecisions: false })
-        let repairAttempts = 0
-        const hasRepairableContentFinding = () => report.findings.some(finding => /^(education|experience|projects|skills|certificates)\[\d+\]/.test(finding.itemPath))
-        for (let cycle = 0; cycle < 2 && !report.passed && hasRepairableContentFinding(); cycle++) {
-          const failedItems = report.findings.map(finding => {
-            const found = /^(education|experience|projects|skills|certificates)\[(\d+)\]/.exec(finding.itemPath)
-            if (!found) return { finding }
-            const section = found[1] as keyof DraftRevision['content'], index = Number(found[2]), item = result.draft.content[section][index]
-            return { finding, section, index, text: item && ('text' in item ? item.text : item.name), citedEvidence: item?.citations.map(citation => ({ ...citation, text: safeItems.find(source => source.id === citation.evidenceId)?.text ?? '' })) }
-          })
-          authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
-          const repair = await dispatcher.generate({ runId: pending.runId, jobId: pending.jobId, model: transportModel(pending.source.model.name), consentId: pending.consentId!, responseSchema: repairSchema, prompt: minimizeGeneratedPrompt(`Factual repair cycle ${cycle + 1} of 2. Correct only the listed failing draft items using only their cited evidence. Preserve every unaffected item. Never infer facts or use uncited evidence. Return corrections for failed item paths only; keep citation IDs/revisions from the supplied evidence. If no safe correction is possible, remove that item by returning no correction for it.\n${JSON.stringify({ findings: failedItems })}`) })
-          authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
-          repairAttempts += repair.attempts
-          const response = repairSchema.parse(JSON.parse(repair.text))
-          for (const correction of response.corrections) {
-            const section = [...result.draft.content[correction.section]], prior = section[correction.index]
-            if (!prior || !correction.citations.every(citation => result.draft.evidence.some(source => source.evidenceId === citation.evidenceId && source.revision === citation.revision) && safeItems.some(source => source.id === citation.evidenceId && source.category === correction.section))) continue
-            const restored = pending.bundle.restoreIdentifiers(correction.text)
-            if ((correction.section === 'experience' || correction.section === 'projects') && !isGeneratedDescriptionParagraph(restored)) continue
-            section[correction.index] = 'text' in prior ? { ...prior, text: restored, citations: correction.citations } : { ...prior, name: restored, citations: correction.citations }
-            result.draft.content = { ...result.draft.content, [correction.section]: section }
-          }
-          result.draft.attempts += repair.attempts
-          report = checkDraftFacts(result.draft, { includeSkillDecisions: false })
-        }
-        let coverageRepairAttempts = 0
-        if (report.passed) {
-          const opportunities = supportedCoverageTerms(analysis.analysis, result.draft)
-          if (opportunities.length) {
-            const opportunity = opportunities[0]
-            const eligible = opportunity.eligible[0]
-            const priorItem = result.draft.content[eligible.section][eligible.index]
-            const priorText = 'text' in priorItem ? priorItem.text : priorItem.name
-            authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
-            const coverageRepair = await dispatcher.generate({ runId: pending.runId, jobId: pending.jobId, model: transportModel(pending.source.model.name), consentId: pending.consentId!, responseSchema: repairSchema, prompt: minimizeGeneratedPrompt(`Supported-keyword coverage repair (single exact item). Add only the explicitly supported term to this authored text. Preserve all existing wording, responsibility, scope, ownership, skill level, certainty, and citations exactly; do not change any other item. Return zero or one correction, only for the supplied section/index.\n${JSON.stringify({ opportunity: { qualification: opportunity.qualification, matchedAs: opportunity.matchedAs, section: eligible.section, index: eligible.index, evidenceId: eligible.evidenceId, revision: eligible.revision }, text: priorText, evidence: safeItems.find(source => source.id === eligible.evidenceId)?.text })}`) })
-            authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
-            coverageRepairAttempts = coverageRepair.attempts
-            const response = repairSchema.parse(JSON.parse(coverageRepair.text))
-            for (const correction of response.corrections) {
-              if (correction.section !== eligible.section || correction.index !== eligible.index) continue
-              const section = [...result.draft.content[eligible.section]], prior = section[eligible.index]
-              const expectedCitation = { evidenceId: eligible.evidenceId, revision: eligible.revision }
-              if (!prior || correction.citations.length !== 1 || correction.citations[0].evidenceId !== expectedCitation.evidenceId || correction.citations[0].revision !== expectedCitation.revision) continue
-              const priorText = 'text' in prior ? prior.text : prior.name
-              const term = escapeCoverageTerm(opportunity.matchedAs)
-              const withoutTerm = correction.text.replace(new RegExp(`(?:^|\\s)${term}(?=$|\\s)`, 'iu'), ' ').replace(/\s+/g, ' ').trim()
-              if (withoutTerm !== pending.bundle.minimizeIdentifiers(priorText).replace(/\s+/g, ' ').trim()) continue
-              const restored = pending.bundle.restoreIdentifiers(correction.text)
-              if ((eligible.section === 'experience' || eligible.section === 'projects') && !isGeneratedDescriptionParagraph(restored)) continue
-              section[eligible.index] = 'text' in prior ? { ...prior, text: restored } : { ...prior, name: restored }
-              result.draft.content = { ...result.draft.content, [eligible.section]: section }
-            }
-            result.draft.attempts += coverageRepair.attempts
-            report = checkDraftFacts(result.draft, { includeSkillDecisions: false })
-          }
-        }
-        const coverage = { ...qualificationCoverage(analysis.runId ?? analysis.jobId, analysis.displayAnalysis ?? analysis.analysis, result.draft, draftInputs.items.map(item => ({ evidenceId: item.id, revision: item.revision, snapshot: item.snapshot }))), repairAttempts: coverageRepairAttempts }
-        if ((['experience', 'projects'] as const).some(section => result.draft.content[section].some(item => item.descriptionFormat === 'paragraph' && !isGeneratedDescriptionParagraph(item.text)))) throw new Error('Final generated paragraphs failed their format contract.')
-        saveGenerationStep('check-document', 'Checking draft structure and document readiness.', ['parse-posting', 'score-evidence', 'select-content', 'tailor-paragraphs', 'verify-claims'])
-        report = checkDraftFacts(result.draft)
-        const previousRow = db.prepare('SELECT data FROM draft_revisions WHERE job_id = ? ORDER BY revision DESC LIMIT 1').get(pending.jobId) as { data: string } | undefined
-        if (previousRow) {
-          // A fresh valid generation resolves earlier schema failures, not an unchanged semantic warning.
-          report = preserveKnownFindings(report, draftRevisionSchema.parse(JSON.parse(previousRow.data)), result.draft, false)
-        }
-        const findings = report.findings
-        const totalAttempts = result.attempts + repairAttempts + coverageRepairAttempts
-        const mergedReport = factualCheckReportSchema.parse({ ...report, passed: findings.length === 0, findings })
-        if (dispatcher.isCancelled(pending.runId) || activeAnalysisByJob.get(pending.jobId) !== pending.runId) {
-          const stillCurrent = activeAnalysisByJob.get(pending.jobId) === pending.runId
-          if (stillCurrent) activeAnalysisByJob.delete(pending.jobId)
-          if (stillCurrent) saveAnalysisState({ jobId: pending.jobId, runId: pending.runId, status: 'cancelled', analysis: analysis.analysis, progress: 'Generation cancelled. A late response was discarded; no draft changes were saved.', attempts: (db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id = ?').get(pending.runId) as { count: number }).count, cacheHit: analysis.cacheHit })
-          db.prepare("UPDATE generation_recovery SET status='cancelled',updated_at=? WHERE run_id=?").run(new Date().toISOString(), pending.runId)
-          return { ok: false, message: 'Generation was cancelled. Its late response was discarded; no draft changes were saved.' }
-        }
-        const scopeNotice = workingTextScopeNotice(pending.jobId)
-        const checkedDraft = draftRevisionSchema.parse({ ...result.draft, status: findings.length ? 'blocked' : 'unverified', checkReport: mergedReport, coverage, attempts: totalAttempts, progress: `${findings.length ? `Draft saved for its ${result.draft.pageTarget}-page target; blocked by ${findings.length} unresolved finding(s).` : `${result.draft.progress} Automated checks passed. Human review remains required.`}${scopeNotice}` })
-        result.draft = checkedDraft
-        const tx = db.transaction(() => { db.prepare('INSERT INTO draft_revisions (id,job_id,revision,data) VALUES (?,?,?,?)').run(result.draft.id, result.draft.jobId, result.draft.revision, JSON.stringify(result.draft)); db.prepare('UPDATE provider_attempt_outcomes SET checkpointed_at=? WHERE run_id=? AND checkpointed_at IS NULL').run(new Date().toISOString(), pending.runId); db.prepare("UPDATE generation_recovery SET status='complete',updated_at=? WHERE run_id=?").run(new Date().toISOString(), pending.runId) })
-        tx()
-        if (activeAnalysisByJob.get(pending.jobId) === pending.runId) activeAnalysisByJob.delete(pending.jobId)
-        saveAnalysisState({ jobId: pending.jobId, runId: pending.runId, status: 'complete', analysis: analysis.analysis, progress: result.draft.progress, attempts: analysis.attempts + totalAttempts, cacheHit: analysis.cacheHit, generationStep: 'check-document', completedSteps: ['parse-posting', 'score-evidence', 'select-content', 'tailor-paragraphs', 'verify-claims', 'check-document'] })
-        return { ok: true, message: `${result.draft.status === 'blocked' ? 'Draft saved locally, editable, and blocked by factual findings.' : 'Draft saved locally. It is unverified and unapproved.'}${scopeNotice}`, draft: result.draft }
-      } catch (error) {
-        if (activeAnalysisByJob.get(pending.jobId) !== pending.runId) {
-          db.prepare("UPDATE generation_recovery SET status='cancelled',updated_at=? WHERE run_id=?").run(new Date().toISOString(), pending.runId)
-          return { ok: false, message: 'Generation was cancelled. Its late response was discarded; no draft changes were saved.' }
-        }
-        activeAnalysisByJob.delete(pending.jobId)
-        const cancelled = error instanceof AnalysisError && error.code === 'CANCELLED'
-        const observedAttempts = (db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id = ?').get(pending.runId) as { count: number }).count
-        const message = cancelled ? 'Draft generation was cancelled. No generated wording was retained.' : 'The generated response could not be safely validated. No model wording was retained; author a correction in the blocked draft or retry.'
-        if (error instanceof IncompatibleGenerationCheckpointError) {
-          db.prepare("UPDATE generation_recovery SET status='cancelled',updated_at=? WHERE run_id=?").run(new Date().toISOString(), pending.runId)
-          const priorProgress = currentAnalysis.get(pending.jobId)
-          saveAnalysisState({ jobId: pending.jobId, runId: pending.runId, status: 'failed', analysis: analysis.analysis, progress: error.message, attempts: observedAttempts, error: error.message, cacheHit: analysis.cacheHit, ...(priorProgress?.runId === pending.runId ? { generationStep: priorProgress.generationStep, completedSteps: priorProgress.completedSteps } : {}) })
-          return { ok: false, message: error.message }
-        }
-        const validationFailure = error instanceof SyntaxError || error instanceof z.ZodError || error instanceof CitationValidationError
-        if (validationFailure) {
-          const failed = draftRevisionSchema.parse({ ...failedDraftIdentity, pageTarget, status: 'blocked', approved: false, content: { education: [], experience: [], projects: [], skills: [], certificates: [] }, evidence: safeItems.map(item => ({ evidenceId: item.id, revision: item.revision, snapshot: item.snapshot })), progress: 'Generation failed validation; model output was discarded. This empty draft is editable only by adding locally authored content and remains blocked pending factual checks.', attempts: observedAttempts })
-          const code = error instanceof CitationValidationError ? error.finding : 'schema'
-          let report = factualCheckReportSchema.parse({ ...checkDraftFacts(failed), passed: false, findings: [{ code, itemPath: 'generation', message: code === 'foreign-citation' ? 'The response referenced evidence outside the selected authorized sources. Model output was discarded.' : 'The tailored response did not match the required structured schema. Model output was discarded.', correction: 'Author or correct draft wording using the saved evidence revisions, then run factual checks.' }] })
-          const previousRow = db.prepare('SELECT data FROM draft_revisions WHERE job_id = ? ORDER BY revision DESC LIMIT 1').get(pending.jobId) as { data: string } | undefined
-          if (previousRow) {
-            const previous = draftRevisionSchema.parse(JSON.parse(previousRow.data))
-            // Discarded model output cannot prove that any earlier flagged wording was corrected.
-            report = preserveKnownFindings(report, previous, previous, false)
-          }
-          const blocked = draftRevisionSchema.parse({ ...failed, checkReport: report })
-          db.transaction(() => {
-            db.prepare('INSERT INTO draft_revisions (id,job_id,revision,data) VALUES (?,?,?,?)').run(blocked.id, blocked.jobId, blocked.revision, JSON.stringify(blocked))
-            db.prepare('UPDATE provider_attempt_outcomes SET checkpointed_at=? WHERE run_id=? AND checkpointed_at IS NULL').run(new Date().toISOString(), pending.runId)
-            db.prepare("UPDATE generation_recovery SET status='complete',updated_at=? WHERE run_id=?").run(new Date().toISOString(), pending.runId)
-          })()
-          const priorProgress = currentAnalysis.get(pending.jobId)
-          saveAnalysisState({ jobId: pending.jobId, runId: pending.runId, status: 'complete', analysis: analysis.analysis, progress: blocked.progress, attempts: observedAttempts, cacheHit: analysis.cacheHit, generationStep: priorProgress?.runId === pending.runId ? priorProgress.generationStep : 'parse-posting', completedSteps: priorProgress?.runId === pending.runId ? priorProgress.completedSteps : ['parse-posting'] })
-          return { ok: true, message: 'A blocked draft was saved; no invalid model output was retained.', draft: blocked }
-        }
-        const knownInvalid = error instanceof AnalysisError && error.code === 'MALFORMED'
-        const paused = error instanceof AnalysisError && ['BUDGET','TIMEOUT','OFFLINE','PROVIDER','INVALID_KEY'].includes(error.code)
-        const safeMessage = cancelled ? message : error instanceof AnalysisError ? error.message : error instanceof Error && /scope|authorization|stale|changed/i.test(error.message) ? 'Your authorized scope changed during generation. Review the outgoing data and try again.' : 'Draft generation failed safely. No draft was created; check authorization, connection, and model settings before retrying.'
-        if (knownInvalid) db.transaction(() => {
-          db.prepare("UPDATE generation_recovery SET status='cancelled',updated_at=? WHERE run_id=?").run(new Date().toISOString(), pending.runId)
-          db.prepare('UPDATE provider_attempt_outcomes SET checkpointed_at=? WHERE run_id=? AND checkpointed_at IS NULL').run(new Date().toISOString(), pending.runId)
-        })()
-        else if (resumeRunId || !validationFailure) db.prepare('UPDATE generation_recovery SET status=?,updated_at=? WHERE run_id=?').run(cancelled ? 'cancelled' : paused ? 'paused' : 'running', new Date().toISOString(), pending.runId)
-        const priorProgress = currentAnalysis.get(pending.jobId)
-        saveAnalysisState({ jobId: pending.jobId, runId: pending.runId, status: cancelled ? 'cancelled' : 'failed', analysis: analysis.analysis, progress: safeMessage, attempts: observedAttempts, error: safeMessage, cacheHit: analysis.cacheHit, ...(priorProgress?.runId === pending.runId ? { generationStep: priorProgress.generationStep, completedSteps: priorProgress.completedSteps } : {}) })
-        return { ok: false, message: safeMessage }
-      } finally { endPhysicalRun(pending.jobId, pending.runId) }
+        let cv: RequestedDocumentsResult['cv']
+        try { cv = await generateDraftCore(token, pageTarget, undefined, owner) }
+        catch { return refused('CV generation could not finish safely. No cover-letter request was started.') }
+        if (pending.purpose === 'cv') return requestedDocumentsResultSchema.parse({ cv, letter: { status: 'not-requested' } })
+        const realCv = cv.ok && cv.draft && !cv.draft.checkReport?.findings.some(finding => finding.itemPath === 'generation') && Object.values(cv.draft.content).some(items => items.length > 0)
+        if (!realCv || !cv.draft) return requestedDocumentsResultSchema.parse({ cv, letter: { status: 'not-started', reason: 'A real generated CV must be saved before requesting a cover letter.' } })
+        // Letter errors are deliberately outside the CV core's empty-draft validation catch.
+        const letter = await generateInitialLetter(token, cv.draft, owner, pending)
+        return requestedDocumentsResultSchema.parse({ cv, letter })
+      } finally {
+        if (requestedDocumentOwners.get(pending.jobId) === owner) { requestedDocumentOwners.delete(pending.jobId); requestedRunByJob.delete(pending.jobId) }
+      }
     },
     async renewDraftReview(jobId: string) {
       if (!uuidSchema.safeParse(jobId).success) return { ok: false, message: 'Choose a valid saved job before renewing its review.' }
-      if (activeAnalysisByJob.has(jobId)) return { ok: false, message: 'Wait for the current posting assessment to finish before renewing review.' }
+      if (requestedDocumentOwners.has(jobId) || activeAnalysisByJob.has(jobId)) return { ok: false, message: 'Wait for the current posting assessment to finish before renewing review.' }
       const job = await this.openJob(jobId)
       const analysis = await this.getAnalysis(jobId)
       const currentScope = job ? currentConsentSource(jobId) : null
@@ -1411,7 +1517,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       if (!pending?.consentId) return { ok: false, message: 'Inspect and authorize a fresh outgoing-data preview before regeneration.' }
       const latestScope = currentConsentSource(pending.jobId)
       if (!latestScope || prepareOutboundBundle(latestScope).scopeHash !== pending.bundle.scopeHash) return { ok: false, message: 'Your job, profile, or model settings changed after consent. Review the outgoing data again.' }
-      if (activeAnalysisByJob.has(pending.jobId) || externalJobOperations.has(pending.jobId)) return { ok: false, message: 'Finish the active job operation before regenerating.' }
+      if (requestedDocumentOwners.has(pending.jobId) || activeAnalysisByJob.has(pending.jobId) || externalJobOperations.has(pending.jobId)) return { ok: false, message: 'Finish the active job operation before regenerating.' }
       const row = db.prepare('SELECT data FROM draft_revisions WHERE job_id = ? ORDER BY revision DESC LIMIT 1').get(pending.jobId) as { data: string } | undefined
       if (!row) return { ok: false, message: 'Create a draft before requesting a replacement proposal.' }
       const base = draftRevisionSchema.parse(JSON.parse(row.data))
@@ -1964,7 +2070,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       return restored
     },
     async cancelAnalysis(jobId: string) {
-      const activeRunId = activeAnalysisByJob.get(jobId)
+      const activeRunId = activeAnalysisByJob.get(jobId) ?? requestedRunByJob.get(jobId)
       const previous = currentAnalysis.get(jobId)
       if (!activeRunId && previous) return analysisResultSchema.parse(previous)
       if (activeRunId) {
@@ -2043,8 +2149,9 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
         outboundEngine.revoke(pending.consentId)
         db.prepare('UPDATE outbound_consents SET revoked = 1 WHERE id = ?').run(pending.consentId)
       }
-      const active = activeAnalysisByJob.get(pending.jobId) === pending.runId
-      if (active) { dispatcher.cancel(pending.runId); activeAnalysisByJob.delete(pending.jobId) }
+      const active = activeAnalysisByJob.get(pending.jobId) === pending.runId || requestedRunByJob.get(pending.jobId) === pending.runId
+      dispatcher.cancel(pending.runId)
+      if (activeAnalysisByJob.get(pending.jobId) === pending.runId) activeAnalysisByJob.delete(pending.jobId)
       const prior = currentAnalysis.get(pending.jobId)
       if (active || !prior) saveAnalysisState({ jobId: pending.jobId, runId: pending.runId, status: 'cancelled', analysis: null, progress: 'Run cancelled. Further dispatches are stopped.', attempts: prior?.attempts ?? 0, cacheHit: false })
       pendingOutbound.delete(token)
@@ -2063,13 +2170,19 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
     return outboundEngine.authorizePayload(runId, consent.bundle, payload)
   }
   const backupEngine = createWorkspaceBackupEngine(db, recoveryHooks?.workspaceBackupMaxBytes)
-  const assertIdle = () => { if (unsettledRunsByJob.size || externalJobOperations.size) throw new Error('A cloud operation is active. Cancel or finish it before backing up or restoring.') }
+  const assertIdle = () => { if (requestedDocumentOwners.size || unsettledRunsByJob.size || externalJobOperations.size) throw new Error('A cloud operation is active. Cancel or finish it before backing up or restoring.') }
   const backup: WorkspaceBackupEngine = {
     readBackupStatus() { return backupEngine.readBackupStatus() },
     assertBackupCapacity(previousBytes) { return backupEngine.assertBackupCapacity(previousBytes) },
     createBackup() { assertIdle(); return backupEngine.createBackup() },
     previewRestore(input) { assertIdle(); return backupEngine.previewRestore(input) },
-    applyRestore(token, writeSafety) { assertIdle(); return backupEngine.applyRestore(token, writeSafety) },
+    applyRestore(token, writeSafety) {
+      assertIdle()
+      const result = backupEngine.applyRestore(token, writeSafety)
+      for (const pending of pendingOutbound.values()) { if (pending.consentId) outboundEngine.revoke(pending.consentId); dispatcher.cancel(pending.runId) }
+      pendingOutbound.clear(); startedAnalysisTokens.clear(); startedRegenerationTokens.clear(); startedDocumentRuns.clear(); recoveredRunIds.clear(); currentAnalysis.clear(); deletionPreviews.clear()
+      return result
+    },
     cancelRestore(token) { return backupEngine.cancelRestore(token) }
   }
   let checkingBackupCapacity = false
@@ -2153,5 +2266,5 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
     const statement = nativePrepare(source)
     return wrapStatement(statement, !statement.readonly)
   }
-  return { api, authorizeOutboundPayload, backup, beginJobOperation, hasActiveWork: () => unsettledRunsByJob.size > 0 || externalJobOperations.size > 0 || activeProfileAiRuns.size > 0, close: () => { db.close() } }
+  return { api, authorizeOutboundPayload, backup, beginJobOperation, hasActiveWork: () => requestedDocumentOwners.size > 0 || unsettledRunsByJob.size > 0 || externalJobOperations.size > 0 || activeProfileAiRuns.size > 0, close: () => { db.close() } }
 }

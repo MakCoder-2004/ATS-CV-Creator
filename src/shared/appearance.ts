@@ -5,7 +5,7 @@ import { piModelSelectionSchema, type PiModelPreferenceInput } from './pi-model'
 import type { JobRecord, JobSaveInput, JobSaveResult, JobDeletionPreview, JobDeletionResult } from './jobs'
 import type { ProfileExchangeResult } from './profile-exchange'
 import type { OutboundConsentAction, OutboundConsentPreview } from './outbound-consent-contract'
-import type { CoverLetterAcknowledgment, CoverLetterActionResult, CoverLetterEdit, CoverLetterPurpose, CoverLetterRecipient, CoverLetterRevision } from './cover-letter'
+import type { CoverLetterAcknowledgment, CoverLetterActionResult, CoverLetterEdit, CoverLetterPurpose, CoverLetterRecipient, CoverLetterRevision, RequestedDocumentsResult } from './cover-letter'
 import type { AnalysisResult, GenerationRecovery, RecoveryChoice } from './posting-analysis'
 
 import type { AddDraftItemInput, DraftCorrectionInput, DraftRevision, SuggestedSkillDecision, DraftTailoringCorrection } from './draft'
@@ -84,6 +84,7 @@ export interface WorkbenchAPI {
   resumeGeneration(runId: string, choice?: RecoveryChoice): Promise<{ ok: boolean; message: string }>
   cancelGenerationRecovery(runId: string): Promise<{ ok: boolean; message: string }>
   generateDraft(consentToken: string, pageTarget?: 1 | 2): Promise<{ ok: boolean; message: string; draft?: DraftRevision }>
+  generateRequestedDocuments(consentToken: string, pageTarget?: 1 | 2): Promise<RequestedDocumentsResult>
   getCoverLetter(jobId: string): Promise<CoverLetterRevision | null>
   editCoverLetter(input: CoverLetterEdit): Promise<CoverLetterActionResult>
   setCoverLetterRecipient(input: CoverLetterRecipient): Promise<CoverLetterActionResult>
