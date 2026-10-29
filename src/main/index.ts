@@ -383,7 +383,7 @@ app.whenReady().then(() => {
   ipcMain.handle('analysis:get', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected job ID'); const result = await workspace!.api.getAnalysis(analysisIdSchema.parse(args[0])); return result === null ? null : analysisResultSchema.parse(result) })
   ipcMain.handle('draft:generate', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 2 || (args[1] !== 1 && args[1] !== 2)) throw new Error('Expected consent token and one- or two-page target'); return draftGenerationSchema.parse(await workspace!.api.generateDraft(analysisStartInputSchema.parse({ consentToken: args[0] }).consentToken, args[1])) })
   ipcMain.handle('documents:generate', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 2 || (args[1] !== 1 && args[1] !== 2)) throw new Error('Expected consent token and one- or two-page target'); return requestedDocumentsResultSchema.parse(await workspace!.api.generateRequestedDocuments(analysisStartInputSchema.parse({ consentToken: args[0] }).consentToken, args[1])) })
-  registerCoverLetterRetryIpc(ipcMain, workspace!.api, trusted)
+  registerCoverLetterRetryIpc(ipcMain, () => workspace!.api, trusted)
   const letterActions = createCoverLetterArtifactController({
     beginJobOperation: (jobId, action) => workspace!.beginJobOperation(jobId, action),
     captureCoverLetterExport: input => workspace!.captureCoverLetterExport(input),
