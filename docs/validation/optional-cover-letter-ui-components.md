@@ -60,4 +60,12 @@ An initial probe used an unparsed fixture with trailing whitespace, correctly tr
 
 The parent inspected the resulting dark failed-save and narrow long-paper screenshots. Final static/helper tests passed 12 tests. Typecheck and build also passed. Evidence is under `.audit/parent-component-probe/`, including `red-valid-fixture.log`, `red-paper-growth.log`, `final-ready.log`, `final-ready.json`, screenshot files, and final static/typecheck/build logs. Reproduce locally with `node .audit/parent-component-probe/run.mjs final-ready` while those ignored fixture files are retained. The compound verification command printed its final completion marker but the harness later labeled the wrapper timed out; the individual completed gate logs and browser JSON were inspected directly.
 
+## Follow-up edit controls and field errors
+
+The next independent review confirmed the parent corrections but found that other paragraphs still displayed enabled Edit buttons while an editor was open. Those controls now disable for any active paragraph session rather than presenting an enabled no-op. The existing unsaved draft remains intact.
+
+Paragraph and recipient failures now have explicit field/action ownership. Each failed field is marked `aria-invalid` and associated with its adjacent error by `aria-describedby`; recipient errors are no longer only a top-level status. Global check/approval errors remain global. Empty exception messages use a useful fallback. This avoids duplicate alert announcements and preserves the entered field value.
+
+The browser gate was extended before the correction and reproduced the enabled competing editor and missing field associations. `final-fields.log` and `final-fields.json` record all nine component cases passing, including adjacent associated recipient errors. Static tests remain 12 passing, and typecheck/build passed again. Field-specific logs are `static-fields.log`, `typecheck-fields.log`, and `build-fields.log` under the same ignored probe directory. No new callback or authority surface was added.
+
 These checks supersede the earlier claim that the component had no browser observation. They do not establish real workbench navigation, keyboard-only operation and focus restoration, every responsive width, host-side request fencing, actual saved data, provider behavior, PDF approval, exports, or installed behavior. The real Electron/public-preload workflow and permanent interaction regressions remain required at integration gate #14.

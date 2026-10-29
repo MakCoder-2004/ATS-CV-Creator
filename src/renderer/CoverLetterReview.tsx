@@ -11,7 +11,7 @@ export type CoverLetterReadiness = { canApprove: boolean; reason?: string }
 export type CoverLetterActionInput = { jobId: string; letterId: string }
 export type CoverLetterParagraphEditInput = CoverLetterActionInput & { paragraphId: string; text: string }
 export type CoverLetterRecipientInput = CoverLetterActionInput & { recipient: string | null }
-type LocalState = { identity: string; paragraphId?: string; text?: string; recipient?: string; error?: string; pending?: boolean }
+type LocalState = { identity: string; paragraphId?: string; text?: string; recipient?: string; error?: string; errorFor?: 'paragraph' | 'recipient' | 'action'; pending?: boolean }
 
 export type CoverLetterReviewProps = {
   jobId: string
@@ -37,6 +37,8 @@ const statusLabel: Record<CoverLetterCheckStatus, string> = {
 const fitLabel: Record<CoverLetterFitStatus, string> = {
   idle: 'Not measured', pending: 'Fit check pending', passed: 'Fits one page', issues: 'Fit needs review', error: 'Fit check failed',
 }
+
+const readableActionError = (error: unknown, fallback: string) => error instanceof Error && error.message.trim() ? error.message : fallback
 
 export function CoverLetterReview(props: CoverLetterReviewProps) {
   const { jobId, originatingCvRevisionId, letter, canonical, readiness, busy } = props
@@ -89,7 +91,7 @@ export function CoverLetterReview(props: CoverLetterReviewProps) {
         setLocal(null)
       }
     } catch (error) {
-      if (currentIdentity.current === expectedIdentity) setLocal({ identity: expectedIdentity, paragraphId, text, error: error instanceof Error ? error.message : 'The wording could not be saved. Your text is still here.' })
+      if (currentIdentity.current === expectedIdentity) setLocal({ identity: expectedIdentity, paragraphId, text, errorFor: 'paragraph', error: readableActionError(error, 'The wording could not be saved. Your text is still here.') })
     }
   }
 
@@ -103,7 +105,7 @@ export function CoverLetterReview(props: CoverLetterReviewProps) {
       await props.onSaveRecipient({ ...actionInput, recipient })
       if (currentIdentity.current === expectedIdentity) setLocal(null)
     } catch (error) {
-      if (currentIdentity.current === expectedIdentity) setLocal({ identity: expectedIdentity, recipient: recipientDraft, error: error instanceof Error ? error.message : 'The recipient could not be saved. Your entry is still here.' })
+      if (currentIdentity.current === expectedIdentity) setLocal({ identity: expectedIdentity, recipient: recipientDraft, errorFor: 'recipient', error: readableActionError(error, 'The recipient could not be saved. Your entry is still here.') })
     }
   }
 
@@ -116,7 +118,7 @@ export function CoverLetterReview(props: CoverLetterReviewProps) {
       await callback(actionInput)
       if (currentIdentity.current === expectedIdentity) setLocal(previous => previous?.identity === expectedIdentity ? { ...previous, pending: false, error: undefined } : null)
     } catch (error) {
-      if (currentIdentity.current === expectedIdentity) setLocal(previous => ({ ...(previous?.identity === expectedIdentity ? previous : { identity: expectedIdentity }), pending: false, error: error instanceof Error ? error.message : 'The requested review action could not be completed.' }))
+      if (currentIdentity.current === expectedIdentity) setLocal(previous => ({ ...(previous?.identity === expectedIdentity ? previous : { identity: expectedIdentity }), pending: false, errorFor: 'action', error: readableActionError(error, 'The requested review action could not be completed.') }))
     }
   }
 
@@ -128,14 +130,14 @@ export function CoverLetterReview(props: CoverLetterReviewProps) {
       await props.onAcknowledge({ jobId, letterId, paragraphId, acknowledged: true })
       if (currentIdentity.current === expectedIdentity) setLocal(previous => previous?.identity === expectedIdentity ? { ...previous, pending: false, error: undefined } : null)
     } catch (error) {
-      if (currentIdentity.current === expectedIdentity) setLocal(previous => ({ ...(previous?.identity === expectedIdentity ? previous : { identity: expectedIdentity }), pending: false, error: error instanceof Error ? error.message : 'The source acknowledgment could not be saved.' }))
+      if (currentIdentity.current === expectedIdentity) setLocal(previous => ({ ...(previous?.identity === expectedIdentity ? previous : { identity: expectedIdentity }), pending: false, errorFor: 'action', error: readableActionError(error, 'The source acknowledgment could not be saved.') }))
     }
   }
 
   return <section className="cover-letter-review" aria-label="Cover letter review">
     <div className="cover-letter-review-status" aria-live="polite">
       <p>{props.message || (!letter ? 'No cover letter is available for this posting.' : mismatch ? 'This cover letter does not match the current cover letter revision or source.' : 'Review the current cover letter and its linked source passages.')}</p>
-      {localState?.error && <p role="alert">{localState.error}</p>}
+      {localState?.errorFor === 'action' && localState.error && <p role="alert">{localState.error}</p>}
       {mismatch && <p role="status">This cover letter is out of date or its current document is unavailable. CV review remains separate.</p>}
       {boundLetter?.findings.map((finding, index) => <p className="cover-letter-finding" key={`${finding.code}-${index}`}>Issue to resolve: {finding.message}</p>)}
     </div>
@@ -171,12 +173,12 @@ export function CoverLetterReview(props: CoverLetterReviewProps) {
             return <section className="cover-letter-paragraph-review" key={paragraph.id} aria-label={`Paragraph ${index + 1} review`}>
               {isEditing ? <form onSubmit={event => { event.preventDefault(); void saveParagraph(paragraph.id, paragraph.text) }}>
                 <label htmlFor={`cover-letter-wording-${index}`}>Paragraph {index + 1} wording</label>
-                <textarea id={`cover-letter-wording-${index}`} value={text} disabled={pending} onChange={event => setLocal({ identity: visitKey, paragraphId: paragraph.id, text: event.currentTarget.value })} />
-                {localState?.error && localState.paragraphId === paragraph.id && <p role="alert">{localState.error}</p>}
+                <textarea id={`cover-letter-wording-${index}`} value={text} disabled={pending} aria-invalid={localState?.errorFor === 'paragraph' && localState.paragraphId === paragraph.id || undefined} aria-describedby={localState?.errorFor === 'paragraph' && localState.paragraphId === paragraph.id ? `cover-letter-wording-error-${index}` : undefined} onChange={event => setLocal({ identity: visitKey, paragraphId: paragraph.id, text: event.currentTarget.value })} />
+                {localState?.errorFor === 'paragraph' && localState.error && localState.paragraphId === paragraph.id && <p id={`cover-letter-wording-error-${index}`} role="alert">{localState.error}</p>}
                 <div className="cover-letter-control-row"><button className="primary-button" type="submit" disabled={pending || !text.trim()}>Save wording</button><button className="secondary-button" type="button" disabled={pending} onClick={() => { setEditingId(null); setLocal(null) }}>Cancel editing</button></div>
               </form> : <>
                 <p className="cover-letter-body-paragraph">{paragraph.text}</p>
-                <div className="cover-letter-control-row"><button className="secondary-button" type="button" disabled={pending || recipientSession} onClick={() => { if (!canBeginParagraphEdit(editSession) || recipientDirty) return; setEditingId({ identity: visitKey, paragraphId: paragraph.id }); setLocal({ identity: visitKey, paragraphId: paragraph.id, text: paragraph.text }) }}>Edit paragraph {index + 1}</button>
+                <div className="cover-letter-control-row"><button className="secondary-button" type="button" disabled={pending || recipientSession || Boolean(activeEdit)} onClick={() => { if (!canBeginParagraphEdit(editSession) || recipientDirty) return; setEditingId({ identity: visitKey, paragraphId: paragraph.id }); setLocal({ identity: visitKey, paragraphId: paragraph.id, text: paragraph.text }) }}>Edit paragraph {index + 1}</button>
                   {acknowledged ? <span className="cover-letter-acknowledged">Source reviewed</span> : <button className="secondary-button" type="button" disabled={pending || unsavedEdit} onClick={() => void acknowledge(paragraph.id, boundLetter.id)}>Acknowledge sources for paragraph {index + 1}</button>}</div>
               </>}
               <div className="cover-letter-sources" aria-label={`Sources for paragraph ${index + 1}`}>
@@ -192,7 +194,8 @@ export function CoverLetterReview(props: CoverLetterReviewProps) {
       <p className="cover-letter-limitation">Automated checks cannot prove semantic truth. A source acknowledgment records your decision; it does not prove that wording is accurate.</p>
       <form className="cover-letter-recipient-form" onSubmit={event => { void saveRecipient(event) }}>
         <label htmlFor="cover-letter-recipient">Recipient name (optional)</label>
-        <input id="cover-letter-recipient" value={recipientDraft} disabled={pending || (!canBeginRecipientEdit(editSession) && editSession?.kind !== 'recipient')} onChange={event => setLocal({ identity: visitKey, recipient: event.currentTarget.value })} aria-describedby="cover-letter-recipient-help" />
+        <input id="cover-letter-recipient" value={recipientDraft} disabled={pending || (!canBeginRecipientEdit(editSession) && editSession?.kind !== 'recipient')} onChange={event => setLocal({ identity: visitKey, recipient: event.currentTarget.value })} aria-invalid={localState?.errorFor === 'recipient' || undefined} aria-describedby={localState?.errorFor === 'recipient' ? 'cover-letter-recipient-help cover-letter-recipient-error' : 'cover-letter-recipient-help'} />
+        {localState?.errorFor === 'recipient' && localState.error && <p id="cover-letter-recipient-error" role="alert">{localState.error}</p>}
         <p id="cover-letter-recipient-help">This name stays on this device and is not sent to Pi. No saved job contacts are selected automatically.</p>
         <div className="cover-letter-control-row"><button className="secondary-button" type="submit" disabled={pending || Boolean(activeEdit) || recipientDraft.trim() === (boundLetter.recipient ?? '')}>Save recipient</button>{recipientSession && <button className="secondary-button" type="button" disabled={pending} onClick={() => setLocal(null)}>Cancel recipient edit</button>}</div>
       </form>

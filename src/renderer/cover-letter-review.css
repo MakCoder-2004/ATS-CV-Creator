@@ -51,6 +51,7 @@
 .cover-letter-recipient-form p,
 .cover-letter-action-bar > p { color: var(--muted); font-size: 13px; line-height: 1.55; }
 .cover-letter-recipient-form button { justify-self: start; min-height: 44px; }
+.cover-letter-recipient-form [role=alert] { color: var(--error); overflow-wrap: anywhere; }
 .cover-letter-ack-count { color: var(--muted); }
 .cover-letter-closing { margin-top: 24px; }
 .cover-letter-signature { margin-top: 12px; font-weight: 700; }
