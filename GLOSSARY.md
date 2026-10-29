@@ -20,16 +20,20 @@ _Avoid_: Job (when referring specifically to the saved source text), Vacancy
 A CV draft arranged and worded for a specific job posting, using the person's career facts as its source.
 _Avoid_: Resume (unless quoting the user's term), Generated CV (implies every part was generated)
 
+**Cover letter**:
+A separate application letter for a saved job posting, grounded in the person's career facts and reviewed independently from the tailored CV. A letter's approval does not approve the CV.
+_Avoid_: CV section, Application message
+
 **Draft**:
-A not-yet-approved version of a tailored CV.
-_Avoid_: Final CV
+A not-yet-approved version of a tailored CV or cover letter. Name the document when the distinction matters.
+_Avoid_: Final CV, Final letter
 
 **Review**:
 The person's assessment of draft wording, supporting evidence and readiness to use the tailored CV.
 _Avoid_: Verification (unless a specific verification operation is meant)
 
 **Approval**:
-The person's explicit acceptance of a reviewed tailored CV for export or use.
+The person's explicit acceptance of a reviewed tailored CV or cover letter for export or use. Each document has its own approval.
 _Avoid_: Validation (means checking conditions, not the person's decision)
 
 **Saved job**:

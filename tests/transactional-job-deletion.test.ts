@@ -1,10 +1,12 @@
 import { afterEach, expect, test } from 'vitest'
 import Database from 'better-sqlite3'
 import { mkdtempSync, rmSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createWorkbench } from '../src/main/workbench'
 import type { AnalysisTransport } from '../src/main/posting-analysis'
+import { coverLetterOperationSchema, coverLetterRevisionSchema } from '../src/shared/cover-letter'
 
 const directories: string[] = []
 const workbenches: Array<ReturnType<typeof createWorkbench>> = []
@@ -57,6 +59,51 @@ function snapshot(directory: string) {
     return Object.fromEntries(['jobs', 'outbound_consents', 'posting_analysis_cache', 'analysis_run_state', 'analysis_attempts', 'provider_attempt_outcomes', 'generation_recovery', 'generation_recovery_extensions', 'draft_revisions', 'regeneration_proposals', 'document_fit_reports', 'langgraph_checkpoints', 'langgraph_checkpoint_writes', 'profile_skills', 'evidence_revisions'].map(table => [table, db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()]))
   } finally { db.close() }
 }
+
+test('job deletion fingerprints and removes only the selected job cover-letter rows', async () => {
+  const { directory, workbench, jobs, runs } = await fixture()
+  const db = new Database(join(directory, 'workbench.sqlite'))
+  db.function('cv_workspace_backup_row_bytes', { deterministic: true }, (rowJson: string) => Buffer.byteLength(JSON.stringify(JSON.parse(rowJson)), 'utf8'))
+  const now = new Date().toISOString()
+  try { for (const [index, job] of jobs.slice(0, 2).entries()) {
+    const parentRunId = runs[index]!.runId
+    const operationId = randomUUID(), letterId = randomUUID()
+    const consent = db.prepare('SELECT id,purpose_hash FROM outbound_consents WHERE run_id=?').get(parentRunId) as { id: string; purpose_hash: string }
+    const skill = (await workbench.api.getProfile()).skills[0]!
+    const draft = await workbench.api.getDraft(job.id)
+    const operation = coverLetterOperationSchema.parse({ id: operationId, jobId: job.id, parentRunId, consentId: consent.id, purposeHash: consent.purpose_hash, status: 'saved', createdAt: now, updatedAt: now })
+    const letter = coverLetterRevisionSchema.parse({ id: letterId, jobId: job.id, parentRunId, operationId, cvRevisionId: draft!.id, revision: 1, createdAt: now, bindings: { postingUpdatedAt: job.updatedAt, scopeHash: 'a'.repeat(64), modelHash: 'b'.repeat(64), sources: [{ ordinal: 1, evidenceId: skill.id, revision: skill.revision, category: 'skill', heading: skill.name, passage: skill.name }] }, date: '28 October 2026', subject: job.title, paragraphs: [{ id: randomUUID(), text: 'Saved evidence supports this paragraph.', citations: [{ ordinal: 1 }] }], findings: [], acknowledgments: {}, approved: false })
+    db.prepare('INSERT INTO cover_letter_revisions(id,job_id,revision,data) VALUES(?,?,?,?)').run(letter.id, job.id, letter.revision, JSON.stringify(letter))
+    db.prepare('INSERT INTO cover_letter_operations(id,job_id,parent_run_id,consent_id,status,data,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)').run(operation.id, operation.jobId, operation.parentRunId, operation.consentId, operation.status, JSON.stringify(operation), now, now)
+  } } finally { db.close() }
+  const preview = await workbench.api.previewJobDeletion([jobs[0]!.id])
+  expect(preview).toMatchObject({ ok: true })
+  if (!preview.ok) throw new Error(preview.message)
+  expect(await workbench.api.executeJobDeletion(preview.token!, [jobs[0]!.id])).toMatchObject({ ok: true, deletedCount: 1 })
+  const read = new Database(join(directory, 'workbench.sqlite'), { readonly: true })
+  try {
+    expect(read.prepare('SELECT job_id FROM cover_letter_revisions').all()).toEqual([{ job_id: jobs[1]!.id }])
+    expect(read.prepare('SELECT job_id FROM cover_letter_operations').all()).toEqual([{ job_id: jobs[1]!.id }])
+    expect(read.prepare('SELECT COUNT(*) AS count FROM jobs').get()).toEqual({ count: 2 })
+  } finally { read.close() }
+})
+
+test('a dispatched letter operation reopens as uncertain without permanently blocking deletion', async () => {
+  const { directory, workbench, jobs, runs } = await fixture()
+  const now = new Date().toISOString(), id = randomUUID(), parentRunId = runs[0]!.runId
+  const db = new Database(join(directory, 'workbench.sqlite'))
+  db.function('cv_workspace_backup_row_bytes', { deterministic: true }, (rowJson: string) => Buffer.byteLength(JSON.stringify(JSON.parse(rowJson)), 'utf8'))
+  try {
+    const consent = db.prepare('SELECT id,purpose_hash FROM outbound_consents WHERE run_id=?').get(parentRunId) as { id: string; purpose_hash: string }
+    const operation = coverLetterOperationSchema.parse({ id, jobId: jobs[0]!.id, parentRunId, consentId: consent.id, purposeHash: consent.purpose_hash, status: 'dispatched', createdAt: now, updatedAt: now })
+    db.prepare('INSERT INTO cover_letter_operations(id,job_id,parent_run_id,consent_id,status,data,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)').run(id, jobs[0]!.id, parentRunId, consent.id, operation.status, JSON.stringify(operation), now, now)
+  } finally { db.close() }
+  workbench.close(); workbenches.pop()
+  const reopened = createWorkbench(directory, undefined, scripted); workbenches.push(reopened)
+  const state = new Database(join(directory, 'workbench.sqlite'), { readonly: true })
+  try { expect(state.prepare('SELECT status FROM cover_letter_operations WHERE id=?').get(id)).toEqual({ status: 'uncertain' }) } finally { state.close() }
+  expect(await reopened.api.previewJobDeletion([jobs[0]!.id])).toMatchObject({ ok: true })
+})
 
 test('pre-change public-workflow baseline has three drafts, analysis, consent and checkpoints in a backup', async () => {
   const { directory, workbench, jobs } = await fixture()

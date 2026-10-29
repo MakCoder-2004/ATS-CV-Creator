@@ -36,6 +36,49 @@ test('outgoing consent preview is minimized, explicit, frozen to job/profile/mod
   expect(await reopened.api.acceptOutboundConsent(preview.token, true, true)).toMatchObject({ ok: false })
 })
 
+test('purpose is frozen in the consent preview and persisted grant metadata without changing the input scope hash', async () => {
+  const { directory, workbench } = await open()
+  const job = await workbench.api.saveJob({ title: 'Engineer', company: 'Canary Co', description: 'Build systems.' })
+  if (!job.ok) throw new Error('Fixture job failed.')
+  const legacy = await workbench.api.prepareOutboundConsent(job.value.id)
+  if (!legacy.ok) throw new Error(legacy.message)
+  const optedIn = await workbench.api.prepareOutboundConsent(job.value.id, 'cv+cover-letter')
+  if (!optedIn.ok) throw new Error(optedIn.message)
+  expect(legacy.purpose).toBe('cv')
+  expect(optedIn.purpose).toBe('cv+cover-letter')
+  expect(legacy.outgoing).toEqual(optedIn.outgoing)
+  expect(await workbench.api.acceptOutboundConsent(legacy.token, true, true)).toMatchObject({ ok: false })
+  const accepted = await workbench.api.acceptOutboundConsent(optedIn.token, true, true)
+  expect(accepted.ok).toBe(true)
+  const Database = (await import('better-sqlite3')).default
+  const db = new Database(join(directory, 'workbench.sqlite'), { readonly: true })
+  try {
+    expect(db.prepare('SELECT purpose_version,purpose,purpose_hash FROM outbound_consents').get()).toMatchObject({ purpose_version: 1, purpose: 'cv+cover-letter', purpose_hash: expect.stringMatching(/^[a-f0-9]{64}$/) })
+  } finally { db.close() }
+  const letterOnly = await workbench.api.prepareOutboundConsent(job.value.id, 'cover-letter-only')
+  if (!letterOnly.ok) throw new Error(letterOnly.message)
+  await workbench.api.acceptOutboundConsent(letterOnly.token, true, true)
+  await expect(workbench.api.startAnalysis(letterOnly.token)).rejects.toThrow(/cover letter only/i)
+  expect(await workbench.api.generateDraft(letterOnly.token)).toMatchObject({ ok: false, message: expect.stringMatching(/cover letter only/i) })
+})
+
+test('corrupt persisted purpose metadata revokes the grant instead of widening its authority', async () => {
+  const { directory, workbench } = await open()
+  const job = await workbench.api.saveJob({ title: 'Engineer', company: 'Canary Co', description: 'Build systems.' })
+  if (!job.ok) throw new Error('Fixture job failed.')
+  const preview = await workbench.api.prepareOutboundConsent(job.value.id, 'cv+cover-letter')
+  if (!preview.ok) throw new Error(preview.message)
+  const accepted = await workbench.api.acceptOutboundConsent(preview.token, true, true)
+  if (!accepted.ok) throw new Error(accepted.message)
+  workbench.close(); workbenches.pop()
+  const db = new (await import('better-sqlite3')).default(join(directory, 'workbench.sqlite'))
+  db.function('cv_workspace_backup_row_bytes', { deterministic: true }, (rowJson: string) => Buffer.byteLength(JSON.stringify(JSON.parse(rowJson)), 'utf8'))
+  try { db.prepare('UPDATE outbound_consents SET purpose_hash=? WHERE run_id=?').run('f'.repeat(64), accepted.runId) } finally { db.close() }
+  const reopened = createWorkbench(directory, undefined, undefined, undefined, runtime); workbenches.push(reopened)
+  const check = new (await import('better-sqlite3')).default(join(directory, 'workbench.sqlite'), { readonly: true })
+  try { expect(check.prepare('SELECT purpose,revoked FROM outbound_consents WHERE run_id=?').get(accepted.runId)).toMatchObject({ purpose: 'cv', revoked: 1 }) } finally { check.close() }
+})
+
 test('stale source, model change or changed posting requires a fresh review', async () => {
   const { workbench } = await open()
   const job = await workbench.api.saveJob({ title: 'Engineer', company: 'Canary Co', description: 'Build systems.' })

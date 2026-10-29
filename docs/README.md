@@ -33,6 +33,8 @@ These files describe the current code or govern changes to it.
 | [Integrated spec fixes](validation/specs-integration-fixes.md) | Root causes, fixture corrections, and focused verification after the integrated Node test failures. |
 | [Stage D temporary research integration](validation/universal-research-stage-d.md) | Development checks for reviewed source rights, full/provisional Pi analysis and remaining release gates; not installed-app proof. |
 | [Integrated Settings follow-up](validation/settings-followup.md) | Combined two-card Settings, legacy finding/recovery and Tavily key development checks; see the separate installed observations below. |
+| [Cover-letter artifact controller](validation/cover-letter-artifact-integration.md) | Current bounded main/shared/preload API, real PDF/DOCX artifact tests and resource wiring; visible/installed acceptance remain separate. |
+| [Cover-letter visible workflow](validation/cover-letter-visible-flow.md) | Production renderer integration, focused component/typecheck/build evidence and one real-main Electron acceptance case awaiting execution on the integrated host. |
 | [Optional faithfulness removal](validation/remove-faithfulness.md) | Earlier branch-specific development evidence for Settings simplification, old preference cleanup and paused-run compatibility. |
 | [Tavily key card](validation/tavily-key-card.md) | Earlier pre-merge development evidence; screenshots there still show the removed cards. |
 

@@ -6,12 +6,12 @@ function workspace() {
   const db = new Database(':memory:')
   db.exec(`CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
     CREATE TABLE encrypted_credentials (key TEXT PRIMARY KEY, ciphertext TEXT NOT NULL);
-    CREATE TABLE outbound_consents (id TEXT PRIMARY KEY, run_id TEXT NOT NULL UNIQUE, scope_hash TEXT NOT NULL, created_at TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0);
+    CREATE TABLE outbound_consents (id TEXT PRIMARY KEY, run_id TEXT NOT NULL UNIQUE, scope_hash TEXT NOT NULL, created_at TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0, purpose_version INTEGER NOT NULL DEFAULT 1, purpose TEXT NOT NULL DEFAULT 'cv', purpose_hash TEXT NOT NULL DEFAULT '');
     CREATE TABLE profile_contact (singleton INTEGER PRIMARY KEY CHECK(singleton = 1), id TEXT NOT NULL UNIQUE, revision INTEGER NOT NULL, data TEXT NOT NULL);
     INSERT INTO settings VALUES ('appearance','light');
     INSERT INTO encrypted_credentials VALUES ('api','secret-bytes');
     INSERT INTO profile_contact VALUES (1,'00000000-0000-4000-8000-000000000001',2,'{"id":"00000000-0000-4000-8000-000000000001","revision":2,"fullName":"A"}');
-    INSERT INTO outbound_consents VALUES ('00000000-0000-4000-8000-000000000002','00000000-0000-4000-8000-000000000003','aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','2026-01-01T00:00:00.000Z',0);`)
+    INSERT INTO outbound_consents VALUES ('00000000-0000-4000-8000-000000000002','00000000-0000-4000-8000-000000000003','aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','2026-01-01T00:00:00.000Z',0,1,'cv','e585d862d6826a3743a83db94d71bbd18e6a6f46faf25f695982c69f51ba42d4');`)
   return db
 }
 

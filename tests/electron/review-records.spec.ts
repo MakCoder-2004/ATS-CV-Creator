@@ -120,7 +120,7 @@ test('review edits whole records with an explicit CV-only or profile scope and e
     await page.getByRole('button', { name: 'Engineer Example Co', exact: true }).click()
     await expect(paper).toContainText('Machine Learning Engineer', { timeout: 20000 })
     await expect(paper).toContainText('B.Sc. in Data Science')
-    await page.getByRole('button', { name: 'Check CV for issues', exact: true }).click()
+    await page.getByRole('button', { name: 'Check page length', exact: true }).click()
     await expect(page.getByRole('region', { name: 'Review checklist' })).toContainText('Checks passed')
     await page.getByRole('button', { name: 'Check page length', exact: true }).click()
     await expect(page.getByRole('region', { name: 'Review checklist' })).toContainText('1 of 1 page', { timeout: 45000 })

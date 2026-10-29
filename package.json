@@ -104,6 +104,27 @@
         "to": "licenses/latex"
       },
       {
+        "from": "resources/cover-letter-template/application",
+        "to": "cover-letter-template/application",
+        "filter": ["cover-letter.tex", "assets.json"]
+      },
+      {
+        "from": "resources/cover-letter-template/upstream/LICENSE",
+        "to": "licenses/cover-letter/upstream-MIT.txt"
+      },
+      {
+        "from": "resources/cover-letter-template/licenses/jake-resume-MIT.txt",
+        "to": "licenses/cover-letter/ancestor-MIT.txt"
+      },
+      {
+        "from": "resources/licenses/cover-letter-NOTICES.txt",
+        "to": "licenses/cover-letter/NOTICES.txt"
+      },
+      {
+        "from": "resources/fonts/lato/OFL.txt",
+        "to": "licenses/cover-letter/Lato-OFL.txt"
+      },
+      {
         "from": "resources/fonts/lato/OFL.txt",
         "to": "licenses/lato-review-OFL.txt"
       },

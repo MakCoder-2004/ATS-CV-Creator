@@ -1,4 +1,4 @@
-import { openReviewDetails } from './review-helpers'
+import { openReviewDetails, closeReviewDetails } from './review-helpers'
 import { test, expect, _electron as electron } from '@playwright/test'
 import { mkdtempSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
@@ -40,14 +40,18 @@ test('user can add locally authored content to the visible empty failed draft', 
     await expect(wordingPanel).toBeVisible()
     await expect(wordingPanel).toContainText('The suggested wording could not be validated, so no CV wording was created.')
     await expect(wordingPanel).not.toContainText('Add saved career facts before approving it')
-    await openReviewDetails(page, 'notes')
-    await expect(draft.getByRole('heading', { name: /review issues? to resolve/i })).toBeVisible()
-    await expect(draft).toContainText("We couldn't use the suggested wording")
-    await draft.getByLabel('Correction evidence').selectOption({ index: 1 })
-    await draft.getByLabel('Your correction').fill('Built reliable services.')
-    await draft.getByRole('button', { name: 'Save local correction' }).click()
+    await closeReviewDetails(page)
+    await draft.getByRole('button', { name: 'Review issues' }).click()
+    await expect(page.getByRole('group', { name: 'Review issues' })).toBeVisible()
+    await page.getByRole('article', { name: 'Draft CV review layout' }).getByRole('button', { name: 'Add experience' }).click()
+    const editor = page.getByRole('dialog', { name: 'Add experience' })
+    await editor.getByLabel('Job title or role').fill('Engineer')
+    await editor.getByLabel('Organization', { exact: true }).fill('Example')
+    await editor.getByLabel('Experience details').fill('Built reliable services.')
+    await editor.getByRole('checkbox', { name: 'I confirm these details describe my own career facts.' }).check()
+    await editor.getByRole('button', { name: 'Save to this CV', exact: true }).click()
+    await expect(editor).not.toBeVisible()
     await expect(page.getByRole('article', { name: 'Draft CV review layout' })).toContainText('Built reliable services.')
-    await expect(draft).toContainText('Needs changes')
     await expect(draft.getByRole('button', { name: 'Approve CV' })).toBeDisabled()
   } finally {
     await app?.close().catch(() => {})

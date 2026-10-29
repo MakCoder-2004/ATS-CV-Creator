@@ -28,6 +28,12 @@ import { registerWorkspaceBackupIpc } from './workspace-backup-ipc'
 import { registerResearchSearchSettingsIpc } from './research-search-settings-ipc'
 import { createResearchSearchCredentials, defaultResearchCredentialDirectory } from './research-search-credentials'
 import { outboundConsentActionSchema, outboundConsentPreviewSchema } from '../shared/outbound-consent-contract'
+import { registerCoverLetterRetryIpc } from './cover-letter-retry-ipc'
+import { registerCoverLetterArtifactIpc } from './cover-letter-artifact-ipc'
+import { createCoverLetterArtifactController } from './cover-letter-artifact-controller'
+import { createCoverLetterCompiler } from './cover-letter-compiler'
+import { scriptedCoverLetterModes, scriptedCoverLetterResponse } from './cover-letter-scripted-fixture'
+import { coverLetterPurposeSchema, requestedDocumentsResultSchema } from '../shared/cover-letter'
 import { analysisIdSchema, analysisResultSchema, analysisStartInputSchema, generationRecoverySchema, recoveryChoiceSchema } from '../shared/posting-analysis'
 import { addDraftItemInputSchema, draftCorrectionInputSchema, draftGenerationSchema, draftRevisionSchema, suggestedSkillDecisionSchema, draftTailoringCorrectionSchema, cvTitleChangeSchema } from '../shared/draft'
 import { factualCheckReportSchema } from '../shared/factual-report'
@@ -84,10 +90,11 @@ app.whenReady().then(() => {
   })
   let scriptedAttempts = 0
   let recoveryFailureSent = false
-  const scriptedAnalysis: AnalysisTransport | undefined = !app.isPackaged && ['1', 'retry', 'generation', 'factual', 'invalid', 'foreign-citation', 'recovery', 'delayed', 'tailored-flow', 'profile-ai', 'profile-ai-delayed', 'profile-ai-wrong-fact', 'profile-ai-late', 'profile-ai-malformed', 'profile-ai-provider-failure'].includes(process.env.CV_TAILOR_SCRIPTED_ANALYSIS ?? '') ? { generate: async ({ prompt, signal }) => {
+  const scriptedAnalysis: AnalysisTransport | undefined = !app.isPackaged && ['1', 'retry', 'generation', 'factual', 'invalid', 'foreign-citation', 'recovery', 'delayed', 'tailored-flow', 'profile-ai', 'profile-ai-delayed', 'profile-ai-wrong-fact', 'profile-ai-late', 'profile-ai-malformed', 'profile-ai-provider-failure', ...scriptedCoverLetterModes].includes(process.env.CV_TAILOR_SCRIPTED_ANALYSIS ?? '') ? { generate: async ({ prompt, signal }) => {
     scriptedAttempts++
     if (process.env.CV_TAILOR_TEST_MODEL_DISPATCH_LOG) {
-      const operation = prompt.startsWith('Organize only facts') ? 'profile-import'
+      const operation = prompt.startsWith('Write one cover letter') ? 'cover-letter'
+        : prompt.startsWith('Organize only facts') ? 'profile-import'
         : prompt.startsWith('Score these numbered') ? 'evidence-scoring'
           : prompt.startsWith('Propose conservative replacement wording') ? 'regeneration'
             : prompt.startsWith('Extract only explicit qualifications') || prompt.startsWith('Extract only explicitly stated role responsibilities') ? 'qualification-extraction'
@@ -95,6 +102,8 @@ app.whenReady().then(() => {
               : /^Write (?:conservative|concise)/.test(prompt) ? 'generation' : 'other'
       appendFileSync(join(app.getPath('userData'), process.env.CV_TAILOR_TEST_MODEL_DISPATCH_LOG), `${operation}\n`)
     }
+    const letterFixture = await scriptedCoverLetterResponse(app.isPackaged, process.env.CV_TAILOR_SCRIPTED_ANALYSIS, prompt, signal)
+    if (letterFixture !== null) return letterFixture
     const isTailoring = /^Write (?:conservative|concise)/.test(prompt)
     if (process.env.CV_TAILOR_SCRIPTED_ANALYSIS === 'profile-ai-delayed' && prompt.startsWith('Organize only facts')) return await new Promise<string>((_resolve, reject) => signal.addEventListener('abort', () => reject(Object.assign(new Error('scripted request cancelled'), { code: 'ECONNRESET' })), { once: true }))
     if (process.env.CV_TAILOR_SCRIPTED_ANALYSIS === 'profile-ai-malformed' && prompt.startsWith('Organize only facts')) return '{not-json'
@@ -151,7 +160,7 @@ app.whenReady().then(() => {
       return JSON.stringify({ items: role ? [{ text: role.text[1], evidence: [role.index], rationale: 'Matches this saved employment title.' }] : [] })
     }
     if (process.env.CV_TAILOR_SCRIPTED_ANALYSIS === 'retry' && scriptedAttempts === 1) throw { status: 429, retryAfter: 3 }
-    if (['generation', 'factual', 'invalid', 'foreign-citation', 'recovery', 'delayed', 'tailored-flow'].includes(process.env.CV_TAILOR_SCRIPTED_ANALYSIS ?? '') && prompt.startsWith('Score these numbered')) {
+    if (['generation', 'factual', 'invalid', 'foreign-citation', 'recovery', 'delayed', 'tailored-flow', ...scriptedCoverLetterModes].includes(process.env.CV_TAILOR_SCRIPTED_ANALYSIS ?? '') && prompt.startsWith('Score these numbered')) {
       const { items } = JSON.parse(prompt.slice(prompt.indexOf('{')))
       return JSON.stringify({ relevance: items.map((item: { index: number }) => ({ index: item.index, score: 0.9, rationale: 'Directly supports the posting.' })) })
     }
@@ -160,7 +169,7 @@ app.whenReady().then(() => {
       const { selected } = JSON.parse(prompt.slice(prompt.indexOf('{'), prompt.lastIndexOf('}') + 1)) as { selected: Array<{ category: string }> }
       return JSON.stringify({ education: [], experience: selected.some(item => item.category === 'experience') ? [{ text: 'Unsupported suggestion.', evidence: [selected.length + 7], rationale: 'Foreign source.' }] : [], projects: [], skills: [] })
     }
-    if (['generation', 'factual', 'invalid', 'recovery', 'delayed', 'tailored-flow'].includes(process.env.CV_TAILOR_SCRIPTED_ANALYSIS ?? '') && isTailoring) {
+    if (['generation', 'factual', 'invalid', 'recovery', 'delayed', 'tailored-flow', ...scriptedCoverLetterModes].includes(process.env.CV_TAILOR_SCRIPTED_ANALYSIS ?? '') && isTailoring) {
       const { selected, experienceGroups, projectGroups } = JSON.parse(prompt.slice(prompt.indexOf('{')))
       const sourceWording = (text: string) => { try { const item = JSON.parse(text); return removeRepeatedEntryHeading(item.description || item.text || item.field || item.title || item.name || text, item.title ?? item.name ?? '', item.organization) || item.title || item.name || text } catch { return text } }
       const paragraphs = (category: string) => {
@@ -199,7 +208,12 @@ app.whenReady().then(() => {
     : import('@earendil-works/pi-coding-agent')
       .then(({ ModelRuntime }) => ModelRuntime.create({ allowModelNetwork: false, refreshOnCreate: false }))
       .catch(() => null)
-  workspace = createWorkbench(app.getPath('userData'), undefined, useScriptedPi ? undefined : scriptedAnalysis, undefined, piRuntime)
+  const letterCompiler = createCoverLetterCompiler({
+    toolchainRoot: app.isPackaged ? join(process.resourcesPath, 'latex') : join(__dirname, '../..', '.tools/latex'),
+    templateRoot: app.isPackaged ? join(process.resourcesPath, 'cover-letter-template/application') : join(__dirname, '../..', 'resources/cover-letter-template/application'),
+    tempRoot: join(app.getPath('temp'), 'cv-tailor-cover-letter-pdf'),
+  })
+  workspace = createWorkbench(app.getPath('userData'), undefined, useScriptedPi ? undefined : scriptedAnalysis, undefined, piRuntime, letterCompiler)
   const researchCredentials = createResearchSearchCredentials({
     credentialsDirectory: defaultResearchCredentialDirectory(app.getPath('appData'), app.getPath('userData')),
     workspaceDirectory: app.getPath('userData'),
@@ -208,7 +222,7 @@ app.whenReady().then(() => {
   registerResearchSearchSettingsIpc(ipcMain, researchCredentials, trusted)
   let modelUpdatePending = false
   registerWorkspaceBackupIpc(() => window!, () => workspace!, () => {
-    const reopened = createWorkbench(app.getPath('userData'), undefined, useScriptedPi ? undefined : scriptedAnalysis, undefined, piRuntime)
+    const reopened = createWorkbench(app.getPath('userData'), undefined, useScriptedPi ? undefined : scriptedAnalysis, undefined, piRuntime, letterCompiler)
     const previous = workspace!
     workspace = reopened
     previous.close()
@@ -352,8 +366,10 @@ app.whenReady().then(() => {
     return jobRecordSchema.array().parse(await workspace!.api.listJobs())
   })
   ipcMain.handle('consent:outbound:preview', async (event, ...args: unknown[]) => {
-    trusted(event); if (args.length !== 1) throw new Error('Expected saved job ID')
-    return outboundConsentPreviewSchema.parse(await workspace!.api.prepareOutboundConsent(uuidSchema.parse(args[0])))
+    trusted(event); if (args.length < 1 || args.length > 2) throw new Error('Expected saved job ID and optional document purpose')
+    const jobId = uuidSchema.parse(args[0])
+    const purpose = args.length === 1 ? 'cv' : coverLetterPurposeSchema.parse(args[1])
+    return outboundConsentPreviewSchema.parse(await workspace!.api.prepareOutboundConsent(jobId, purpose))
   })
   ipcMain.handle('consent:outbound:accept', async (event, ...args: unknown[]) => {
     trusted(event); if (args.length !== 3 || typeof args[1] !== 'boolean' || typeof args[2] !== 'boolean') throw new Error('Expected preview token and consent decisions')
@@ -366,6 +382,16 @@ app.whenReady().then(() => {
   ipcMain.handle('analysis:start', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected consent token'); const input = analysisStartInputSchema.parse({ consentToken: args[0] }); return analysisResultSchema.parse(await workspace!.api.startAnalysis(input.consentToken)) })
   ipcMain.handle('analysis:get', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected job ID'); const result = await workspace!.api.getAnalysis(analysisIdSchema.parse(args[0])); return result === null ? null : analysisResultSchema.parse(result) })
   ipcMain.handle('draft:generate', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 2 || (args[1] !== 1 && args[1] !== 2)) throw new Error('Expected consent token and one- or two-page target'); return draftGenerationSchema.parse(await workspace!.api.generateDraft(analysisStartInputSchema.parse({ consentToken: args[0] }).consentToken, args[1])) })
+  ipcMain.handle('documents:generate', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 2 || (args[1] !== 1 && args[1] !== 2)) throw new Error('Expected consent token and one- or two-page target'); return requestedDocumentsResultSchema.parse(await workspace!.api.generateRequestedDocuments(analysisStartInputSchema.parse({ consentToken: args[0] }).consentToken, args[1])) })
+  registerCoverLetterRetryIpc(ipcMain, () => workspace!.api, trusted)
+  const letterActions = createCoverLetterArtifactController({
+    beginJobOperation: (jobId, action) => workspace!.beginJobOperation(jobId, action),
+    captureCoverLetterExport: input => workspace!.captureCoverLetterExport(input),
+  }, {
+    chooseDestination: async format => dialog.showSaveDialog(window!, { title: `Export cover-letter ${format === 'pdf' ? 'PDF' : 'editable DOCX'}`, defaultPath: `cover-letter.${format}`, filters: [{ name: format === 'pdf' ? 'PDF document' : 'Word document', extensions: [format] }], properties: ['showOverwriteConfirmation'] }),
+    confirmOverwrite: async format => (await dialog.showMessageBox(window!, { type: 'warning', title: 'Replace existing cover letter?', message: `Replace the selected file with this approved cover-letter ${format.toUpperCase()}?`, buttons: ['Keep existing file', 'Replace file'], defaultId: 0, cancelId: 0, noLink: true })).response === 1,
+  })
+  registerCoverLetterArtifactIpc(ipcMain, () => ({ ...workspace!.api, ...letterActions }), trusted)
   ipcMain.handle('draft:renew-review', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected job ID'); return draftGenerationSchema.parse(await workspace!.api.renewDraftReview(analysisIdSchema.parse(args[0]))) })
   ipcMain.handle('draft:regenerate', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 2) throw new Error('Expected consent token and regeneration target'); return regenerationResultSchema.parse(await workspace!.api.regenerateDraft(analysisStartInputSchema.parse({ consentToken: args[0] }).consentToken, regenerationTargetSchema.parse(args[1]))) })
   ipcMain.handle('draft:regeneration:get', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected job ID'); const proposal = await workspace!.api.getRegenerationProposal(analysisIdSchema.parse(args[0])); return proposal === null ? null : regenerationProposalSchema.parse(proposal) })

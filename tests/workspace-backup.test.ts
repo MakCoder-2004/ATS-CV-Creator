@@ -73,6 +73,9 @@ test('complete workspace backup restores draft revisions, evidence, posting, pre
   const proposal = await active.api.regenerateDraft(nextConsent.token, { kind: 'section', section: 'skills' })
   expect(proposal).toMatchObject({ ok: true, proposal: { status: 'pending' } })
   const backup = active.backup.createBackup()
+  expect(JSON.parse(backup).version).toBe(4)
+  expect(Object.keys(JSON.parse(backup).tables)).toContain('cover_letter_revisions')
+  expect(Object.keys(JSON.parse(backup).tables)).toContain('cover_letter_operations')
   expect(JSON.parse(backup).tables.draft_revisions.rows.length).toBeGreaterThan(0)
   expect(JSON.parse(backup).tables.langgraph_checkpoints.rows.length).toBeGreaterThan(0)
   expect(backup).not.toContain('encrypted_credentials')
@@ -137,6 +140,11 @@ test('released version-2 backups upgrade optional posting details to honest unkn
   if (!saved.ok) throw new Error('Job fixture failed')
   const old = JSON.parse(workbench.backup.createBackup())
   old.version = 2
+  delete old.tables.cover_letter_revisions
+  delete old.tables.cover_letter_operations
+  old.tables.schema_migrations.rows = old.tables.schema_migrations.rows.filter((row: { version: number }) => row.version < 10)
+  old.tables.outbound_consents.schema = 'CREATE TABLE outbound_consents (id TEXT PRIMARY KEY, run_id TEXT NOT NULL UNIQUE, scope_hash TEXT NOT NULL, created_at TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0)'
+  for (const row of old.tables.outbound_consents.rows) { delete row.job_id; delete row.purpose_version; delete row.purpose; delete row.purpose_hash }
   for (const row of old.tables.jobs.rows) {
     const job = JSON.parse(row.data)
     delete job.contacts
@@ -156,16 +164,68 @@ test('released version-2 backups upgrade optional posting details to honest unkn
   expect(restored?.revisions[0].optionalDetails.compensation).toMatchObject({ value: null, origin: 'unknown' })
 })
 
+test('captured public v3 backup restores synthetic profile, job and contact data', async () => {
+  const { dir, workbench } = fixture()
+  const backup = readFileSync(join(process.cwd(), 'tests/fixtures/cover-letter-legacy-v3.json'), 'utf8')
+  expect(JSON.parse(backup).version).toBe(3)
+  const preview = workbench.backup.previewRestore(backup)
+  workbench.backup.applyRestore(preview.token, safetyBackup(dir))
+  const restoredDb = new Database(join(dir, 'workbench.sqlite'), { readonly: true })
+  try { expect(restoredDb.prepare('SELECT purpose_version,purpose,purpose_hash FROM outbound_consents').get()).toMatchObject({ purpose_version: 1, purpose: 'cv', purpose_hash: expect.stringMatching(/^[a-f0-9]{64}$/) }) } finally { restoredDb.close() }
+  expect((await workbench.api.getProfile()).contact).toMatchObject({ fullName: 'Fixture Candidate', email: 'candidate@example.test' })
+  expect((await workbench.api.getProfile()).skills).toMatchObject([{ name: 'TypeScript', category: 'Programming' }])
+  expect(await workbench.api.listJobs()).toMatchObject([{ title: 'Software Engineer', company: 'Fixture Systems' }])
+  workbench.close(); instances.pop()
+  const reopened = open(dir)
+  expect((await reopened.api.getProfile()).contact).toMatchObject({ fullName: 'Fixture Candidate' })
+  expect(await reopened.api.listJobs()).toMatchObject([{ title: 'Software Engineer' }])
+})
+
+test('authentic pre-migration-10 v3 consent rows without job ownership still upgrade', async () => {
+  const { workbench } = fixture()
+  const backup = JSON.parse(readFileSync(join(process.cwd(), 'tests/fixtures/cover-letter-legacy-v3.json'), 'utf8'))
+  backup.tables.schema_migrations.rows = backup.tables.schema_migrations.rows.filter((row: { version: number }) => row.version < 10)
+  backup.tables.outbound_consents.schema = backup.tables.outbound_consents.schema.replace(', job_id TEXT)', ')')
+  for (const row of backup.tables.outbound_consents.rows) delete row.job_id
+  const preview = workbench.backup.previewRestore(JSON.stringify(backup))
+  workbench.backup.applyRestore(preview.token, content => content)
+  expect((await workbench.api.getProfile()).contact).toMatchObject({ fullName: 'Fixture Candidate' })
+  const parentGateShape = JSON.parse(readFileSync(join(process.cwd(), 'tests/fixtures/cover-letter-legacy-v3.json'), 'utf8'))
+  parentGateShape.tables.schema_migrations.rows = parentGateShape.tables.schema_migrations.rows.filter((row: { version: number }) => row.version < 10)
+  parentGateShape.tables.outbound_consents.schema = parentGateShape.tables.outbound_consents.schema.replace(', job_id TEXT)', ')')
+  const parentPreview = workbench.backup.previewRestore(JSON.stringify(parentGateShape))
+  workbench.backup.applyRestore(parentPreview.token, content => content)
+  expect((await workbench.api.getProfile()).contact).toMatchObject({ fullName: 'Fixture Candidate' })
+})
+
+test('version-2 migration refuses unknown consent SQL before rewriting it', async () => {
+  const { workbench } = fixture()
+  const backup = JSON.parse(workbench.backup.createBackup())
+  backup.version = 2
+  delete backup.tables.cover_letter_revisions
+  delete backup.tables.cover_letter_operations
+  backup.tables.schema_migrations.rows = backup.tables.schema_migrations.rows.filter((row: { version: number }) => row.version < 10)
+  backup.tables.outbound_consents.schema = 'CREATE TABLE outbound_consents (laundered_sql TEXT)'
+  expect(() => workbench.backup.previewRestore(JSON.stringify(backup))).toThrow(/schema|incompatible/i)
+})
+
+test('captured v3 backup refuses a changed consent schema before migration', async () => {
+  const { workbench } = fixture()
+  const backup = JSON.parse(readFileSync(join(process.cwd(), 'tests/fixtures/cover-letter-legacy-v3.json'), 'utf8'))
+  backup.tables.outbound_consents.schema = 'CREATE TABLE outbound_consents (id TEXT PRIMARY KEY, run_id TEXT)'
+  expect(() => workbench.backup.previewRestore(JSON.stringify(backup))).toThrow(/schema is incompatible/i)
+})
+
 test('released v3 backups without the contact field restore contacts as empty', async () => {
   const { dir, workbench } = fixture()
-  const saved = await workbench.api.saveJob({ title: 'Legacy v3 role', company: 'Example', description: 'Historical posting text.' })
-  if (!saved.ok) throw new Error('Job fixture failed')
-  const oldV3 = JSON.parse(workbench.backup.createBackup())
+  const oldV3 = JSON.parse(readFileSync(join(process.cwd(), 'tests/fixtures/cover-letter-legacy-v3.json'), 'utf8'))
   expect(oldV3.version).toBe(3)
-  for (const row of oldV3.tables.jobs.rows) { const record = JSON.parse(row.data); delete record.contacts; row.data = JSON.stringify(record) }
+  const historicalJob = JSON.parse(oldV3.tables.jobs.rows[0].data)
+  delete historicalJob.contacts
+  oldV3.tables.jobs.rows[0].data = JSON.stringify(historicalJob)
   const restore = workbench.backup.previewRestore(JSON.stringify(oldV3))
   workbench.backup.applyRestore(restore.token, safetyBackup(dir))
-  expect(await workbench.api.openJob(saved.value.id)).toMatchObject({ contacts: [] })
+  expect(await workbench.api.openJob(historicalJob.id)).toMatchObject({ contacts: [] })
 })
 
 test('released v2 backups retain historical JSON and HTML provenance through v3 restore without fetching', async () => {
@@ -284,6 +344,23 @@ test('restore rejects oversized aggregate, table, row, and posting-revision inpu
   expect(await workbench.api.openJob(saved.value.id)).toEqual(saved.value)
   workbench.close(); instances.pop()
   expect(await open(dir).api.openJob(saved.value.id)).toEqual(saved.value)
+})
+
+test('cover-letter rows use the shared backup capacity trigger and roll back on overflow', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cv-tailor-letter-capacity-')); directories.push(dir)
+  const wb = createWorkbench(dir, undefined, scripted, { workspaceBackupMaxBytes: 20_000 }); instances.push(wb)
+  const job = await wb.api.saveJob({ title: 'Capacity role', company: 'Example', description: 'Keep this posting.' })
+  if (!job.ok) throw new Error('Job fixture failed')
+  const status = await wb.api.getWorkspaceBackupStatus()
+  const db = new Database(join(dir, 'workbench.sqlite'))
+  db.function('cv_workspace_backup_row_bytes', { deterministic: true }, (rowJson: string) => Buffer.byteLength(JSON.stringify(JSON.parse(rowJson)), 'utf8'))
+  try {
+    const id = '30000000-0000-4000-8000-000000000001', run = '40000000-0000-4000-8000-000000000001', consent = '50000000-0000-4000-8000-000000000001'
+    const now = new Date().toISOString(), oversize = 'x'.repeat(status.maxBytes - status.bytes + 500)
+    expect(() => db.prepare('INSERT INTO cover_letter_operations(id,job_id,parent_run_id,consent_id,status,data,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)').run(id, job.value.id, run, consent, 'prepared', oversize, now, now)).toThrow(/WORKSPACE_BACKUP_CAPACITY/)
+    expect(db.prepare('SELECT COUNT(*) AS count FROM cover_letter_operations').get()).toEqual({ count: 0 })
+    expect((await wb.api.getWorkspaceBackupStatus()).bytes).toBe(status.bytes)
+  } finally { db.close() }
 })
 
 test('failed database write rolls back the full replacement, including current credentials', async () => {

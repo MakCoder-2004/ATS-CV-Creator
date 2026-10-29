@@ -1,5 +1,5 @@
 import type { ZodTypeAny } from "zod"
-import { AnalysisError, type AnalysisInput, type AnalysisUsage } from "./posting-analysis"
+import { AnalysisError, type AnalysisInput, type AnalysisUsage, type LetterTaskContext } from "./posting-analysis"
 import { completePiTask, type PiModelRuntime } from "./pi-model"
 import type { PiModelSelection } from "../shared/pi-model"
 import { postingAnalysisSchema, type PostingAnalysis } from "../shared/posting-analysis"
@@ -24,6 +24,7 @@ export interface PiWorkbenchDispatcherOptions extends PiWorkbenchDispatcherHooks
 type PiWorkbenchBaseInput = Omit<AnalysisInput, "model"> & { consentId: string; model?: unknown }
 export type PiWorkbenchAnalysisInput = PiWorkbenchBaseInput
 export type PiWorkbenchGenerationInput = PiWorkbenchBaseInput & {
+  letterTask?: LetterTaskContext
   responseSchema: ZodTypeAny
   model?: unknown
   retryProviderFailures?: boolean
@@ -47,7 +48,7 @@ export function createPiWorkbenchDispatcher(options: PiWorkbenchDispatcherOption
   }
   const isCancelled = (runId: string) => cancelled.has(runId)
 
-  async function execute<T>(input: PiWorkbenchAnalysisInput, schema: ZodTypeAny, maxTokens: number, maxBytes: number): Promise<{ value: T; attempts: number }> {
+  async function execute<T>(input: PiWorkbenchAnalysisInput & { letterTask?: LetterTaskContext }, schema: ZodTypeAny, maxTokens: number, maxBytes: number): Promise<{ value: T; attempts: number }> {
     const { runId, consentId, jobId, prompt } = input
     if (!runId || !jobId || !prompt.trim() || !consentId || authorizations.get(runId) !== consentId) {
       throw new AnalysisError("PROVIDER", "This request requires valid accepted outgoing-data consent.")
@@ -77,12 +78,14 @@ export function createPiWorkbenchDispatcher(options: PiWorkbenchDispatcherOption
         maxOutputTokens: maxTokens,
         responseSchema: schema,
         onDispatch: () => {
-          options.onAttempt?.(Date.now(), runId)
+          check()
+          if (input.letterTask) input.letterTask.beforeDispatch()
+          else options.onAttempt?.(Date.now(), runId)
           attempts = 1
         },
         onResponse: () => {
           responseReceived = true
-          options.onAttemptComplete?.(runId, true)
+          if (!input.letterTask) options.onAttemptComplete?.(runId, true)
         },
       })
       check()
@@ -98,7 +101,7 @@ export function createPiWorkbenchDispatcher(options: PiWorkbenchDispatcherOption
     try {
       return await work
     } catch (error) {
-      if (attempts && !responseReceived) options.onAttemptComplete?.(runId, false)
+      if (attempts && !responseReceived && !input.letterTask) options.onAttemptComplete?.(runId, false)
       const malformed = error instanceof Error && /structured data|required task format/.test(error.message)
       const failure = cancelled.has(runId) || controller.signal.aborted
         ? new AnalysisError("CANCELLED", "Analysis cancelled.")

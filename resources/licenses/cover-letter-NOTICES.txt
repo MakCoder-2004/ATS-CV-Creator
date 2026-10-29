@@ -1,0 +1,27 @@
+Cover-letter document resources
+
+CV Tailor's application-letter-v1 is an application-owned adaptation of the
+Letter layout in PFCS33/resume-cl-template, pinned upstream commit
+ d485ff56e1111d97f07acd0e9930be2a11d8c608.
+Upstream copyright (c) 2025 Yunshan Feng, MIT License.
+The upstream MIT copyright and permission notice is retained in upstream-MIT.txt.
+The acknowledged Jake Gutierrez resume-template ancestor MIT notice is retained
+in ancestor-MIT.txt (commit 3e64a933141a7cda3a328f0743f73a201628a4ba).
+
+The adapted template and exact runtime asset manifest are distributed at
+cover-letter-template/application. Downloaded upstream source and its placeholder
+prose are not used as runtime letter content. Neither pinned template nor font
+bytes are modified at export time. Only escaped application-owned content is
+written to an isolated temporary compiler workspace.
+
+Lato: Copyright (c) 2010-2011 by tyPoland Lukasz Dziedzic, Reserved Font Name Lato.
+See Lato-OFL.txt for the full SIL Open Font License 1.1 and copyright notice.
+The bundled TeX Live lato package is inventoried as OFL/LPPL 1.3c; see the
+accompanying licenses/latex inventory, LPPL, OFL, TeX Live and TinyTeX notices.
+Those texts describe the toolchain's separate dependencies, not a single license
+for all TeX Live contents.
+
+PDF is the authoritative measured one-page Letter artifact. Editable DOCX is
+built from the same canonical wording and local fields. Word may reflow.
+Packaging configuration and source tests do not constitute installed-app,
+renderer workflow, live-provider or recruitment-system acceptance.
