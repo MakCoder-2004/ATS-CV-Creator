@@ -569,7 +569,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
   const approvalMaterial = (letter: ReturnType<typeof coverLetterRevisionSchema.parse>, canonical: unknown, findings: unknown) => ({ ...measurementMaterial(letter, canonical), findings, acknowledgments: letter.acknowledgments, approvedAt: letter.approvedAt })
   const letterReviewState = (jobId: string, identity: CoverLetterTemplateIdentity | null): Pick<CoverLetterReadModel, 'letter' | 'canonical' | 'readiness'> => {
     const letter = readCoverLetter(jobId)
-    const bindingProblem = letter ? coverLetterCurrentStatus(letter) : 'No cover-letter draft is saved for this job.'
+    const bindingProblem = letter ? letterAuthority.problem ?? coverLetterCurrentStatus(letter) : 'No cover-letter draft is saved for this job.'
     let canonical = null, canonicalProblem: string | null = null
     if (letter) {
       try { if (!identity) throw new Error(); canonical = projectCoverLetter(letter, letterContact(), identity) }
@@ -2205,6 +2205,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       return coverLetterActionResultSchema.parse({ ok: checked.findings.length === 0, message: checked.findings.length ? 'Resolve the known cover-letter findings before approval.' : 'Current source bindings and paragraph citations are available for review.', letter: checked })
     },
     async measureCoverLetter(input) {
+      if (letterAuthority.problem) return { ok: false, message: letterAuthority.problem }
       const parsed = coverLetterArtifactActionSchema.safeParse(input)
       if (!parsed.success) return { ok: false, message: 'Expected only the current job and letter IDs.' }
       let release: (() => void) | undefined
@@ -2240,6 +2241,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       finally { release?.() }
     },
     async approveCoverLetter(jobId, expectedLetterId) {
+      if (letterAuthority.problem) return { ok: false, message: letterAuthority.problem }
       const letter = readCoverLetter(jobId)
       if (!letter) return coverLetterActionResultSchema.parse({ ok: false, message: 'No cover-letter draft is saved for this job.' })
       const stale = coverLetterCurrentStatus(letter)
