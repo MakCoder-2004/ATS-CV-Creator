@@ -1,6 +1,7 @@
 import { COVER_LETTER_WORD_BUDGET, coverLetterModelResponseSchema, coverLetterSourceSchema, type CoverLetterRevision, type CoverLetterSource } from '../shared/cover-letter'
 import { prepareOutboundBundle, type ConsentSource, type OutboundBundle } from '../shared/outbound-consent'
 import { experienceInputSchema, type ExperienceRecord } from '../shared/experience'
+import { coverLetterSourceCopy } from '../shared/cover-letter-source-copy'
 
 /** Parallel local and minimized views; identifiers are never serialized into the prompt. */
 export function prepareCoverLetterSources(source: ConsentSource, bundle: OutboundBundle) {
@@ -14,8 +15,9 @@ export function prepareCoverLetterSources(source: ConsentSource, bundle: Outboun
     const ordinal = local.length + 1
     local.push(coverLetterSourceSchema.parse({ ordinal, evidenceId: id, revision, category, heading, passage, ...(parentId ? { parentId } : {}) }))
     // Fail closed rather than silently extending the reviewed bundle or truncating factual context.
-    if (safeHeading.length > 300 || safePassage.length > 5000 || localIdentifier.test(`${safeHeading} ${safePassage}`) || bundle.containsRestoredIdentifier([safeHeading, safePassage])) throw new Error('A letter source could not be minimized within its bounds.')
-    outgoing.push({ ordinal, category, heading: safeHeading, passage: safePassage, ...(kind ? { kind } : {}) })
+    const outgoingPassage = coverLetterSourceCopy({ category, passage: safePassage })
+    if (safeHeading.length > 300 || outgoingPassage.length > 5000 || localIdentifier.test(`${safeHeading} ${outgoingPassage}`) || bundle.containsRestoredIdentifier([safeHeading, outgoingPassage])) throw new Error('A letter source could not be minimized within its bounds.')
+    outgoing.push({ ordinal, category, heading: safeHeading, passage: outgoingPassage, ...(kind ? { kind } : {}) })
     if (kind) experienceKinds[id] = kind
   }
   source.profile.education.forEach((item, index) => {

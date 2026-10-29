@@ -20,6 +20,7 @@ import { coverLetterGenerationStatusSchema, coverLetterOutcomeSchema, coverLette
 import { createOutboundConsentEngine } from './outbound-consent'
 import { prepareCoverLetterSources, parseCoverLetterResponse, checkLocalCoverLetter } from './cover-letter-generation'
 import { coverLetterFailureMessage, diagnoseCoverLetterFailure } from './cover-letter-failure'
+import { buildCoverLetterPrompt } from './cover-letter-prompt'
 import { canonicalCoverLetterSchema, projectCoverLetter, type CoverLetterTemplateIdentity } from '../shared/cover-letter-document'
 import { coverLetterReadModelSchema, coverLetterArtifactActionSchema, type CoverLetterReadModel } from '../shared/cover-letter-artifact'
 import { createCoverLetterCompiler, hashCoverLetterDocument } from './cover-letter-compiler'
@@ -838,7 +839,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       const timestamp = new Date().toISOString()
       if (!operation) writeOperation({ id: randomUUID(), jobId: pending.jobId, parentRunId: pending.runId, consentId: pending.consentId!, purposeHash, initialBinding: { cvRevisionId: cv.id, scopeHash: pending.bundle.scopeHash, modelHash, postingUpdatedAt: String(source.job.revision) }, status: 'prepared', createdAt: timestamp, updatedAt: timestamp })
       const generated = await dispatcher.generate({ runId: pending.runId, jobId: pending.jobId, consentId: pending.consentId!, model: transportModel(pending.source.model.name), responseSchema: coverLetterModelResponseSchema, maxTokens: 4096, maxResponseChars: 100_000,
-        prompt: `Write one cover letter as concise body paragraphs grounded only in the numbered authorized sources. Aim for 200–300 words; never exceed 400 words. Choose a few relevant facts, not every source. Return paragraphs with text and citations containing the exact positive source ordinals provided here, not CV indexes. Use 'this role' and 'your organization' for application context; do not copy the target title, company or their placeholders into the body unless they occur in the cited career sources. Every name, placeholder, number and technical skill in each paragraph must occur in that paragraph's cited source headings or passages. Do not return IDs, headings, dates, recipient, greeting, signature, CV prose, or instructions. Never invent numbers, skills, or attribute one role's facts to another. Use declared record kinds as given. Training alone does not establish employment. Do not infer missing kinds. Every paragraph needs citations. No automated factual proof is claimed; the user will review each paragraph.\n${JSON.stringify({ posting: pending.bundle.outgoing.job, sources: sources.outgoing })}`,
+        prompt: buildCoverLetterPrompt(pending.bundle.outgoing.job, sources.outgoing),
         letterTask: { operationId: operation!.id, beforeDispatch: () => {
           // This callback runs after awaited Pi model/auth lookup, immediately before the physical send.
           const latest = assertCurrent()

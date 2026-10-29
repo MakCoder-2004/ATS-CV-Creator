@@ -1,5 +1,6 @@
 import { useRef, useState, useLayoutEffect } from 'react'
 import type { CoverLetterRevision } from '../shared/cover-letter'
+import { coverLetterSourceCopy } from '../shared/cover-letter-source-copy'
 import type { CanonicalCoverLetter } from '../shared/cover-letter-document'
 import type { ExperienceRecord } from '../shared/experience'
 import { advanceReviewVisit, canBeginParagraphEdit, canBeginRecipientEdit, canSaveParagraphEdit, canSaveRecipientEdit } from './cover-letter-review-state'
@@ -188,7 +189,7 @@ export function CoverLetterReview(props: CoverLetterReviewProps) {
                 <h3>Source passages for paragraph {index + 1}</h3>
                 {sources.length ? sources.map(source => {
                   const kind = props.experienceKinds?.[source.evidenceId]
-                  return <blockquote key={source.ordinal}><strong>{source.heading}</strong>{kind && <p>{experienceKindLabels[kind]}</p>}<p>{source.passage}</p></blockquote>
+                  return <blockquote key={source.ordinal}><strong>{source.heading}</strong>{kind && <p>{experienceKindLabels[kind]}</p>}<p>{coverLetterSourceCopy(source)}</p></blockquote>
                 }) : <p>No current linked source passage is available.</p>}
               </div>
             </section>

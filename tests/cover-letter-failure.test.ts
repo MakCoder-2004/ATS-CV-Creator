@@ -47,7 +47,7 @@ test('unsafe citation rejection survives reopening without retaining rejected pr
     expect(letterCalls).toHaveLength(1)
     expect(letterCalls[0]).toContain('not CV indexes')
     expect(letterCalls[0]).toContain('never exceed 400 words')
-    expect(letterCalls[0]).toContain("Use 'this role' and 'your organization'")
+    expect(letterCalls[0]).toContain("Use 'this role', 'your team' or 'your organization'")
     const savedCv = await workspace.api.getDraft(job.value.id)
     workspace.close()
     const db = new Database(join(directory, 'workbench.sqlite'), { readonly: true })
