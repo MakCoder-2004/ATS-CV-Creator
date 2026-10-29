@@ -1,6 +1,6 @@
 import type { CanonicalCoverLetter } from '../shared/cover-letter-document'
 
-const normalize = (value: string) => value.normalize('NFC').replace(/\s+/gu, ' ').trim()
+const normalize = (value: string) => value.normalize('NFC').replace(/[‘’]/g, "'").replace(/[“”]/g, '"').replace(/…/g, '...').replace(/\.\s*\.\s*\./g, '...').replace(/\s+/gu, ' ').trim()
 export async function inspectCoverLetterPdf(bytes: Uint8Array) {
   const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs')
   const loading = getDocument({ data: new Uint8Array(bytes), useSystemFonts: false, fontExtraProperties: true })

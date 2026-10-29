@@ -37,6 +37,13 @@ test('TeX-looking text remains literal and body paragraph delimiters are applica
   const two = projectCoverLetter({ ...revision, paragraphs: [revision.paragraphs[0], { ...revision.paragraphs[0], id: uid('8'), text: 'Second paragraph.' }] }, { fullName: 'Ari Example' }, template)
   expect(renderCoverLetterTex(two)).toContain('Built tools for Montréal teams.\\par\nSecond paragraph.')
 })
+test('permits verified English typography while still refusing bidi controls and unsupported scripts', () => {
+  const text = '“Reliable” work – colleagues’ tools… — careful delivery.'
+  expect(projectCoverLetter({ ...revision, paragraphs: [{ ...revision.paragraphs[0], text }] }, { fullName: 'Ari O’Neil' }, template).paragraphs).toEqual([text])
+  expect(() => projectCoverLetter({ ...revision, paragraphs: [{ ...revision.paragraphs[0], text: `Hidden ${String.fromCodePoint(0x202e)}text` }] }, { fullName: 'Ari' }, template)).toThrow(/unsupported/)
+  expect(() => projectCoverLetter({ ...revision, paragraphs: [{ ...revision.paragraphs[0], text: 'مرحبا' }] }, { fullName: 'Ari' }, template)).toThrow(/unsupported/)
+})
+
 test('projection does not mutate revision, current contact, or verified template inputs', () => {
   const source = structuredClone(revision), sender = { fullName: 'Ari Example', email: 'ari@example.test' }, manifest = { ...template }
   projectCoverLetter(source, sender, manifest)

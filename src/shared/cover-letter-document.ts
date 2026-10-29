@@ -9,7 +9,7 @@ export const coverLetterTemplateIdentitySchema = z.object({
 }).strict()
 export type CoverLetterTemplateIdentity = z.infer<typeof coverLetterTemplateIdentitySchema>
 
-const supportedLetterText = (value: string) => !/[\u0000-\u001f\u007f-\u009f\u200B-\u200F\u202A-\u202E\u2066-\u2069]/u.test(value) && !/[^\u0020-\u007e\u00a0-\u024f\u0300-\u036f]/u.test(value)
+const supportedLetterText = (value: string) => !/[\u0000-\u001f\u007f-\u009f\u200B-\u200F\u202A-\u202E\u2066-\u2069]/u.test(value) && !/[^\u0020-\u007e\u00a0-\u024f\u0300-\u036f\u2013\u2014\u2018\u2019\u201c\u201d\u2026]/u.test(value)
 const printableText = (max: number) => z.string().trim().min(1).max(max).refine(supportedLetterText, 'Text contains unsupported characters.').transform(value => value.normalize('NFC'))
 const printableEmail = z.string().email().max(254).refine(supportedLetterText, 'Email contains unsupported characters.').transform(value => value.normalize('NFC'))
 export const canonicalCoverLetterSchema = z.object({

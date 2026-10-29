@@ -72,7 +72,7 @@ export function CoverLetterReview(props: CoverLetterReviewProps) {
   const editSession: EditSession = activeEdit ? { kind: 'paragraph', paragraphId: activeEdit } : localState?.recipient !== undefined ? { kind: 'recipient' } : null
   const unsavedEdit = Boolean(activeEdit || recipientDirty)
   const pending = busy || Boolean(localState?.pending)
-  const mismatch = Boolean(letter && (letter.jobId !== jobId || !originatingCvRevisionId || letter.cvRevisionId !== originatingCvRevisionId || !canonical || canonical.jobId !== jobId || canonical.sourceRevisionId !== letter.id || canonical.revision !== letter.revision || canonical.paragraphs.length !== letter.paragraphs.length || canonical.paragraphs.some((text, index) => text !== letter.paragraphs[index]?.text)))
+  const mismatch = Boolean(letter && (letter.jobId !== jobId || !originatingCvRevisionId || letter.cvRevisionId !== originatingCvRevisionId || !canonical || canonical.jobId !== jobId || canonical.sourceRevisionId !== letter.id || canonical.revision !== letter.revision || canonical.paragraphs.length !== letter.paragraphs.length || canonical.paragraphs.some((text, index) => text !== letter.paragraphs[index]?.text.normalize('NFC'))))
   const boundLetter = letter && !mismatch ? letter : null
   const boundCanonical = boundLetter && canonical ? canonical : null
   const sourceByOrdinal = new Map((boundLetter?.bindings.sources ?? []).map(source => [source.ordinal, source]))

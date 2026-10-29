@@ -6,7 +6,7 @@ import { resolve, join } from 'node:path'
 import JSZip from 'jszip'
 import { projectCoverLetter } from '../src/shared/cover-letter-document'
 import { createCoverLetterCompiler, hashCoverLetterDocument } from '../src/main/cover-letter-compiler'
-import { inspectCoverLetterPdf } from '../src/main/cover-letter-pdf'
+import { assertCoverLetterPdfContent, inspectCoverLetterPdf } from '../src/main/cover-letter-pdf'
 import { renderCoverLetterDocx } from '../src/main/cover-letter-docx'
 
 const uid = (n: string) => `${n.repeat(8)}-${n.repeat(4)}-4${n.repeat(3)}-8${n.repeat(3)}-${n.repeat(12)}`
@@ -63,6 +63,18 @@ test('actual Lato PDF is one selectable US Letter page and DOCX uses same canoni
   expect(plain).toContain('Built reliable tools for Montréal teams with Zoë.')
   expect(await zip.file('word/styles.xml')!.async('string')).toContain('Lato')
   expect(xml).not.toContain('Built systems.')
+}, 60_000)
+
+test('ordinary English apostrophes and typographic punctuation survive actual letter compilation', async () => {
+  const straight = canonical({ paragraphs: [{ ...baseRevision.paragraphs[0], text: "It's dependable work." }] })
+  const straightPdf = await compiler.compile(straight)
+  const straightText = await inspectCoverLetterPdf(straightPdf.pdf)
+  expect(straightText.extractedText.join(' ')).toContain('It’s dependable work.')
+  const typographic = canonical({ paragraphs: [{ ...baseRevision.paragraphs[0], text: '“Reliable” work – colleagues’ tools… — careful delivery.' }] })
+  const compiled = await compiler.compile(typographic)
+  const inspected = await inspectCoverLetterPdf(compiled.pdf)
+  expect(inspected.extractedText.join(' ')).toContain('“Reliable” work – colleagues’ tools')
+  expect(() => assertCoverLetterPdfContent(typographic, { ...inspected, extractedText: inspected.extractedText.map(text => text.replace('careful', 'careless')) })).toThrow(/text|reading order/)
 }, 60_000)
 
 test('same-document concurrent compilation returns independent bytes and metadata', async () => {

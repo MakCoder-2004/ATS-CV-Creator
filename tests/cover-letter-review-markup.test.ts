@@ -63,6 +63,14 @@ test('renders bound letter and source passages as escaped review-only content', 
   expect(html).not.toContain('type="hidden"')
 })
 
+test('canonically equivalent accented wording remains reviewable', () => {
+  const composed = 'Built résumé tooling.'
+  const letter = { ...revision, paragraphs: [{ ...revision.paragraphs[0], text: composed.normalize('NFD') }] }
+  const html = renderReview({ letter, canonical: { ...canonical, paragraphs: [composed] } })
+  expect(html).toContain('Edit paragraph 1')
+  expect(html).not.toContain('current document does not match')
+})
+
 test('keeps an optional recipient field labeled, local-only, and escaped', () => {
   const html = renderReview()
   expect(html).toContain('Recipient name (optional)')
