@@ -14,7 +14,7 @@ import { openRouterModelSchema } from '../shared/openrouter-settings'
 import { piModelSelectionSchema } from '../shared/pi-model'
 import { coverLetterOperationSchema, coverLetterPurposeSchema, coverLetterRevisionSchema } from '../shared/cover-letter'
 import { legacyV3TableSchemas } from './workspace-backup-legacy-v3'
-import { letterOriginProblem, resolveLetterOrigin } from './cover-letter-provenance'
+import { letterHistoricalMappingReadable, letterOriginProblem, resolveLetterOrigin } from './cover-letter-provenance'
 
 // Keep this explicit: credentials are never serialized; all workspace persistence tables, including
 // migrations and LangGraph checkpoints, are represented in the versioned format.
@@ -58,7 +58,7 @@ export function createWorkspaceBackupEngine(db: Database.Database, maxBackupByte
     if (unsupported.length) throw new Error(`Unsupported workspace tables prevent a complete backup: ${unsupported.join(', ')}`)
     return tables.filter(name => present.includes(name))
   }
-  const rowsFor = (name: string) => db.prepare(`SELECT * FROM "${name}"`).all() as Array<Record<string, unknown>>
+  const rowsFor = (name: string) => db.prepare(`SELECT * FROM "${name}"${name === 'outbound_consents' ? ' ORDER BY rowid' : ''}`).all() as Array<Record<string, unknown>>
   const parseJson = (table: string, value: string): unknown => {
     try { return JSON.parse(value) } catch { throw new Error(`Backup contains corrupt JSON: ${table}`) }
   }
@@ -269,13 +269,22 @@ export function createWorkspaceBackupEngine(db: Database.Database, maxBackupByte
     const draftOwners = new Map((rows.draft_revisions?.rows ?? []).map(row => [String(row.id), String(row.job_id)]))
     const recoveryRecords = new Map((rows.generation_recovery?.rows ?? []).map(row => [String(row.run_id), row]))
     const draftRecords = new Map((rows.draft_revisions?.rows ?? []).map(row => [String(row.id), parseJson('draft_revisions', String(row.data))]))
+    const operationsByConsent = new Map([...operationRecords.values()].map(operation => [operation.consentId, operation]))
+    const previousIntents = new Map<string, { consent: Record<string, unknown>; operation?: ReturnType<typeof coverLetterOperationSchema.parse> }>()
+    const latestByJob = new Map<string, Record<string, unknown>>()
+    // This is the insertion order restored into the consent ledger, not caller-supplied dates.
+    for (const consent of rows.outbound_consents?.rows ?? []) {
+      const prior = latestByJob.get(String(consent.job_id))
+      if (prior) previousIntents.set(String(consent.id), { consent: prior, operation: operationsByConsent.get(String(prior.id)) })
+      latestByJob.set(String(consent.job_id), consent)
+    }
     const origins = new Map<string, ReturnType<typeof resolveLetterOrigin>>()
     const initialParents = new Set<string>()
     for (const row of rows.cover_letter_operations?.rows ?? []) {
       const operation = operationRecords.get(String(row.id))!
       const consent = consentRecords.get(operation.consentId)
       if (!consent || consent.run_id !== operation.parentRunId || consent.job_id !== operation.jobId || consent.purpose === 'cv' || consent.purpose_hash !== operation.purposeHash) fail('cover_letter_operations')
-      const origin = resolveLetterOrigin(operation, consent, id => consentRecords.get(id), id => recoveryRecords.get(id), id => draftRecords.get(id))
+      const origin = resolveLetterOrigin(operation, consent, id => recoveryRecords.get(id), id => draftRecords.get(id), id => previousIntents.get(id))
       origins.set(operation.id, origin)
       if (origin.status === 'invalid') fail('cover_letter_operations')
       if (operation.initialBinding || origin.status === 'known') {
@@ -290,8 +299,9 @@ export function createWorkspaceBackupEngine(db: Database.Database, maxBackupByte
       const binding = operation?.initialBinding
       if (binding && (binding.cvRevisionId !== letter.cvRevisionId || binding.scopeHash !== letter.bindings.scopeHash || binding.modelHash !== letter.bindings.modelHash || binding.postingUpdatedAt !== letter.bindings.postingUpdatedAt)) fail('cover_letter_revisions')
       const origin = origins.get(letter.operationId)!
-      // Preserve unknown historical records for reading, but never ignore a resolvable contradiction.
-      if (origin.status !== 'unknown' && letterOriginProblem(letter, origin)) fail('cover_letter_revisions')
+      // Preserve old labels only as read-only prose. Live readiness always requires exact issued passages,
+      // even if optional child metadata is removed; restore also clears every review authority field.
+      if (origin.status !== 'unknown' && letterOriginProblem(letter, origin) && !letterHistoricalMappingReadable(letter, origin)) fail('cover_letter_revisions')
     }
     for (const row of rows.outbound_consents?.rows ?? []) {
       const purpose = coverLetterPurposeSchema.safeParse(row.purpose)

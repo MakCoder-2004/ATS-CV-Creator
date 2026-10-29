@@ -271,7 +271,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
     return { ok: true, data }
   }
   const outboundEngine = createOutboundConsentEngine()
-  type PendingOutbound = { jobId: string; source: ConsentSource; bundle: OutboundBundle; runId: string; purpose: CoverLetterPurpose; consentId?: string; retry?: { origin: NonNullable<CoverLetterOperation['retryOrigin']>; cvRevisionId: string; visibleCvRevisionId: string; operationId?: string } }
+  type PendingOutbound = { jobId: string; source: ConsentSource; bundle: OutboundBundle; runId: string; purpose: CoverLetterPurpose; consentId?: string; retry?: { origin: NonNullable<CoverLetterOperation['retryOrigin']>; cvRevisionId: string; visibleCvRevisionId: string; sourceConsentId: string; operationId?: string } }
   const pendingOutbound = new Map<string, PendingOutbound>()
   const currentAnalysis = new Map<string, ReturnType<typeof analysisResultSchema.parse>>()
   const saveAnalysisState = (input: unknown) => {
@@ -478,7 +478,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
     const binding = recorded.data.initialBinding
     if (binding && (binding.cvRevisionId !== letter.cvRevisionId || binding.scopeHash !== letter.bindings.scopeHash || binding.modelHash !== letter.bindings.modelHash || binding.postingUpdatedAt !== letter.bindings.postingUpdatedAt)) return 'The cover-letter operation source binding is invalid.'
     const consent = db.prepare('SELECT * FROM outbound_consents WHERE id=?').get(recorded.data.consentId) as Record<string, unknown> | undefined
-    const origin = resolveLetterOrigin(recorded.data, consent, readLetterConsent, readLetterRecovery, readLetterDraft)
+    const origin = resolveLetterOrigin(recorded.data, consent, readLetterRecovery, readLetterDraft, readPreviousLetterIntent)
     return letterOriginProblem(letter, origin)
   }
   const readLetterConsent = (id: string) => db.prepare('SELECT * FROM outbound_consents WHERE id=?').get(id) as Record<string, unknown> | undefined
@@ -488,7 +488,14 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
     return row ? JSON.parse(row.data) : undefined
   }
   const latestCvId = (jobId: string) => (db.prepare('SELECT id FROM draft_revisions WHERE job_id=? ORDER BY revision DESC LIMIT 1').get(jobId) as { id: string } | undefined)?.id
-  const operationOrigin = (operation: CoverLetterOperation) => resolveLetterOrigin(operation, readLetterConsent(operation.consentId), readLetterConsent, readLetterRecovery, readLetterDraft)
+  const operationOrigin = (operation: CoverLetterOperation) => resolveLetterOrigin(operation, readLetterConsent(operation.consentId), readLetterRecovery, readLetterDraft, readPreviousLetterIntent)
+  const latestLetterConsent = (jobId: string) => db.prepare('SELECT * FROM outbound_consents WHERE job_id=? ORDER BY rowid DESC LIMIT 1').get(jobId) as Record<string, unknown> | undefined
+  const letterIntent = (consent: Record<string, unknown> | undefined) => {
+    if (!consent) return undefined
+    const row = db.prepare('SELECT * FROM cover_letter_operations WHERE consent_id=? ORDER BY rowid DESC LIMIT 1').get(consent.id) as Record<string, unknown> | undefined
+    return { consent, operation: row ? readLetterOperation(row) : undefined }
+  }
+  const readPreviousLetterIntent = (consentId: string) => letterIntent(db.prepare('SELECT * FROM outbound_consents WHERE job_id=(SELECT job_id FROM outbound_consents WHERE id=?) AND rowid<(SELECT rowid FROM outbound_consents WHERE id=?) ORDER BY rowid DESC LIMIT 1').get(consentId, consentId) as Record<string, unknown> | undefined)
   const readLetterOperation = (row: Record<string, unknown>): CoverLetterOperation => {
     const operation = coverLetterOperationSchema.parse(JSON.parse(String(row.data)))
     if (operation.id !== row.id || operation.jobId !== row.job_id || operation.parentRunId !== row.parent_run_id || operation.consentId !== row.consent_id || operation.status !== row.status) throw new Error('The cover-letter operation identity is invalid.')
@@ -496,11 +503,10 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
   }
   const retryEligibility = (jobId: string, expectedCvRevisionId: string) => {
     if (requestedDocumentOwners.has(jobId) || unsettledRunsByJob.has(jobId) || activeAnalysisByJob.has(jobId) || externalJobOperations.has(jobId)) throw new Error('Finish or cancel the active operation and wait for its physical response to settle before retrying.')
-    const latestOperation = db.prepare('SELECT * FROM cover_letter_operations WHERE job_id=? ORDER BY rowid DESC LIMIT 1').get(jobId) as Record<string, unknown> | undefined
-    if (latestOperation && operationOrigin(readLetterOperation(latestOperation)).status !== 'known') throw new Error('The prior cover-letter origin binding is unavailable or invalid. A fresh full flow is required.')
-    const row = db.prepare("SELECT * FROM generation_recovery WHERE job_id=? AND json_extract(snapshot,'$.identity.id')=? ORDER BY updated_at DESC LIMIT 1").get(jobId, expectedCvRevisionId) as Record<string, unknown> | undefined
-    const origin = resolveCvParentOrigin(row ? readLetterConsent(String(row.consent_id)) : undefined, row, readLetterDraft)
-    if (origin.status !== 'known' || origin.cvRevisionId !== expectedCvRevisionId) throw new Error('The originating completed CV parent or frozen analysis is unavailable or invalid. A fresh full flow is required.')
+    const intent = letterIntent(latestLetterConsent(jobId))
+    const origin = intent?.operation ? operationOrigin(intent.operation) : resolveCvParentOrigin(intent?.consent, intent ? readLetterRecovery(String(intent.consent.run_id)) : undefined, readLetterDraft)
+    if (origin.status !== 'known') throw new Error('The originating completed CV parent or prior cover-letter origin binding is unavailable or invalid. A fresh full flow is required.')
+    if (origin.cvRevisionId !== expectedCvRevisionId) throw new Error('The expected originating CV is stale. Review the current letter origin and prepare a fresh preview.')
     const source = currentConsentSource(jobId)
     if (!source || prepareOutboundBundle(source).scopeHash !== origin.scopeHash || String(source.job.revision) !== origin.postingUpdatedAt || !isDeepStrictEqual(source.model, origin.frozen.source.model) || !isDeepStrictEqual(prepareCoverLetterSources(source, prepareOutboundBundle(source)), prepareCoverLetterSources(origin.frozen.source, prepareOutboundBundle(origin.frozen.source)))) throw new Error('The posting, profile, source passages or exact model changed. A fresh full flow is required.')
     return origin
@@ -724,6 +730,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       if ((pending.retry ? pending.purpose !== 'cover-letter-only' : pending.purpose !== 'cv+cover-letter') || recoveredRunIds.has(pending.runId)) throw new Error('This run does not authorize a cover letter.')
       const grant = db.prepare('SELECT 1 FROM outbound_consents WHERE id=? AND run_id=? AND job_id=? AND scope_hash=? AND purpose_version=1 AND purpose=? AND purpose_hash=? AND revoked=0').get(pending.consentId, pending.runId, pending.jobId, pending.bundle.scopeHash, pending.purpose, purposeHash)
       if (!grant) throw new Error('Current cover-letter consent is unavailable.')
+      if (pending.retry && latestLetterConsent(pending.jobId)?.id !== pending.consentId) throw new Error('The source intent changed after letter-only consent. Review a fresh preview.')
       authorizeOutboundPayload(pending.runId, pending.bundle.outgoing)
       const current = db.prepare('SELECT id FROM draft_revisions WHERE job_id=? ORDER BY revision DESC LIMIT 1').get(pending.jobId) as { id: string } | undefined
       if (current?.id !== visibleCvRevisionId) throw new Error('The visible CV changed during letter generation.')
@@ -1398,12 +1405,18 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       if (!uuidSchema.safeParse(jobId).success || !uuidSchema.safeParse(expectedCvRevisionId).success) return outboundConsentPreviewSchema.parse({ ok: false, message: 'Choose a valid saved job and originating CV revision.' })
       try {
         const origin = retryEligibility(jobId, expectedCvRevisionId)
+        const sourceConsentId = String(latestLetterConsent(jobId)!.id), visibleCvRevisionId = latestCvId(jobId)!
         const result = await this.prepareOutboundConsent(jobId, 'cover-letter-only')
         if (!result.ok) return result
+        if (latestLetterConsent(jobId)?.id !== sourceConsentId || latestCvId(jobId) !== visibleCvRevisionId) {
+          pendingOutbound.delete(result.token)
+          throw new Error('The source intent or visible CV changed while preparing the preview. Review a fresh preview.')
+        }
+        retryEligibility(jobId, expectedCvRevisionId)
         const pending = pendingOutbound.get(result.token)!
         pending.source = origin.frozen.source
         pending.bundle = prepareOutboundBundle(origin.frozen.source)
-        pending.retry = { origin: { parentRunId: origin.frozen.runId, consentId: origin.frozen.consentId }, cvRevisionId: origin.cvRevisionId, visibleCvRevisionId: latestCvId(jobId)! }
+        pending.retry = { origin: { parentRunId: origin.frozen.runId, consentId: origin.frozen.consentId }, cvRevisionId: origin.cvRevisionId, visibleCvRevisionId, sourceConsentId }
         const uncertain = db.prepare("SELECT 1 FROM cover_letter_operations WHERE job_id=? AND status IN ('dispatched','uncertain') LIMIT 1").get(jobId)
         return outboundConsentPreviewSchema.parse({ ...result, warning: `${uncertain ? 'A prior letter request may have completed and may have incurred a charge. This is a new request, not a replay. ' : ''}${result.warning}` })
       } catch (error) { return outboundConsentPreviewSchema.parse({ ok: false, message: error instanceof Error ? error.message : 'A fresh full flow is required.' }) }
@@ -1414,7 +1427,10 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       const refused = (reason: string) => coverLetterOutcomeSchema.parse({ status: 'not-started', reason })
       if (!pending?.consentId || pending.purpose !== 'cover-letter-only' || !pending.retry?.operationId || recoveredRunIds.has(pending.runId)) return refused('Review and accept a fresh bound letter-only preview before generation.')
       if (startedDocumentRuns.has(pending.runId)) return refused('This letter-only run has already started. Prepare a fresh preview to retry.')
-      try { retryEligibility(pending.jobId, pending.retry.cvRevisionId) } catch (error) { return refused(error instanceof Error ? error.message : 'The retry binding is unavailable.') }
+      try {
+        retryEligibility(pending.jobId, pending.retry.cvRevisionId)
+        if (latestLetterConsent(pending.jobId)?.id !== pending.consentId) throw new Error('The source intent changed after consent. Review a fresh letter-only preview.')
+      } catch (error) { return refused(error instanceof Error ? error.message : 'The retry binding is unavailable.') }
       const row = db.prepare('SELECT * FROM cover_letter_operations WHERE id=?').get(pending.retry.operationId) as Record<string, unknown> | undefined
       if (!row) return refused('The letter-only operation is missing.')
       const operation = readLetterOperation(row), origin = operationOrigin(operation)
@@ -1485,6 +1501,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       try {
         if (pending.retry) {
           retryEligibility(pending.jobId, pending.retry.cvRevisionId)
+          if (latestLetterConsent(pending.jobId)?.id !== pending.retry.sourceConsentId) throw new Error('The source intent changed after preview. Review a fresh letter-only preview.')
           if (latestCvId(pending.jobId) !== pending.retry.visibleCvRevisionId) throw new Error('The visible CV changed after preview. Review a fresh letter-only preview.')
         }
         const record = outboundEngine.grantConsent(pending.runId, pending.bundle, { accepted, privacyAcknowledged }, pending.purpose)
