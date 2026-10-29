@@ -1,5 +1,5 @@
-import { coverLetterModelResponseSchema, coverLetterSourceSchema, type CoverLetterSource } from '../shared/cover-letter'
-import type { ConsentSource, OutboundBundle } from '../shared/outbound-consent'
+import { coverLetterModelResponseSchema, coverLetterSourceSchema, type CoverLetterRevision, type CoverLetterSource } from '../shared/cover-letter'
+import { prepareOutboundBundle, type ConsentSource, type OutboundBundle } from '../shared/outbound-consent'
 import { experienceInputSchema, type ExperienceRecord } from '../shared/experience'
 
 /** Parallel local and minimized views; identifiers are never serialized into the prompt. */
@@ -92,4 +92,20 @@ export function validateCoverLetterResponse(value: unknown, sources: ReturnType<
     }
   }
   return response
+}
+
+/** Re-run the same detectable factual policy on local, restored wording and actual passages. */
+export function checkLocalCoverLetter(letter: CoverLetterRevision, source: ConsentSource, postingTools: readonly string[]): CoverLetterRevision['findings'] {
+  const bundle = prepareOutboundBundle(source)
+  const prepared = prepareCoverLetterSources(source, bundle)
+  const local = { ...prepared, outgoing: prepared.local.map(item => ({ ordinal: item.ordinal, category: item.category, heading: item.heading, passage: item.passage })) }
+  return letter.paragraphs.flatMap(paragraph => {
+    try {
+      validateCoverLetterResponse({ paragraphs: [{ text: paragraph.text, citations: paragraph.citations }] }, local, { ...bundle, containsRestoredIdentifier: () => false }, postingTools)
+      return []
+    } catch (error) {
+      const message = error instanceof Error && /^The letter |^A (?:letter citation|named source)/.test(error.message) ? error.message : 'The paragraph cannot be checked against its current source passages.'
+      return [{ code: 'local-factual-check', paragraphId: paragraph.id, message }]
+    }
+  })
 }

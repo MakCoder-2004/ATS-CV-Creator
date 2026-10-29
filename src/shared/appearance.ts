@@ -6,6 +6,7 @@ import type { JobRecord, JobSaveInput, JobSaveResult, JobDeletionPreview, JobDel
 import type { ProfileExchangeResult } from './profile-exchange'
 import type { OutboundConsentAction, OutboundConsentPreview } from './outbound-consent-contract'
 import type { CoverLetterGenerationStatus, CoverLetterOutcome, CoverLetterAcknowledgment, CoverLetterActionResult, CoverLetterEdit, CoverLetterPurpose, CoverLetterRecipient, CoverLetterRevision, RequestedDocumentsResult } from './cover-letter'
+import type { CoverLetterReadModel } from './cover-letter-artifact'
 import type { AnalysisResult, GenerationRecovery, RecoveryChoice } from './posting-analysis'
 
 import type { AddDraftItemInput, DraftCorrectionInput, DraftRevision, SuggestedSkillDecision, DraftTailoringCorrection } from './draft'
@@ -89,6 +90,7 @@ export interface WorkbenchAPI {
   generateCoverLetter(consentToken: string): Promise<CoverLetterOutcome>
   getCoverLetterGenerationStatus(jobId: string): Promise<CoverLetterGenerationStatus>
   getCoverLetter(jobId: string): Promise<CoverLetterRevision | null>
+  getCoverLetterReadModel(jobId: string): Promise<CoverLetterReadModel>
   editCoverLetter(input: CoverLetterEdit): Promise<CoverLetterActionResult>
   setCoverLetterRecipient(input: CoverLetterRecipient): Promise<CoverLetterActionResult>
   acknowledgeCoverLetterParagraph(input: CoverLetterAcknowledgment): Promise<CoverLetterActionResult>

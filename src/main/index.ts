@@ -29,6 +29,7 @@ import { registerResearchSearchSettingsIpc } from './research-search-settings-ip
 import { createResearchSearchCredentials, defaultResearchCredentialDirectory } from './research-search-credentials'
 import { outboundConsentActionSchema, outboundConsentPreviewSchema } from '../shared/outbound-consent-contract'
 import { registerCoverLetterRetryIpc } from './cover-letter-retry-ipc'
+import { coverLetterReadModelSchema } from '../shared/cover-letter-artifact'
 import { coverLetterAcknowledgmentSchema, coverLetterActionResultSchema, coverLetterEditSchema, coverLetterPurposeSchema, coverLetterRecipientSchema, coverLetterRevisionSchema, requestedDocumentsResultSchema } from '../shared/cover-letter'
 import { analysisIdSchema, analysisResultSchema, analysisStartInputSchema, generationRecoverySchema, recoveryChoiceSchema } from '../shared/posting-analysis'
 import { addDraftItemInputSchema, draftCorrectionInputSchema, draftGenerationSchema, draftRevisionSchema, suggestedSkillDecisionSchema, draftTailoringCorrectionSchema, cvTitleChangeSchema } from '../shared/draft'
@@ -372,6 +373,7 @@ app.whenReady().then(() => {
   ipcMain.handle('draft:generate', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 2 || (args[1] !== 1 && args[1] !== 2)) throw new Error('Expected consent token and one- or two-page target'); return draftGenerationSchema.parse(await workspace!.api.generateDraft(analysisStartInputSchema.parse({ consentToken: args[0] }).consentToken, args[1])) })
   ipcMain.handle('documents:generate', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 2 || (args[1] !== 1 && args[1] !== 2)) throw new Error('Expected consent token and one- or two-page target'); return requestedDocumentsResultSchema.parse(await workspace!.api.generateRequestedDocuments(analysisStartInputSchema.parse({ consentToken: args[0] }).consentToken, args[1])) })
   registerCoverLetterRetryIpc(ipcMain, workspace!.api, trusted)
+  ipcMain.handle('cover-letter:read-model', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected saved job ID'); return coverLetterReadModelSchema.parse(await workspace!.api.getCoverLetterReadModel(uuidSchema.parse(args[0]))) })
   ipcMain.handle('cover-letter:get', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected saved job ID'); const value = await workspace!.api.getCoverLetter(analysisIdSchema.parse(args[0])); return value === null ? null : coverLetterRevisionSchema.parse(value) })
   ipcMain.handle('cover-letter:edit', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected local cover-letter edit'); return coverLetterActionResultSchema.parse(await workspace!.api.editCoverLetter(coverLetterEditSchema.parse(args[0]))) })
   ipcMain.handle('cover-letter:recipient', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected local recipient edit'); return coverLetterActionResultSchema.parse(await workspace!.api.setCoverLetterRecipient(coverLetterRecipientSchema.parse(args[0]))) })

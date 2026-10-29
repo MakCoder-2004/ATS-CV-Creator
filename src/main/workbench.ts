@@ -18,7 +18,10 @@ import { profileExchangeSchema, type ProfileExchange } from '../shared/profile-e
 import { prepareOutboundBundle, type ConsentSource, type EvidenceScopeRevision, type OutboundBundle, type OutboundPayload } from '../shared/outbound-consent'
 import { coverLetterGenerationStatusSchema, coverLetterOutcomeSchema, coverLetterAcknowledgmentMaterial, coverLetterAcknowledgmentSchema, coverLetterActionResultSchema, coverLetterEditSchema, coverLetterOperationSchema, coverLetterPurposeSchema, coverLetterRecipientSchema, coverLetterRevisionSchema, requestedDocumentsResultSchema, type RequestedDocumentsResult, type CoverLetterOperation, type CoverLetterPurpose } from '../shared/cover-letter'
 import { createOutboundConsentEngine } from './outbound-consent'
-import { prepareCoverLetterSources, validateCoverLetterResponse } from './cover-letter-generation'
+import { prepareCoverLetterSources, validateCoverLetterResponse, checkLocalCoverLetter } from './cover-letter-generation'
+import { canonicalCoverLetterSchema, projectCoverLetter, type CoverLetterTemplateIdentity } from '../shared/cover-letter-document'
+import { coverLetterReadModelSchema } from '../shared/cover-letter-artifact'
+import { createCoverLetterCompiler } from './cover-letter-compiler'
 import { coverLetterModelResponseSchema } from '../shared/cover-letter'
 import type { OutboundConsentAction, OutboundConsentPreview } from '../shared/outbound-consent-contract'
 import { regenerationProposalSchema, regenerationTargetSchema, type RegenerationTarget, type RegenerationProposal } from '../shared/regeneration'
@@ -515,6 +518,42 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
     const data = coverLetterOperationSchema.parse(next)
     db.prepare('INSERT INTO cover_letter_operations(id,job_id,parent_run_id,consent_id,status,data,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,data=excluded.data,updated_at=excluded.updated_at').run(data.id, data.jobId, data.parentRunId, data.consentId, data.status, JSON.stringify(data), data.createdAt, data.updatedAt)
     return data
+  }
+  const letterCompiler = createCoverLetterCompiler({ toolchainRoot: join(__dirname, '../..', '.tools/latex'), templateRoot: join(__dirname, '../..', 'resources/cover-letter-template/application'), tempRoot: join(userData, 'letter-compiler') })
+  const letterContact = () => {
+    const contact = readProfile().contact
+    return contact ? { fullName: contact.fullName, ...(contact.email ? { email: contact.email } : {}), ...(contact.phone ? { phone: contact.phone } : {}), ...(contact.location ? { location: contact.location } : {}) } : null
+  }
+  const letterFindings = (letter: ReturnType<typeof coverLetterRevisionSchema.parse>) => {
+    const source = currentConsentSource(letter.jobId)
+    const analysisRow = db.prepare('SELECT data FROM posting_analysis_cache WHERE job_id=? ORDER BY rowid DESC LIMIT 1').get(letter.jobId) as { data: string } | undefined
+    let tools: string[] = []
+    try { tools = analysisRow ? postingAnalysisSchema.parse(JSON.parse(analysisRow.data)).tools : [] } catch { /* No analysis tools are additional authority. */ }
+    const checked = source ? checkLocalCoverLetter(letter, source, tools) : []
+    const history = db.prepare('SELECT data FROM cover_letter_revisions WHERE job_id=? AND revision<=? ORDER BY revision').all(letter.jobId, letter.revision) as Array<{ data: string }>
+    const known = history.flatMap(row => {
+      const prior = coverLetterRevisionSchema.parse(JSON.parse(row.data))
+      return prior.findings.flatMap(finding => {
+        // Deterministic findings are rerun, not inherited after a correction.
+        if (finding.code === 'local-factual-check') return []
+        const originals = finding.paragraphId ? prior.paragraphs.filter(p => p.id === finding.paragraphId) : prior.paragraphs
+        const remaining = letter.paragraphs.find(p => originals.some(old => old.text.normalize('NFC') === p.text.normalize('NFC')))
+        return remaining || !originals.length ? [{ ...finding, ...(finding.paragraphId && remaining ? { paragraphId: remaining.id } : {}) }] : []
+      })
+    })
+    return [...known, ...checked].filter((finding, index, all) => all.findIndex(other => JSON.stringify(other) === JSON.stringify(finding)) === index).slice(0, 100)
+  }
+  const letterReviewState = (jobId: string, identity: CoverLetterTemplateIdentity | null) => {
+    const letter = readCoverLetter(jobId)
+    const bindingProblem = letter ? coverLetterCurrentStatus(letter) : 'No cover-letter draft is saved for this job.'
+    let canonical = null, canonicalProblem: string | null = null
+    if (letter) {
+      try { if (!identity) throw new Error(); canonical = projectCoverLetter(letter, letterContact(), identity) }
+      catch { canonicalProblem = 'The local contact, letter wording or template is not printable. Correct the local fields before preparing a PDF.' }
+    }
+    const findings = letter ? letterFindings(letter) : []
+    const paragraphAcknowledgments = Object.fromEntries(letter?.paragraphs.map(p => [p.id, letter.acknowledgments[p.id] === acknowledgmentHash(p, letter.bindings.sources)]) ?? [])
+    return { letter, canonical, readiness: { bindingProblem, canonicalProblem, findings, paragraphAcknowledgments, currentFit: null, approved: false, canMeasure: !!letter && !!canonical && !bindingProblem, canApprove: false, canExport: false } }
   }
   const acknowledgmentHash = (paragraph: ReturnType<typeof coverLetterRevisionSchema.parse>['paragraphs'][number], sources: ReturnType<typeof coverLetterRevisionSchema.parse>['bindings']['sources']) => createHash('sha256').update(coverLetterAcknowledgmentMaterial(paragraph, sources)).digest('hex')
   const generateDraftCore = async (token: string, pageTarget: 1 | 2 = 1, resumeRunId?: string, owner?: symbol): Promise<Awaited<ReturnType<WorkbenchStorageAPI['generateDraft']>>> => {
@@ -2063,6 +2102,15 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       if (!uuidSchema.safeParse(jobId).success) return null
       return readCoverLetter(jobId)
     },
+    async getCoverLetterReadModel(jobId) {
+      uuidSchema.parse(jobId)
+      let identity: CoverLetterTemplateIdentity | null = null
+      try { identity = await letterCompiler.getTemplateIdentity() } catch { /* Readable/correctable even with damaged local resources. */ }
+      const state = letterReviewState(jobId, identity)
+      const row = state.letter ? db.prepare('SELECT * FROM cover_letter_operations WHERE id=?').get(state.letter.operationId) as Record<string, unknown> | undefined : undefined
+      const origin = row ? operationOrigin(readLetterOperation(row)) : null
+      return coverLetterReadModelSchema.parse({ jobId, ...state, generation: await this.getCoverLetterGenerationStatus(jobId), experienceKinds: origin?.status === 'known' ? origin.experienceKinds : {} })
+    },
     async editCoverLetter(input) {
       const parsed = coverLetterEditSchema.safeParse(input)
       if (!parsed.success) return coverLetterActionResultSchema.parse({ ok: false, message: 'The cover-letter edit is invalid or contains unsupported authority fields.' })
@@ -2072,8 +2120,13 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       if (stale) return coverLetterActionResultSchema.parse({ ok: false, message: stale })
       if (parsed.data.paragraphs.length !== prior.paragraphs.length || parsed.data.paragraphs.some((paragraph, index) => paragraph.id !== prior.paragraphs[index]?.id)) return coverLetterActionResultSchema.parse({ ok: false, message: 'Keep the current paragraph identities while editing their wording.' })
       const { fit: _fit, approvedAt: _approvedAt, ...base } = prior
-      const saved = coverLetterRevisionSchema.parse({ ...base, id: randomUUID(), revision: prior.revision + 1, recipient: parsed.data.recipient ?? undefined, paragraphs: parsed.data.paragraphs, acknowledgments: {}, approved: false, createdAt: new Date().toISOString() })
+      const saved = coverLetterRevisionSchema.parse({ ...base, id: randomUUID(), revision: prior.revision + 1, recipient: parsed.data.recipient ?? undefined, paragraphs: parsed.data.paragraphs, findings: [], acknowledgments: {}, approved: false, createdAt: new Date().toISOString() })
       try {
+        // Validate before saving so unsupported edits cannot strand an uneditable canonical-null revision.
+        canonicalCoverLetterSchema.shape.paragraphs.parse(saved.paragraphs.map(p => p.text))
+        canonicalCoverLetterSchema.shape.recipient.parse(saved.recipient)
+        saved.findings = letterFindings(saved)
+        if (readCoverLetter(saved.jobId)?.id !== prior.id || coverLetterCurrentStatus(prior)) throw new Error('Stale edit')
         db.prepare('INSERT INTO cover_letter_revisions(id,job_id,revision,data) VALUES(?,?,?,?)').run(saved.id, saved.jobId, saved.revision, JSON.stringify(saved))
         return coverLetterActionResultSchema.parse({ ok: true, message: 'The cover letter was edited locally. Review its paragraphs again.', letter: saved })
       } catch { return coverLetterActionResultSchema.parse({ ok: false, message: 'The cover-letter edit could not be saved.' }) }
@@ -2104,7 +2157,9 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       if (!letter) return coverLetterActionResultSchema.parse({ ok: false, message: 'No cover-letter draft is saved for this job.' })
       const stale = coverLetterCurrentStatus(letter)
       if (stale) return coverLetterActionResultSchema.parse({ ok: false, message: stale, letter })
-      return coverLetterActionResultSchema.parse({ ok: letter.findings.length === 0, message: letter.findings.length ? 'Resolve the known cover-letter findings before approval.' : 'Current source bindings and paragraph citations are available for review.', letter })
+      const checked = coverLetterRevisionSchema.parse({ ...letter, findings: letterFindings(letter), approved: false, approvedAt: undefined })
+      db.prepare('UPDATE cover_letter_revisions SET data=? WHERE id=?').run(JSON.stringify(checked), checked.id)
+      return coverLetterActionResultSchema.parse({ ok: checked.findings.length === 0, message: checked.findings.length ? 'Resolve the known cover-letter findings before approval.' : 'Current source bindings and paragraph citations are available for review.', letter: checked })
     },
     async approveCoverLetter(jobId) {
       const letter = readCoverLetter(jobId)
