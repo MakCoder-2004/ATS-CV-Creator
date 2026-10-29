@@ -187,6 +187,25 @@ test('inherited warnings keep immutable original claim attribution through appen
   }
 })
 
+test('known claim attribution stays original across a real letter-only retry operation', async () => {
+  const f = await setup(), original = f.letter.paragraphs[0]
+  f.mutate(letter => { letter.paragraphs[0].text = 'I led the team.'; letter.findings = [{ code: 'unsupported-claim', paragraphId: original.id, message: 'Leadership is not supported.' }] })
+  const retry = await f.wb.api.prepareCoverLetterRetry(f.jobId, f.letter.cvRevisionId)
+  if (!retry.ok) throw new Error(retry.message)
+  expect((await f.wb.api.acceptOutboundConsent(retry.token, true, true)).ok).toBe(true)
+  const outcome = await f.wb.api.generateCoverLetter(retry.token)
+  if (outcome.status !== 'saved') throw new Error(JSON.stringify(outcome))
+  expect(outcome.letter.operationId).not.toBe(f.letter.operationId)
+  const p = outcome.letter.paragraphs[0]
+  const appended = await f.wb.api.editCoverLetter({ jobId: f.jobId, letterId: outcome.letter.id, recipient: null, paragraphs: [{ ...p, text: 'I led the team. I practiced TypeScript.' }] })
+  expect(appended.ok).toBe(true)
+  expect((await f.wb.api.checkCoverLetter(f.jobId)).ok).toBe(false)
+  const corrected = await f.wb.api.editCoverLetter({ jobId: f.jobId, letterId: appended.letter!.id, recipient: null, paragraphs: [{ ...p, text: 'I practiced TypeScript.' }] })
+  expect(corrected.ok).toBe(true)
+  expect((await f.wb.api.checkCoverLetter(f.jobId)).ok).toBe(true)
+  expect((await f.wb.api.getCoverLetterReadModel(f.jobId)).readiness.findings).toEqual([])
+})
+
 test('known warnings survive unrelated recipient edits until flagged wording is replaced', async () => {
   const f = await setup()
   f.mutate(letter => { letter.findings = [{ code: 'unsupported-claim', paragraphId: letter.paragraphs[0].id, message: 'Known unsupported wording.' }] })

@@ -536,15 +536,15 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
     try { tools = analysisRow ? postingAnalysisSchema.parse(JSON.parse(analysisRow.data)).tools : [] } catch { /* No analysis tools are additional authority. */ }
     const checked = source ? checkLocalCoverLetter(letter, source, tools) : []
     const history = db.prepare('SELECT data FROM cover_letter_revisions WHERE job_id=? AND revision<=? ORDER BY revision').all(letter.jobId, letter.revision) as Array<{ data: string }>
-    // Legacy warnings have no finding ID. Their first appearance within an operation
-    // fixes attribution; later persisted carrier copies must never expand that claim.
+    // Legacy warnings have no finding ID. Their first appearance in this job fixes
+    // attribution across edits AND retries; carrier copies are never newly issued roots.
     const findingOrigins = new Map<string, string>()
     const known = history.flatMap(row => {
       const prior = coverLetterRevisionSchema.parse(JSON.parse(row.data))
       return prior.findings.flatMap(finding => {
         // Deterministic findings are rerun, not inherited after a correction.
         if (finding.code === 'local-factual-check' || finding.code === 'local-word-budget') return []
-        const key = JSON.stringify([prior.operationId, finding.code, finding.message])
+        const key = JSON.stringify([finding.code, finding.message])
         const origin = findingOrigins.get(key)
         if (origin && origin !== prior.id) return []
         findingOrigins.set(key, prior.id)
