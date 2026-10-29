@@ -47,7 +47,8 @@ test('letter edits and recipient stay local, acknowledgments bind to current tex
   let sourceHash: { scope_hash: string }
   try { sourceHash = sourceDb.prepare('SELECT scope_hash FROM outbound_consents WHERE run_id=?').get(consent.runId) as { scope_hash: string } } finally { sourceDb.close() }
   const letterId = randomUUID(), operationId = randomUUID(), now = new Date().toISOString()
-  const dataSource = { ordinal: 1, evidenceId: skill.value.skills[0].id, revision: skill.value.skills[0].revision, category: 'skill' as const, heading: 'TypeScript', passage: 'Saved TypeScript skill.' }
+  // This fixture has a real current v5 parent: use its issued skill JSON, not a historical display label.
+  const dataSource = { ordinal: 1, evidenceId: skill.value.skills[0].id, revision: skill.value.skills[0].revision, category: 'skill' as const, heading: 'TypeScript', passage: JSON.stringify({ name: 'TypeScript', category: 'Programming' }) }
   const currentSettings = await wb.api.getSettings()
   const letter = coverLetterRevisionSchema.parse({ id: letterId, jobId: job.value.id, parentRunId: consent.runId, operationId, cvRevisionId: generated.draft.id, revision: 1, createdAt: now, bindings: { postingUpdatedAt: job.value.updatedAt, scopeHash: sourceHash.scope_hash, modelHash: digest({ name: defaultOpenRouterModel }), sources: [dataSource] }, date: '28 October 2026', subject: 'Application for Engineer', paragraphs: [{ id: randomUUID(), text: 'I have built TypeScript systems.', citations: [{ ordinal: 1 }] }], findings: [], acknowledgments: {}, fit: { documentHash: 'c'.repeat(64), actualPages: 1, overflow: false, measuredAt: now }, approved: false })
   const db = new Database(join(dir, 'workbench.sqlite'))
