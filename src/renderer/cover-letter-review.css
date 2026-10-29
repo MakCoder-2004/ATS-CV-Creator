@@ -61,7 +61,8 @@
 .cover-letter-action-bar { position: sticky; top: 8px; z-index: 4; display: grid; gap: 12px; padding: 16px 20px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
 .cover-letter-action-status { display: flex; flex-wrap: wrap; gap: 8px 16px; color: var(--muted); }
 .cover-letter-action-bar button:disabled { cursor: not-allowed; opacity: .55; }
-.cover-letter-review :is(button, input, textarea) { scroll-margin-top: calc(var(--cover-letter-review-bar-height, 0px) + 24px); }
+.cover-letter-review :is(button, input, textarea),
+.review-stage .cover-letter-review :is(button, input, textarea, select, summary, [tabindex]) { scroll-margin-block: calc(var(--cover-letter-review-bar-height, 0px) + 24px) 24px; }
 .cover-letter-review button:focus-visible,
 .cover-letter-document-selector button:focus-visible,
 .cover-letter-run-option input:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }

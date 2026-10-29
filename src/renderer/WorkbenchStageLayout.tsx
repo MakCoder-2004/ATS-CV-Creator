@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type Dispatch, type FormEvent, type SetStateAction } from 'react'
+import { useEffect, useRef, useState, type Dispatch, type FormEvent, type SetStateAction, type ReactNode } from 'react'
 import { FileText, CheckCircle2, Sparkles, BookOpen, ListChecks, BriefcaseBusiness, BadgeCheck } from 'lucide-react'
 import { GenerationProgress, SuggestedSkillReview, TailoringInspector } from './CVFlowPanels'
 import type { RegenerationProposal, RegenerationTarget } from '../shared/regeneration'
@@ -19,12 +19,25 @@ import { DraftRecordEditor, type RecordEditorTarget } from './DraftRecordEditor'
 import { listDraftRecords, type MutateDraftRecordInput, type MutateDraftRecordResult } from '../shared/draft-records'
 import { SelectedReview } from './SelectedReview'
 import { describeSource, readableText } from './review-copy'
+import type { WorkbenchAPI } from '../shared/appearance'
+import { CoverLetterRunOption } from './CoverLetterRunOption'
+import { ApplicationDocumentSelector, type ApplicationDocument } from './ApplicationDocumentSelector'
 
 export type WorkbenchSources = { profile: ProfileSnapshot; evidence: ExperienceSnapshot }
 type Phase = 1 | 2 | 3 | 4 | 5
 type Section = 'education' | 'experience' | 'projects' | 'skills' | 'certificates'
 
 type Props = {
+  api: WorkbenchAPI
+  selectedDocument: ApplicationDocument
+  selectDocument: (document: ApplicationDocument) => void
+  letterStatus: string
+  letterWorkspace: ReactNode
+  letterGenerationStatus: string | null
+  includeLetter: boolean
+  setIncludeLetter: (included: boolean) => void
+  letterOnly: boolean
+  generateLetterOnly: () => Promise<void>
   mutateRecord: (input: Omit<MutateDraftRecordInput, 'jobId'>) => Promise<MutateDraftRecordResult>
   returnToReview: () => void
   renewDraftReview: () => Promise<boolean>
@@ -118,6 +131,7 @@ function EmptyDocument({ message }: { message: string }) {
 
 export function WorkbenchStageLayout(props: Props) {
   const { returnToReview, renewDraftReview, decideSuggestedSkill, activeJob, onNavigate, error, retry, activePhase, review, consentAccepted, consentError, consentBusy, recovery, recoveryBusy, resumeSavedGeneration, cancelSavedGeneration, draft, canonical, fitReport, fitBusy, acceptedCuts, setAcceptedCuts, draftBusy, draftError, pageTarget, setPageTarget, addSection, setAddSection, addEvidence, setAddEvidence, sources, outgoingProfileCounts, inspectOutgoing, cancelOutgoing, authorizeOutgoing, startAnalysis, generateDraft, cancelAnalysis, measurePageFit, applyPageCuts, addDraftItem, correctDraft, changeCvTitle, checkDraftNow, approveCurrentDraft, onProposalAccepted, exportDocx, docxBusy } = props
+  const api = props.api
   const analysis = props.analysis ? { ...props.analysis, analysis: props.analysis.displayAnalysis ?? props.analysis.analysis } : null
   const workingTextDiffersFromSource = Boolean(activeJob?.sourceSnapshot && activeJob.sourceSnapshot.description !== activeJob.description)
   const sourceScopeNote = 'This assessment uses only the accepted working posting. The separately retained source snapshot differs, so source requirements absent from the working text were not assessed.'
@@ -164,7 +178,7 @@ export function WorkbenchStageLayout(props: Props) {
     setRegenPreview(null)
     if (requestedTarget.kind !== 'title') setRegenTarget(requestedTarget)
     setRegenBusy(true); setRegenMessage('Preparing the information you can review before sharing…')
-    try { if (stalePreview) await window.workbench.cancelOutboundConsent(stalePreview.token); const result = await window.workbench.prepareOutboundConsent(activeJob.id); if (!result.ok) { setRegenMessage(result.message); return }; cancelingRegeneration.current = false; setRegenPreview({ preview: result, target: requestedTarget }); setRegenMessage('') }
+    try { if (stalePreview) await api.cancelOutboundConsent(stalePreview.token); const result = await api.prepareOutboundConsent(activeJob.id); if (!result.ok) { setRegenMessage(result.message); return }; cancelingRegeneration.current = false; setRegenPreview({ preview: result, target: requestedTarget }); setRegenMessage('') }
     catch { setRegenMessage('The outgoing-data preview could not be prepared. Try again.') } finally { setRegenBusy(false) }
   }
   async function cancelRegeneration() {
@@ -175,7 +189,7 @@ export function WorkbenchStageLayout(props: Props) {
     setRegenBusy(true)
     setRegenMessage('Cancelling this authorization…')
     try {
-      const result = await window.workbench.cancelOutboundConsent(preview.token)
+      const result = await api.cancelOutboundConsent(preview.token)
       setRegenMessage(result.ok ? 'Authorization cancelled. Review a fresh preview before proposing wording.' : 'The authorization could not be cancelled. It is no longer available here. Review a fresh preview before proposing wording.')
     } catch {
       setRegenMessage('The authorization could not be cancelled. It is no longer available here. Review a fresh preview before proposing wording.')
@@ -183,7 +197,7 @@ export function WorkbenchStageLayout(props: Props) {
   }
   async function cancelActiveRegeneration() {
     if (!activeJob) return
-    const result = await window.workbench.cancelAnalysis(activeJob.id)
+    const result = await api.cancelAnalysis(activeJob.id)
     setRegenPreview(null)
     setRegenMessage(result.progress || 'Regeneration cancelled. The draft remains unchanged.')
   }
@@ -191,18 +205,18 @@ export function WorkbenchStageLayout(props: Props) {
     if (!regenPreview || regenBusy || cancelingRegeneration.current) return
     setRegenBusy(true); setRegenMessage('Creating a suggestion. Your CV is unchanged…')
     const { preview, target } = regenPreview
-    try { const authorized = await window.workbench.acceptOutboundConsent(preview.token, true, true); if (!authorized.ok) { setRegenMessage(authorized.message); return }; const result = await window.workbench.regenerateDraft(preview.token, target); if (!result.ok || !result.proposal) { setRegenMessage(result.message); return }; setProposal(result.proposal); setRegenMessage(result.message); setRegenPreview(null) }
+    try { const authorized = await api.acceptOutboundConsent(preview.token, true, true); if (!authorized.ok) { setRegenMessage(authorized.message); return }; const result = await api.regenerateDraft(preview.token, target); if (!result.ok || !result.proposal) { setRegenMessage(result.message); return }; setProposal(result.proposal); setRegenMessage(result.message); setRegenPreview(null) }
     catch (failure) { setRegenMessage(failure instanceof Error ? failure.message : 'Regeneration failed safely; the current draft was preserved.') } finally { setRegenBusy(false) }
   }
   async function resolveProposal(decision: 'accept' | 'reject') {
     if (!activeJob || !proposal) return
     setRegenBusy(true)
     try {
-      const result = await window.workbench.resolveRegenerationProposal(activeJob.id, proposal.id, decision)
+      const result = await api.resolveRegenerationProposal(activeJob.id, proposal.id, decision)
       if (result.proposal) setProposal(result.proposal)
       setRegenMessage(decision === 'reject' && result.ok ? 'Suggestion discarded. Your CV is unchanged.' : decision === 'accept' && result.ok ? 'Suggestion added. Sources and page length were checked. Review your updated CV before approving.' : result.message)
       if (result.proposal?.status === 'accepted' && result.draft) {
-        const [document, fit] = await Promise.all([window.workbench.getCanonicalDocument(activeJob.id), result.ok ? window.workbench.getDocumentFitReport(activeJob.id) : Promise.resolve(null)])
+        const [document, fit] = await Promise.all([api.getCanonicalDocument(activeJob.id), result.ok ? api.getDocumentFitReport(activeJob.id) : Promise.resolve(null)])
         setProposal(result.proposal); onProposalAccepted(result.draft, document, fit)
       }
     } catch (failure) { setRegenMessage(failure instanceof Error ? failure.message : 'The proposal could not be resolved.') } finally { setRegenBusy(false) }
@@ -210,13 +224,13 @@ export function WorkbenchStageLayout(props: Props) {
   useEffect(() => {
     let current = true
     setProposal(null); setRegenPreview(null); setRegenMessage(''); setSelectedItem(null); setEditing(false); setSectionToolsOpen(false)
-    if (activeJob) void window.workbench.getRegenerationProposal(activeJob.id).then(value => { if (current) { setProposal(value); setRegenMessage(value?.progress ?? '') } }).catch(() => {})
+    if (activeJob) void api.getRegenerationProposal(activeJob.id).then(value => { if (current) { setProposal(value); setRegenMessage(value?.progress ?? '') } }).catch(() => {})
     return () => { current = false }
   }, [activeJob?.id])
   useEffect(() => {
     if (!regenBusy || !activeJob) return
     let mounted = true
-    const poll = async () => { const result = await window.workbench.getAnalysis(activeJob.id).catch(() => null); if (mounted && result?.status === 'running') setRegenMessage(result.progress) }
+    const poll = async () => { const result = await api.getAnalysis(activeJob.id).catch(() => null); if (mounted && result?.status === 'running') setRegenMessage(result.progress) }
     const timer = window.setInterval(() => void poll(), 250); void poll()
     return () => { mounted = false; window.clearInterval(timer) }
   }, [activeJob?.id, regenBusy])
@@ -241,7 +255,7 @@ export function WorkbenchStageLayout(props: Props) {
   const reviewHasError = /could not|failed|blocked|unavailable|stale|too long|issues? need attention|invalid|not approved|cannot|can't|error|choose a destination|no file was written/i.test(draftError)
   const outgoing = review?.outgoing as unknown as OutboundPayload | undefined
   const regenerationOutgoing = regenPreview?.preview.outgoing as unknown as OutboundPayload | undefined
-  const headings = ['Start with the right role.', 'Your data, before it leaves.', draftBusy ? 'Your CV is taking shape.' : 'Understand the role. Then tailor your CV.', 'Review your CV', 'Ready for your next application.']
+  const headings = ['Start with the right role.', 'Your data, before it leaves.', props.letterOnly ? 'Prepare your cover letter.' : draftBusy ? props.includeLetter ? 'Your documents are taking shape.' : 'Your CV is taking shape.' : 'Understand the role. Then tailor your CV.', props.selectedDocument === 'cover-letter' ? 'Review your cover letter' : 'Review your CV', 'Ready for your next application.']
   const descriptions = ['The posting sets the target. Your profile supplies the facts.', 'See what will be shared before you choose to continue.', 'Qualifications and keywords guide the wording—not invented experience.', 'Make it yours. Review the wording, check the fit, then approve.', 'A clean document, without review highlights or added-skill notices.']
 
   return <div className={`cv-workbench-start${activePhase === 4 ? ' cv-review-mode' : ''}`}>
@@ -270,13 +284,17 @@ export function WorkbenchStageLayout(props: Props) {
       {(() => { const ReviewBody = 'div'; return <ReviewBody className="outbound-review-body">
       {activePhase === 2 && <header className="outbound-phase-heading"><h2>Your data, before it leaves</h2></header>}
       {activePhase === 2 && <>
+        {props.letterOnly ? <p role="status">Purpose: cover letter only. This fresh authorization will not analyze the posting again or regenerate your CV.</p> : <CoverLetterRunOption checked={props.includeLetter} disabled={consentBusy} onChange={props.setIncludeLetter} />}
+        <p role="status">Preview purpose: {review.purpose === 'cv+cover-letter' ? 'CV and cover letter' : review.purpose === 'cover-letter-only' ? 'Cover letter only' : 'CV only'}.</p>
         {outgoing && <section className="outbound-data-card" aria-labelledby="outgoing-included-heading"><h3 id="outgoing-included-heading">What your selected model provider receives</h3><dl className="outbound-category-list"><div><dt>Job posting</dt><dd>Title and full description</dd></div>{outgoingProfileCounts.length ? outgoingProfileCounts.map(item => <div key={item.label}><dt>{item.label}</dt><dd>{item.count} {item.count === 1 ? item.unit : `${item.unit}s`}</dd></div>) : <div><dt>Profile details</dt><dd>None saved yet</dd></div>}<div><dt>Pi model</dt><dd>{outgoing.model.providerId}/{outgoing.model.name}</dd></div><div><dt>Thinking level</dt><dd>{outgoing.model.thinkingLevel}</dd></div></dl></section>}
         {outgoing && <IncludedContent outgoing={outgoing} />}
         <aside className="outbound-privacy-notice" aria-label="Cloud processing notice"><p>No model request starts until you authorize this run. Pi uses your existing sign-in to send the reviewed, minimized text to the selected provider.</p><p>Provider data policies and charges vary. Redaction cannot guarantee anonymity. Review the provider's terms before sending sensitive information.</p><details><summary>Full privacy notice</summary><p>{review.warning} {review.termsNotice}</p></details></aside>
         <div className="outbound-actions"><button className="secondary-button" type="button" disabled={consentBusy} onClick={() => void cancelOutgoing()}>Back to posting</button><button className="primary-button" type="button" disabled={consentBusy} onClick={() => void authorizeOutgoing()}>{consentBusy ? 'Authorizing…' : 'Authorize and start this run'}</button></div>
       </>}
       {activePhase === 3 && <>
-        {draftBusy ? <GenerationProgress analysis={analysis} measuring={fitBusy} onCancel={() => void cancelAnalysis()} cancelling={false} /> : <>
+        {props.letterOnly ? <section className="generate-ready" aria-label="Generate cover letter"><h2>Generate your cover letter</h2><p>Authorized purpose: cover letter only. The saved CV and posting analysis will not change.</p>{outgoing && <p>Pi provider: {outgoing.model.providerId} · Model: {outgoing.model.name} · Thinking level: {outgoing.model.thinkingLevel}</p>}<p>{review.warning}</p><p>{review.termsNotice}</p><button className="primary-button" type="button" disabled={draftBusy || consentBusy} onClick={() => void props.generateLetterOnly()}>{draftBusy ? 'Generating cover letter…' : 'Generate cover letter'}</button>{draftBusy && <button className="secondary-button" type="button" onClick={() => void cancelAnalysis()}>Cancel cover letter generation</button>}<button className="secondary-button" type="button" disabled={draftBusy || consentBusy} onClick={() => void cancelOutgoing()}>Revoke this run</button>{draftError && <p role="alert">{draftError}</p>}</section> : <>
+        <CoverLetterRunOption checked={props.includeLetter} disabled authorizedPurpose={review.purpose === 'cv+cover-letter' ? 'cv+cover-letter' : 'cv'} onChange={props.setIncludeLetter} />
+        {draftBusy ? <><GenerationProgress analysis={analysis} measuring={fitBusy} onCancel={() => void cancelAnalysis()} cancelling={false} />{props.includeLetter && <p role="status">{props.letterGenerationStatus === 'generating' ? 'Your CV is saved. Generating the authorized cover letter…' : props.letterGenerationStatus === 'saved' ? 'Cover letter saved. Preparing the document review…' : 'The cover letter follows successful CV generation. Its outcome is separate from your CV.'}</p>}</> : <>
         {analysis?.status === 'running' && <section className="analysis-loading" role="status"><h2>Reading the job posting…</h2><p>Finding the qualifications, skills and keywords to guide your CV.</p><button className="secondary-button" type="button" onClick={() => void cancelAnalysis()}>Cancel analysis</button></section>}
         {analysis?.status === 'failed' && <p className="inspector-error" role="alert">{analysis.error ?? analysis.progress}</p>}
         {analysis?.status === 'cancelled' && <p role="status">{analysis.progress}</p>}
@@ -287,12 +305,15 @@ export function WorkbenchStageLayout(props: Props) {
         <button className="secondary-button revoke-run" type="button" disabled={consentBusy} onClick={() => void cancelOutgoing()}>Revoke this run</button>
         </>}
         {draftError && !(analysis?.status === 'failed' && draftError === (analysis.error ?? analysis.progress)) && <p className="inspector-error" role="alert">{draftError}</p>}
+        </>}
       </>}
       {consentError && <p className="inspector-error" role="alert">{consentError}</p>}
       </ReviewBody>; })()}
     </section>}
 
-    {activePhase >= 4 && draft && <section className={activePhase === 4 ? 'review-stage' : undefined} aria-label="Tailoring workflow"><section aria-label={activePhase === 4 ? 'CV review' : undefined}>
+    {activePhase >= 4 && <ApplicationDocumentSelector selected={props.selectedDocument} onSelect={props.selectDocument} cvStatus={draft?.approved && activeJob && draft.targetPostingUpdatedAt === activeJob.updatedAt ? 'Approved' : draft ? 'Ready to review' : 'Not available'} coverLetterStatus={props.letterStatus} />}
+    {activePhase >= 4 && props.selectedDocument === 'cover-letter' && <section className="review-stage" aria-label="Tailoring workflow">{props.letterWorkspace}</section>}
+    {activePhase >= 4 && props.selectedDocument === 'cv' && draft && <section className={activePhase === 4 ? 'review-stage' : undefined} aria-label="Tailoring workflow"><section aria-label={activePhase === 4 ? 'CV review' : undefined}>
       {activePhase === 4 && workingTextDiffersFromSource && <p className="posting-scope-note" role="status">{sourceScopeNote}</p>}
       {activePhase === 4 && activeJob && draft.targetPostingUpdatedAt !== activeJob.updatedAt && <section className="stale-target-notice" role="status" aria-label="Earlier posting review"><h2>This CV targets an earlier posting</h2><p>Your approved wording and review history are preserved, but this approval does not cover the accepted posting revision. Review the current posting assessment before reusing this wording; generating a new draft is optional.</p><button type="button" className="primary-button" disabled={consentBusy} onClick={() => void inspectOutgoing()}>{consentBusy ? 'Preparing…' : 'Review outgoing data for current posting'}</button></section>}
       {activePhase === 4 && <ReviewActionBar feedback={reviewHasError ? draftError : ''} draft={draft} targetCurrent={Boolean(activeJob && draft.targetPostingUpdatedAt === activeJob.updatedAt)} fit={fitReport} fitBusy={fitBusy} busy={draftBusy || regenBusy} acknowledged={reviewAcknowledged} setAcknowledged={setReviewAcknowledged} onCheck={checkDraftNow} onMeasure={measurePageFit} onApprove={approveCurrentDraft} onOpenDetails={openDetails} detailsOpen={inspectorOpen} acceptedCuts={acceptedCuts} setAcceptedCuts={setAcceptedCuts} onApplyCuts={applyPageCuts} />}
@@ -325,7 +346,7 @@ export function WorkbenchStageLayout(props: Props) {
             {proposal && <section className="proposal-comparison" aria-label="Compare suggestion"><h4>{proposal.target.kind === 'title' ? 'Compare CV title' : 'Compare wording'}</h4><p>{proposal.status === 'pending' ? 'Your CV will not change until you accept this suggestion.' : proposal.status === 'accepted' ? 'This wording has been added to your CV. Review it again before approval.' : 'Your CV was not changed.'}</p><p className="regeneration-scope-note">{proposal.progress}</p>{proposal.proposed.map((item, index) => { const prior = proposal.before?.[index]; const beforeText = typeof prior === 'string' ? prior : prior?.text ?? ''; return <article key={index}><h5>Current</h5><p>{readableText(beforeText) || (proposal.target.kind === 'title' ? 'No CV title' : 'Saved wording')}</p><h5>Suggested</h5><p>{readableText(item.text) || 'Suggested wording unavailable'}</p><p>Sources: {item.citations.map(citation => sourceLabel(draft, citation.evidenceId, citation.revision)).join('; ')}</p>{readableText(item.rationale) && <p>{readableText(item.rationale)}</p>}</article>})}{proposal.status === 'pending' && <div><button type="button" className="secondary-button" disabled={regenBusy} onClick={() => void resolveProposal('reject')}>Reject proposal</button><button type="button" className="primary-button" disabled={regenBusy} onClick={() => void resolveProposal('accept')}>{proposal.target.kind === 'title' ? 'Use this CV title' : 'Accept replacement and recheck'}</button></div>}</section>}
             {regenMessage && <p className="regeneration-status" role="status">{regenMessage}</p>}
           </section>}
-          </>}{activePhase === 5 && draft.approved && <div className="export-actions"><button type="button" className="primary-button" disabled={exportBusy || docxBusy || !fitReport || fitReport.overflow} onClick={async () => { if (!activeJob) return; setExportBusy(true); setExportMessage(''); try { setExportMessage((await window.workbench.exportApprovedPdf(activeJob.id)).message) } catch { setExportMessage('PDF export failed. Check the destination and try again.') } finally { setExportBusy(false) } }}>{exportBusy ? 'Exporting…' : 'Export approved PDF'}</button><button type="button" className="secondary-button" disabled={exportBusy || docxBusy || !fitReport || fitReport.overflow} onClick={() => void exportDocx()}>{docxBusy ? 'Preparing editable Word…' : 'Export editable Word document'}</button><p role="status" aria-live="polite">{exportMessage || 'Files are checked locally; no ATS service or model request is used. Word may reflow differently from PDF.'}</p></div>}
+          </>}{activePhase === 5 && draft.approved && <div className="export-actions"><button type="button" className="primary-button" disabled={exportBusy || docxBusy || !fitReport || fitReport.overflow} onClick={async () => { if (!activeJob) return; setExportBusy(true); setExportMessage(''); try { setExportMessage((await api.exportApprovedPdf(activeJob.id)).message) } catch { setExportMessage('PDF export failed. Check the destination and try again.') } finally { setExportBusy(false) } }}>{exportBusy ? 'Exporting…' : 'Export approved PDF'}</button><button type="button" className="secondary-button" disabled={exportBusy || docxBusy || !fitReport || fitReport.overflow} onClick={() => void exportDocx()}>{docxBusy ? 'Preparing editable Word…' : 'Export editable Word document'}</button><p role="status" aria-live="polite">{exportMessage || 'Files are checked locally; no ATS service or model request is used. Word may reflow differently from PDF.'}</p></div>}
 
           {activePhase === 5 && draftError && <p className={`review-feedback${reviewHasError ? ' is-error' : ''}`} role={reviewHasError ? 'alert' : 'status'}>{draftError}</p>}
           <button type="button" className="secondary-button new-run-button" disabled={consentBusy || draftBusy} onClick={() => void inspectOutgoing()}>{consentBusy ? 'Preparing…' : 'Create another CV'}</button>
