@@ -105,11 +105,11 @@ export function commitLetterDestination(
 ): void {
   const capture = (handle && typeof handle === 'object' ? handles.get(handle) : undefined)
   if (!capture || capture.used) fail('INVALID_CAPTURE')
+  capture.used = true
   if (!(bytes instanceof Uint8Array) || bytes.byteLength === 0 || bytes.byteLength > MAX_BYTES) fail('INVALID_BYTES')
   if (!options || typeof options.overwriteApproved !== 'boolean' || typeof options.beforeCommit !== 'function') fail('GUARD_FAILED')
   if (capture.fingerprint !== null && options.overwriteApproved !== true) fail('OVERWRITE_REQUIRED')
   const payload = Buffer.from(bytes)
-  capture.used = true
 
   let temporary: string | undefined
   let fd: number | undefined

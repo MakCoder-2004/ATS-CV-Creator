@@ -27,6 +27,22 @@ describe('cover letter destination capture and commit', () => {
     expect(readFileSync(path)).toEqual(Buffer.from('new document'))
   })
 
+  it('requires explicit overwrite approval and consumes the refused capture', () => {
+    const root = fixture()
+    const path = join(root, 'letter.pdf')
+    writeFileSync(path, 'old')
+    const refused = captureLetterDestination(path)
+    expect(() => commit(refused)).toThrow(expect.objectContaining({ code: 'OVERWRITE_REQUIRED' }))
+    expect(readFileSync(path, 'utf8')).toBe('old')
+    expect(readdirSync(root)).toEqual(['letter.pdf'])
+    expect(() => commit(refused, Buffer.from('replacement'), true)).toThrow(expect.objectContaining({ code: 'INVALID_CAPTURE' }))
+    expect(readFileSync(path, 'utf8')).toBe('old')
+
+    const approved = captureLetterDestination(path)
+    commit(approved, Buffer.from('replacement'), true)
+    expect(readFileSync(path, 'utf8')).toBe('replacement')
+  })
+
   it('requires explicit overwrite approval and replaces an unchanged approved file', () => {
     const root = fixture()
     const path = join(root, 'letter.pdf')
@@ -49,7 +65,9 @@ describe('cover letter destination capture and commit', () => {
     if (change === 'replaced') { rmSync(path); writeFileSync(path, 'old bytes') }
     if (change === 'modified') writeFileSync(path, 'new bytes')
     const before = (() => { try { return readFileSync(path) } catch { return null } })()
-    expect(() => commit(handle, Buffer.from('output'), true)).toThrow()
+    expect(() => commit(handle, Buffer.from('output'), true)).toThrow(expect.objectContaining({ code: 'DESTINATION_CHANGED' }))
+    expect((() => { try { return readFileSync(path) } catch { return null } })()).toEqual(before)
+    expect(() => commit(handle, Buffer.from('retry'), true)).toThrow(expect.objectContaining({ code: 'INVALID_CAPTURE' }))
     expect((() => { try { return readFileSync(path) } catch { return null } })()).toEqual(before)
   })
 
@@ -69,7 +87,8 @@ describe('cover letter destination capture and commit', () => {
     const root = fixture()
     const path = join(root, 'letter.pdf')
     const handle = captureLetterDestination(path)
-    expect(() => commitLetterDestination(handle, Buffer.from('output'), { overwriteApproved: false, beforeCommit: () => { throw new Error('stale') } })).toThrow()
+    expect(() => commitLetterDestination(handle, Buffer.from('output'), { overwriteApproved: false, beforeCommit: () => { throw new Error('stale') } })).toThrow(expect.objectContaining({ code: 'GUARD_FAILED' }))
+    expect(() => commit(handle)).toThrow(expect.objectContaining({ code: 'INVALID_CAPTURE' }))
     expect(() => readFileSync(path)).toThrow()
     expect(readdirSync(root)).toEqual([])
     const fresh = captureLetterDestination(path)
@@ -81,12 +100,19 @@ describe('cover letter destination capture and commit', () => {
   it('rejects asynchronous and non-void guards without committing', async () => {
     const root = fixture()
     const path = join(root, 'letter.pdf')
-    const handle = captureLetterDestination(path)
+    const asyncHandle = captureLetterDestination(path)
     const pending = Promise.reject(new Error('late guard'))
-    expect(() => commitLetterDestination(handle, Buffer.from('output'), { overwriteApproved: false, beforeCommit: (() => pending) as unknown as () => undefined })).toThrow()
-    expect(() => commitLetterDestination(handle, Buffer.from('output'), { overwriteApproved: false, beforeCommit: (() => true) as unknown as () => undefined })).toThrow()
+    expect(() => commitLetterDestination(asyncHandle, Buffer.from('output'), { overwriteApproved: false, beforeCommit: (() => pending) as unknown as () => undefined })).toThrow(expect.objectContaining({ code: 'GUARD_FAILED' }))
+    expect(() => commit(asyncHandle)).toThrow(expect.objectContaining({ code: 'INVALID_CAPTURE' }))
+    expect(() => readFileSync(path)).toThrow()
+    expect(readdirSync(root)).toEqual([])
+
+    const nonVoidHandle = captureLetterDestination(path)
+    expect(() => commitLetterDestination(nonVoidHandle, Buffer.from('output'), { overwriteApproved: false, beforeCommit: (() => true) as unknown as () => undefined })).toThrow(expect.objectContaining({ code: 'GUARD_FAILED' }))
+    expect(() => commit(nonVoidHandle)).toThrow(expect.objectContaining({ code: 'INVALID_CAPTURE' }))
     await expect(pending).rejects.toThrow('late guard')
     expect(() => readFileSync(path)).toThrow()
+    expect(readdirSync(root)).toEqual([])
   })
 
   it('does not accept forged or reused capture handles', () => {
@@ -96,6 +122,22 @@ describe('cover letter destination capture and commit', () => {
     expect(() => commit({ exists: false } as ReturnType<typeof captureLetterDestination>, Buffer.from('x'), false)).toThrow()
     commit(handle)
     expect(() => commit(handle)).toThrow()
+  })
+
+  it('consumes captures after invalid payload and invalid options refusals', () => {
+    const root = fixture()
+    const path = join(root, 'letter.pdf')
+    const invalidBytes = captureLetterDestination(path)
+    expect(() => commit(invalidBytes, Buffer.alloc(0))).toThrow(expect.objectContaining({ code: 'INVALID_BYTES' }))
+    expect(() => commit(invalidBytes, Buffer.from('retry'))).toThrow(expect.objectContaining({ code: 'INVALID_CAPTURE' }))
+    expect(() => readFileSync(path)).toThrow()
+    expect(readdirSync(root)).toEqual([])
+
+    const invalidOptions = captureLetterDestination(path)
+    expect(() => commitLetterDestination(invalidOptions, Buffer.from('output'), null as never)).toThrow(expect.objectContaining({ code: 'GUARD_FAILED' }))
+    expect(() => commit(invalidOptions)).toThrow(expect.objectContaining({ code: 'INVALID_CAPTURE' }))
+    expect(() => readFileSync(path)).toThrow()
+    expect(readdirSync(root)).toEqual([])
   })
 
   it('rejects invalid payloads, directories and overlong files', () => {
@@ -114,12 +156,18 @@ describe('cover letter destination capture and commit', () => {
     expect(() => readFileSync(path)).toThrow()
   })
 
-  it('refuses a leaf symlink when supported', () => {
+  it('refuses a leaf symlink when supported', ({ skip }) => {
     const root = fixture()
     const target = join(root, 'real.pdf')
     const path = join(root, 'link.pdf')
     writeFileSync(target, 'safe')
-    try { symlinkSync(target, path) } catch { return }
+    try {
+      symlinkSync(target, path)
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code
+      if (code === 'EPERM' || code === 'EACCES' || code === 'ENOSYS') skip(`symlink creation unsupported: ${code}`)
+      throw error
+    }
     expect(() => captureLetterDestination(path)).toThrow()
     expect(readFileSync(target, 'utf8')).toBe('safe')
   })
