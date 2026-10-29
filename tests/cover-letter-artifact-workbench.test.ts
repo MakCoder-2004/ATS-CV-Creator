@@ -20,6 +20,7 @@ test('actual local PDF measurement enables independent explicit approval, previe
   expect((await f.wb.api.approveCoverLetter(f.jobId, f.letter.id)).ok).toBe(false)
   const preview = await f.wb.api.getCoverLetterPdf(input)
   expect(preview.ok).toBe(true)
+  if (!preview.ok) throw new Error(preview.message)
   const inspected = await inspectCoverLetterPdf(Buffer.from(preview.pdfBase64!, 'base64'))
   const state = await f.wb.api.getCoverLetterReadModel(f.jobId)
   assertCoverLetterPdfContent(state.canonical!, inspected)

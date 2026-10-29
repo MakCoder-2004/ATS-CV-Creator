@@ -20,7 +20,13 @@ export const coverLetterReadModelSchema = z.object({
   readiness: coverLetterReadinessSchema,
 }).strict()
 export type CoverLetterReadModel = z.infer<typeof coverLetterReadModelSchema>
-export const coverLetterPreviewResultSchema = z.object({ ok: z.boolean(), message: z.string(), documentHash: z.string().regex(/^[a-f0-9]{64}$/).optional(), pdfBase64: z.string().min(1).max(28_000_000).optional() }).strict()
-export const coverLetterExportResultSchema = z.object({ ok: z.boolean(), cancelled: z.boolean(), message: z.string() }).strict()
+export const coverLetterPreviewResultSchema = z.discriminatedUnion('ok', [
+  z.object({ ok: z.literal(true), message: z.string(), documentHash: z.string().regex(/^[a-f0-9]{64}$/), pdfBase64: z.string().min(1).max(28_000_000) }).strict(),
+  z.object({ ok: z.literal(false), message: z.string() }).strict(),
+])
+export const coverLetterExportResultSchema = z.discriminatedUnion('ok', [
+  z.object({ ok: z.literal(true), cancelled: z.literal(false), message: z.string() }).strict(),
+  z.object({ ok: z.literal(false), cancelled: z.boolean(), message: z.string() }).strict(),
+])
 export type CoverLetterPreviewResult = z.infer<typeof coverLetterPreviewResultSchema>
 export type CoverLetterExportResult = z.infer<typeof coverLetterExportResultSchema>

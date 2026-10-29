@@ -21,6 +21,15 @@ for (const [method, channel] of [['measureCoverLetter', 'cover-letter:measure'],
   await expect(call(args)).rejects.toThrow()
 })
 
+test('preview success requires actual bytes/hash and export success cannot also be cancelled', async () => {
+  bridge.invoke.mockResolvedValue({ ok: true, message: 'No actual bytes.' })
+  await expect(bridge.api!.getCoverLetterPdf(action)).rejects.toThrow()
+  bridge.invoke.mockResolvedValue({ ok: false, message: 'Refused.', documentHash: 'a'.repeat(64), pdfBase64: 'ZmFrZQ==' })
+  await expect(bridge.api!.getCoverLetterPdf(action)).rejects.toThrow()
+  bridge.invoke.mockResolvedValue({ ok: true, cancelled: true, message: 'Contradictory success.' })
+  await expect(bridge.api!.exportCoverLetter({ ...action, format: 'pdf' })).rejects.toThrow()
+})
+
 test('approval requires explicit current letter ID at preload and read model is strict', async () => {
   await expect(bridge.api!.approveCoverLetter(jobId)).rejects.toThrow()
   await expect(bridge.api!.getCoverLetterReadModel('bad')).rejects.toThrow()
