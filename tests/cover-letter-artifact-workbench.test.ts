@@ -130,6 +130,46 @@ test('local wording/recipient revisions recheck actual facts and refuse unprinta
   expect(f.prompts.some(p => p.includes('Local Recruiter'))).toBe(false)
 })
 
+test('local review keeps the 400-word body budget correctable without introducing a model-request quota', async () => {
+  const f = await setup(), count = f.prompts.length
+  let letter = f.letter
+  for (const words of [401, 400]) {
+    const edited = await f.wb.api.editCoverLetter({ jobId: f.jobId, letterId: letter.id, recipient: null, paragraphs: [{ ...letter.paragraphs[0], text: Array(words).fill('Work').join(' ') }] })
+    expect(edited.ok).toBe(true)
+    letter = edited.letter!
+    expect((await f.wb.api.checkCoverLetter(f.jobId)).ok).toBe(words <= 400)
+    expect((await f.wb.api.getCoverLetterReadModel(f.jobId)).readiness.findings.some(finding => finding.code === 'local-word-budget')).toBe(words > 400)
+  }
+  expect(f.prompts).toHaveLength(count)
+})
+
+test('restored employer anchors reject cross-role borrowing through real local edit/check/approval actions', async () => {
+  const f = await artifactFixture(false, true); fixtures.push(f)
+  const paragraphs = [{ ...f.letter.paragraphs[0], text: 'At Alpha, I reduced latency by 20% using Rust.', citations: f.letter.bindings.sources.filter(source => source.category === 'experience' && !source.parentId).map(source => ({ ordinal: source.ordinal })) }]
+  const edited = await f.wb.api.editCoverLetter({ jobId: f.jobId, letterId: f.letter.id, recipient: null, paragraphs })
+  expect(edited.ok).toBe(true)
+  expect(await f.wb.api.checkCoverLetter(f.jobId)).toMatchObject({ ok: false })
+  const input = { jobId: f.jobId, letterId: edited.letter!.id }
+  expect((await f.wb.api.measureCoverLetter(input)).ok).toBe(true)
+  await acknowledge(f)
+  expect((await f.wb.api.approveCoverLetter(f.jobId, input.letterId)).ok).toBe(false)
+  const fixed = await f.wb.api.editCoverLetter({ ...input, recipient: null, paragraphs: [{ ...paragraphs[0], text: 'At Beta, I reduced latency by 20% using Rust.' }] })
+  expect(fixed.ok).toBe(true)
+  expect((await f.wb.api.checkCoverLetter(f.jobId)).ok).toBe(true)
+}, 30_000)
+
+test('known warning claims cannot be waived by punctuation, whitespace, case or appending innocuous wording', async () => {
+  const f = await setup(), original = f.letter.paragraphs[0]
+  f.mutate(letter => { letter.paragraphs[0].text = 'I led the team.'; letter.findings = [{ code: 'unsupported-claim', paragraphId: original.id, message: 'Leadership is not supported.' }] })
+  let id = f.letter.id
+  for (const text of ['I  led the team.', 'I led the team!', 'I LED the team.', 'I led the team. I practiced TypeScript.', 'I have led the team.', 'I led the experienced team.']) {
+    const edited = await f.wb.api.editCoverLetter({ jobId: f.jobId, letterId: id, recipient: null, paragraphs: [{ ...original, text }] })
+    expect(edited.ok).toBe(true)
+    id = edited.letter!.id
+    expect((await f.wb.api.checkCoverLetter(f.jobId)).ok).toBe(false)
+  }
+})
+
 test('known warnings survive unrelated recipient edits until flagged wording is replaced', async () => {
   const f = await setup()
   f.mutate(letter => { letter.findings = [{ code: 'unsupported-claim', paragraphId: letter.paragraphs[0].id, message: 'Known unsupported wording.' }] })

@@ -2,6 +2,7 @@ import { z } from 'zod'
 import { uuidSchema } from './profile'
 import { draftGenerationSchema } from './draft'
 
+export const COVER_LETTER_WORD_BUDGET = 400
 const digestSchema = z.string().regex(/^[a-f0-9]{64}$/)
 export const coverLetterPurposeSchema = z.enum(['cv', 'cv+cover-letter', 'cover-letter-only'])
 export type CoverLetterPurpose = z.infer<typeof coverLetterPurposeSchema>

@@ -540,9 +540,19 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       const prior = coverLetterRevisionSchema.parse(JSON.parse(row.data))
       return prior.findings.flatMap(finding => {
         // Deterministic findings are rerun, not inherited after a correction.
-        if (finding.code === 'local-factual-check') return []
+        if (finding.code === 'local-factual-check' || finding.code === 'local-word-budget') return []
         const originals = finding.paragraphId ? prior.paragraphs.filter(p => p.id === finding.paragraphId) : prior.paragraphs
-        const remaining = letter.paragraphs.find(p => originals.some(old => old.text.normalize('NFC') === p.text.normalize('NFC')))
+        const claimKey = (text: string) => text.normalize('NFKC').toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim()
+        // Legacy warnings have paragraph attribution, not a semantic claim span. Keep
+        // every attributable sentence while it remains, including inside appended text.
+        // Formatting/case/punctuation cannot waive a known unsupported claim.
+        const claims = originals.flatMap(old => old.text.split(/[.!?;\n]+/u).map(claimKey).filter(Boolean))
+        const remaining = letter.paragraphs.find(p => claims.some(claim => {
+          const current = claimKey(p.text).split(' '), words = claim.split(' ')
+          let at = 0
+          for (const word of current) if (word === words[at]) at++
+          return at === words.length
+        }))
         return remaining || !originals.length ? [{ ...finding, ...(finding.paragraphId && remaining ? { paragraphId: remaining.id } : {}) }] : []
       })
     })

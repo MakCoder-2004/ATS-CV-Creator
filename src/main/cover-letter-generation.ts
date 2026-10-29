@@ -1,4 +1,4 @@
-import { coverLetterModelResponseSchema, coverLetterSourceSchema, type CoverLetterRevision, type CoverLetterSource } from '../shared/cover-letter'
+import { COVER_LETTER_WORD_BUDGET, coverLetterModelResponseSchema, coverLetterSourceSchema, type CoverLetterRevision, type CoverLetterSource } from '../shared/cover-letter'
 import { prepareOutboundBundle, type ConsentSource, type OutboundBundle } from '../shared/outbound-consent'
 import { experienceInputSchema, type ExperienceRecord } from '../shared/experience'
 
@@ -99,13 +99,19 @@ export function checkLocalCoverLetter(letter: CoverLetterRevision, source: Conse
   const bundle = prepareOutboundBundle(source)
   const prepared = prepareCoverLetterSources(source, bundle)
   const local = { ...prepared, outgoing: prepared.local.map(item => ({ ordinal: item.ordinal, category: item.category, heading: item.heading, passage: item.passage })) }
-  return letter.paragraphs.flatMap(paragraph => {
+  const budget = letter.paragraphs.reduce((count, paragraph) => count + paragraph.text.trim().split(/\s+/u).length, 0) > COVER_LETTER_WORD_BUDGET
+    ? [{ code: 'local-word-budget', message: 'Shorten the letter body to 400 words or fewer before approval.' }] : []
+  return [...budget, ...letter.paragraphs.flatMap(paragraph => {
     try {
       validateCoverLetterResponse({ paragraphs: [{ text: paragraph.text, citations: paragraph.citations }] }, local, { ...bundle, containsRestoredIdentifier: () => false }, postingTools)
+      // Re-minimize only for the named-parent policy: employer/project tokens retain the
+      // same attribution anchors as generation. The raw pass above must run first so
+      // scrubbing cannot conceal an unsupported number, date, skill or local identifier.
+      validateCoverLetterResponse({ paragraphs: [{ text: bundle.minimizeIdentifiers(paragraph.text), citations: paragraph.citations }] }, prepared, bundle, postingTools)
       return []
     } catch (error) {
       const message = error instanceof Error && /^The letter |^A (?:letter citation|named source)/.test(error.message) ? error.message : 'The paragraph cannot be checked against its current source passages.'
       return [{ code: 'local-factual-check', paragraphId: paragraph.id, message }]
     }
-  })
+  })]
 }

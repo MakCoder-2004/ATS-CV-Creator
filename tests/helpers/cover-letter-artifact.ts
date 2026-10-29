@@ -9,7 +9,7 @@ import type { PiModelRuntime } from '../../src/main/pi-model'
 import type { Api, Model } from '@earendil-works/pi-ai'
 import type { AnalysisTransport } from '../../src/main/posting-analysis'
 
-export async function artifactFixture(pi = false) {
+export async function artifactFixture(pi = false, twoRoles = false) {
   const dir = mkdtempSync(join(tmpdir(), 'letter-controller-'))
   const prompts: string[] = []
   const transport: AnalysisTransport = { async generate({ prompt }) {
@@ -36,7 +36,8 @@ export async function artifactFixture(pi = false) {
   if (pi) await wb.api.setPiModel({ reference: 'sample/synthetic', thinkingLevel: 'low' })
   await wb.api.saveContact({ fullName: 'Zoë Candidate', email: 'zoe@example.test', headline: 'Never print headline', links: [{ label: 'Private link', url: 'https://example.test/private' }] })
   await wb.api.saveSkill({ name: 'TypeScript', category: 'Programming' })
-  await wb.api.saveExperience({ kind: 'training', title: 'Trainee', organization: 'Learning group', description: 'Practiced TypeScript exercises.', factualItems: [{ text: 'Practiced TypeScript.' }] })
+  await wb.api.saveExperience({ kind: twoRoles ? 'employment' : 'training', title: twoRoles ? 'Engineer' : 'Trainee', organization: twoRoles ? 'Alpha' : 'Learning group', description: twoRoles ? 'Practiced TypeScript exercises and maintained dashboards.' : 'Practiced TypeScript exercises.', factualItems: [{ text: 'Practiced TypeScript.' }] })
+  if (twoRoles) await wb.api.saveExperience({ kind: 'employment', title: 'Engineer', organization: 'Beta', description: 'Practiced TypeScript exercises. Reduced latency by 20% using Rust.', factualItems: [{ text: 'Reduced latency by 20% using Rust.' }] })
   const saved = await wb.api.saveJob({ title: 'Developer', company: 'Example', description: 'Build tools with Rust.' })
   if (!saved.ok) throw new Error('Job setup failed')
   const jobId = saved.value.id

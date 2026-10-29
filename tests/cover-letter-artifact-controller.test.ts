@@ -2,6 +2,8 @@ import { afterEach, expect, test, vi } from 'vitest'
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import JSZip from 'jszip'
+import type { IpcMain, IpcMainInvokeEvent } from 'electron'
+import { registerCoverLetterArtifactIpc } from '../src/main/cover-letter-artifact-ipc'
 import { artifactFixture } from './helpers/cover-letter-artifact'
 import { createCoverLetterArtifactController, type CoverLetterNativeDialogs } from '../src/main/cover-letter-artifact-controller'
 import { createCoverLetterCompiler } from '../src/main/cover-letter-compiler'
@@ -50,6 +52,27 @@ test('real public native actions save actual PDF and editable DOCX from the same
   expect(cv?.approved).toBe(false)
 }, 30_000)
 
+test('registered letter actions resolve the actual reopened workspace after verified restore and close', async () => {
+  const { f, input, output } = await setup(), path = join(output, 'restored.pdf')
+  let current = f.wb
+  const controller = createCoverLetterArtifactController({ beginJobOperation: (jobId, action) => current.beginJobOperation(jobId, action), captureCoverLetterExport: action => current.captureCoverLetterExport(action) }, native(path))
+  const handlers = new Map<string, (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown>(), event = {} as IpcMainInvokeEvent
+  registerCoverLetterArtifactIpc({ handle: (channel, handler) => { handlers.set(channel, handler) } } as Pick<IpcMain, 'handle'>, () => ({ ...current.api, ...controller }), sender => { if (sender !== event) throw new Error('Untrusted sender') })
+  const invoke = (channel: string, ...args: unknown[]) => handlers.get(channel)!(event, ...args)
+  expect(await invoke('cover-letter:read-model', f.jobId)).toMatchObject({ readiness: { canExport: true } })
+  const restore = current.backup.previewRestore(current.backup.createBackup())
+  current.backup.applyRestore(restore.token, text => text)
+  current = f.reopen()
+  expect(await invoke('cover-letter:read-model', f.jobId)).toMatchObject({ readiness: { canExport: false, currentFit: null } })
+  expect(await invoke('cover-letter:check', f.jobId)).toMatchObject({ ok: true })
+  expect(await invoke('cover-letter:measure', input)).toMatchObject({ ok: true })
+  expect(await invoke('cover-letter:paragraph:acknowledge', { ...input, paragraphId: f.letter.paragraphs[0].id, acknowledged: true })).toMatchObject({ ok: true })
+  expect(await invoke('cover-letter:approve', f.jobId, f.letter.id)).toMatchObject({ ok: true })
+  expect(await invoke('cover-letter:pdf', input)).toMatchObject({ ok: true, pdfBase64: expect.any(String) })
+  expect(await invoke('cover-letter:export', { ...input, format: 'pdf' })).toMatchObject({ ok: true })
+  expect(readFileSync(path).subarray(0, 5).toString()).toBe('%PDF-')
+}, 30_000)
+
 test('unapproved, forged fit, unsupported, stale or malformed export requests never open a dialog or write bytes', async () => {
   const { f, input, output } = await setup(false), dialogs = native(join(output, 'refused.pdf'))
   const controller = createCoverLetterArtifactController(f.wb, dialogs)
@@ -61,6 +84,20 @@ test('unapproved, forged fit, unsupported, stale or malformed export requests ne
   expect(dialogs.chooseDestination).not.toHaveBeenCalled()
   expect(readdirSync(output)).toEqual([])
 })
+
+test('a real measured fit plus forged approved boolean cannot substitute for explicit main approval, including reopen', async () => {
+  const { f, input, output } = await setup(false), dialogs = native(join(output, 'forged.pdf'))
+  expect((await f.wb.api.measureCoverLetter(input)).ok).toBe(true)
+  for (const p of f.letter.paragraphs) expect((await f.wb.api.acknowledgeCoverLetterParagraph({ ...input, paragraphId: p.id, acknowledged: true })).ok).toBe(true)
+  f.mutate(letter => { letter.approved = true; letter.approvedAt = new Date().toISOString() })
+  for (const reopen of [false, true]) {
+    if (reopen) f.reopen()
+    expect((await f.wb.api.getCoverLetterReadModel(f.jobId)).readiness).toMatchObject({ currentFit: { actualPages: 1 }, approved: false, canExport: false })
+    expect((await createCoverLetterArtifactController(f.wb, dialogs).exportCoverLetter({ ...input, format: 'pdf' })).ok).toBe(false)
+  }
+  expect(dialogs.chooseDestination).not.toHaveBeenCalled()
+  expect(readdirSync(output)).toEqual([])
+}, 30_000)
 
 test('native cancel, explicit overwrite decline and approved replacement report accurate outcomes and clean owned temps', async () => {
   const { f, input, output } = await setup(), path = join(output, 'existing.pdf')
@@ -164,6 +201,20 @@ test('final synchronous private-DB assertion is used at commit, after the post-g
   } }
   expect((await createCoverLetterArtifactController(workspace, native(path)).exportCoverLetter({ ...input, format: 'pdf' })).ok).toBe(false)
   expect(readdirSync(output)).toEqual([])
+}, 30_000)
+
+for (const operation of ['measure', 'preview'] as const) test(`actual ${operation} discards late compiled bytes/fit after a local header edit`, async () => {
+  const { f, input } = await setup(false), real = createCoverLetterCompiler(f.roots), calls = f.prompts.length
+  f.reopen({ ...real, compile: async canonical => {
+    const result = await real.compile(canonical), contact = (await f.wb.api.getProfile()).contact!
+    expect((await f.wb.api.saveContact({ id: contact.id, fullName: 'Changed while preparing local PDF' })).ok).toBe(true)
+    return result
+  } })
+  const result = operation === 'measure' ? await f.wb.api.measureCoverLetter(input) : await f.wb.api.getCoverLetterPdf(input)
+  expect(result.ok).toBe(false)
+  expect(result).not.toHaveProperty('pdfBase64')
+  expect((await f.wb.api.getCoverLetter(f.jobId))?.fit).toBeUndefined()
+  expect(f.prompts).toHaveLength(calls)
 }, 30_000)
 
 for (const change of ['header', 'source', 'recipient', 'body'] as const) test(`current ${change} change after actual compile refuses all writes`, async () => {
