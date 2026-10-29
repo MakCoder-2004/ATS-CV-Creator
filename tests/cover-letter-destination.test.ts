@@ -143,10 +143,12 @@ describe('cover letter destination capture and commit', () => {
   it('rejects invalid payloads, directories and overlong files', () => {
     const root = fixture()
     const path = join(root, 'letter.pdf')
-    const handle = captureLetterDestination(path)
-    expect(() => commit(handle, Buffer.alloc(0))).toThrow()
-    expect(() => commit(handle, Buffer.alloc(20 * 1024 * 1024 + 1))).toThrow()
-    expect(() => commit(handle, 'not bytes' as unknown as Buffer)).toThrow()
+    for (const payload of [Buffer.alloc(0), Buffer.alloc(20 * 1024 * 1024 + 1), 'not bytes'] as const) {
+      const handle = captureLetterDestination(path)
+      expect(() => commit(handle, payload as Buffer)).toThrow(expect.objectContaining({ code: 'INVALID_BYTES' }))
+      expect(() => commit(handle)).toThrow(expect.objectContaining({ code: 'INVALID_CAPTURE' }))
+      expect(readdirSync(root)).toEqual([])
+    }
     const directory = join(root, 'directory')
     mkdirSync(directory)
     expect(() => captureLetterDestination(directory)).toThrow()
