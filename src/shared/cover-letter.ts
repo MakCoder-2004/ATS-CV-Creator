@@ -48,6 +48,7 @@ export const coverLetterRevisionSchema = z.object({
   fit: z.object({ documentHash: digestSchema, actualPages: z.literal(1), overflow: z.literal(false), measuredAt: z.string().datetime() }).strict().optional(),
   approved: z.boolean(),
   approvedAt: z.string().datetime().optional(),
+  localArtifactAuthority: z.object({ measurementSeal: digestSchema, approvalSeal: digestSchema.optional() }).strict().optional(),
 }).strict().superRefine((letter, ctx) => {
   const ids = new Set<string>()
   for (const source of letter.bindings.sources) {

@@ -6,7 +6,7 @@ import type { JobRecord, JobSaveInput, JobSaveResult, JobDeletionPreview, JobDel
 import type { ProfileExchangeResult } from './profile-exchange'
 import type { OutboundConsentAction, OutboundConsentPreview } from './outbound-consent-contract'
 import type { CoverLetterGenerationStatus, CoverLetterOutcome, CoverLetterAcknowledgment, CoverLetterActionResult, CoverLetterEdit, CoverLetterPurpose, CoverLetterRecipient, CoverLetterRevision, RequestedDocumentsResult } from './cover-letter'
-import type { CoverLetterReadModel } from './cover-letter-artifact'
+import type { CoverLetterReadModel, CoverLetterArtifactAction, CoverLetterPreviewResult } from './cover-letter-artifact'
 import type { AnalysisResult, GenerationRecovery, RecoveryChoice } from './posting-analysis'
 
 import type { AddDraftItemInput, DraftCorrectionInput, DraftRevision, SuggestedSkillDecision, DraftTailoringCorrection } from './draft'
@@ -95,7 +95,9 @@ export interface WorkbenchAPI {
   setCoverLetterRecipient(input: CoverLetterRecipient): Promise<CoverLetterActionResult>
   acknowledgeCoverLetterParagraph(input: CoverLetterAcknowledgment): Promise<CoverLetterActionResult>
   checkCoverLetter(jobId: string): Promise<CoverLetterActionResult>
-  approveCoverLetter(jobId: string): Promise<CoverLetterActionResult>
+  approveCoverLetter(jobId: string, expectedLetterId?: string): Promise<CoverLetterActionResult>
+  measureCoverLetter(input: CoverLetterArtifactAction): Promise<CoverLetterActionResult>
+  getCoverLetterPdf(input: CoverLetterArtifactAction): Promise<CoverLetterPreviewResult>
   renewDraftReview(jobId: string): Promise<{ ok: boolean; message: string; draft?: DraftRevision }>
   regenerateDraft(consentToken: string, target: RegenerationTarget): Promise<{ ok: boolean; message: string; proposal?: RegenerationProposal }>
   getRegenerationProposal(jobId: string): Promise<RegenerationProposal | null>

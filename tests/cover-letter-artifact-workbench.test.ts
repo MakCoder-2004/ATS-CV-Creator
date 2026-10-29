@@ -1,9 +1,99 @@
 import { afterEach, expect, test } from 'vitest'
+import { inspectCoverLetterPdf, assertCoverLetterPdfContent } from '../src/main/cover-letter-pdf'
 import { artifactFixture } from './helpers/cover-letter-artifact'
+
+async function acknowledge(f: Awaited<ReturnType<typeof artifactFixture>>) {
+  const letter = (await f.wb.api.getCoverLetter(f.jobId))!
+  for (const p of letter.paragraphs) expect((await f.wb.api.acknowledgeCoverLetterParagraph({ jobId: f.jobId, letterId: letter.id, paragraphId: p.id, acknowledged: true })).ok).toBe(true)
+}
 
 const fixtures: Awaited<ReturnType<typeof artifactFixture>>[] = []
 afterEach(() => fixtures.splice(0).forEach(f => f.cleanup()))
 async function setup() { const f = await artifactFixture(); fixtures.push(f); return f }
+
+test('actual local PDF measurement enables independent explicit approval, preview and safe offline reopen', async () => {
+  const f = await setup(), cv = await f.wb.api.getDraft(f.jobId), count = f.prompts.length
+  const input = { jobId: f.jobId, letterId: f.letter.id }
+  expect((await f.wb.api.approveCoverLetter(f.jobId, f.letter.id)).ok).toBe(false)
+  const measured = await f.wb.api.measureCoverLetter(input)
+  expect(measured).toMatchObject({ ok: true, letter: { fit: { actualPages: 1, overflow: false }, approved: false } })
+  expect((await f.wb.api.approveCoverLetter(f.jobId, f.letter.id)).ok).toBe(false)
+  const preview = await f.wb.api.getCoverLetterPdf(input)
+  expect(preview.ok).toBe(true)
+  const inspected = await inspectCoverLetterPdf(Buffer.from(preview.pdfBase64!, 'base64'))
+  const state = await f.wb.api.getCoverLetterReadModel(f.jobId)
+  assertCoverLetterPdfContent(state.canonical!, inspected)
+  await acknowledge(f)
+  expect((await f.wb.api.approveCoverLetter(f.jobId, f.letter.id)).ok).toBe(true)
+  expect((await f.wb.api.checkCoverLetter(f.jobId)).ok).toBe(true)
+  expect((await f.wb.api.getCoverLetterReadModel(f.jobId)).readiness).toMatchObject({ approved: true, canExport: true })
+  expect(await f.wb.api.getDraft(f.jobId)).toEqual(cv)
+  expect(f.prompts).toHaveLength(count)
+  f.reopen()
+  expect((await f.wb.api.getCoverLetterReadModel(f.jobId)).readiness).toMatchObject({ approved: true, canExport: true })
+  const restore = f.wb.backup.previewRestore(f.wb.backup.createBackup())
+  f.wb.backup.applyRestore(restore.token, text => text)
+  expect((await f.wb.api.getCoverLetterReadModel(f.jobId)).readiness).toMatchObject({ currentFit: null, approved: false, canExport: false })
+}, 30_000)
+
+test('fit-shaped database data, approval flags, stale IDs and forged acknowledgments never authorize artifacts', async () => {
+  const f = await setup(), input = { jobId: f.jobId, letterId: f.letter.id }
+  await acknowledge(f)
+  f.mutate(letter => { letter.fit = { documentHash: 'c'.repeat(64), actualPages: 1, overflow: false, measuredAt: new Date().toISOString() }; letter.approved = true; letter.approvedAt = new Date().toISOString() })
+  expect((await f.wb.api.getCoverLetterReadModel(f.jobId)).readiness).toMatchObject({ currentFit: null, approved: false, canExport: false })
+  expect((await f.wb.api.approveCoverLetter(f.jobId, f.letter.id)).ok).toBe(false)
+  expect((await f.wb.api.measureCoverLetter({ ...input, fit: { actualPages: 1 } } as never)).ok).toBe(false)
+  expect((await f.wb.api.measureCoverLetter(input)).ok).toBe(true)
+  f.mutate(letter => { letter.acknowledgments[letter.paragraphs[0].id] = 'f'.repeat(64) })
+  expect((await f.wb.api.approveCoverLetter(f.jobId, f.letter.id)).ok).toBe(false)
+  await acknowledge(f)
+  expect((await f.wb.api.approveCoverLetter(f.jobId, f.letter.id)).ok).toBe(true)
+  const edited = await f.wb.api.setCoverLetterRecipient({ ...input, recipient: 'Local Recruiter' })
+  expect(edited.ok).toBe(true)
+  expect((await f.wb.api.approveCoverLetter(f.jobId, f.letter.id)).ok).toBe(false)
+  expect((await f.wb.api.getCoverLetterPdf(input)).ok).toBe(false)
+  expect((await f.wb.api.getCoverLetterReadModel(f.jobId)).readiness).toMatchObject({ currentFit: null, approved: false, canExport: false })
+}, 30_000)
+
+for (const change of ['header', 'source', 'posting', 'recipient', 'body'] as const) test(`measured approval is never current after a public ${change} edit`, async () => {
+  const f = await setup(), input = { jobId: f.jobId, letterId: f.letter.id }
+  expect((await f.wb.api.measureCoverLetter(input)).ok).toBe(true)
+  await acknowledge(f)
+  expect((await f.wb.api.approveCoverLetter(f.jobId, f.letter.id)).ok).toBe(true)
+  if (change === 'header') { const contact = (await f.wb.api.getProfile()).contact!; expect((await f.wb.api.saveContact({ id: contact.id, fullName: 'Changed Header', email: contact.email })).ok).toBe(true) }
+  if (change === 'source') { const skill = (await f.wb.api.getProfile()).skills[0]; expect((await f.wb.api.saveSkill({ id: skill.id, name: 'TypeScript', category: 'Updated Programming' })).ok).toBe(true) }
+  if (change === 'posting') expect((await f.wb.api.saveJob({ id: f.jobId, title: 'Changed title', company: 'Example', description: 'Different posting.' })).ok).toBe(true)
+  if (change === 'recipient') expect((await f.wb.api.setCoverLetterRecipient({ ...input, recipient: 'New local recipient' })).ok).toBe(true)
+  if (change === 'body') expect((await f.wb.api.editCoverLetter({ ...input, recipient: null, paragraphs: [{ ...f.letter.paragraphs[0], text: 'I practiced TypeScript exercises.' }] })).ok).toBe(true)
+  const state = await f.wb.api.getCoverLetterReadModel(f.jobId)
+  expect(state.readiness).toMatchObject({ currentFit: null, approved: false, canExport: false })
+  expect(state.letter).toMatchObject({ approved: false })
+  expect(state.letter?.fit).toBeUndefined()
+}, 30_000)
+
+test('CV-only review edits do not invalidate the immutable letter origin or approval', async () => {
+  const f = await setup(), input = { jobId: f.jobId, letterId: f.letter.id }, cv = (await f.wb.api.getDraft(f.jobId))!
+  expect((await f.wb.api.measureCoverLetter(input)).ok).toBe(true)
+  await acknowledge(f)
+  expect((await f.wb.api.approveCoverLetter(f.jobId, f.letter.id)).ok).toBe(true)
+  expect((await f.wb.api.changeCvTitle({ jobId: f.jobId, draftId: cv.id, title: null })).ok).toBe(true)
+  expect((await f.wb.api.getDraft(f.jobId))?.id).not.toBe(cv.id)
+  expect((await f.wb.api.getCoverLetterReadModel(f.jobId)).readiness.canExport).toBe(true)
+  expect((await f.wb.api.getCoverLetter(f.jobId))?.cvRevisionId).toBe(cv.id)
+}, 30_000)
+
+test('actual local preview/measurement fail closed on unsupported text, bidi, significant overflow and multipage output', async () => {
+  const f = await setup(), input = { jobId: f.jobId, letterId: f.letter.id }, original = f.letter.paragraphs[0]
+  for (const text of ['مرحبا', `Hidden${String.fromCharCode(0x202e)} wording`, 'W'.repeat(200)]) {
+    f.mutate(letter => { letter.paragraphs = [{ ...original, text }] })
+    expect((await f.wb.api.measureCoverLetter(input)).ok).toBe(false)
+    expect((await f.wb.api.getCoverLetterPdf(input)).ok).toBe(false)
+    expect((await f.wb.api.approveCoverLetter(f.jobId, f.letter.id)).ok).toBe(false)
+  }
+  f.mutate(letter => { letter.paragraphs = Array.from({ length: 8 }, (_, at) => ({ ...original, id: `00000000-0000-4000-8000-${String(at).padStart(12, '0')}`, text: 'Practiced TypeScript exercises and built reliable tools. '.repeat(45) })) })
+  expect((await f.wb.api.measureCoverLetter(input)).ok).toBe(false)
+  expect((await f.wb.api.getCoverLetterReadModel(f.jobId)).readiness.currentFit).toBeNull()
+}, 30_000)
 
 test('current read model projects exact local contact, frozen kinds, checks and separate CV authority', async () => {
   const f = await setup(), beforeCv = await f.wb.api.getDraft(f.jobId)

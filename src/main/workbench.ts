@@ -20,8 +20,10 @@ import { coverLetterGenerationStatusSchema, coverLetterOutcomeSchema, coverLette
 import { createOutboundConsentEngine } from './outbound-consent'
 import { prepareCoverLetterSources, validateCoverLetterResponse, checkLocalCoverLetter } from './cover-letter-generation'
 import { canonicalCoverLetterSchema, projectCoverLetter, type CoverLetterTemplateIdentity } from '../shared/cover-letter-document'
-import { coverLetterReadModelSchema } from '../shared/cover-letter-artifact'
-import { createCoverLetterCompiler } from './cover-letter-compiler'
+import { coverLetterReadModelSchema, coverLetterArtifactActionSchema, type CoverLetterReadModel } from '../shared/cover-letter-artifact'
+import { createCoverLetterCompiler, hashCoverLetterDocument } from './cover-letter-compiler'
+import { createCoverLetterAuthority } from './cover-letter-authority'
+import { assertCoverLetterPdfContent, inspectCoverLetterPdf } from './cover-letter-pdf'
 import { coverLetterModelResponseSchema } from '../shared/cover-letter'
 import type { OutboundConsentAction, OutboundConsentPreview } from '../shared/outbound-consent-contract'
 import { regenerationProposalSchema, regenerationTargetSchema, type RegenerationTarget, type RegenerationProposal } from '../shared/regeneration'
@@ -105,7 +107,7 @@ function inheritRevisionFindings(prior: DraftRevision, next: DraftRevision, read
   return draftRevisionSchema.parse({ ...next, checkReport: report, status: report.passed ? 'unverified' : 'blocked' })
 }
 
-export function createWorkbench(userData: string, _legacySecureStorage?: unknown, scriptedTransport?: AnalysisTransport, recoveryHooks?: { beforeGraphCheckpoint?: (metadata: import('@langchain/langgraph').CheckpointMetadata) => void; workspaceBackupMaxBytes?: number }, piRuntime?: PiModelRuntime | Promise<PiModelRuntime | null>): { api: WorkbenchStorageAPI; authorizeOutboundPayload<T>(runId: string, payload: T): T; backup: WorkspaceBackupEngine; beginJobOperation(jobId: string, action: string): () => void; hasActiveWork(): boolean; close(): void } {
+export function createWorkbench(userData: string, _legacySecureStorage?: unknown, scriptedTransport?: AnalysisTransport, recoveryHooks?: { beforeGraphCheckpoint?: (metadata: import('@langchain/langgraph').CheckpointMetadata) => void; workspaceBackupMaxBytes?: number }, piRuntime?: PiModelRuntime | Promise<PiModelRuntime | null>, letterCompilerOverride?: ReturnType<typeof createCoverLetterCompiler>): { api: WorkbenchStorageAPI; authorizeOutboundPayload<T>(runId: string, payload: T): T; backup: WorkspaceBackupEngine; beginJobOperation(jobId: string, action: string): () => void; hasActiveWork(): boolean; close(): void } {
   mkdirSync(userData, { recursive: true })
   const db = new Database(join(userData, 'workbench.sqlite'))
   registerWorkspaceBackupRowSizer(db)
@@ -519,7 +521,8 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
     db.prepare('INSERT INTO cover_letter_operations(id,job_id,parent_run_id,consent_id,status,data,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,data=excluded.data,updated_at=excluded.updated_at').run(data.id, data.jobId, data.parentRunId, data.consentId, data.status, JSON.stringify(data), data.createdAt, data.updatedAt)
     return data
   }
-  const letterCompiler = createCoverLetterCompiler({ toolchainRoot: join(__dirname, '../..', '.tools/latex'), templateRoot: join(__dirname, '../..', 'resources/cover-letter-template/application'), tempRoot: join(userData, 'letter-compiler') })
+  const letterAuthority = createCoverLetterAuthority(userData)
+  const letterCompiler = letterCompilerOverride ?? createCoverLetterCompiler({ toolchainRoot: join(__dirname, '../..', '.tools/latex'), templateRoot: join(__dirname, '../..', 'resources/cover-letter-template/application'), tempRoot: join(userData, 'letter-compiler') })
   const letterContact = () => {
     const contact = readProfile().contact
     return contact ? { fullName: contact.fullName, ...(contact.email ? { email: contact.email } : {}), ...(contact.phone ? { phone: contact.phone } : {}), ...(contact.location ? { location: contact.location } : {}) } : null
@@ -543,7 +546,9 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
     })
     return [...known, ...checked].filter((finding, index, all) => all.findIndex(other => JSON.stringify(other) === JSON.stringify(finding)) === index).slice(0, 100)
   }
-  const letterReviewState = (jobId: string, identity: CoverLetterTemplateIdentity | null) => {
+  const measurementMaterial = (letter: ReturnType<typeof coverLetterRevisionSchema.parse>, canonical: unknown) => ({ canonical, bindings: letter.bindings, fit: letter.fit })
+  const approvalMaterial = (letter: ReturnType<typeof coverLetterRevisionSchema.parse>, canonical: unknown, findings: unknown) => ({ ...measurementMaterial(letter, canonical), findings, acknowledgments: letter.acknowledgments, approvedAt: letter.approvedAt })
+  const letterReviewState = (jobId: string, identity: CoverLetterTemplateIdentity | null): Pick<CoverLetterReadModel, 'letter' | 'canonical' | 'readiness'> => {
     const letter = readCoverLetter(jobId)
     const bindingProblem = letter ? coverLetterCurrentStatus(letter) : 'No cover-letter draft is saved for this job.'
     let canonical = null, canonicalProblem: string | null = null
@@ -553,7 +558,25 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
     }
     const findings = letter ? letterFindings(letter) : []
     const paragraphAcknowledgments = Object.fromEntries(letter?.paragraphs.map(p => [p.id, letter.acknowledgments[p.id] === acknowledgmentHash(p, letter.bindings.sources)]) ?? [])
-    return { letter, canonical, readiness: { bindingProblem, canonicalProblem, findings, paragraphAcknowledgments, currentFit: null, approved: false, canMeasure: !!letter && !!canonical && !bindingProblem, canApprove: false, canExport: false } }
+    const canMeasure = !!letter && !!canonical && !bindingProblem
+    const currentFit = canMeasure && letter.fit && letter.fit.documentHash === hashCoverLetterDocument(canonical) && letterAuthority.verify('measurement', measurementMaterial(letter, canonical), letter.localArtifactAuthority?.measurementSeal) ? letter.fit : null
+    const canApprove = canMeasure && !!currentFit && !findings.length && Object.values(paragraphAcknowledgments).every(Boolean)
+    const approved = canApprove && letter.approved && letterAuthority.verify('approval', approvalMaterial(letter, canonical, findings), letter.localArtifactAuthority?.approvalSeal)
+    const effective = letter ? coverLetterRevisionSchema.parse({ ...letter, findings, fit: currentFit ?? undefined, approved, approvedAt: approved ? letter.approvedAt : undefined }) : null
+    return { letter: effective, canonical, readiness: { bindingProblem, canonicalProblem, findings, paragraphAcknowledgments, currentFit, approved, canMeasure, canApprove, canExport: approved } }
+  }
+  const captureTrustedLetter = (jobId: string, letterId: string, identity: CoverLetterTemplateIdentity, requireApproval = false) => {
+    const state = letterReviewState(jobId, identity)
+    if (!state.letter || state.letter.id !== letterId) throw new Error('This cover-letter revision is no longer current.')
+    if (!state.canonical || !state.readiness.canMeasure || (requireApproval && !state.readiness.canExport)) throw new Error('The current cover letter is not ready for this local action.')
+    // This closure is main-only: no renderer path, hash, report or snapshot can create it.
+    const fingerprint = JSON.stringify({ stored: readCoverLetter(jobId), canonical: state.canonical, readiness: state.readiness })
+    const assertCurrent = (): undefined => {
+      const current = letterReviewState(jobId, identity)
+      if (JSON.stringify({ stored: readCoverLetter(jobId), canonical: current.canonical, readiness: current.readiness }) !== fingerprint || !current.readiness.canMeasure || (requireApproval && !current.readiness.canExport)) throw new Error('The cover letter changed while its local artifact was being prepared. No file was written.')
+      return undefined
+    }
+    return { canonical: state.canonical, letter: readCoverLetter(jobId)!, assertCurrent }
   }
   const acknowledgmentHash = (paragraph: ReturnType<typeof coverLetterRevisionSchema.parse>['paragraphs'][number], sources: ReturnType<typeof coverLetterRevisionSchema.parse>['bindings']['sources']) => createHash('sha256').update(coverLetterAcknowledgmentMaterial(paragraph, sources)).digest('hex')
   const generateDraftCore = async (token: string, pageTarget: 1 | 2 = 1, resumeRunId?: string, owner?: symbol): Promise<Awaited<ReturnType<WorkbenchStorageAPI['generateDraft']>>> => {
@@ -2119,7 +2142,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       const stale = coverLetterCurrentStatus(prior)
       if (stale) return coverLetterActionResultSchema.parse({ ok: false, message: stale })
       if (parsed.data.paragraphs.length !== prior.paragraphs.length || parsed.data.paragraphs.some((paragraph, index) => paragraph.id !== prior.paragraphs[index]?.id)) return coverLetterActionResultSchema.parse({ ok: false, message: 'Keep the current paragraph identities while editing their wording.' })
-      const { fit: _fit, approvedAt: _approvedAt, ...base } = prior
+      const { fit: _fit, approvedAt: _approvedAt, localArtifactAuthority: _authority, ...base } = prior
       const saved = coverLetterRevisionSchema.parse({ ...base, id: randomUUID(), revision: prior.revision + 1, recipient: parsed.data.recipient ?? undefined, paragraphs: parsed.data.paragraphs, findings: [], acknowledgments: {}, approved: false, createdAt: new Date().toISOString() })
       try {
         // Validate before saving so unsupported edits cannot strand an uneditable canonical-null revision.
@@ -2157,18 +2180,66 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       if (!letter) return coverLetterActionResultSchema.parse({ ok: false, message: 'No cover-letter draft is saved for this job.' })
       const stale = coverLetterCurrentStatus(letter)
       if (stale) return coverLetterActionResultSchema.parse({ ok: false, message: stale, letter })
-      const checked = coverLetterRevisionSchema.parse({ ...letter, findings: letterFindings(letter), approved: false, approvedAt: undefined })
+      const findings = letterFindings(letter)
+      const checked = coverLetterRevisionSchema.parse({ ...letter, findings, ...(findings.length ? { approved: false, approvedAt: undefined } : {}) })
       db.prepare('UPDATE cover_letter_revisions SET data=? WHERE id=?').run(JSON.stringify(checked), checked.id)
       return coverLetterActionResultSchema.parse({ ok: checked.findings.length === 0, message: checked.findings.length ? 'Resolve the known cover-letter findings before approval.' : 'Current source bindings and paragraph citations are available for review.', letter: checked })
     },
-    async approveCoverLetter(jobId) {
+    async measureCoverLetter(input) {
+      const parsed = coverLetterArtifactActionSchema.safeParse(input)
+      if (!parsed.success) return { ok: false, message: 'Expected only the current job and letter IDs.' }
+      let release: (() => void) | undefined
+      try {
+        release = beginJobOperation(parsed.data.jobId, 'Cover-letter measurement')
+        const identity = await letterCompiler.getTemplateIdentity()
+        const snapshot = captureTrustedLetter(parsed.data.jobId, parsed.data.letterId, identity)
+        const compiled = await letterCompiler.compile(snapshot.canonical)
+        const inspected = await inspectCoverLetterPdf(compiled.pdf)
+        assertCoverLetterPdfContent(snapshot.canonical, inspected)
+        if (compiled.documentHash !== hashCoverLetterDocument(snapshot.canonical)) throw new Error('Invalid compiled identity')
+        snapshot.assertCurrent()
+        const fit = { documentHash: compiled.documentHash, actualPages: 1 as const, overflow: false as const, measuredAt: new Date().toISOString() }
+        const saved = coverLetterRevisionSchema.parse({ ...snapshot.letter, findings: letterFindings(snapshot.letter), fit, approved: false, approvedAt: undefined, localArtifactAuthority: undefined })
+        saved.localArtifactAuthority = { measurementSeal: letterAuthority.seal('measurement', measurementMaterial(saved, snapshot.canonical)) }
+        db.prepare('UPDATE cover_letter_revisions SET data=? WHERE id=?').run(JSON.stringify(saved), saved.id)
+        return coverLetterActionResultSchema.parse({ ok: true, message: 'Actual one-page Letter PDF measured with selectable text and embedded Lato.', letter: saved })
+      } catch { return { ok: false, message: 'The current cover letter could not be measured as one printable Letter page. Check wording, contact, current sources and local resources.' } }
+      finally { release?.() }
+    },
+    async getCoverLetterPdf(input) {
+      const parsed = coverLetterArtifactActionSchema.safeParse(input)
+      if (!parsed.success) return { ok: false, message: 'Expected only the current job and letter IDs.' }
+      let release: (() => void) | undefined
+      try {
+        release = beginJobOperation(parsed.data.jobId, 'Cover-letter PDF preview')
+        const identity = await letterCompiler.getTemplateIdentity()
+        const snapshot = captureTrustedLetter(parsed.data.jobId, parsed.data.letterId, identity)
+        const compiled = await letterCompiler.compile(snapshot.canonical)
+        snapshot.assertCurrent()
+        return { ok: true, message: 'Actual compiled cover-letter PDF. Word may reflow.', documentHash: compiled.documentHash, pdfBase64: compiled.pdf.toString('base64') }
+      } catch { return { ok: false, message: 'The current cover-letter PDF could not be prepared. Check its wording, contact, sources and one-page fit.' } }
+      finally { release?.() }
+    },
+    async approveCoverLetter(jobId, expectedLetterId) {
       const letter = readCoverLetter(jobId)
       if (!letter) return coverLetterActionResultSchema.parse({ ok: false, message: 'No cover-letter draft is saved for this job.' })
       const stale = coverLetterCurrentStatus(letter)
       if (stale) return coverLetterActionResultSchema.parse({ ok: false, message: stale, letter })
-      if (letter.findings.length) return coverLetterActionResultSchema.parse({ ok: false, message: 'Resolve all known cover-letter findings before approval.', letter })
+      if (expectedLetterId !== undefined && expectedLetterId !== letter.id) return { ok: false, message: 'This cover-letter revision is no longer current.' }
+      const findings = letterFindings(letter)
+      if (findings.length) return coverLetterActionResultSchema.parse({ ok: false, message: 'Resolve all known cover-letter findings before approval.', letter: { ...letter, findings, approved: false, approvedAt: undefined } })
       if (letter.paragraphs.some(paragraph => letter.acknowledgments[paragraph.id] !== acknowledgmentHash(paragraph, letter.bindings.sources))) return coverLetterActionResultSchema.parse({ ok: false, message: 'Acknowledge every current paragraph and its bound source passages before approval.', letter })
-      return coverLetterActionResultSchema.parse({ ok: false, message: 'This backend has no main-generated PDF fit measurement. Cover-letter approval is unavailable until compilation is implemented.', letter })
+      let identity: CoverLetterTemplateIdentity
+      try { identity = await letterCompiler.getTemplateIdentity() } catch { return { ok: false, message: 'The local template or compiler assets are unavailable.' } }
+      const state = letterReviewState(jobId, identity)
+      if (!state.readiness.canApprove || state.letter?.id !== letter.id) return { ok: false, message: 'A current main-generated PDF fit measurement is required before approval.' }
+      if (!expectedLetterId) return { ok: false, message: 'Explicit approval must identify the current letter revision.' }
+      // Re-read after the awaited asset check; never authorize the earlier callback's data.
+      const current = readCoverLetter(jobId)!
+      const saved = coverLetterRevisionSchema.parse({ ...current, findings: state.readiness.findings, approved: true, approvedAt: new Date().toISOString() })
+      saved.localArtifactAuthority = { measurementSeal: current.localArtifactAuthority!.measurementSeal, approvalSeal: letterAuthority.seal('approval', approvalMaterial(saved, state.canonical, state.readiness.findings)) }
+      db.prepare('UPDATE cover_letter_revisions SET data=? WHERE id=?').run(JSON.stringify(saved), saved.id)
+      return { ok: true, message: 'The exact measured cover letter was explicitly approved independently of the CV.', letter: saved }
     },
     async getDraft(jobId: string) {
       if (!uuidSchema.safeParse(jobId).success) return null

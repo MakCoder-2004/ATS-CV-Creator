@@ -499,7 +499,7 @@ export function createWorkspaceBackupEngine(db: Database.Database, maxBackupByte
     }
     for (const row of backup.tables.cover_letter_revisions?.rows ?? []) {
       const letter = coverLetterRevisionSchema.parse(parseJson('cover_letter_revisions', String(row.data)))
-      const { fit: _fit, approvedAt: _approvedAt, ...reviewed } = letter
+      const { fit: _fit, approvedAt: _approvedAt, localArtifactAuthority: _authority, ...reviewed } = letter
       row.data = JSON.stringify({ ...reviewed, acknowledgments: {}, approved: false })
     }
     const expected = actualTables().sort()
