@@ -6,7 +6,7 @@ import { resolve } from 'node:path'
 import { ApplicationDocumentSelector } from '../src/renderer/ApplicationDocumentSelector'
 import { CoverLetterRunOption } from '../src/renderer/CoverLetterRunOption'
 import { CoverLetterReview } from '../src/renderer/CoverLetterReview'
-import { advanceReviewVisit, canBeginParagraphEdit, canBeginRecipientEdit } from '../src/renderer/cover-letter-review-state'
+import { advanceReviewVisit, canBeginParagraphEdit, canBeginRecipientEdit, canSaveParagraphEdit, canSaveRecipientEdit } from '../src/renderer/cover-letter-review-state'
 
 const uid = (n: string) => `${n.repeat(8)}-${n.repeat(4)}-4${n.repeat(3)}-8${n.repeat(3)}-${n.repeat(12)}`
 const revision = {
@@ -21,7 +21,7 @@ const canonical = {
 const handlers = {
   onSaveParagraph: async () => {}, onSaveRecipient: async () => {}, onAcknowledge: async () => {}, onCheck: async () => {}, onMeasureFit: async () => {}, onApprove: async () => {},
 }
-const renderReview = (props: Record<string, unknown> = {}) => renderToStaticMarkup(createElement(CoverLetterReview, { jobId: revision.jobId, sourceRevisionId: revision.cvRevisionId, letter: revision, canonical, checkStatus: 'issues', fitStatus: 'pending', readiness: { canApprove: false, reason: 'Resolve the listed issue.' }, message: 'The wording check found an issue.', busy: false, ...handlers, ...props } as never))
+const renderReview = (props: Record<string, unknown> = {}) => renderToStaticMarkup(createElement(CoverLetterReview, { jobId: revision.jobId, originatingCvRevisionId: revision.cvRevisionId, letter: revision, canonical, checkStatus: 'issues', fitStatus: 'pending', readiness: { canApprove: false, reason: 'Resolve the listed issue.' }, message: 'The wording check found an issue.', busy: false, ...handlers, ...props } as never))
 
 test('shows separate CV and cover letter selection with independent statuses', () => {
   const html = renderToStaticMarkup(createElement(ApplicationDocumentSelector, { selected: 'cover-letter', cvStatus: 'Approved', coverLetterStatus: 'Failed', onSelect: () => {} }))
@@ -85,7 +85,7 @@ test('renders editable paragraph actions, current acknowledgment, and honest sem
 })
 
 test('preserves stale and unavailable state without hiding CV selection', () => {
-  const html = renderReview({ sourceRevisionId: uid('8'), message: 'This cover letter is out of date.', readiness: { canApprove: false, reason: 'Review the current source.' } })
+  const html = renderReview({ originatingCvRevisionId: uid('8'), message: 'This cover letter is out of date.', readiness: { canApprove: false, reason: 'Review the current source.' } })
   expect(html).toContain('This cover letter is out of date.')
   expect(html).toContain('CV')
   expect(html).toContain('Cover letter')
@@ -113,6 +113,20 @@ test('serializes edit sessions and advances identity epochs across A-B-A visits'
   expect(advanceReviewVisit(visitAAgain, 'A')).toEqual(visitAAgain)
 })
 
+test('saving an active edit is distinct from starting an empty edit session', () => {
+  const paragraph = { kind: 'paragraph' as const, paragraphId: 'paragraph-one' }
+  const recipient = { kind: 'recipient' as const }
+  expect(canBeginParagraphEdit(paragraph)).toBe(false)
+  expect(canSaveParagraphEdit(paragraph, 'paragraph-one')).toBe(true)
+  expect(canSaveParagraphEdit(paragraph, 'paragraph-two')).toBe(false)
+  expect(canSaveParagraphEdit(recipient, 'paragraph-one')).toBe(false)
+  expect(canSaveParagraphEdit(null, 'paragraph-one')).toBe(false)
+  expect(canBeginRecipientEdit(recipient)).toBe(false)
+  expect(canSaveRecipientEdit(recipient)).toBe(true)
+  expect(canSaveRecipientEdit(paragraph)).toBe(false)
+  expect(canSaveRecipientEdit(null)).toBe(false)
+})
+
 test('places the sticky action bar before the paper in review markup', () => {
   const html = renderReview()
   expect(html.indexOf('cover-letter-action-bar')).toBeLessThan(html.indexOf('cover-letter-paper'))
@@ -138,6 +152,7 @@ test('uses paper palette colors with WCAG AA contrast for paper text and focus',
   const paperSelected = match('selected')
   expect(contrast(paperInk, '#ffffff')).toBeGreaterThanOrEqual(4.5)
   expect(contrast(match('muted'), '#ffffff')).toBeGreaterThanOrEqual(4.5)
+  expect(contrast(match('error'), '#ffffff')).toBeGreaterThanOrEqual(4.5)
   expect(contrast(paperAccent, '#ffffff')).toBeGreaterThanOrEqual(4.5)
   expect(contrast(paperInk, paperSelected)).toBeGreaterThanOrEqual(4.5)
   expect(contrast(paperAccent, paperSelected)).toBeGreaterThanOrEqual(4.5)

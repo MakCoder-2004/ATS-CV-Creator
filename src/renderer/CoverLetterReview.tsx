@@ -1,7 +1,7 @@
 import { useRef, useState, useLayoutEffect } from 'react'
 import type { CoverLetterRevision } from '../shared/cover-letter'
 import type { CanonicalCoverLetter } from '../shared/cover-letter-document'
-import { advanceReviewVisit, canBeginParagraphEdit, canBeginRecipientEdit } from './cover-letter-review-state'
+import { advanceReviewVisit, canBeginParagraphEdit, canBeginRecipientEdit, canSaveParagraphEdit, canSaveRecipientEdit } from './cover-letter-review-state'
 import type { EditSession } from './cover-letter-review-state'
 import './cover-letter-review.css'
 
@@ -15,7 +15,7 @@ type LocalState = { identity: string; paragraphId?: string; text?: string; recip
 
 export type CoverLetterReviewProps = {
   jobId: string
-  sourceRevisionId: string | null
+  originatingCvRevisionId: string | null
   letter: CoverLetterRevision | null
   canonical: CanonicalCoverLetter | null
   checkStatus: CoverLetterCheckStatus
@@ -35,12 +35,12 @@ const statusLabel: Record<CoverLetterCheckStatus, string> = {
   idle: 'Not checked', pending: 'Check pending', passed: 'No known issues', issues: 'Issues need review', error: 'Check failed',
 }
 const fitLabel: Record<CoverLetterFitStatus, string> = {
-  idle: 'Not measured', pending: 'Fit check pending', passed: 'One-page fit reported by host', issues: 'Fit needs review', error: 'Fit check failed',
+  idle: 'Not measured', pending: 'Fit check pending', passed: 'Fits one page', issues: 'Fit needs review', error: 'Fit check failed',
 }
 
 export function CoverLetterReview(props: CoverLetterReviewProps) {
-  const { jobId, sourceRevisionId, letter, canonical, readiness, busy } = props
-  const identity = letter ? `${jobId}:${letter.id}:${letter.revision}:${sourceRevisionId ?? 'missing'}` : `${jobId}:missing:${sourceRevisionId ?? 'missing'}`
+  const { jobId, originatingCvRevisionId, letter, canonical, readiness, busy } = props
+  const identity = letter ? `${jobId}:${letter.id}:${letter.revision}:${originatingCvRevisionId ?? 'missing'}` : `${jobId}:missing:${originatingCvRevisionId ?? 'missing'}`
   const visit = useRef({ identity, epoch: 0 })
   visit.current = advanceReviewVisit(visit.current, identity)
   const visitKey = `${identity}@${visit.current.epoch}`
@@ -50,10 +50,12 @@ export function CoverLetterReview(props: CoverLetterReviewProps) {
   useLayoutEffect(() => {
     const bar = actionBarRef.current
     if (!bar || typeof ResizeObserver === 'undefined') return
-    const observer = new ResizeObserver(entries => {
-      const height = entries[0]?.contentRect.height
+    const measure = () => {
+      const height = bar.getBoundingClientRect().height
       if (height) (bar.closest('.cover-letter-review') as HTMLElement | null)?.style.setProperty('--cover-letter-review-bar-height', `${Math.ceil(height)}px`)
-    })
+    }
+    measure()
+    const observer = new ResizeObserver(measure)
     observer.observe(bar)
     return () => observer.disconnect()
   }, [])
@@ -68,7 +70,7 @@ export function CoverLetterReview(props: CoverLetterReviewProps) {
   const editSession: EditSession = activeEdit ? { kind: 'paragraph', paragraphId: activeEdit } : localState?.recipient !== undefined ? { kind: 'recipient' } : null
   const unsavedEdit = Boolean(activeEdit || recipientDirty)
   const pending = busy || Boolean(localState?.pending)
-  const mismatch = Boolean(letter && (letter.jobId !== jobId || !sourceRevisionId || letter.cvRevisionId !== sourceRevisionId || !canonical || canonical.jobId !== jobId || canonical.sourceRevisionId !== letter.id || canonical.revision !== letter.revision || canonical.paragraphs.length !== letter.paragraphs.length || canonical.paragraphs.some((text, index) => text !== letter.paragraphs[index]?.text)))
+  const mismatch = Boolean(letter && (letter.jobId !== jobId || !originatingCvRevisionId || letter.cvRevisionId !== originatingCvRevisionId || !canonical || canonical.jobId !== jobId || canonical.sourceRevisionId !== letter.id || canonical.revision !== letter.revision || canonical.paragraphs.length !== letter.paragraphs.length || canonical.paragraphs.some((text, index) => text !== letter.paragraphs[index]?.text)))
   const boundLetter = letter && !mismatch ? letter : null
   const boundCanonical = boundLetter && canonical ? canonical : null
   const sourceByOrdinal = new Map((boundLetter?.bindings.sources ?? []).map(source => [source.ordinal, source]))
@@ -76,7 +78,7 @@ export function CoverLetterReview(props: CoverLetterReviewProps) {
   const actionInput = boundLetter ? { jobId, letterId: boundLetter.id } : null
 
   const saveParagraph = async (paragraphId: string, fallback: string) => {
-    if (!actionInput || pending || !canBeginParagraphEdit(editSession) || recipientDirty) return
+    if (!actionInput || pending || !canSaveParagraphEdit(editSession, paragraphId) || recipientDirty) return
     const expectedIdentity = visitKey
     const text = local?.identity === expectedIdentity && local.paragraphId === paragraphId ? local.text ?? fallback : fallback
     setLocal({ identity: expectedIdentity, paragraphId, text, pending: true })
@@ -93,7 +95,7 @@ export function CoverLetterReview(props: CoverLetterReviewProps) {
 
   const saveRecipient = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    if (!actionInput || pending || !canBeginRecipientEdit(editSession)) return
+    if (!actionInput || pending || !canSaveRecipientEdit(editSession)) return
     const expectedIdentity = visitKey
     const recipient = recipientDraft.trim() || null
     setLocal({ identity: expectedIdentity, recipient: recipientDraft, pending: true })
@@ -190,12 +192,12 @@ export function CoverLetterReview(props: CoverLetterReviewProps) {
       <p className="cover-letter-limitation">Automated checks cannot prove semantic truth. A source acknowledgment records your decision; it does not prove that wording is accurate.</p>
       <form className="cover-letter-recipient-form" onSubmit={event => { void saveRecipient(event) }}>
         <label htmlFor="cover-letter-recipient">Recipient name (optional)</label>
-        <input id="cover-letter-recipient" value={recipientDraft} disabled={pending || Boolean(activeEdit)} onChange={event => setLocal({ identity: visitKey, recipient: event.currentTarget.value })} aria-describedby="cover-letter-recipient-help" />
+        <input id="cover-letter-recipient" value={recipientDraft} disabled={pending || (!canBeginRecipientEdit(editSession) && editSession?.kind !== 'recipient')} onChange={event => setLocal({ identity: visitKey, recipient: event.currentTarget.value })} aria-describedby="cover-letter-recipient-help" />
         <p id="cover-letter-recipient-help">This name stays on this device and is not sent to Pi. No saved job contacts are selected automatically.</p>
         <div className="cover-letter-control-row"><button className="secondary-button" type="submit" disabled={pending || Boolean(activeEdit) || recipientDraft.trim() === (boundLetter.recipient ?? '')}>Save recipient</button>{recipientSession && <button className="secondary-button" type="button" disabled={pending} onClick={() => setLocal(null)}>Cancel recipient edit</button>}</div>
       </form>
       <p className="cover-letter-ack-count" role="status">{acknowledgedCount} of {boundLetter.paragraphs.length} paragraphs acknowledged</p>
-    </> : <div className="cover-letter-unavailable" role="status"><h2>{letter ? 'Cover letter needs review' : 'No cover letter available'}</h2><p>{mismatch ? 'The available letter is stale or its current document does not match. The host must provide a current letter before review.' : props.message || 'The CV remains available for its independent review.'}</p></div>}
+    </> : <div className="cover-letter-unavailable" role="status"><h2>{letter ? 'Cover letter needs review' : 'No cover letter available'}</h2><p>{mismatch ? 'The available letter is stale or its current document does not match. Open the current letter again before reviewing. Your CV remains separate.' : props.message || 'The CV remains available for its independent review.'}</p></div>}
 
   </section>
 }

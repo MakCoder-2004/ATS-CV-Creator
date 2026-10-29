@@ -13,3 +13,11 @@ export function canBeginRecipientEdit(session: EditSession): boolean {
 export function canBeginParagraphEdit(session: EditSession): boolean {
   return session === null
 }
+
+export function canSaveParagraphEdit(session: EditSession, paragraphId: string): boolean {
+  return session?.kind === 'paragraph' && session.paragraphId === paragraphId
+}
+
+export function canSaveRecipientEdit(session: EditSession): boolean {
+  return session?.kind === 'recipient'
+}
