@@ -38,4 +38,6 @@ Settings stores appearance, one exact Pi provider/model and thinking level. Choo
 
 ## What is not shipped
 
+The optional cover-letter backend now has separate generation/retry, source-bound local review, actual Letter/Lato PDF measurement, explicit approval and native PDF/editable-DOCX actions. The production renderer host is not linked by this bounded integration, so this is not yet an accepted visible cover-letter workflow. The [artifact-controller API and validation](validation/cover-letter-artifact-integration.md) describe the exact current read model and actions for the next visible-flow unit; CV review/export remains independent. No installed cover-letter acceptance is claimed.
+
 The documents under [research on later features](research/ai-job-search-adoption-plan.md) include possible job discovery, cover letters, application tracking, interview aids, and other later features. They are research and proposals, not installed features. [`prototypes/cv-tailor-ui/`](../prototypes/cv-tailor-ui/) contains browser-only design evidence. The [frontend design system](../design%20system/README.md) is normative for UI work, but a prototype fixture is not a persisted record or a promise of production behavior.
