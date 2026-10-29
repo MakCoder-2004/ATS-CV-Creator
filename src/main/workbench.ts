@@ -23,6 +23,8 @@ import { canonicalCoverLetterSchema, projectCoverLetter, type CoverLetterTemplat
 import { coverLetterReadModelSchema, coverLetterArtifactActionSchema, type CoverLetterReadModel } from '../shared/cover-letter-artifact'
 import { createCoverLetterCompiler, hashCoverLetterDocument } from './cover-letter-compiler'
 import { createCoverLetterAuthority } from './cover-letter-authority'
+import { renderCoverLetterDocx } from './cover-letter-docx'
+import type { TrustedLetterExportSnapshot } from './cover-letter-artifact-controller'
 import { assertCoverLetterPdfContent, inspectCoverLetterPdf } from './cover-letter-pdf'
 import { coverLetterModelResponseSchema } from '../shared/cover-letter'
 import type { OutboundConsentAction, OutboundConsentPreview } from '../shared/outbound-consent-contract'
@@ -107,7 +109,7 @@ function inheritRevisionFindings(prior: DraftRevision, next: DraftRevision, read
   return draftRevisionSchema.parse({ ...next, checkReport: report, status: report.passed ? 'unverified' : 'blocked' })
 }
 
-export function createWorkbench(userData: string, _legacySecureStorage?: unknown, scriptedTransport?: AnalysisTransport, recoveryHooks?: { beforeGraphCheckpoint?: (metadata: import('@langchain/langgraph').CheckpointMetadata) => void; workspaceBackupMaxBytes?: number }, piRuntime?: PiModelRuntime | Promise<PiModelRuntime | null>, letterCompilerOverride?: ReturnType<typeof createCoverLetterCompiler>): { api: WorkbenchStorageAPI; authorizeOutboundPayload<T>(runId: string, payload: T): T; backup: WorkspaceBackupEngine; beginJobOperation(jobId: string, action: string): () => void; hasActiveWork(): boolean; close(): void } {
+export function createWorkbench(userData: string, _legacySecureStorage?: unknown, scriptedTransport?: AnalysisTransport, recoveryHooks?: { beforeGraphCheckpoint?: (metadata: import('@langchain/langgraph').CheckpointMetadata) => void; workspaceBackupMaxBytes?: number }, piRuntime?: PiModelRuntime | Promise<PiModelRuntime | null>, letterCompilerOverride?: ReturnType<typeof createCoverLetterCompiler>): { api: WorkbenchStorageAPI; authorizeOutboundPayload<T>(runId: string, payload: T): T; backup: WorkspaceBackupEngine; beginJobOperation(jobId: string, action: string): () => void; captureCoverLetterExport(input: import('../shared/cover-letter-artifact').CoverLetterArtifactAction): Promise<TrustedLetterExportSnapshot>; hasActiveWork(): boolean; close(): void } {
   mkdirSync(userData, { recursive: true })
   const db = new Database(join(userData, 'workbench.sqlite'))
   registerWorkspaceBackupRowSizer(db)
@@ -2516,5 +2518,29 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
     const statement = nativePrepare(source)
     return wrapStatement(statement, !statement.readonly)
   }
-  return { api, authorizeOutboundPayload, backup, beginJobOperation, hasActiveWork: () => requestedDocumentOwners.size > 0 || unsettledRunsByJob.size > 0 || externalJobOperations.size > 0 || activeProfileAiRuns.size > 0, close: () => { db.close() } }
+  const captureCoverLetterExport = async (input: import('../shared/cover-letter-artifact').CoverLetterArtifactAction): Promise<TrustedLetterExportSnapshot> => {
+    const { jobId, letterId } = coverLetterArtifactActionSchema.parse(input)
+    const identity = await letterCompiler.getTemplateIdentity()
+    const snapshot = captureTrustedLetter(jobId, letterId, identity, true)
+    return {
+      canonical: structuredClone(snapshot.canonical),
+      assertCurrent: snapshot.assertCurrent,
+      async createBytes(format) {
+        snapshot.assertCurrent()
+        let bytes: Buffer
+        if (format === 'pdf') {
+          const compiled = await letterCompiler.compile(snapshot.canonical)
+          if (compiled.documentHash !== hashCoverLetterDocument(snapshot.canonical)) throw new Error('Compiled letter identity changed.')
+          bytes = compiled.pdf
+        } else if (format === 'docx') {
+          await letterCompiler.getTemplateIdentity()
+          snapshot.assertCurrent()
+          bytes = await renderCoverLetterDocx(snapshot.canonical)
+        } else throw new Error('Unsupported cover-letter format.')
+        snapshot.assertCurrent()
+        return bytes
+      },
+    }
+  }
+  return { api, authorizeOutboundPayload, backup, beginJobOperation, captureCoverLetterExport, hasActiveWork: () => requestedDocumentOwners.size > 0 || unsettledRunsByJob.size > 0 || externalJobOperations.size > 0 || activeProfileAiRuns.size > 0, close: () => { db.close() } }
 }

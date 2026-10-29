@@ -6,7 +6,7 @@ import type { JobRecord, JobSaveInput, JobSaveResult, JobDeletionPreview, JobDel
 import type { ProfileExchangeResult } from './profile-exchange'
 import type { OutboundConsentAction, OutboundConsentPreview } from './outbound-consent-contract'
 import type { CoverLetterGenerationStatus, CoverLetterOutcome, CoverLetterAcknowledgment, CoverLetterActionResult, CoverLetterEdit, CoverLetterPurpose, CoverLetterRecipient, CoverLetterRevision, RequestedDocumentsResult } from './cover-letter'
-import type { CoverLetterReadModel, CoverLetterArtifactAction, CoverLetterPreviewResult } from './cover-letter-artifact'
+import type { CoverLetterReadModel, CoverLetterArtifactAction, CoverLetterPreviewResult, CoverLetterExportInput, CoverLetterExportResult } from './cover-letter-artifact'
 import type { AnalysisResult, GenerationRecovery, RecoveryChoice } from './posting-analysis'
 
 import type { AddDraftItemInput, DraftCorrectionInput, DraftRevision, SuggestedSkillDecision, DraftTailoringCorrection } from './draft'
@@ -98,6 +98,7 @@ export interface WorkbenchAPI {
   approveCoverLetter(jobId: string, expectedLetterId?: string): Promise<CoverLetterActionResult>
   measureCoverLetter(input: CoverLetterArtifactAction): Promise<CoverLetterActionResult>
   getCoverLetterPdf(input: CoverLetterArtifactAction): Promise<CoverLetterPreviewResult>
+  exportCoverLetter(input: CoverLetterExportInput): Promise<CoverLetterExportResult>
   renewDraftReview(jobId: string): Promise<{ ok: boolean; message: string; draft?: DraftRevision }>
   regenerateDraft(consentToken: string, target: RegenerationTarget): Promise<{ ok: boolean; message: string; proposal?: RegenerationProposal }>
   getRegenerationProposal(jobId: string): Promise<RegenerationProposal | null>
@@ -121,7 +122,7 @@ export interface WorkbenchAPI {
   acceptDocumentCuts(jobId: string, documentHash: string, entryIds: string[]): Promise<{ ok: boolean; message: string; draft?: DraftRevision }>
 }
 
-export type WorkbenchStorageAPI = Omit<WorkbenchAPI, 'getResearchSearchKeyStatus' | 'removeResearchSearchKey' | 'exportProfile' | 'previewProfileImport' | 'applyProfileImport' | 'cancelProfileImport' | 'previewProfilePdfImport' | 'cancelProfilePdfImport' | 'rebaseProfilePdfImport' | 'applyProfilePdfImport' | 'previewProfileDocxImport' | 'cancelProfileDocxImport' | 'rebaseProfileDocxImport' | 'applyProfileDocxImport' | 'previewProfileAiStructuring' | 'consentProfileAiStructuring' | 'runProfileAiStructuring' | 'cancelProfileAiStructuring' | 'exportWorkspaceBackup' | 'previewWorkspaceRestore' | 'applyWorkspaceRestore' | 'cancelWorkspaceRestore' | 'measureDocument' | 'getDocumentPdf' | 'exportApprovedPdf' | 'exportDraftDocx' | 'openContactProfile'> & {
+export type WorkbenchStorageAPI = Omit<WorkbenchAPI, 'exportCoverLetter' | 'getResearchSearchKeyStatus' | 'removeResearchSearchKey' | 'exportProfile' | 'previewProfileImport' | 'applyProfileImport' | 'cancelProfileImport' | 'previewProfilePdfImport' | 'cancelProfilePdfImport' | 'rebaseProfilePdfImport' | 'applyProfilePdfImport' | 'previewProfileDocxImport' | 'cancelProfileDocxImport' | 'rebaseProfileDocxImport' | 'applyProfileDocxImport' | 'previewProfileAiStructuring' | 'consentProfileAiStructuring' | 'runProfileAiStructuring' | 'cancelProfileAiStructuring' | 'exportWorkspaceBackup' | 'previewWorkspaceRestore' | 'applyWorkspaceRestore' | 'cancelWorkspaceRestore' | 'measureDocument' | 'getDocumentPdf' | 'exportApprovedPdf' | 'exportDraftDocx' | 'openContactProfile'> & {
   saveDocumentFitReport(jobId: string, report: DocumentFitReport): Promise<DocumentFitReport>
   validateProfileImport(input: string): Promise<{ ok: boolean; message: string }>
   replaceProfile(input: string): Promise<{ ok: boolean; message: string; profile?: ProfileSnapshot }>

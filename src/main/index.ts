@@ -29,8 +29,10 @@ import { registerResearchSearchSettingsIpc } from './research-search-settings-ip
 import { createResearchSearchCredentials, defaultResearchCredentialDirectory } from './research-search-credentials'
 import { outboundConsentActionSchema, outboundConsentPreviewSchema } from '../shared/outbound-consent-contract'
 import { registerCoverLetterRetryIpc } from './cover-letter-retry-ipc'
-import { coverLetterArtifactActionSchema, coverLetterPreviewResultSchema, coverLetterReadModelSchema } from '../shared/cover-letter-artifact'
-import { coverLetterAcknowledgmentSchema, coverLetterActionResultSchema, coverLetterEditSchema, coverLetterPurposeSchema, coverLetterRecipientSchema, coverLetterRevisionSchema, requestedDocumentsResultSchema } from '../shared/cover-letter'
+import { registerCoverLetterArtifactIpc } from './cover-letter-artifact-ipc'
+import { createCoverLetterArtifactController } from './cover-letter-artifact-controller'
+import { createCoverLetterCompiler } from './cover-letter-compiler'
+import { coverLetterPurposeSchema, requestedDocumentsResultSchema } from '../shared/cover-letter'
 import { analysisIdSchema, analysisResultSchema, analysisStartInputSchema, generationRecoverySchema, recoveryChoiceSchema } from '../shared/posting-analysis'
 import { addDraftItemInputSchema, draftCorrectionInputSchema, draftGenerationSchema, draftRevisionSchema, suggestedSkillDecisionSchema, draftTailoringCorrectionSchema, cvTitleChangeSchema } from '../shared/draft'
 import { factualCheckReportSchema } from '../shared/factual-report'
@@ -202,7 +204,12 @@ app.whenReady().then(() => {
     : import('@earendil-works/pi-coding-agent')
       .then(({ ModelRuntime }) => ModelRuntime.create({ allowModelNetwork: false, refreshOnCreate: false }))
       .catch(() => null)
-  workspace = createWorkbench(app.getPath('userData'), undefined, useScriptedPi ? undefined : scriptedAnalysis, undefined, piRuntime)
+  const letterCompiler = createCoverLetterCompiler({
+    toolchainRoot: app.isPackaged ? join(process.resourcesPath, 'latex') : join(__dirname, '../..', '.tools/latex'),
+    templateRoot: app.isPackaged ? join(process.resourcesPath, 'cover-letter-template/application') : join(__dirname, '../..', 'resources/cover-letter-template/application'),
+    tempRoot: join(app.getPath('temp'), 'cv-tailor-cover-letter-pdf'),
+  })
+  workspace = createWorkbench(app.getPath('userData'), undefined, useScriptedPi ? undefined : scriptedAnalysis, undefined, piRuntime, letterCompiler)
   const researchCredentials = createResearchSearchCredentials({
     credentialsDirectory: defaultResearchCredentialDirectory(app.getPath('appData'), app.getPath('userData')),
     workspaceDirectory: app.getPath('userData'),
@@ -211,7 +218,7 @@ app.whenReady().then(() => {
   registerResearchSearchSettingsIpc(ipcMain, researchCredentials, trusted)
   let modelUpdatePending = false
   registerWorkspaceBackupIpc(() => window!, () => workspace!, () => {
-    const reopened = createWorkbench(app.getPath('userData'), undefined, useScriptedPi ? undefined : scriptedAnalysis, undefined, piRuntime)
+    const reopened = createWorkbench(app.getPath('userData'), undefined, useScriptedPi ? undefined : scriptedAnalysis, undefined, piRuntime, letterCompiler)
     const previous = workspace!
     workspace = reopened
     previous.close()
@@ -373,15 +380,11 @@ app.whenReady().then(() => {
   ipcMain.handle('draft:generate', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 2 || (args[1] !== 1 && args[1] !== 2)) throw new Error('Expected consent token and one- or two-page target'); return draftGenerationSchema.parse(await workspace!.api.generateDraft(analysisStartInputSchema.parse({ consentToken: args[0] }).consentToken, args[1])) })
   ipcMain.handle('documents:generate', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 2 || (args[1] !== 1 && args[1] !== 2)) throw new Error('Expected consent token and one- or two-page target'); return requestedDocumentsResultSchema.parse(await workspace!.api.generateRequestedDocuments(analysisStartInputSchema.parse({ consentToken: args[0] }).consentToken, args[1])) })
   registerCoverLetterRetryIpc(ipcMain, workspace!.api, trusted)
-  ipcMain.handle('cover-letter:read-model', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected saved job ID'); return coverLetterReadModelSchema.parse(await workspace!.api.getCoverLetterReadModel(uuidSchema.parse(args[0]))) })
-  ipcMain.handle('cover-letter:get', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected saved job ID'); const value = await workspace!.api.getCoverLetter(analysisIdSchema.parse(args[0])); return value === null ? null : coverLetterRevisionSchema.parse(value) })
-  ipcMain.handle('cover-letter:edit', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected local cover-letter edit'); return coverLetterActionResultSchema.parse(await workspace!.api.editCoverLetter(coverLetterEditSchema.parse(args[0]))) })
-  ipcMain.handle('cover-letter:recipient', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected local recipient edit'); return coverLetterActionResultSchema.parse(await workspace!.api.setCoverLetterRecipient(coverLetterRecipientSchema.parse(args[0]))) })
-  ipcMain.handle('cover-letter:paragraph:acknowledge', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected paragraph acknowledgment'); return coverLetterActionResultSchema.parse(await workspace!.api.acknowledgeCoverLetterParagraph(coverLetterAcknowledgmentSchema.parse(args[0]))) })
-  ipcMain.handle('cover-letter:check', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected saved job ID'); return coverLetterActionResultSchema.parse(await workspace!.api.checkCoverLetter(analysisIdSchema.parse(args[0]))) })
-  ipcMain.handle('cover-letter:approve', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 2) throw new Error('Expected saved job and current letter IDs'); return coverLetterActionResultSchema.parse(await workspace!.api.approveCoverLetter(uuidSchema.parse(args[0]), uuidSchema.parse(args[1]))) })
-  ipcMain.handle('cover-letter:measure', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected current letter action'); return coverLetterActionResultSchema.parse(await workspace!.api.measureCoverLetter(coverLetterArtifactActionSchema.parse(args[0]))) })
-  ipcMain.handle('cover-letter:pdf', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected current letter action'); return coverLetterPreviewResultSchema.parse(await workspace!.api.getCoverLetterPdf(coverLetterArtifactActionSchema.parse(args[0]))) })
+  const letterActions = createCoverLetterArtifactController(workspace!, {
+    chooseDestination: async format => dialog.showSaveDialog(window!, { title: `Export cover-letter ${format === 'pdf' ? 'PDF' : 'editable DOCX'}`, defaultPath: `cover-letter.${format}`, filters: [{ name: format === 'pdf' ? 'PDF document' : 'Word document', extensions: [format] }], properties: ['showOverwriteConfirmation'] }),
+    confirmOverwrite: async format => (await dialog.showMessageBox(window!, { type: 'warning', title: 'Replace existing cover letter?', message: `Replace the selected file with this approved cover-letter ${format.toUpperCase()}?`, buttons: ['Keep existing file', 'Replace file'], defaultId: 0, cancelId: 0, noLink: true })).response === 1,
+  })
+  registerCoverLetterArtifactIpc(ipcMain, { ...workspace!.api, ...letterActions }, trusted)
   ipcMain.handle('draft:renew-review', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected job ID'); return draftGenerationSchema.parse(await workspace!.api.renewDraftReview(analysisIdSchema.parse(args[0]))) })
   ipcMain.handle('draft:regenerate', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 2) throw new Error('Expected consent token and regeneration target'); return regenerationResultSchema.parse(await workspace!.api.regenerateDraft(analysisStartInputSchema.parse({ consentToken: args[0] }).consentToken, regenerationTargetSchema.parse(args[1]))) })
   ipcMain.handle('draft:regeneration:get', async (event, ...args: unknown[]) => { trusted(event); if (args.length !== 1) throw new Error('Expected job ID'); const proposal = await workspace!.api.getRegenerationProposal(analysisIdSchema.parse(args[0])); return proposal === null ? null : regenerationProposalSchema.parse(proposal) })
