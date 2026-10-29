@@ -26,11 +26,7 @@ export function assertCoverLetterPdfContent(letter: CanonicalCoverLetter, inspec
   const fontFamilies = inspected.fonts.map(font => font.name.replace(/^[A-Z]{6}\+/, ''))
   if (!fontFamilies.includes('Lato-Regular') || !fontFamilies.includes('Lato-Bold') || inspected.fonts.some(font => !font.embedded)) throw new Error('The compiled cover letter is missing its embedded Lato font programs.')
   const actual = normalize(inspected.extractedText.join(' '))
-  const ordered = [letter.name, ...[letter.contact.email, letter.contact.phone, letter.contact.location].filter((value): value is string => Boolean(value)), letter.date, `RE: ${letter.subject}`, letter.greeting, ...letter.paragraphs, 'Sincerely,', letter.signature].map(normalize)
-  let cursor = 0
-  for (const field of ordered) {
-    const index = actual.indexOf(field, cursor)
-    if (!field || index < 0) throw new Error('The compiled letter text or reading order does not match the canonical letter.')
-    cursor = index + field.length
-  }
+  const contact = [letter.contact.email, letter.contact.phone, letter.contact.location].filter((value): value is string => Boolean(value)).join(' · ')
+  const expected = normalize([letter.name, contact, letter.date, `RE: ${letter.subject}`, letter.greeting, ...letter.paragraphs, 'Sincerely,', letter.signature].filter(Boolean).join(' '))
+  if (actual !== expected) throw new Error('The compiled letter text or reading order does not match the canonical letter.')
 }

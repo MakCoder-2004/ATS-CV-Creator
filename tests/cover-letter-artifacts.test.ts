@@ -77,6 +77,17 @@ test('ordinary English apostrophes and typographic punctuation survive actual le
   expect(() => assertCoverLetterPdfContent(typographic, { ...inspected, extractedText: inspected.extractedText.map(text => text.replace('careful', 'careless')) })).toThrow(/text|reading order/)
 }, 60_000)
 
+test('PDF comparison checks the whole canonical letter, including word boundaries and extra text', async () => {
+  const letter = canonical({ paragraphs: [{ ...baseRevision.paragraphs[0], text: 'I can' }] })
+  const compiled = await compiler.compile(letter)
+  const inspected = await inspectCoverLetterPdf(compiled.pdf)
+  expect(inspected.extractedText.some(text => text.includes('I can'))).toBe(true)
+  for (const replacement of ['I can’t', 'I can not', 'I can 9', 'I can do more']) {
+    expect(() => assertCoverLetterPdfContent(letter, { ...inspected, extractedText: inspected.extractedText.map(text => text.replace('I can', replacement)) })).toThrow(/text|reading order/)
+  }
+  expect(() => assertCoverLetterPdfContent(letter, { ...inspected, extractedText: ['Unreviewed additional sentence.', ...inspected.extractedText] })).toThrow(/text|reading order/)
+}, 60_000)
+
 test('same-document concurrent compilation returns independent bytes and metadata', async () => {
   const letter = canonical({ subject: 'Concurrent copy test' })
   const [a, b] = await Promise.all([compiler.compile(letter), compiler.compile(letter)])
@@ -141,7 +152,7 @@ test('actual compiler refuses unsupported Arabic and multipage body output', asy
 }, 60_000)
 
 test('asset verification runs before a warm-cache return and rejects changed template and font bytes', async () => {
-  const copy = join(root, 'corrupt-copy'), copiedToolchain = join(copy, 'toolchain'), copiedApp = join(copy, 'application')
+  const copy = join(root, 'corrupt copy with spaces'), copiedToolchain = join(copy, 'toolchain'), copiedApp = join(copy, 'application')
   await mkdir(copy, { recursive: true })
   await cp(toolchainRoot, copiedToolchain, { recursive: true })
   await cp(templateRoot, copiedApp, { recursive: true })

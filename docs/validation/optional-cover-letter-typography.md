@@ -21,8 +21,14 @@ Structured review compares paragraph wording in NFC form, consistent with the ca
 ## Gates
 
 - `tests/cover-letter-document.test.ts` verifies the added English typography and continued bidi/Arabic refusal.
-- `tests/cover-letter-artifacts.test.ts` compiles actual apostrophe and typographic paragraphs, inspects selectable PDF text, and rejects changed wording.
+- `tests/cover-letter-artifacts.test.ts` compiles actual apostrophe and typographic paragraphs, inspects selectable PDF text, and rejects changed wording. Its owned copied-toolchain test also compiles successfully from a path containing spaces before checking asset corruption.
 - `tests/cover-letter-review-markup.test.ts` verifies that canonically equivalent accented wording stays reviewable.
 - Focused green output and typecheck are in `.audit/cover-letter-template/natural-typography-green.log` and `natural-typography-typecheck.log`.
+
+## Complete text-stream comparison
+
+Independent review then found a pre-existing substring weakness around the typography normalization. A synthetic inspected-text substitution could extend canonical `I can` to `I can’t`, append words or numbers, or insert unrelated text between fields. The unchanged compiler was not demonstrated to produce those substitutions, but the comparison helper accepted them and therefore did not establish the claimed boundary.
+
+A regression first reproduced that refusal failure using a real compiled baseline followed by explicitly altered parsed text. The comparison now requires equality of the complete normalized expected stream, including the actual contact separators, rather than locating fields as arbitrary substrings. Quotes, ellipses, NFC and layout whitespace remain the only equivalences. Letters, digits, negations, field order and extra text remain significant. `.audit/cover-letter-template/full-stream-pdf-red.log` records the failing prefix case; `full-stream-pdf-green.log` records the corrected focused suite. This is a helper-boundary substitution test, not evidence that the current renderer changed a sentence's meaning.
 
 This changes acceptance of previously rejected input and PDF text comparison, not the layout or output of an already accepted document. The immutable template identity remains unchanged. No compiler integrity, font lookup, unsupported-script, overflow, source, or approval guard was relaxed.
