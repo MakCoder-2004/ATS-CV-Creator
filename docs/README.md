@@ -25,8 +25,9 @@ These files describe the current code or govern changes to it.
 | [Lato font notice](../resources/fonts/lato/README.md) | Font provenance. |
 | [Pi SDK notices](../resources/licenses/README.md) | SDK license text and remaining redistribution review. |
 | [LaTeX license inventory](../resources/latex-licenses/README.md) | Bundled toolchain license inventory and its limits. |
-| [Installed 0.1.0 title replacement](validation/release-0.1.0-title-installed.md) | Current same-version installed app, isolated native SQLite reopen and selectable compiled-PDF title. |
-| [Updated 0.1.0 title replacement build](validation/release-0.1.0-title-replacement.md) | Current installer build and checksum before installed checks. |
+| [Windows 1.0.0 release](validation/release-1.0.0.md) | Current installer digest, genuine installed letter PDF/Word exports, native SQLite reopen and preservation of the existing installed workspace. |
+| [Installed 0.1.0 title replacement](validation/release-0.1.0-title-installed.md) | Historical same-version installed app, isolated native SQLite reopen and selectable compiled-PDF title. |
+| [Updated 0.1.0 title replacement build](validation/release-0.1.0-title-replacement.md) | Historical 0.1.0 installer build and checksum before its installed checks. |
 | [Original 0.1.0 prerelease build](validation/release-0.1.0-candidate.md) | Historical packaging checks and digest for superseded 0.1.0 bytes. |
 | [Earlier installed 0.1.0](validation/release-0.1.0-installed.md) | Historical installed SQLite reopen for the superseded 0.1.0 binary, not the title replacement. |
 | [Spec 75 implementation evidence](validation/spec-75-implementation.md) | Focused paragraph-format checks and open provider and installed gates. |
@@ -34,7 +35,7 @@ These files describe the current code or govern changes to it.
 | [Stage D temporary research integration](validation/universal-research-stage-d.md) | Development checks for reviewed source rights, full/provisional Pi analysis and remaining release gates; not installed-app proof. |
 | [Integrated Settings follow-up](validation/settings-followup.md) | Combined two-card Settings, legacy finding/recovery and Tavily key development checks; see the separate installed observations below. |
 | [Cover-letter artifact controller](validation/cover-letter-artifact-integration.md) | Current bounded main/shared/preload API, real PDF/DOCX artifact tests and resource wiring; visible/installed acceptance remain separate. |
-| [Cover-letter visible workflow](validation/cover-letter-visible-flow.md) | Production renderer integration, focused component/typecheck/build evidence and one real-main Electron acceptance case awaiting execution on the integrated host. |
+| [Cover-letter visible workflow](validation/cover-letter-visible-flow.md) | Production renderer integration and the earlier focused real-main Electron acceptance; see 1.0.0 for the installed check. |
 | [Optional faithfulness removal](validation/remove-faithfulness.md) | Earlier branch-specific development evidence for Settings simplification, old preference cleanup and paused-run compatibility. |
 | [Tavily key card](validation/tavily-key-card.md) | Earlier pre-merge development evidence; screenshots there still show the removed cards. |
 
