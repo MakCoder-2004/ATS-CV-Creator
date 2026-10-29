@@ -47,6 +47,10 @@ export function prepareCoverLetterSources(source: ConsentSource, bundle: Outboun
 const normalize = (text: string) => text.normalize('NFKC').toLocaleLowerCase().replace(/[^\p{L}\p{N}%$€£+#]+/gu, ' ').trim()
 const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 const hasTerm = (text: string, term: string) => new RegExp(`(?<![\\p{L}\\p{N}])${escape(term)}(?![\\p{L}\\p{N}])`, 'iu').test(text)
+class CoverLetterSupportError extends Error {
+  constructor(message: string, readonly term: string) { super(message) }
+}
+
 function numbers(text: string) {
   const withoutTokens = text.replace(/\[\[[A-Z_]+\d+\]\]/g, '')
   const qualifier = '(?:(?:more\\s+than|less\\s+than|at\\s+least|up\\s+to|over|under|above|below|about|around|approximately|nearly|almost|roughly)\\s+)?'
@@ -55,21 +59,33 @@ function numbers(text: string) {
   return [...withoutTokens.matchAll(pattern)].map(m => normalize(m[0]))
 }
 
-/** Deterministic rejection of detectable issues, not semantic proof; human review is still required. */
-export function validateCoverLetterResponse(value: unknown, sources: ReturnType<typeof prepareCoverLetterSources>, bundle: OutboundBundle, postingTools: readonly string[]) {
+/** Format, citation identity and privacy remain hard boundaries, even for a blocked draft. */
+export function parseCoverLetterResponse(value: unknown, sources: ReturnType<typeof prepareCoverLetterSources>, bundle: OutboundBundle) {
   const response = coverLetterModelResponseSchema.parse(value)
+  const ordinals = new Set(sources.outgoing.map(source => source.ordinal))
+  const allowedTokens = new Set(JSON.stringify([sources.outgoing, bundle.outgoing.job]).match(/\[\[[^\]\r\n]+\]\]/g) ?? [])
+  for (const paragraph of response.paragraphs) {
+    if (paragraph.citations.some(citation => !ordinals.has(citation.ordinal))) throw new Error('A letter citation is outside the authorized source set.')
+    if (bundle.containsRestoredIdentifier(paragraph.text) || /\b[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}\b/i.test(paragraph.text) || (paragraph.text.match(/\[\[[^\]\r\n]+\]\]/g) ?? []).some(token => !allowedTokens.has(token))) throw new Error('The letter contains an unauthorized identifier.')
+  }
+  return response
+}
+
+/** Detectable factual issues block approval, not access to a private-safe editable draft. */
+export function validateCoverLetterResponse(value: unknown, sources: ReturnType<typeof prepareCoverLetterSources>, bundle: OutboundBundle, postingTools: readonly string[]) {
+  const response = parseCoverLetterResponse(value, sources, bundle)
   const terms = [...postingTools, ...bundle.outgoing.profile.skills.map(s => s.name), ...bundle.outgoing.profile.projects.flatMap(p => p.technologies), 'TypeScript', 'JavaScript', 'Python', 'Rust', 'Java', 'Kubernetes', 'Docker', 'React', 'AWS', 'Azure', 'SQL', 'C++', 'C#']
   for (const paragraph of response.paragraphs) {
     const cited = paragraph.citations.map(c => sources.outgoing.find(s => s.ordinal === c.ordinal))
-    if (cited.some(s => !s)) throw new Error('A letter citation is outside the authorized source set.')
     const support = cited.map(s => `${s!.heading} ${s!.passage}`).join('\n')
-    if (bundle.containsRestoredIdentifier(paragraph.text) || /\b[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}\b/i.test(paragraph.text)) throw new Error('The letter contains an unauthorized identifier.')
     const tokens = paragraph.text.match(/\[\[[^\]\r\n]+\]\]/g) ?? []
     if (tokens.some(t => !support.includes(t))) throw new Error('The letter attributes a fact to an uncited source.')
     const checkSupport = (text: string, passage: string) => {
       const allowed = new Set(numbers(passage))
-      if (numbers(text).some(n => !allowed.has(n))) throw new Error('The letter contains an unsupported numeric expression.')
-      if (terms.some(term => term.trim() && hasTerm(text, term) && !hasTerm(passage, term))) throw new Error('The letter contains a detectably unsupported skill.')
+      const number = numbers(text).find(n => !allowed.has(n))
+      if (number) throw new CoverLetterSupportError('The letter contains an unsupported numeric expression.', number)
+      const skill = terms.find(term => term.trim() && hasTerm(text, term) && !hasTerm(passage, term))
+      if (skill) throw new CoverLetterSupportError('The letter contains a detectably unsupported skill.', skill)
     }
     checkSupport(paragraph.text, support)
     // An explicitly named role/project cannot borrow another role's quantities or technologies.
@@ -111,7 +127,7 @@ export function checkLocalCoverLetter(letter: CoverLetterRevision, source: Conse
       return []
     } catch (error) {
       const message = error instanceof Error && /^The letter |^A (?:letter citation|named source)/.test(error.message) ? error.message : 'The paragraph cannot be checked against its current source passages.'
-      return [{ code: 'local-factual-check', paragraphId: paragraph.id, message }]
+      return [{ code: 'local-factual-check', paragraphId: paragraph.id, message: error instanceof CoverLetterSupportError ? `${message} Check “${error.term.slice(0, 160)}” against this paragraph's sources.` : message }]
     }
   })]
 }

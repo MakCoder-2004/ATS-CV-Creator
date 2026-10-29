@@ -20,7 +20,7 @@ test('a separately reviewed cover letter preserves the CV and profile and export
     app = await electron.launch({
       args: [join(process.cwd(), 'out/main/index.js'), '--disable-gpu'],
       timeout: 60000,
-      env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData, CV_TAILOR_SCRIPTED_ANALYSIS: 'cover-letter-success', CV_TAILOR_SCRIPTED_PI_MODEL: '1' },
+      env: { ...process.env, CV_TAILOR_TEST_USER_DATA_DIR: userData, CV_TAILOR_SCRIPTED_ANALYSIS: 'cover-letter-review-issue', CV_TAILOR_SCRIPTED_PI_MODEL: '1' },
     })
     // Check Electron's actual path before making any workspace writes.
     const actualUserData = await app.evaluate(({ app }) => app.getPath('userData'))
@@ -79,6 +79,9 @@ test('a separately reviewed cover letter preserves the CV and profile and export
     await generate.click()
     await expect(page.getByRole('region', { name: 'CV document', exact: true })).toBeVisible({ timeout: 30000 })
     await assertPhase('Review evidence')
+    await expect(page.getByRole('button', { name: 'Check CV for issues', exact: true })).toHaveCount(0)
+    await page.getByRole('button', { name: 'Check page length', exact: true }).click()
+    await expect.poll(() => page.evaluate(id => window.workbench.getDocumentFitReport(id).then(value => value?.actualPages ?? 0), jobId), { timeout: 45000 }).toBeGreaterThan(0)
     const cvBeforeLetterReview = await page.evaluate(id => window.workbench.getDraft(id), jobId)
     expect(cvBeforeLetterReview).not.toBeNull()
     expect(cvBeforeLetterReview?.approved).toBe(false)
@@ -90,13 +93,16 @@ test('a separately reviewed cover letter preserves the CV and profile and export
     const paper = review.getByRole('article', { name: 'Cover letter structured review' })
     await expect(paper).toBeVisible({ timeout: 20000 })
     await expect(paper).toContainText('Dear Hiring Manager,')
-    await expect(paper).toContainText('I use TypeScript.')
+    await expect(paper).toContainText('I use Python.')
+    await expect(review).toContainText('unsupported skill')
     await expect(review.getByRole('button', { name: 'Approve cover letter', exact: true })).toBeDisabled()
     const generatedLetter = await page.evaluate(id => window.workbench.getCoverLetterReadModel(id), jobId)
     expect(generatedLetter.generation.status).toBe('saved')
     expect(generatedLetter.letter?.cvRevisionId).toBe(cvBeforeLetterReview?.id)
     expect(generatedLetter.readiness.approved).toBe(false)
     expect(generatedLetter.readiness.canExport).toBe(false)
+    expect(generatedLetter.readiness.findings.length).toBeGreaterThan(0)
+    expect(generatedLetter.readiness.canApprove).toBe(false)
 
     const firstParagraph = review.getByRole('region', { name: 'Paragraph 1 review', exact: true })
     await firstParagraph.getByRole('button', { name: 'Edit paragraph 1', exact: true }).click()
@@ -104,6 +110,7 @@ test('a separately reviewed cover letter preserves the CV and profile and export
     await firstParagraph.getByRole('button', { name: 'Save wording', exact: true }).click()
     await expect(firstParagraph.getByRole('textbox', { name: 'Paragraph 1 wording', exact: true })).toHaveCount(0)
     await expect(firstParagraph).toContainText(editedWording)
+    expect((await page.evaluate(id => window.workbench.getCoverLetterReadModel(id), jobId)).readiness.findings).toEqual([])
     await expect(review.getByText('Page fit: Not measured', { exact: true })).toBeVisible()
 
     await review.getByLabel('Recipient name (optional)', { exact: true }).fill(recipient)

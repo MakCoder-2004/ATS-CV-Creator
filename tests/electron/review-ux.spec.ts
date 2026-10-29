@@ -148,7 +148,7 @@ test('review centers the CV and reveals only the selected wording and human-read
     expect(bar!.y).toBeGreaterThanOrEqual(0)
     expect(bar!.y + bar!.height, 'Review actions must remain visible while reading the bottom of the CV').toBeLessThanOrEqual(812)
     await expect(checklist).toContainText('Page length needed')
-    await expect(page.getByRole('button', { name: 'Check CV for issues' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Check CV for issues' })).toHaveCount(0)
     const mobileEntry = paper.getByRole('button', { name: /Review sources for Engineer/ }).first()
     await mobileEntry.click()
     await expect(mobileEntry).toBeFocused()

@@ -94,7 +94,7 @@ test('installed Pi migration: settings, consented cited CV, review, and exports'
     await page.getByRole('button', { name: 'Check page length' }).click()
     await expect(page.getByRole('status')).toContainText(/Fits the selected target|page/i, { timeout: 45_000 })
     await page.getByRole('checkbox', { name: 'I reviewed this CV and its wording.' }).check()
-    await page.getByRole('button', { name: 'Check CV for issues' }).click()
+    await page.getByRole('button', { name: 'Check page length' }).click()
     await expect(page.getByRole('button', { name: 'Approve CV' })).toBeEnabled({ timeout: 30_000 })
     await page.getByRole('button', { name: 'Approve CV' }).click()
     const pdfPath = join(userData, 'synthetic-approved.pdf')

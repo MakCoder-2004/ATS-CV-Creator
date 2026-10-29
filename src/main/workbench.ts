@@ -18,7 +18,7 @@ import { profileExchangeSchema, type ProfileExchange } from '../shared/profile-e
 import { prepareOutboundBundle, type ConsentSource, type EvidenceScopeRevision, type OutboundBundle, type OutboundPayload } from '../shared/outbound-consent'
 import { coverLetterGenerationStatusSchema, coverLetterOutcomeSchema, coverLetterAcknowledgmentMaterial, coverLetterAcknowledgmentSchema, coverLetterActionResultSchema, coverLetterEditSchema, coverLetterOperationSchema, coverLetterPurposeSchema, coverLetterRecipientSchema, coverLetterRevisionSchema, requestedDocumentsResultSchema, type RequestedDocumentsResult, type CoverLetterOperation, type CoverLetterPurpose } from '../shared/cover-letter'
 import { createOutboundConsentEngine } from './outbound-consent'
-import { prepareCoverLetterSources, validateCoverLetterResponse, checkLocalCoverLetter } from './cover-letter-generation'
+import { prepareCoverLetterSources, parseCoverLetterResponse, checkLocalCoverLetter } from './cover-letter-generation'
 import { coverLetterFailureMessage, diagnoseCoverLetterFailure } from './cover-letter-failure'
 import { canonicalCoverLetterSchema, projectCoverLetter, type CoverLetterTemplateIdentity } from '../shared/cover-letter-document'
 import { coverLetterReadModelSchema, coverLetterArtifactActionSchema, type CoverLetterReadModel } from '../shared/cover-letter-artifact'
@@ -855,13 +855,14 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       const origin = operationOrigin(operation!)
       if (origin.status !== 'known') throw new Error('The completed CV parent is invalid.')
       const analysis = origin.frozen.analysis.analysis
-      const response = validateCoverLetterResponse(JSON.parse(generated.text), sources, pending.bundle, analysis?.tools ?? [])
+      const response = parseCoverLetterResponse(JSON.parse(generated.text), sources, pending.bundle)
       const letter = coverLetterRevisionSchema.parse({ id: randomUUID(), jobId: pending.jobId, parentRunId: pending.runId, operationId: operation!.id, cvRevisionId: cv.id,
         revision: ((db.prepare('SELECT MAX(revision) AS revision FROM cover_letter_revisions WHERE job_id=?').get(pending.jobId) as { revision: number | null }).revision ?? 0) + 1,
         recipient: readCoverLetter(pending.jobId)?.recipient,
         createdAt: new Date().toISOString(), date: new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }), subject: `Application: ${source.job.title}`,
         bindings: { postingUpdatedAt: String(source.job.revision), scopeHash: pending.bundle.scopeHash, modelHash, sources: sources.local },
         paragraphs: response.paragraphs.map(paragraph => ({ ...paragraph, id: randomUUID(), text: pending.bundle.restoreIdentifiers(paragraph.text) })), findings: [], acknowledgments: {}, approved: false })
+      letter.findings = checkLocalCoverLetter(letter, pending.source, analysis?.tools ?? [])
       db.transaction(() => {
         const current = assertCurrent()
         if (!isDeepStrictEqual(prepareCoverLetterSources(current, prepareOutboundBundle(current)), sources)) throw new Error('Current source passages changed.')

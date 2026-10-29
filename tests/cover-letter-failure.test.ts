@@ -20,14 +20,14 @@ test.each([
   expect(coverLetterFailureMessage(code)).not.toMatch(/PRIVATE_/)
 })
 
-test('specific letter rejection survives reopening without retaining rejected prose or changing the CV', async () => {
+test('unsafe citation rejection survives reopening without retaining rejected prose or changing the CV', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'letter-failure-'))
   const prompts: string[] = []
   const transport = { generate: async ({ prompt }: { prompt: string }) => {
     prompts.push(prompt)
     if (prompt.startsWith('Extract only explicit')) return JSON.stringify({ required: [], preferred: [], tools: [], responsibilities: [], keywords: [] })
     if (prompt.startsWith('Score these numbered')) return JSON.stringify({ relevance: [{ index: 0, score: 1, rationale: 'Saved skill.' }] })
-    if (prompt.startsWith('Write one cover letter')) return JSON.stringify({ paragraphs: [{ text: 'I use Python.', citations: [{ ordinal: 1 }] }] })
+    if (prompt.startsWith('Write one cover letter')) return JSON.stringify({ paragraphs: [{ text: 'I use Python.', citations: [{ ordinal: 999 }] }] })
     return JSON.stringify({ education: [], experience: [], projects: [], skills: [{ name: 'TypeScript', evidence: [0], rationale: 'Saved skill.' }] })
   } }
   let workspace = createWorkbench(directory, undefined, transport)
@@ -42,7 +42,7 @@ test('specific letter rejection survives reopening without retaining rejected pr
     expect((await workspace.api.startAnalysis(preview.token)).status).toBe('complete')
     const result = await workspace.api.generateRequestedDocuments(preview.token)
     expect(result.cv.ok).toBe(true)
-    expect(result.letter).toMatchObject({ status: 'failed', message: expect.stringContaining('technical skill') })
+    expect(result.letter).toMatchObject({ status: 'failed', message: expect.stringContaining('outside the authorized') })
     const letterCalls = prompts.filter(prompt => prompt.startsWith('Write one cover letter'))
     expect(letterCalls).toHaveLength(1)
     expect(letterCalls[0]).toContain('not CV indexes')
@@ -53,13 +53,13 @@ test('specific letter rejection survives reopening without retaining rejected pr
     const db = new Database(join(directory, 'workbench.sqlite'), { readonly: true })
     try {
       const row = db.prepare('SELECT data FROM cover_letter_operations').get() as { data: string }
-      expect(JSON.parse(row.data)).toMatchObject({ status: 'failed', failureCode: 'unsupported-skill' })
+      expect(JSON.parse(row.data)).toMatchObject({ status: 'failed', failureCode: 'unknown-citation' })
       expect(row.data).not.toContain('I use Python')
       const storedCv = db.prepare('SELECT data FROM draft_revisions').get() as { data: string }
       expect(JSON.parse(storedCv.data)).toEqual(result.cv.draft)
     } finally { db.close() }
     workspace = createWorkbench(directory, undefined, transport)
-    expect((await workspace.api.getCoverLetterGenerationStatus(job.value.id)).reason).toContain('technical skill')
+    expect((await workspace.api.getCoverLetterGenerationStatus(job.value.id)).reason).toContain('outside the authorized')
     expect(await workspace.api.getDraft(job.value.id)).toEqual(savedCv)
     expect(await workspace.api.getProfile()).toEqual(profile)
     expect(prompts.filter(prompt => prompt.startsWith('Write one cover letter'))).toHaveLength(1)

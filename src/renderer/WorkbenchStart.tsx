@@ -268,12 +268,6 @@ function WorkbenchVisit({ activeJob, onNavigate, isCurrent }: StartProps & { isC
     finally { if (selectedJob.current === jobId) setDraftBusy(false) }
   }
 
-  async function checkDraftNow() {
-    if (!activeJob) return
-    const report = await api.checkDraft(activeJob.id)
-    setDraft(await api.getDraft(activeJob.id))
-    setDraftError(report?.passed ? 'Automated checks found no blocking issues. Review the wording and its sources before approving.' : `${report?.findings.length ?? 0} issue${report?.findings.length === 1 ? '' : 's'} need attention. Choose Review issues to open the correction guidance.`)
-  }
   async function exportDocx() {
     if (!activeJob || docxBusy) return
     setDocxBusy(true); setDraftError('')
@@ -343,7 +337,18 @@ function WorkbenchVisit({ activeJob, onNavigate, isCurrent }: StartProps & { isC
     if (!activeJob || fitBusy) return
     setFitBusy(true); setDraftError(''); setAcceptedCuts([])
     const jobId = activeJob.id
-    try { const report = await api.measureDocument(jobId); if (selectedJob.current === jobId) setFitReport(report) }
+    try {
+      const checks = await api.checkDraft(jobId)
+      const checked = await api.getDraft(jobId)
+      if (selectedJob.current !== jobId) return
+      setDraft(checked)
+      if (!checks || !checked) { setDraftError('The current CV is unavailable. Reopen this posting before measuring.'); return }
+      const report = await api.measureDocument(jobId)
+      if (selectedJob.current === jobId) {
+        setFitReport(report)
+        if (!checks.passed) setDraftError(`${checks.findings.length} issue${checks.findings.length === 1 ? '' : 's'} need attention. Choose Review issues for guidance.`)
+      }
+    }
     catch (failure) { if (selectedJob.current === jobId) setDraftError(failure instanceof Error ? failure.message : 'The real PDF page measurement failed.') }
     finally { if (selectedJob.current === jobId) setFitBusy(false) }
   }
@@ -425,7 +430,7 @@ function WorkbenchVisit({ activeJob, onNavigate, isCurrent }: StartProps & { isC
       const outcome = await api.generateCoverLetter(token)
       if (pendingToken.current !== token || operation !== operationEpoch.current) { await loadLetter().catch(() => {}); return }
       await loadLetter()
-      setLetterMessage(outcome.status === 'saved' ? 'Cover letter saved. Review its wording and sources.' : 'message' in outcome ? outcome.message : 'reason' in outcome ? outcome.reason : 'No cover letter was requested.')
+      setLetterMessage(outcome.status === 'saved' ? outcome.letter.findings.length ? 'Cover letter saved with issues to edit. Review the flagged paragraphs before approval.' : 'Cover letter saved. Review its wording and sources.' : 'message' in outcome ? outcome.message : 'reason' in outcome ? outcome.reason : 'No cover letter was requested.')
       setSelectedDocument('cover-letter'); setLetterReviewOpen(true); setNewRun(false)
     } catch (failure) {
       if (current()) { setLetterMessage(readableFailure(failure, 'Cover letter generation failed. Your CV is unchanged.')); await loadLetter().catch(() => {}); setNewRun(false) }
@@ -513,7 +518,7 @@ function WorkbenchVisit({ activeJob, onNavigate, isCurrent }: StartProps & { isC
     pageTarget={pageTarget} setPageTarget={setPageTarget} addSection={addSection} setAddSection={setAddSection} addEvidence={addEvidence} setAddEvidence={setAddEvidence} sources={sources} outgoingProfileCounts={outgoingProfileCounts}
     inspectOutgoing={inspectOutgoing} cancelOutgoing={cancelOutgoing} authorizeOutgoing={authorizeOutgoing} startAnalysis={startAnalysis} generateDraft={generateDraft} cancelAnalysis={async () => { if (!activeJob) return; ++operationEpoch.current; const result = await api.cancelAnalysis(activeJob.id); setAnalysis(result); setDraftBusy(false); setLetterBusy(false); await loadLetter(); const saved = await api.getDraft(activeJob.id); if (saved) { setDraft(saved); setCanonical(await api.getCanonicalDocument(activeJob.id)); setFitReport(await api.getDocumentFitReport(activeJob.id)); setNewRun(false) } }}
     returnToReview={() => { setReviewApprovedDraft(true); void loadLetter().catch(() => {}) }} renewDraftReview={renewDraftReview} decideSuggestedSkill={decideSuggestedSkill}
-    mutateRecord={mutateRecord} measurePageFit={measurePageFit} applyPageCuts={applyPageCuts} addDraftItem={addDraftItem} correctDraft={correctDraft} changeCvTitle={changeCvTitle} checkDraftNow={checkDraftNow} approveCurrentDraft={approveCurrentDraft} exportDocx={exportDocx} docxBusy={docxBusy}
+    mutateRecord={mutateRecord} measurePageFit={measurePageFit} applyPageCuts={applyPageCuts} addDraftItem={addDraftItem} correctDraft={correctDraft} changeCvTitle={changeCvTitle} approveCurrentDraft={approveCurrentDraft} exportDocx={exportDocx} docxBusy={docxBusy}
     onProposalAccepted={(next, document, fit) => { setDraft(next); setCanonical(document); setFitReport(fit); setAcceptedCuts([]) }}
   />
 }

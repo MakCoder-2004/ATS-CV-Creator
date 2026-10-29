@@ -559,14 +559,29 @@ test('public opt-in saves one independent letter after real CV despite pending s
 for (const [name, response] of [
   ['foreign', { paragraphs: [{ text: 'I use TypeScript.', citations: [{ ordinal: 999 }] }] }],
   ['schema', { paragraphs: [{ text: 'I use TypeScript.', citations: [{ ordinal: 1 }], approved: true }] }],
+  ['identifier', { paragraphs: [{ text: 'I am applying to PRIVATE_COMPANY.', citations: [{ ordinal: 1 }] }] }],
+  ['token', { paragraphs: [{ text: 'I worked at [[NOT_ISSUED1]].', citations: [{ ordinal: 1 }] }] }],
   ['number', { paragraphs: [{ text: 'I have 42 years using TypeScript.', citations: [{ ordinal: 1 }] }] }],
   ['skill', { paragraphs: [{ text: 'I use Rust.', citations: [{ ordinal: 1 }] }] }],
 ] as const) test(`invalid ${name} letter never replaces or rolls back real CV`, async () => {
   const f = await fixture('cv+cover-letter', async () => JSON.stringify(response))
   const result = await f.wb.api.generateRequestedDocuments(f.token, 1)
   expect(result.cv).toMatchObject({ ok: true, draft: { content: { skills: [{ name: 'TypeScript' }] } } })
-  expect(result.letter.status).toBe('failed')
-  expect(await f.wb.api.getCoverLetter(f.jobId)).toBeNull()
+  if (name === 'number' || name === 'skill') {
+    expect(result.letter.status).toBe('saved')
+    const letter = await f.wb.api.getCoverLetter(f.jobId)
+    expect(letter?.paragraphs[0].text).toBe(response.paragraphs[0].text)
+    expect(letter?.findings.length).toBeGreaterThan(0)
+    expect(letter?.findings.some(finding => finding.message.includes(name === 'skill' ? 'Rust' : '42 years'))).toBe(true)
+    expect((await f.wb.api.approveCoverLetter(f.jobId, letter!.id)).ok).toBe(false)
+    const corrected = await f.wb.api.editCoverLetter({ jobId: f.jobId, letterId: letter!.id, paragraphs: letter!.paragraphs.map(paragraph => ({ ...paragraph, text: 'I use TypeScript.' })), recipient: null })
+    expect(corrected.ok).toBe(true)
+    expect(corrected.letter?.findings).toEqual([])
+    expect(corrected.letter?.approved).toBe(false)
+  } else {
+    expect(result.letter.status).toBe('failed')
+    expect(await f.wb.api.getCoverLetter(f.jobId)).toBeNull()
+  }
   expect((await f.wb.api.getDraft(f.jobId))?.id).toBe(result.cv.draft?.id)
   expect(f.prompts).toHaveLength(4)
 })

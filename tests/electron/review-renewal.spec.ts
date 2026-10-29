@@ -75,7 +75,7 @@ import { join } from 'node:path'
     expect(setup.approval?.contentHash).toBeTruthy()
     await expect(wordingAcknowledgment).toBeVisible()
     await expect(wordingAcknowledgment).not.toBeChecked()
-    await page.getByRole('button', { name: 'Check CV for issues' }).click()
+    await page.getByRole('button', { name: 'Check page length' }).click()
     await expect(page.getByRole('region', { name: 'Review checklist' })).toContainText('Checks passed')
     await page.getByRole('button', { name: 'Check page length' }).click()
     await expect(page.getByRole('region', { name: 'Review checklist' })).toContainText(/Fits the selected target/, { timeout: 45000 })

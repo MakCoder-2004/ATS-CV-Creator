@@ -174,7 +174,7 @@ test('installed app compiles a generated draft with its bundled LaTeX toolchain'
     await page.getByRole('button', { name: 'Check page length' }).click()
     await expect(page.getByText(/Fits the selected target/i)).toBeVisible({ timeout: 45000 })
     await page.getByRole('checkbox', { name: 'I reviewed this CV and its wording.' }).check()
-    await page.getByRole('button', { name: 'Check CV for issues' }).click()
+    await page.getByRole('button', { name: 'Check page length' }).click()
     await expect(page.getByRole('button', { name: 'Approve CV' })).toBeEnabled()
     await page.getByRole('button', { name: 'Approve CV' }).click()
     const preview = page.getByRole('region', { name: 'Compiled PDF preview' })

@@ -143,7 +143,7 @@ test('real Electron UI generates and exposes cited draft with a DEV-only scripte
     await expect(page.getByRole('article', { name: 'Draft CV review layout' })).toBeVisible()
     await page.getByRole('button', { name: 'Check page length' }).click()
     await expect(page.getByRole('status').filter({ hasText: /Fits the selected target/i })).toBeVisible({ timeout: 30000 })
-    await page.getByRole('button', { name: 'Check CV for issues' }).click()
+    await page.getByRole('button', { name: 'Check page length' }).click()
     await expect(page.getByRole('checkbox', { name: 'I reviewed this CV and its wording.' })).toBeVisible()
     await page.getByRole('checkbox', { name: 'I reviewed this CV and its wording.' }).check()
     await expect(page.getByRole('button', { name: 'Approve CV' })).toBeEnabled()

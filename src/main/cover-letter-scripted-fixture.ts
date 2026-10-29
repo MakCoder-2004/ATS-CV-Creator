@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import { coverLetterModelResponseSchema } from '../shared/cover-letter'
 
-export const scriptedCoverLetterModes = ['cover-letter-success', 'cover-letter-failure', 'cover-letter-delay', 'cover-letter-invalid'] as const
+export const scriptedCoverLetterModes = ['cover-letter-success', 'cover-letter-failure', 'cover-letter-delay', 'cover-letter-invalid', 'cover-letter-review-issue'] as const
 const modeSchema = z.enum(scriptedCoverLetterModes)
 const sourceSchema = z.object({ ordinal: z.number().int().positive(), category: z.enum(['education', 'experience', 'project', 'skill']), heading: z.string().min(1).max(300), passage: z.string().min(1).max(5000), kind: z.enum(['employment', 'training']).optional() }).strict()
 
@@ -19,6 +19,6 @@ export async function scriptedCoverLetterResponse(packaged: boolean, mode: strin
   const request = JSON.parse(prompt.slice(prompt.indexOf('{'))) as { sources?: unknown }
   const sources = z.array(sourceSchema).min(1).max(500).parse(request.sources)
   const source = sources.find(item => item.category === 'skill') ?? sources[0]
-  const text = source.category === 'skill' ? `I use ${source.heading}.` : source.passage
+  const text = mode === 'cover-letter-review-issue' ? 'I use Python.' : source.category === 'skill' ? `I use ${source.heading}.` : source.passage
   return JSON.stringify(coverLetterModelResponseSchema.parse({ paragraphs: [{ text, citations: [{ ordinal: source.ordinal }] }] }))
 }

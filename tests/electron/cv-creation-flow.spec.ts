@@ -100,7 +100,6 @@ test('visible CV creation reviews new skills, preserves profile evidence, and ex
     await reviewAcknowledgment.check()
     await page.getByRole('button', { name: 'Check page length' }).click()
     await expect(page.getByRole('status').filter({ hasText: /Fits the selected target/i })).toBeVisible({ timeout: 45000 })
-    await page.getByRole('button', { name: 'Check CV for issues' }).click()
     await expect(page.getByRole('button', { name: 'Approve CV' })).toBeEnabled({ timeout: 30000 })
     await page.getByRole('button', { name: 'Approve CV' }).click()
     expect(await page.evaluate(id => window.workbench.assertDraftExportable(id), jobId)).toMatchObject({ ok: true })
@@ -126,7 +125,6 @@ test('visible CV creation reviews new skills, preserves profile evidence, and ex
     await reviewAcknowledgment.check()
     await page.getByRole('button', { name: 'Check page length' }).click()
     await expect(page.getByRole('status').filter({ hasText: /Fits the selected target/i })).toBeVisible({ timeout: 45000 })
-    await page.getByRole('button', { name: 'Check CV for issues' }).click()
     await page.getByRole('button', { name: 'Approve CV' }).click()
 
     await app.evaluate(({ dialog }, destinations) => {
