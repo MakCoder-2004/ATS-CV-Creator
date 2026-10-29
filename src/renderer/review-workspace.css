@@ -48,6 +48,7 @@
 .review-context-heading button { flex-shrink: 0; width: 44px; min-height: 44px; display: grid; place-items: center; }
 .review-detail-nav { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; padding: 12px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--raised) 35%, var(--surface)); }
 .review-detail-nav button { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; min-height: 44px; padding: 8px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--ink); text-align: left; font: 650 13px/1.5 'Manrope Variable', sans-serif; cursor: pointer; }
+.review-detail-nav button:last-child { grid-column: 1 / -1; }
 .review-detail-nav button svg { flex: none; color: var(--muted); }
 .review-detail-nav button span:not(.review-nav-count) { flex: 1; min-width: 0; }
 .review-detail-nav button:hover { background: var(--raised); }
