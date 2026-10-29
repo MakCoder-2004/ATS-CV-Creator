@@ -1,6 +1,7 @@
 import { useRef, useState, useLayoutEffect } from 'react'
 import type { CoverLetterRevision } from '../shared/cover-letter'
 import type { CanonicalCoverLetter } from '../shared/cover-letter-document'
+import type { ExperienceRecord } from '../shared/experience'
 import { advanceReviewVisit, canBeginParagraphEdit, canBeginRecipientEdit, canSaveParagraphEdit, canSaveRecipientEdit } from './cover-letter-review-state'
 import type { EditSession } from './cover-letter-review-state'
 import './cover-letter-review.css'
@@ -18,6 +19,7 @@ export type CoverLetterReviewProps = {
   originatingCvRevisionId: string | null
   letter: CoverLetterRevision | null
   canonical: CanonicalCoverLetter | null
+  experienceKinds?: Readonly<Record<string, ExperienceRecord['kind']>>
   checkStatus: CoverLetterCheckStatus
   fitStatus: CoverLetterFitStatus
   readiness: CoverLetterReadiness
@@ -38,6 +40,7 @@ const fitLabel: Record<CoverLetterFitStatus, string> = {
   idle: 'Not measured', pending: 'Fit check pending', passed: 'Fits one page', issues: 'Fit needs review', error: 'Fit check failed',
 }
 
+const experienceKindLabels: Record<ExperienceRecord['kind'], string> = { employment: 'Employment', training: 'Training' }
 const readableActionError = (error: unknown, fallback: string) => error instanceof Error && error.message.trim() ? error.message : fallback
 
 export function CoverLetterReview(props: CoverLetterReviewProps) {
@@ -183,7 +186,10 @@ export function CoverLetterReview(props: CoverLetterReviewProps) {
               </>}
               <div className="cover-letter-sources" aria-label={`Sources for paragraph ${index + 1}`}>
                 <h3>Source passages for paragraph {index + 1}</h3>
-                {sources.length ? sources.map(source => <blockquote key={source.ordinal}><strong>{source.heading}</strong><p>{source.passage}</p></blockquote>) : <p>No current linked source passage is available.</p>}
+                {sources.length ? sources.map(source => {
+                  const kind = props.experienceKinds?.[source.evidenceId]
+                  return <blockquote key={source.ordinal}><strong>{source.heading}</strong>{kind && <p>{experienceKindLabels[kind]}</p>}<p>{source.passage}</p></blockquote>
+                }) : <p>No current linked source passage is available.</p>}
               </div>
             </section>
           })}

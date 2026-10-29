@@ -63,6 +63,14 @@ test('renders bound letter and source passages as escaped review-only content', 
   expect(html).not.toContain('type="hidden"')
 })
 
+test('displays only supplied authoritative experience-kind context without inferring an unknown kind', () => {
+  const sourceId = revision.bindings.sources[0].evidenceId
+  expect(renderReview({ experienceKinds: { [sourceId]: 'training' } })).toContain('>Training<')
+  expect(renderReview({ experienceKinds: { [sourceId]: 'employment' } })).toContain('>Employment<')
+  expect(renderReview()).not.toContain('>Employment<')
+  expect(renderReview({ experienceKinds: { [uid('9')]: 'employment' } })).not.toContain('>Employment<')
+})
+
 test('canonically equivalent accented wording remains reviewable', () => {
   const composed = 'Built résumé tooling.'
   const letter = { ...revision, paragraphs: [{ ...revision.paragraphs[0], text: composed.normalize('NFD') }] }

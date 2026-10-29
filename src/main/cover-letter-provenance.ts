@@ -2,12 +2,13 @@ import { createHash } from 'node:crypto'
 import { draftRevisionSchema } from '../shared/draft'
 import { generationRecoverySnapshotSchema } from '../shared/generation-recovery'
 import type { CoverLetterOperation, CoverLetterRevision, CoverLetterSource } from '../shared/cover-letter'
+import type { ExperienceRecord } from '../shared/experience'
 import { prepareOutboundBundle } from '../shared/outbound-consent'
 import { prepareCoverLetterSources } from './cover-letter-generation'
 
 const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
 type Row = Record<string, unknown>
-type Origin = { status: 'known'; cvRevisionId: string; scopeHash: string; modelHash: string; postingUpdatedAt: string; sources: CoverLetterSource[] } | { status: 'unknown' } | { status: 'invalid' }
+type Origin = { status: 'known'; cvRevisionId: string; scopeHash: string; modelHash: string; postingUpdatedAt: string; sources: CoverLetterSource[]; experienceKinds: Readonly<Record<string, ExperienceRecord['kind']>> } | { status: 'unknown' } | { status: 'invalid' }
 
 /** The CV parent's frozen identity/source is authoritative, never the optional child metadata.
  * A future letter-only parent needs an explicit originating-parent contract; it cannot infer
@@ -23,7 +24,8 @@ export function resolveInitialLetterOrigin(operation: CoverLetterOperation, cons
     if (consent.purpose !== 'cv+cover-letter' || recovery.status !== 'complete' || recovery.run_id !== operation.parentRunId || recovery.job_id !== operation.jobId || recovery.consent_id !== operation.consentId || recovery.scope_hash !== consent.scope_hash || frozen.runId !== operation.parentRunId || frozen.jobId !== operation.jobId || frozen.consentId !== operation.consentId || frozen.scopeHash !== consent.scope_hash || bundle.scopeHash !== frozen.scopeHash || frozen.source.job.id !== operation.jobId || frozen.identity.jobId !== operation.jobId) return { status: 'invalid' }
     const cv = draftRevisionSchema.parse(readDraft(frozen.identity.id))
     if (cv.id !== frozen.identity.id || cv.jobId !== operation.jobId || cv.revision !== frozen.identity.revision || cv.createdAt !== frozen.identity.createdAt || cv.targetPostingUpdatedAt !== frozen.identity.targetPostingUpdatedAt || cv.targetPostingUpdatedAt !== String(frozen.source.job.revision) || cv.checkReport?.findings.some(finding => finding.itemPath === 'generation') || !Object.values(cv.content).some(items => items.length > 0)) return { status: 'invalid' }
-    const origin = { status: 'known' as const, cvRevisionId: cv.id, scopeHash: frozen.scopeHash, modelHash: hash(frozen.source.model), postingUpdatedAt: String(frozen.source.job.revision), sources: prepareCoverLetterSources(frozen.source, bundle).local }
+    const prepared = prepareCoverLetterSources(frozen.source, bundle)
+    const origin = { status: 'known' as const, cvRevisionId: cv.id, scopeHash: frozen.scopeHash, modelHash: hash(frozen.source.model), postingUpdatedAt: String(frozen.source.job.revision), sources: prepared.local, experienceKinds: prepared.experienceKinds }
     const binding = operation.initialBinding
     if (binding && (binding.cvRevisionId !== origin.cvRevisionId || binding.scopeHash !== origin.scopeHash || binding.modelHash !== origin.modelHash || binding.postingUpdatedAt !== origin.postingUpdatedAt)) return { status: 'invalid' }
     return origin

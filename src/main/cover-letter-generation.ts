@@ -1,19 +1,22 @@
 import { coverLetterModelResponseSchema, coverLetterSourceSchema, type CoverLetterSource } from '../shared/cover-letter'
 import type { ConsentSource, OutboundBundle } from '../shared/outbound-consent'
+import { experienceInputSchema, type ExperienceRecord } from '../shared/experience'
 
 /** Parallel local and minimized views; identifiers are never serialized into the prompt. */
 export function prepareCoverLetterSources(source: ConsentSource, bundle: OutboundBundle) {
   const localIdentifier = /\b[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}\b/i
   if (localIdentifier.test(JSON.stringify(bundle.outgoing.job))) throw new Error('The minimized posting still contains a local identifier.')
   const local: CoverLetterSource[] = []
-  const outgoing: Array<{ ordinal: number; category: CoverLetterSource['category']; heading: string; passage: string }> = []
-  const add = (id: string, revision: number, category: CoverLetterSource['category'], heading: string, passage: string, safeHeading: string, safePassage: string, parentId?: string) => {
+  const outgoing: Array<{ ordinal: number; category: CoverLetterSource['category']; heading: string; passage: string; kind?: ExperienceRecord['kind'] }> = []
+  const experienceKinds: Record<string, ExperienceRecord['kind']> = {}
+  const add = (id: string, revision: number, category: CoverLetterSource['category'], heading: string, passage: string, safeHeading: string, safePassage: string, parentId?: string, kind?: ExperienceRecord['kind']) => {
     if (local.length >= 500 || !passage.trim() || !safePassage.trim()) return
     const ordinal = local.length + 1
     local.push(coverLetterSourceSchema.parse({ ordinal, evidenceId: id, revision, category, heading, passage, ...(parentId ? { parentId } : {}) }))
     // Fail closed rather than silently extending the reviewed bundle or truncating factual context.
     if (safeHeading.length > 300 || safePassage.length > 5000 || localIdentifier.test(`${safeHeading} ${safePassage}`) || bundle.containsRestoredIdentifier([safeHeading, safePassage])) throw new Error('A letter source could not be minimized within its bounds.')
-    outgoing.push({ ordinal, category, heading: safeHeading, passage: safePassage })
+    outgoing.push({ ordinal, category, heading: safeHeading, passage: safePassage, ...(kind ? { kind } : {}) })
+    if (kind) experienceKinds[id] = kind
   }
   source.profile.education.forEach((item, index) => {
     const safe = bundle.outgoing.profile.education[index]
@@ -23,8 +26,9 @@ export function prepareCoverLetterSources(source: ConsentSource, bundle: Outboun
   source.profile.experience.forEach((item, index) => {
     const safe = bundle.outgoing.profile.experience[index]
     const heading = `${item.title} — ${item.organization}`, safeHeading = `${safe.title} — ${safe.organization}`
-    add(item.id, item.revision, 'experience', heading, item.description, safeHeading, safe.description)
-    item.factualItems?.forEach((fact, at) => { if (fact.id && fact.revision) add(fact.id, fact.revision, 'experience', heading, fact.text, safeHeading, safe.evidence[at], item.id) })
+    const kind = item.kind === undefined ? undefined : experienceInputSchema.shape.kind.parse(item.kind)
+    add(item.id, item.revision, 'experience', heading, item.description, safeHeading, safe.description, undefined, kind)
+    item.factualItems?.forEach((fact, at) => { if (fact.id && fact.revision) add(fact.id, fact.revision, 'experience', heading, fact.text, safeHeading, safe.evidence[at], item.id, kind) })
   })
   source.profile.projects.forEach((item, index) => {
     const safe = bundle.outgoing.profile.projects[index]
@@ -37,7 +41,7 @@ export function prepareCoverLetterSources(source: ConsentSource, bundle: Outboun
     add(item.id, item.revision, 'skill', item.name, JSON.stringify({ name: item.name, category: item.category, proficiency: item.proficiency, years: item.years }), safe.name, JSON.stringify(safe))
   })
   if (!local.length) throw new Error('No bounded authorized career facts are available for a cover letter.')
-  return { local, outgoing }
+  return { local, outgoing, experienceKinds }
 }
 
 const normalize = (text: string) => text.normalize('NFKC').toLocaleLowerCase().replace(/[^\p{L}\p{N}%$€£+#]+/gu, ' ').trim()

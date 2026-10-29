@@ -34,6 +34,18 @@ test('ordinal payload contains only bounded minimized authorized facts; local pa
   expect(validateCoverLetterResponse(letter, f.sources, f.bundle, ['Rust'])).toEqual(letter)
 })
 
+test('declared training and employment kinds reach the model and review context without changing source bindings', () => {
+  const f = fixture()
+  expect(f.sources.outgoing.filter(source => source.category === 'experience').every(source => !('kind' in source))).toBe(true)
+  for (const kind of ['training', 'employment'] as const) {
+    f.source.profile.experience[0].kind = kind
+    const prepared = prepareCoverLetterSources(f.source, prepareOutboundBundle(f.source))
+    expect(prepared.outgoing.filter(source => source.category === 'experience').map(source => source.kind)).toEqual([kind, kind])
+    expect(prepared.experienceKinds).toMatchObject({ [f.roleId]: kind, [f.factId]: kind })
+    expect(prepared.local).toEqual(f.sources.local)
+  }
+})
+
 test('numeric units, qualifiers, foreign identifiers and unsupported posting skills fail closed', () => {
   const f = fixture()
   for (const text of ['I reduced latency by 20 years.', 'I reduced latency by over 20%.', 'I use Rust.', `My source is ${f.roleId}.`, 'PRIVATE_PERSON built systems.']) {

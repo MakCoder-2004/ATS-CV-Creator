@@ -55,7 +55,7 @@ A real generated CV is not merely `result.ok`. Existing CV validation failures c
 
 ## Factual support and human review
 
-Initially use education, experience, projects, and saved skills, matching existing generation input categories. Keep source parent context for nested facts. An ordinal citation resolves only through the frozen authorized allowlist. Reject foreign/missing ordinals, invalid structures, and detected unsupported numbers/skills/identifiers. A paragraph may compare multiple genuine sources but cannot attribute one role's facts to another.
+Initially use education, experience, projects, and saved skills, matching existing generation input categories. Keep source parent context for nested facts. Preserve declared Employment or Training kinds in model facts and resolved review context. Missing kinds are not permission to infer employment; resolve review labels from frozen parent facts, never model assertions. An ordinal citation resolves only through the frozen authorized allowlist. Reject foreign/missing ordinals, invalid structures, and detected unsupported numbers/skills/identifiers. A paragraph may compare multiple genuine sources but cannot attribute one role's facts to another.
 
 Do not claim automated semantic proof. Every generated body paragraph requires human review of the linked local passages and main-bound acknowledgment of its current text/source revisions. An edit, source change, or recipient change invalidates the prior decisions. Known unresolved findings remain blocking until corrected or removed, not acknowledged away or cleared by changing an ID. Acknowledgment records acceptance, not proof of reading or truth.
 
