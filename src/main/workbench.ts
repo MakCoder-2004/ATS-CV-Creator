@@ -644,6 +644,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       profile.skills.forEach((item, i) => { const safe = approvedPayload.profile.skills[i]; if (safe) scrubbed.set(item.id, JSON.stringify(safe)) })
       profile.certificates.forEach((item, i) => { const safe = approvedPayload.profile.certificates[i]; if (safe) scrubbed.set(item.id, JSON.stringify(safe)) })
       const safeItems = frozen?.safeItems ?? items.map(item => ({ ...item, text: scrubbed.get(item.id) ?? '' })).filter(item => item.text)
+      if (!safeItems.length) return { ok: false, message: 'Your profile has no saved career facts for CV generation. Add experience, projects, skills or education in My profile, or restore a workspace backup in Settings, then review outgoing data again.' }
       const failedDraftIdentity = frozen?.identity ?? { id: randomUUID(), jobId: pending.jobId, revision: ((db.prepare('SELECT MAX(revision) AS revision FROM draft_revisions WHERE job_id = ?').get(pending.jobId) as { revision: number | null }).revision ?? 0) + 1, targetPostingUpdatedAt: pending.source.job.revision, createdAt: new Date().toISOString(), lockedFields: draftInputs.lockedFields }
       if (!resumeRunId) {
         const data = { runId: pending.runId, jobId: pending.jobId, consentId: pending.consentId, scopeHash: pending.bundle.scopeHash, analysis, job, profile, experience, draftInputs, safeItems, identity: failedDraftIdentity, pageTarget, source: pending.source }
@@ -2362,9 +2363,11 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       if (!row) return null
       const attempts = (db.prepare('SELECT COUNT(*) AS count FROM analysis_attempts WHERE run_id=?').get(row.run_id) as { count: number }).count
       const uncertainAttempts = (db.prepare('SELECT COUNT(*) AS count FROM provider_attempt_outcomes WHERE run_id=? AND checkpointed_at IS NULL').get(row.run_id) as { count: number }).count
-      let compatible = false
-      try { const snapshot = generationRecoverySnapshotSchema.parse(JSON.parse(row.snapshot)); compatible = snapshot.version === 5 && (Boolean(scriptedTransport) || isDeepStrictEqual(snapshot.model, readPiSelection())) } catch { compatible = false }
-      const progress = !compatible
+      let compatible = false, missingFacts = false
+      try { const snapshot = generationRecoverySnapshotSchema.parse(JSON.parse(row.snapshot)); missingFacts = snapshot.version === 5 && snapshot.safeItems.length === 0; compatible = !missingFacts && snapshot.version === 5 && (Boolean(scriptedTransport) || isDeepStrictEqual(snapshot.model, readPiSelection())) } catch { compatible = false }
+      const progress = missingFacts
+        ? 'This saved run has no career facts and cannot resume. Add facts in My profile or restore your backup in Settings, then review outgoing data for a fresh run.'
+        : !compatible
         ? `This saved run uses an earlier generation contract or its model/format is incompatible. ${uncertainAttempts ? 'A prior model request may have completed and may have incurred a charge. ' : ''}No request will be replayed. Review outgoing data and authorize fresh analysis and generation.`
         : uncertainAttempts
           ? 'A model request may have completed before the app closed. No new request will be sent until you choose to retry. Retrying could incur another charge.'
