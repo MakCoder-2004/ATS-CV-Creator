@@ -38,6 +38,7 @@ import { SqliteCheckpointSaver } from './sqlite-checkpoint'
 import { createWorkspaceBackupEngine, registerWorkspaceBackupRowSizer, WorkspaceBackupCapacityError } from './workspace-backup'
 import type { WorkspaceBackupEngine } from '../shared/workspace-backup'
 import { generationRecoverySnapshotSchema } from '../shared/generation-recovery'
+import { letterOriginProblem, letterSourceMappingMatches, resolveInitialLetterOrigin } from './cover-letter-provenance'
 import { profilePdfProposalSchema, type ProfilePdfProposal } from '../shared/profile-pdf-import'
 
 type NestedInput = { id?: string; text: string }
@@ -466,9 +467,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
     try { currentSources = prepareCoverLetterSources(source, bundle).local } catch { return 'Current career fact passages could not be resolved safely.' }
     for (const bound of letter.bindings.sources) {
       const current = currentSources.find(item => item.evidenceId === bound.evidenceId)
-      // The earlier backend stored this deterministic saved-skill label, not a frozen JSON passage.
-      const legacySkillPassage = current?.category === 'skill' && bound.passage === `Saved ${current.heading} skill.`
-      if (!current || current.revision !== bound.revision || current.category !== bound.category || current.parentId !== bound.parentId || current.heading !== bound.heading || current.passage !== bound.passage && !legacySkillPassage) return 'A cited career fact or its source passage changed or disappeared. Review the source passages again.'
+      if (!letterSourceMappingMatches(bound, current)) return 'A cited career fact, source ordinal or source passage changed or disappeared. Review the source passages again.'
     }
     const operation = db.prepare('SELECT data FROM cover_letter_operations WHERE id=? AND job_id=? AND parent_run_id=? AND status=?').get(letter.operationId, letter.jobId, letter.parentRunId, 'saved') as { data: string } | undefined
     if (!operation) return 'The cover-letter operation is missing or unsettled.'
@@ -476,9 +475,13 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
     if (!recorded.success || recorded.data.id !== letter.operationId || recorded.data.jobId !== letter.jobId || recorded.data.parentRunId !== letter.parentRunId || recorded.data.status !== 'saved') return 'The cover-letter operation identity is invalid.'
     const binding = recorded.data.initialBinding
     if (binding && (binding.cvRevisionId !== letter.cvRevisionId || binding.scopeHash !== letter.bindings.scopeHash || binding.modelHash !== letter.bindings.modelHash || binding.postingUpdatedAt !== letter.bindings.postingUpdatedAt)) return 'The cover-letter operation source binding is invalid.'
-    const draft = db.prepare('SELECT 1 FROM draft_revisions WHERE id=? AND job_id=?').get(letter.cvRevisionId, letter.jobId)
-    if (!draft) return 'The originating CV revision is missing.'
-    return null
+    const consent = db.prepare('SELECT * FROM outbound_consents WHERE id=?').get(recorded.data.consentId) as Record<string, unknown> | undefined
+    const recovery = db.prepare('SELECT * FROM generation_recovery WHERE run_id=?').get(letter.parentRunId) as Record<string, unknown> | undefined
+    const origin = resolveInitialLetterOrigin(recorded.data, consent, recovery, id => {
+      const row = db.prepare('SELECT data FROM draft_revisions WHERE id=? AND job_id=?').get(id, letter.jobId) as { data: string } | undefined
+      return row ? JSON.parse(row.data) : undefined
+    })
+    return letterOriginProblem(letter, origin)
   }
   const acknowledgmentHash = (paragraph: ReturnType<typeof coverLetterRevisionSchema.parse>['paragraphs'][number], sources: ReturnType<typeof coverLetterRevisionSchema.parse>['bindings']['sources']) => createHash('sha256').update(coverLetterAcknowledgmentMaterial(paragraph, sources)).digest('hex')
   const generateDraftCore = async (token: string, pageTarget: 1 | 2 = 1, resumeRunId?: string, owner?: symbol): Promise<Awaited<ReturnType<WorkbenchStorageAPI['generateDraft']>>> => {

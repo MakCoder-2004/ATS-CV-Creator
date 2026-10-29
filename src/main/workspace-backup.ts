@@ -14,6 +14,7 @@ import { openRouterModelSchema } from '../shared/openrouter-settings'
 import { piModelSelectionSchema } from '../shared/pi-model'
 import { coverLetterOperationSchema, coverLetterPurposeSchema, coverLetterRevisionSchema } from '../shared/cover-letter'
 import { legacyV3TableSchemas } from './workspace-backup-legacy-v3'
+import { letterOriginProblem, resolveInitialLetterOrigin } from './cover-letter-provenance'
 
 // Keep this explicit: credentials are never serialized; all workspace persistence tables, including
 // migrations and LangGraph checkpoints, are represented in the versioned format.
@@ -266,13 +267,19 @@ export function createWorkspaceBackupEngine(db: Database.Database, maxBackupByte
     }
     const consentRecords = new Map((rows.outbound_consents?.rows ?? []).map(row => [String(row.id), row]))
     const draftOwners = new Map((rows.draft_revisions?.rows ?? []).map(row => [String(row.id), String(row.job_id)]))
+    const recoveryRecords = new Map((rows.generation_recovery?.rows ?? []).map(row => [String(row.run_id), row]))
+    const draftRecords = new Map((rows.draft_revisions?.rows ?? []).map(row => [String(row.id), parseJson('draft_revisions', String(row.data))]))
+    const origins = new Map<string, ReturnType<typeof resolveInitialLetterOrigin>>()
     const initialParents = new Set<string>()
     for (const row of rows.cover_letter_operations?.rows ?? []) {
       const operation = operationRecords.get(String(row.id))!
       const consent = consentRecords.get(operation.consentId)
       if (!consent || consent.run_id !== operation.parentRunId || consent.job_id !== operation.jobId || consent.purpose === 'cv' || consent.purpose_hash !== operation.purposeHash) fail('cover_letter_operations')
-      if (operation.initialBinding) {
-        if (consent?.purpose !== 'cv+cover-letter' || consent.scope_hash !== operation.initialBinding.scopeHash || draftOwners.get(operation.initialBinding.cvRevisionId) !== operation.jobId || initialParents.has(operation.parentRunId)) fail('cover_letter_operations')
+      const origin = resolveInitialLetterOrigin(operation, consent, recoveryRecords.get(operation.parentRunId), id => draftRecords.get(id))
+      origins.set(operation.id, origin)
+      if (origin.status === 'invalid') fail('cover_letter_operations')
+      if (operation.initialBinding || origin.status === 'known') {
+        if (consent?.purpose !== 'cv+cover-letter' || operation.initialBinding && (consent.scope_hash !== operation.initialBinding.scopeHash || draftOwners.get(operation.initialBinding.cvRevisionId) !== operation.jobId) || initialParents.has(operation.parentRunId)) fail('cover_letter_operations')
         initialParents.add(operation.parentRunId)
       }
     }
@@ -282,6 +289,9 @@ export function createWorkspaceBackupEngine(db: Database.Database, maxBackupByte
       if (!operation || operation.jobId !== letter.jobId || operation.parentRunId !== letter.parentRunId || operation.status !== 'saved' || draftOwners.get(letter.cvRevisionId) !== letter.jobId) fail('cover_letter_revisions')
       const binding = operation?.initialBinding
       if (binding && (binding.cvRevisionId !== letter.cvRevisionId || binding.scopeHash !== letter.bindings.scopeHash || binding.modelHash !== letter.bindings.modelHash || binding.postingUpdatedAt !== letter.bindings.postingUpdatedAt)) fail('cover_letter_revisions')
+      const origin = origins.get(letter.operationId)!
+      // Preserve unknown historical records for reading, but never ignore a resolvable contradiction.
+      if (origin.status !== 'unknown' && letterOriginProblem(letter, origin)) fail('cover_letter_revisions')
     }
     for (const row of rows.outbound_consents?.rows ?? []) {
       const purpose = coverLetterPurposeSchema.safeParse(row.purpose)

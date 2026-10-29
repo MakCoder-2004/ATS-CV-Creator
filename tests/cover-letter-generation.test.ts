@@ -16,13 +16,16 @@ const validLetter = () => JSON.stringify({ paragraphs: [{ text: 'I use TypeScrip
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done }); return { promise, resolve } }
 const opened: ReturnType<typeof createWorkbench>[] = [], dirs: string[] = []
 afterEach(() => { opened.splice(0).forEach(w => w.close()); dirs.splice(0).forEach(d => rmSync(d, { recursive: true, force: true })) })
-async function fixture(purpose: CoverLetterPurpose = 'cv+cover-letter', letter: (input: Parameters<AnalysisTransport['generate']>[0]) => Promise<string> = async () => validLetter(), options: { pi?: boolean; beforeLetterAuth?: () => Promise<void>; cvResponse?: unknown; failCvOnce?: boolean } = {}) {
+async function fixture(purpose: CoverLetterPurpose = 'cv+cover-letter', letter: (input: Parameters<AnalysisTransport['generate']>[0]) => Promise<string> = async () => validLetter(), options: { pi?: boolean; beforeLetterAuth?: () => Promise<void>; cvResponse?: unknown; failCvOnce?: boolean; twoSources?: boolean } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'letter-generation-')); dirs.push(dir)
   const prompts: string[] = []
   const transport: AnalysisTransport = { async generate(input) {
     const { prompt } = input; prompts.push(prompt)
     if (prompt.startsWith('Extract only explicit')) return JSON.stringify({ required: [], preferred: [], tools: ['Rust'], responsibilities: [], keywords: [] })
-    if (prompt.startsWith('Score these numbered')) return JSON.stringify({ relevance: [{ index: 0, score: 1, rationale: 'Saved skill.' }] })
+    if (prompt.startsWith('Score these numbered')) {
+      const { items } = JSON.parse(prompt.slice(prompt.indexOf('{')))
+      return JSON.stringify({ relevance: items.map((item: { index: number }) => ({ index: item.index, score: 1, rationale: 'Saved skill.' })) })
+    }
     if (prompt.startsWith('Write one cover letter')) return letter(input)
     if (options.failCvOnce) { options.failCvOnce = false; throw new AnalysisError('OFFLINE', 'Synthetic CV interruption.') }
     return JSON.stringify(options.cvResponse ?? { education: [], experience: [], projects: [], skills: [{ name: 'TypeScript', evidence: [0], rationale: 'Saved skill.' }] })
@@ -37,6 +40,7 @@ async function fixture(purpose: CoverLetterPurpose = 'cv+cover-letter', letter: 
   if (options.pi) await wb.api.setPiModel({ reference: 'sample/author/chat', thinkingLevel: 'low' })
   await wb.api.saveContact({ fullName: 'PRIVATE_CANDIDATE', email: 'private@example.test' })
   await wb.api.saveSkill({ name: 'TypeScript', category: 'Programming' })
+  if (options.twoSources) await wb.api.saveSkill({ name: 'Zebra', category: 'Programming' })
   const job = await wb.api.saveJob({ title: 'Developer', company: 'PRIVATE_COMPANY', description: 'Build services with Rust.', contacts: [{ id: randomUUID(), name: 'PRIVATE_SAVED_CONTACT', role: 'Recruiter', profileUrl: 'https://example.com/private-contact' }] })
   if (!job.ok) throw new Error(job.error.message)
   const preview = await wb.api.prepareOutboundConsent(job.value.id, purpose)
@@ -45,7 +49,8 @@ async function fixture(purpose: CoverLetterPurpose = 'cv+cover-letter', letter: 
   if (purpose !== 'cover-letter-only') expect((await wb.api.startAnalysis(preview.token)).status).toBe('complete')
   const rows = (table: string) => { const db = new Database(join(dir, 'workbench.sqlite')); try { return db.prepare(`SELECT * FROM ${table}`).all() as Record<string, unknown>[] } finally { db.close() } }
   const mutate = (sql: string) => { const db = new Database(join(dir, 'workbench.sqlite')); registerWorkspaceBackupRowSizer(db); try { db.exec(sql) } finally { db.close() } }
-  return { wb, dir, token: preview.token, jobId: job.value.id, prompts, rows, mutate, transport }
+  const replaceData = (table: string, data: unknown) => mutate(`UPDATE ${table} SET data='${JSON.stringify(data).replace(/'/g, "''")}'`)
+  return { wb, dir, token: preview.token, jobId: job.value.id, prompts, rows, mutate, replaceData, transport }
 }
 
 test('public opt-out preserves real CV pipeline and creates zero letter calls or rows', async () => {
@@ -224,8 +229,12 @@ test('generated letter reopens offline, restore revokes authority, and imported 
   const forged = JSON.parse(row.data)
   forged.bindings.sources[0].passage = 'Invented private source passage attached to an otherwise genuine saved skill ID.'
   row.data = JSON.stringify(forged)
+  expect(() => reopened.backup.previewRestore(JSON.stringify(backup))).toThrow(/cover_letter_revisions/)
+  row.data = JSON.stringify(letter)
   const restore = reopened.backup.previewRestore(JSON.stringify(backup))
   reopened.backup.applyRestore(restore.token, content => content)
+  expect((await reopened.api.checkCoverLetter(f.jobId)).ok).toBe(true)
+  f.replaceData('cover_letter_revisions', forged)
   expect(await reopened.api.checkCoverLetter(f.jobId)).toMatchObject({ ok: false, message: expect.stringMatching(/source passage/) })
   expect((await reopened.api.generateRequestedDocuments(f.token)).cv.ok).toBe(false)
   expect((await reopened.api.getDraft(f.jobId))?.id).toBe(generated.cv.draft?.id)
@@ -267,4 +276,102 @@ test('uncertain child is durable on reopen but never a permanent live deletion l
   const reopened = createWorkbench(f.dir, undefined, { generate: async () => { throw new Error('No replay') } }); opened.push(reopened)
   expect((await reopened.api.previewJobDeletion([f.jobId])).ok).toBe(true)
   expect((await reopened.api.generateRequestedDocuments(f.token)).cv.ok).toBe(false)
+})
+
+for (const binding of ['stripped', 'rewritten'] as const) test(`review regression ${binding} binding cannot substitute a same-job title revision`, async () => {
+  const f = await fixture()
+  const generated = await f.wb.api.generateRequestedDocuments(f.token)
+  expect(generated.letter.status).toBe('saved')
+  const original = generated.cv.draft!
+  const changed = await f.wb.api.changeCvTitle({ jobId: f.jobId, draftId: original.id, title: null })
+  expect(changed.ok).toBe(true)
+  const newer = (await f.wb.api.getDraft(f.jobId))!
+  expect(newer.id).not.toBe(original.id)
+  // Merely editing the current CV must not invalidate the actual originating revision.
+  expect((await f.wb.api.checkCoverLetter(f.jobId)).ok).toBe(true)
+  const backup = JSON.parse(f.wb.backup.createBackup())
+  const operation = JSON.parse(backup.tables.cover_letter_operations.rows[0].data)
+  const letter = JSON.parse(backup.tables.cover_letter_revisions.rows[0].data)
+  if (binding === 'stripped') delete operation.initialBinding
+  else operation.initialBinding.cvRevisionId = newer.id
+  letter.cvRevisionId = newer.id
+  backup.tables.cover_letter_operations.rows[0].data = JSON.stringify(operation)
+  backup.tables.cover_letter_revisions.rows[0].data = JSON.stringify(letter)
+  expect(() => f.wb.backup.previewRestore(JSON.stringify(backup))).toThrow(/cover_letter_(operations|revisions)/)
+  // Exercise the independent current-readiness boundary even for already persisted wrong records.
+  f.replaceData('cover_letter_operations', operation)
+  f.replaceData('cover_letter_revisions', letter)
+  expect(await f.wb.api.checkCoverLetter(f.jobId)).toMatchObject({ ok: false, message: expect.stringMatching(/origin|binding/i) })
+  expect((await f.wb.api.approveCoverLetter(f.jobId)).ok).toBe(false)
+  expect(f.prompts).toHaveLength(4)
+})
+
+for (const tamper of ['renumber', 'swap', 'passage'] as const) test(`review regression ${tamper} sources cannot forge issued ordinal mapping`, async () => {
+  const f = await fixture('cv+cover-letter', undefined, { twoSources: true })
+  const generated = await f.wb.api.generateRequestedDocuments(f.token)
+  expect(generated.letter.status).toBe('saved')
+  const backup = JSON.parse(f.wb.backup.createBackup())
+  const letter = JSON.parse(backup.tables.cover_letter_revisions.rows[0].data)
+  expect(letter.bindings.sources.map((s: { heading: string }) => s.heading)).toEqual(['TypeScript', 'Zebra'])
+  if (tamper === 'renumber') { letter.bindings.sources[0].ordinal = 42; letter.paragraphs[0].citations[0].ordinal = 42 }
+  if (tamper === 'swap') { letter.bindings.sources[0].ordinal = 2; letter.bindings.sources[1].ordinal = 1 }
+  if (tamper === 'passage') letter.bindings.sources[0].passage = 'Invented passage attached to a genuine source ID.'
+  backup.tables.cover_letter_revisions.rows[0].data = JSON.stringify(letter)
+  expect(() => f.wb.backup.previewRestore(JSON.stringify(backup))).toThrow(/cover_letter_revisions/)
+  f.replaceData('cover_letter_revisions', letter)
+  expect(await f.wb.api.checkCoverLetter(f.jobId)).toMatchObject({ ok: false, message: expect.stringMatching(/ordinal|source passage/i) })
+  expect((await f.wb.api.acknowledgeCoverLetterParagraph({ jobId: f.jobId, letterId: letter.id, paragraphId: letter.paragraphs[0].id, acknowledged: true })).ok).toBe(false)
+  expect((await f.wb.api.approveCoverLetter(f.jobId)).ok).toBe(false)
+  expect(f.prompts).toHaveLength(4)
+})
+
+test('review regression stripped optional metadata retains only the independently resolved genuine origin', async () => {
+  const f = await fixture()
+  const generated = await f.wb.api.generateRequestedDocuments(f.token)
+  expect(generated.letter.status).toBe('saved')
+  const backup = JSON.parse(f.wb.backup.createBackup())
+  const operation = JSON.parse(backup.tables.cover_letter_operations.rows[0].data)
+  delete operation.initialBinding
+  backup.tables.cover_letter_operations.rows[0].data = JSON.stringify(operation)
+  const restore = f.wb.backup.previewRestore(JSON.stringify(backup))
+  f.wb.backup.applyRestore(restore.token, text => text)
+  expect((await f.wb.api.checkCoverLetter(f.jobId)).ok).toBe(true)
+  expect((await f.wb.api.getCoverLetter(f.jobId))?.cvRevisionId).toBe(generated.cv.draft!.id)
+})
+
+for (const tamper of ['unfinished-parent', 'empty-cv', 'generation-failure'] as const) test(`review regression ${tamper} cannot claim eligible committed origin`, async () => {
+  const f = await fixture()
+  expect((await f.wb.api.generateRequestedDocuments(f.token)).letter.status).toBe('saved')
+  const backup = JSON.parse(f.wb.backup.createBackup())
+  const operation = JSON.parse(backup.tables.cover_letter_operations.rows[0].data)
+  delete operation.initialBinding
+  backup.tables.cover_letter_operations.rows[0].data = JSON.stringify(operation)
+  const cv = JSON.parse(backup.tables.draft_revisions.rows[0].data)
+  if (tamper === 'unfinished-parent') backup.tables.generation_recovery.rows[0].status = 'cancelled'
+  if (tamper === 'empty-cv') cv.content.skills = []
+  if (tamper === 'generation-failure') cv.checkReport.findings.push({ code: 'schema', itemPath: 'generation', message: 'Invalid model output.', correction: 'Author locally.' })
+  backup.tables.draft_revisions.rows[0].data = JSON.stringify(cv)
+  expect(() => f.wb.backup.previewRestore(JSON.stringify(backup))).toThrow(/cover_letter_operations/)
+  f.replaceData('cover_letter_operations', operation)
+  f.replaceData('draft_revisions', cv)
+  if (tamper === 'unfinished-parent') f.mutate("UPDATE generation_recovery SET status='cancelled'")
+  expect((await f.wb.api.checkCoverLetter(f.jobId)).ok).toBe(false)
+})
+
+test('review regression missing parent provenance remains readable after restore but cannot be current or approved', async () => {
+  const f = await fixture()
+  expect((await f.wb.api.generateRequestedDocuments(f.token)).letter.status).toBe('saved')
+  const backup = JSON.parse(f.wb.backup.createBackup())
+  const operation = JSON.parse(backup.tables.cover_letter_operations.rows[0].data)
+  delete operation.initialBinding
+  backup.tables.cover_letter_operations.rows[0].data = JSON.stringify(operation)
+  backup.tables.generation_recovery.rows = []
+  const restore = f.wb.backup.previewRestore(JSON.stringify(backup))
+  f.wb.backup.applyRestore(restore.token, text => text)
+  const letter = (await f.wb.api.getCoverLetter(f.jobId))!
+  expect(letter.paragraphs[0].text).toBe('I use TypeScript.')
+  expect(letter.approved).toBe(false)
+  expect(await f.wb.api.checkCoverLetter(f.jobId)).toMatchObject({ ok: false, message: expect.stringMatching(/origin.*unavailable|provenance/i) })
+  expect((await f.wb.api.approveCoverLetter(f.jobId)).ok).toBe(false)
+  expect((await f.wb.api.editCoverLetter({ jobId: f.jobId, letterId: letter.id, paragraphs: letter.paragraphs, recipient: null })).ok).toBe(false)
 })
