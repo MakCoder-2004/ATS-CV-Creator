@@ -28,7 +28,7 @@ Evidence is local/uncommitted under `YOUR.audit/cover-letter-visible-flow/`.
 
 `typecheck-initial.log`, `typecheck.log`, `build.log`, `component-test.log`, `docs-links.log`, `diff-check.log` and `scope.log` record these checks. No full test suite or review round was run.
 
-## Integrated-host acceptance case (not executed here)
+## Integrated-host acceptance case
 
 `tests/electron/cover-letter-flow.spec.ts` launches the real built main with isolated, asserted userData and `CV_TAILOR_SCRIPTED_ANALYSIS=cover-letter-success`. It seeds only contact, skill, experience and job through public preload, selects the synthetic model visibly in Settings, and drives visible consent, analysis pause, both-document generation, local paragraph/recipient edits, actual source acknowledgments, checks, real one-page measurement, letter approval, real compiled canvas and PDF/Word native destination actions. It inspects actual saved PDF selectable text/page dimensions and editable DOCX text, verifies no review annotations print, confirms CV/profile/experience remain unchanged by letter operations, and checks the five exact stage labels. Native destination pickers alone are stubbed. No draft, acknowledgment, fit or approval is seeded; no hidden control is manipulated.
 
@@ -38,4 +38,14 @@ Run on the parent's already provisioned integrated Electron/SQLite/toolchain hos
 npx playwright test tests/electron/cover-letter-flow.spec.ts --workers=1
 ```
 
-Do not use `npm run test:electron` for this bounded check: that script rebuilds native SQLite and runs broader orchestration. This renderer-only tree's dependencies were installed with scripts disabled; Electron/native SQLite and the pinned private toolchain were intentionally not provisioned. Therefore the new test is **not executed**, and no visible-flow screenshot, native runtime pass, real-provider result, responsive visual acceptance, packaged/installed acceptance or letter-only-retry E2E result is claimed. No known unimplemented normal UI branch is intentionally left as a feature-button stub; runtime acceptance remains the next gate.
+Do not use `npm run test:electron` for this bounded check: that script rebuilds native SQLite and runs broader orchestration. This renderer-only tree's dependencies were installed with scripts disabled; Electron/native SQLite and the pinned private toolchain were intentionally not provisioned. The renderer worker therefore did not execute the case. It made no native runtime, real-provider, responsive visual, packaged/installed or letter-only-retry E2E claim. The parent's integrated result follows.
+
+## Parent focused acceptance result
+
+After integrating the renderer and the two known backend restore/key fixes, the parent ran `npm run typecheck`, `npm run build`, and the single Playwright command above. All passed. Playwright reported **one test passed in 48.9 seconds**.
+
+This crossed the real Electron renderer, trusted preload/main actions, isolated native SQLite, pinned local compiler, PDF.js canvas, actual PDF/DOCX writers and filesystem. Consent, generation, editing, recipient entry, source acknowledgments, fit, approval and export were exercised through visible controls. The test verified the exported selectable PDF and editable Word text and unchanged CV/profile data. Only the provider and native destination pickers were synthetic/stubbed. There was no hidden draft/fit/approval injection and no user workspace was modified.
+
+Parent evidence is `.audit/cover-letter-template/visible-final-{typecheck,build,e2e}.log`. Known restore/reopen/key corrections also passed their 11 targeted tests in `focused-backend-known-fixes-final.log`. The initial cold target run exceeded Vitest's unrelated five-second default, so that targeted command was rerun once with a 30-second bound; no product assertions or production deadlines were changed.
+
+Per the maintainer's instruction to stop over-testing, the parent did not repeat the full suite or add further review loops at handoff. Earlier complete-suite results remain historical evidence, not a claim that the final UI ran those suites. No real-provider, packaged/installed, exhaustive responsive/keyboard, or separate letter-only-retry Electron acceptance is claimed. No installer or merge was run.

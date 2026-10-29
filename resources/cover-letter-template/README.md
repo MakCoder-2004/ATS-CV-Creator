@@ -1,6 +1,6 @@
 # Cover-letter template
 
-Selected [PFCS33/resume-cl-template](https://github.com/PFCS33/resume-cl-template) as the starting template for an optional cover letter alongside a tailored CV. This directory contains downloaded source and a compiled sample, not an implemented application feature.
+Selected [PFCS33/resume-cl-template](https://github.com/PFCS33/resume-cl-template) as the starting template for an optional cover letter alongside a tailored CV. This directory keeps the unchanged upstream source, its original compiled sample, and the application-owned adaptation used by the feature.
 
 Open [the PDF preview](preview.pdf) or [the image preview](preview.png). Both contain upstream placeholder text, not a generated application letter.
 
@@ -50,16 +50,12 @@ cd .audit/cover-letter-template-rebuild/cover-letter
 
 The result is `.audit/cover-letter-template-rebuild/cover-letter/main.pdf`. PDF metadata dates can make rebuilt PDF hashes differ. Compare the content and layout rather than expecting byte-identical PDFs.
 
-## Integration still open
+## Application integration
 
-The requested interaction is an option to generate a cover letter for the same job posting when starting CV generation and posting analysis. No renderer, model request, storage, approval, or export behavior changes in this download.
+The downloaded upstream files remain unchanged. The application-owned adaptation in `application/` uses Letter paper, Lato, and paragraph text. The source feature offers an unchecked include-letter choice before run authorization, separate document review and approval, a local optional recipient, actual PDF preview, and separate PDF/DOCX exports. A failed letter does not discard the saved CV.
 
-Before implementation, settle the following product decisions and checks.
+The optional recipient is not sent to Pi and is never inferred from saved contacts. An empty value uses "Dear Hiring Manager,". Runtime compilation and required license resources are wired into the build configuration. No new installer has been built or installed for this change.
 
-- The maintainer approved matching the CV's Lato typography and using a concise one-page paragraph letter. Keep this downloaded source unchanged and adapt a separate application-owned template.
-- The maintainer approved separate PDF and editable DOCX exports, plus an optional manually entered recipient name that stays local and is excluded from Pi requests. Without a name, use "Dear Hiring Manager,". Do not infer or automatically use saved job contacts.
-- Implement editable letter fields, evidence-grounded writing, purpose-bound consent, independent review/approval, persistence, and failure handling. A letter failure must not discard a valid CV.
-- Test escaping, supported characters, long content, both named and generic recipients, and one-page layout on the actual generated document.
-- Wire packaging and runtime compilation deliberately. This source bundle is not yet included in the installer resource configuration.
+The focused visible Electron flow passed with a synthetic provider and real SQLite, compiler, PDF/DOCX output and file writes. See [visible-flow evidence](../../docs/validation/cover-letter-visible-flow.md) and [implemented workflows](../../docs/workflows.md). Real-provider and installed-app acceptance remain separate, unrun gates.
 
 The designed workflow, baseline, compile logs, extracted text, and review evidence remain local under `.audit/cover-letter-template/`. The canonical decision trail is `docs/validation/optional-cover-letter-decisions.tsv`. Feature requirements are tracked in [issue #122](https://github.com/MakCoder-2004/ATS-CV-Creator/issues/122).
