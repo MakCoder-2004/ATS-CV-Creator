@@ -170,6 +170,22 @@ test('known warning claims cannot be waived by punctuation, whitespace, case or 
   }
 })
 
+test('inherited warnings keep immutable original claim attribution through append then remove correction', async () => {
+  const f = await setup(), original = f.letter.paragraphs[0]
+  f.mutate(letter => { letter.paragraphs[0].text = 'I led the team.'; letter.findings = [{ code: 'unsupported-claim', paragraphId: original.id, message: 'Leadership is not supported.' }] })
+  const appended = await f.wb.api.editCoverLetter({ jobId: f.jobId, letterId: f.letter.id, recipient: null, paragraphs: [{ ...original, text: 'I led the team. I practiced TypeScript.' }] })
+  expect(appended.ok).toBe(true)
+  expect((await f.wb.api.checkCoverLetter(f.jobId)).ok).toBe(false)
+  let id = appended.letter!.id
+  for (const text of ['I practiced TypeScript.', 'I practiced TypeScript. I use TypeScript.']) {
+    const corrected = await f.wb.api.editCoverLetter({ jobId: f.jobId, letterId: id, recipient: null, paragraphs: [{ ...original, text }] })
+    expect(corrected.ok).toBe(true)
+    id = corrected.letter!.id
+    expect((await f.wb.api.checkCoverLetter(f.jobId)).ok).toBe(true)
+    expect((await f.wb.api.getCoverLetterReadModel(f.jobId)).readiness.findings).toEqual([])
+  }
+})
+
 test('known warnings survive unrelated recipient edits until flagged wording is replaced', async () => {
   const f = await setup()
   f.mutate(letter => { letter.findings = [{ code: 'unsupported-claim', paragraphId: letter.paragraphs[0].id, message: 'Known unsupported wording.' }] })
