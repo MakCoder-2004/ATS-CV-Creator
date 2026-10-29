@@ -19,6 +19,7 @@ afterEach(() => { opened.splice(0).forEach(w => w.close()); dirs.splice(0).forEa
 async function fixture(purpose: CoverLetterPurpose = 'cv+cover-letter', letter: (input: Parameters<AnalysisTransport['generate']>[0]) => Promise<string> = async () => validLetter(), options: { pi?: boolean; beforeLetterAuth?: () => Promise<void>; cvResponse?: unknown; failCvOnce?: boolean; twoSources?: boolean } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'letter-generation-')); dirs.push(dir)
   const prompts: string[] = []
+  const piCalls: Array<{ model: unknown; reasoning: unknown }> = []
   const transport: AnalysisTransport = { async generate(input) {
     const { prompt } = input; prompts.push(prompt)
     if (prompt.startsWith('Extract only explicit')) return JSON.stringify({ required: [], preferred: [], tools: ['Rust'], responsibilities: [], keywords: [] })
@@ -30,11 +31,14 @@ async function fixture(purpose: CoverLetterPurpose = 'cv+cover-letter', letter: 
     if (options.failCvOnce) { options.failCvOnce = false; throw new AnalysisError('OFFLINE', 'Synthetic CV interruption.') }
     return JSON.stringify(options.cvResponse ?? { education: [], experience: [], projects: [], skills: [{ name: 'TypeScript', evidence: [0], rationale: 'Saved skill.' }] })
   } }
-  let letterAuthHeld = false
+  let lastLetterAuthCount = -1
   const runtime = {
     getProviders: () => [{ id: model.provider, getModels: () => [model] }], getPhysicalModel: () => model, getAvailable: async () => [model],
-    getAuth: async () => { if (prompts.length === 3 && !letterAuthHeld) { letterAuthHeld = true; await options.beforeLetterAuth?.() } return { source: 'synthetic' } },
-    completeSimple: async (_model: unknown, context: { messages: Array<{ content: string }> }, request: { signal: AbortSignal }) => ({ role: 'assistant', provider: model.provider, model: model.id, stopReason: 'stop', content: [{ type: 'text', text: await transport.generate({ model: model.id, prompt: context.messages.at(-1)!.content, signal: request.signal, responseSchema: {} as never }) }], usage: { output: 28 } }),
+    getAuth: async () => { if (prompts.length >= 3 && prompts.length !== lastLetterAuthCount) { lastLetterAuthCount = prompts.length; await options.beforeLetterAuth?.() } return { source: 'synthetic' } },
+    completeSimple: async (selected: unknown, context: { messages: Array<{ content: string }> }, request: { signal: AbortSignal; reasoning?: unknown }) => {
+      piCalls.push({ model: selected, reasoning: request.reasoning })
+      return { role: 'assistant', provider: model.provider, model: model.id, stopReason: 'stop', content: [{ type: 'text', text: await transport.generate({ model: model.id, prompt: context.messages.at(-1)!.content, signal: request.signal, responseSchema: {} as never }) }], usage: { output: 28 } }
+    },
   } as unknown as PiModelRuntime
   const wb = options.pi ? createWorkbench(dir, undefined, undefined, undefined, runtime) : createWorkbench(dir, undefined, transport); opened.push(wb)
   if (options.pi) await wb.api.setPiModel({ reference: 'sample/author/chat', thinkingLevel: 'low' })
@@ -50,8 +54,286 @@ async function fixture(purpose: CoverLetterPurpose = 'cv+cover-letter', letter: 
   const rows = (table: string) => { const db = new Database(join(dir, 'workbench.sqlite')); try { return db.prepare(`SELECT * FROM ${table}`).all() as Record<string, unknown>[] } finally { db.close() } }
   const mutate = (sql: string) => { const db = new Database(join(dir, 'workbench.sqlite')); registerWorkspaceBackupRowSizer(db); try { db.exec(sql) } finally { db.close() } }
   const replaceData = (table: string, data: unknown) => mutate(`UPDATE ${table} SET data='${JSON.stringify(data).replace(/'/g, "''")}'`)
-  return { wb, dir, token: preview.token, jobId: job.value.id, prompts, rows, mutate, replaceData, transport }
+  return { wb, dir, token: preview.token, jobId: job.value.id, prompts, piCalls, rows, mutate, replaceData, transport }
 }
+
+test('fresh public retry after failed initial letter sends one letter and no CV or analysis, retaining reviewed CV', async () => {
+  let calls = 0
+  const f = await fixture('cv+cover-letter', async () => ++calls === 1 ? JSON.stringify({ paragraphs: [] }) : validLetter())
+  const initial = await f.wb.api.generateRequestedDocuments(f.token)
+  expect(initial.letter.status).toBe('failed')
+  const originId = initial.cv.draft!.id
+  const reviewed = await f.wb.api.decideSuggestedSkill({ jobId: f.jobId, draftId: originId, skillId: initial.cv.draft!.suggestedSkills![0].id, decision: 'removed' })
+  expect(reviewed.ok).toBe(true)
+  const cvBefore = f.rows('draft_revisions')
+  const status = await f.wb.api.getCoverLetterGenerationStatus(f.jobId)
+  expect(status).toMatchObject({ status: 'failed', originCvRevisionId: originId, retryAvailable: true })
+  const preview = await f.wb.api.prepareCoverLetterRetry(f.jobId, originId)
+  if (!preview.ok) throw new Error(preview.message)
+  expect(preview.purpose).toBe('cover-letter-only')
+  expect((await f.wb.api.generateCoverLetter(preview.token)).status).toBe('not-started')
+  expect((await f.wb.api.acceptOutboundConsent(preview.token, true, true)).ok).toBe(true)
+  expect(await f.wb.api.getCoverLetterGenerationStatus(f.jobId)).toMatchObject({ status: 'not-started', originCvRevisionId: originId })
+  const before = f.prompts.length
+  expect((await f.wb.api.generateCoverLetter(preview.token)).status).toBe('saved')
+  expect(f.prompts.slice(before)).toHaveLength(1)
+  expect(f.prompts[before]).toMatch(/^Write one cover letter/)
+  expect(f.rows('draft_revisions')).toEqual(cvBefore)
+  expect((await f.wb.api.generateCoverLetter(preview.token)).status).toBe('not-started')
+  expect((await f.wb.api.generateCoverLetter(f.token)).status).toBe('not-started')
+  expect((await f.wb.api.getCoverLetter(f.jobId))?.cvRevisionId).toBe(originId)
+  expect((await f.wb.api.checkCoverLetter(f.jobId)).ok).toBe(true)
+  expect(() => f.wb.backup.createBackup()).not.toThrow()
+})
+
+test('fresh Add Letter after explicit CV-only consent requires a new grant; origin survives absent child crash gap', async () => {
+  const f = await fixture('cv')
+  const initial = await f.wb.api.generateRequestedDocuments(f.token)
+  expect(f.rows('cover_letter_operations')).toHaveLength(0)
+  expect(await f.wb.api.getCoverLetterGenerationStatus(f.jobId)).toMatchObject({ status: 'not-requested', originCvRevisionId: initial.cv.draft!.id, retryAvailable: true })
+  expect((await f.wb.api.generateCoverLetter(f.token)).status).toBe('not-started')
+  const preview = await f.wb.api.prepareCoverLetterRetry(f.jobId, initial.cv.draft!.id)
+  if (!preview.ok) throw new Error(preview.message)
+  expect((await f.wb.api.acceptOutboundConsent(preview.token, true, true)).ok).toBe(true)
+  expect((await f.wb.api.generateCoverLetter(preview.token)).status).toBe('saved')
+  expect(f.prompts).toHaveLength(4)
+})
+
+async function acceptRetry(f: Awaited<ReturnType<typeof fixture>>, cvId: string) {
+  const preview = await f.wb.api.prepareCoverLetterRetry(f.jobId, cvId)
+  if (!preview.ok) throw new Error(preview.message)
+  expect((await f.wb.api.acceptOutboundConsent(preview.token, true, true)).ok).toBe(true)
+  return preview
+}
+
+test('retry refuses an unsettled physical attempt, including after cancellation, until actual settlement', async () => {
+  const entered = deferred<void>(), settle = deferred<string>()
+  let calls = 0
+  const f = await fixture('cv+cover-letter', async () => { if (++calls === 1) { entered.resolve(); return settle.promise } return validLetter() })
+  const initial = f.wb.api.generateRequestedDocuments(f.token)
+  await entered.promise
+  const cvId = (await f.wb.api.getDraft(f.jobId))!.id
+  expect((await f.wb.api.prepareCoverLetterRetry(f.jobId, cvId)).ok).toBe(false)
+  await f.wb.api.cancelOutboundConsent(f.token)
+  expect((await f.wb.api.prepareCoverLetterRetry(f.jobId, cvId)).ok).toBe(false)
+  settle.resolve(validLetter()); await initial
+  // A settled cancelled attempt has no continuing physical lock.
+  const firstRetry = await acceptRetry(f, cvId)
+  expect((await f.wb.api.generateCoverLetter(firstRetry.token)).status).toBe('saved')
+  expect(f.prompts.filter(p => p.startsWith('Extract only explicit'))).toHaveLength(1)
+  expect(f.rows('draft_revisions')).toHaveLength(1)
+})
+
+test('uncertain initial request requires a fresh warned consent and old grant never replays', async () => {
+  let calls = 0
+  const f = await fixture('cv+cover-letter', async () => { if (++calls === 1) throw new Error('Provider disconnected after send'); return validLetter() })
+  const initial = await f.wb.api.generateRequestedDocuments(f.token)
+  expect(initial.letter.status).toBe('uncertain')
+  const preview = await f.wb.api.prepareCoverLetterRetry(f.jobId, initial.cv.draft!.id)
+  if (!preview.ok) throw new Error(preview.message)
+  expect(preview.warning).toMatch(/may have completed.*charge/i)
+  expect((await f.wb.api.acceptOutboundConsent(preview.token, true, true)).ok).toBe(true)
+  expect((await f.wb.api.generateRequestedDocuments(f.token)).cv.ok).toBe(false)
+  expect((await f.wb.api.generateDraft(preview.token)).ok).toBe(false)
+  await expect(f.wb.api.startAnalysis(preview.token)).rejects.toThrow(/cover letter only/i)
+  expect((await f.wb.api.regenerateDraft(preview.token, { kind: 'title' })).ok).toBe(false)
+  expect((await f.wb.api.generateCoverLetter(preview.token)).status).toBe('saved')
+  expect(f.prompts).toHaveLength(5)
+  expect(f.rows('analysis_attempts')).toHaveLength(3)
+  expect(f.rows('provider_attempt_outcomes')).toHaveLength(3)
+})
+
+for (const change of ['profile', 'model', 'posting', 'origin', 'analysis'] as const) test(`retry preview refuses changed ${change} without dispatch`, async () => {
+  const f = await fixture('cv', undefined, { pi: change === 'model' })
+  const initial = await f.wb.api.generateRequestedDocuments(f.token)
+  const before = f.prompts.length
+  if (change === 'profile') await f.wb.api.saveSkill({ name: 'Python', category: 'Programming' })
+  if (change === 'model') await f.wb.api.setPiModel({ reference: 'sample/author/chat', thinkingLevel: 'high' })
+  if (change === 'posting') { const job = (await f.wb.api.openJob(f.jobId))!; expect((await f.wb.api.saveJob({ id: job.id, title: job.title, company: job.company, contacts: job.contacts, description: 'Changed posting.' })).ok).toBe(true) }
+  if (change === 'origin') f.mutate("UPDATE generation_recovery SET snapshot=json_set(snapshot,'$.identity.id','00000000-0000-4000-8000-000000000000')")
+  if (change === 'analysis') f.mutate("UPDATE generation_recovery SET snapshot=json_set(snapshot,'$.analysis.status','failed')")
+  expect((await f.wb.api.prepareCoverLetterRetry(f.jobId, initial.cv.draft!.id)).ok).toBe(false)
+  expect(f.prompts).toHaveLength(before)
+})
+
+test('missing optional child after a committed real CV uses the validated completed parent, not CV replay', async () => {
+  const f = await fixture()
+  const cv = await f.wb.api.generateDraft(f.token)
+  expect(cv.ok).toBe(true)
+  expect(f.rows('cover_letter_operations')).toHaveLength(0)
+  f.wb.close(); opened.splice(opened.indexOf(f.wb), 1)
+  const reopened = createWorkbench(f.dir, undefined, f.transport); opened.push(reopened)
+  f.wb = reopened
+  expect(await reopened.api.getCoverLetterGenerationStatus(f.jobId)).toMatchObject({ status: 'not-started', originCvRevisionId: cv.draft!.id, retryAvailable: true })
+  const retry = await acceptRetry(f, cv.draft!.id)
+  expect((await reopened.api.generateCoverLetter(retry.token)).status).toBe('saved')
+  expect(f.prompts).toHaveLength(4)
+  expect(f.rows('draft_revisions')).toHaveLength(1)
+})
+
+test('letter-only replacement preserves the local recipient but never sends recipient, draft-local prose, contact or IDs', async () => {
+  const f = await fixture()
+  const initial = await f.wb.api.generateRequestedDocuments(f.token)
+  const prior = (await f.wb.api.getCoverLetter(f.jobId))!
+  expect((await f.wb.api.editCoverLetter({ jobId: f.jobId, letterId: prior.id, recipient: 'LOCAL_RECIPIENT_SECRET', paragraphs: prior.paragraphs.map(p => ({ ...p, text: 'LOCAL_LETTER_SECRET' })) })).ok).toBe(true)
+  const retry = await acceptRetry(f, initial.cv.draft!.id)
+  const before = f.prompts.length
+  const result = await f.wb.api.generateCoverLetter(retry.token)
+  expect(result.status).toBe('saved')
+  const letter = (await f.wb.api.getCoverLetter(f.jobId))!
+  expect(letter.recipient).toBe('LOCAL_RECIPIENT_SECRET')
+  expect(letter.acknowledgments).toEqual({})
+  expect(letter.approved).toBe(false)
+  for (const secret of ['LOCAL_RECIPIENT_SECRET', 'LOCAL_LETTER_SECRET', 'PRIVATE_CANDIDATE', 'private@example.test', 'PRIVATE_COMPANY', 'PRIVATE_SAVED_CONTACT', letter.cvRevisionId, letter.parentRunId, ...letter.bindings.sources.map(s => s.evidenceId)]) expect(f.prompts[before]).not.toContain(secret)
+  expect(f.prompts.slice(before)).toHaveLength(1)
+})
+
+for (const change of ['purpose', 'scope', 'cancel', 'model', 'cv', 'capacity', 'origin'] as const) test(`retry final post-auth ${change} fence sends zero requests`, async () => {
+  const entered = deferred<void>(), settle = deferred<void>()
+  let hold = false
+  const f = await fixture('cv', undefined, { pi: true, beforeLetterAuth: async () => { if (hold) { entered.resolve(); await settle.promise } } })
+  const initial = await f.wb.api.generateRequestedDocuments(f.token)
+  const retry = await acceptRetry(f, initial.cv.draft!.id)
+  const before = f.prompts.length
+  hold = true
+  const work = f.wb.api.generateCoverLetter(retry.token)
+  await entered.promise
+  if (change === 'purpose') f.mutate("UPDATE outbound_consents SET purpose='cv' WHERE purpose='cover-letter-only'")
+  if (change === 'scope') await f.wb.api.saveSkill({ name: 'Python', category: 'Programming' })
+  if (change === 'cancel') await f.wb.api.cancelOutboundConsent(retry.token)
+  if (change === 'model') f.mutate("UPDATE settings SET value=json_set(value,'$.thinkingLevel','high') WHERE key='pi-model'")
+  if (change === 'cv') expect((await f.wb.api.changeCvTitle({ jobId: f.jobId, draftId: initial.cv.draft!.id, title: null })).ok).toBe(true)
+  if (change === 'capacity') f.mutate(`UPDATE cv_workspace_backup_state SET max_bytes=${(await f.wb.api.getWorkspaceBackupStatus()).bytes}`)
+  if (change === 'origin') f.mutate("UPDATE cover_letter_operations SET data=json_remove(data,'$.retryOrigin')")
+  settle.resolve()
+  expect((await work).status).not.toBe('saved')
+  expect(f.prompts).toHaveLength(before)
+  expect(await f.wb.api.getCoverLetter(f.jobId)).toBeNull()
+}, 20_000)
+
+for (const change of ['cancel', 'scope', 'capacity'] as const) test(`retry duplicate and late ${change} response cannot save or replay`, async () => {
+  const entered = deferred<void>(), settle = deferred<string>()
+  const f = await fixture('cv', async () => { entered.resolve(); return settle.promise })
+  const initial = await f.wb.api.generateRequestedDocuments(f.token)
+  const retry = await acceptRetry(f, initial.cv.draft!.id)
+  const cvBefore = f.rows('draft_revisions')
+  const work = f.wb.api.generateCoverLetter(retry.token)
+  await entered.promise
+  expect(await f.wb.api.getCoverLetterGenerationStatus(f.jobId)).toMatchObject({ status: 'generating', retryAvailable: false })
+  expect((await f.wb.api.generateCoverLetter(retry.token)).status).toBe('not-started')
+  expect((await f.wb.api.prepareCoverLetterRetry(f.jobId, initial.cv.draft!.id)).ok).toBe(false)
+  expect((await f.wb.api.previewJobDeletion([f.jobId])).ok).toBe(false)
+  if (change === 'cancel') await f.wb.api.cancelOutboundConsent(retry.token)
+  if (change === 'scope') await f.wb.api.saveSkill({ name: 'Python', category: 'Programming' })
+  if (change === 'capacity') f.mutate(`UPDATE cv_workspace_backup_state SET max_bytes=${(await f.wb.api.getWorkspaceBackupStatus()).bytes + 10}`)
+  settle.resolve(validLetter())
+  expect((await work).status).toBe(change === 'cancel' ? 'cancelled' : 'uncertain')
+  expect(await f.wb.api.getCoverLetter(f.jobId)).toBeNull()
+  expect(f.rows('draft_revisions')).toEqual(cvBefore)
+  expect((await f.wb.api.generateCoverLetter(retry.token)).status).toBe('not-started')
+  expect(f.prompts).toHaveLength(4)
+})
+
+test('retry not-started, cancelled and saved statuses reopen offline; restore revokes new grant and deletion owns new run', async () => {
+  const f = await fixture('cv')
+  const initial = await f.wb.api.generateRequestedDocuments(f.token)
+  const retry = await acceptRetry(f, initial.cv.draft!.id)
+  const accepted = f.rows('outbound_consents').at(-1)!
+  const notStartedBackup = f.wb.backup.createBackup()
+  f.wb.close(); opened.splice(opened.indexOf(f.wb), 1)
+  const reopened = createWorkbench(f.dir, undefined, f.transport); opened.push(reopened); f.wb = reopened
+  expect(await reopened.api.getCoverLetterGenerationStatus(f.jobId)).toMatchObject({ status: 'not-started', originCvRevisionId: initial.cv.draft!.id, retryAvailable: true })
+  expect((await reopened.api.generateCoverLetter(retry.token)).status).toBe('not-started')
+  const restore = reopened.backup.previewRestore(notStartedBackup)
+  reopened.backup.applyRestore(restore.token, content => content)
+  expect(await reopened.api.getCoverLetterGenerationStatus(f.jobId)).toMatchObject({ status: 'cancelled', retryAvailable: true })
+  expect(f.rows('outbound_consents').every(row => row.revoked === 1)).toBe(true)
+  const fresh = await acceptRetry(f, initial.cv.draft!.id)
+  expect((await reopened.api.generateCoverLetter(fresh.token)).status).toBe('saved')
+  const savedBackup = reopened.backup.createBackup()
+  const savedRestore = reopened.backup.previewRestore(savedBackup)
+  reopened.backup.applyRestore(savedRestore.token, content => content)
+  expect(await reopened.api.getCoverLetterGenerationStatus(f.jobId)).toMatchObject({ status: 'saved', originCvRevisionId: initial.cv.draft!.id })
+  expect((await reopened.api.checkCoverLetter(f.jobId)).ok).toBe(true)
+  const unrelated = await reopened.api.saveJob({ title: 'Unrelated', company: 'Elsewhere', description: 'Other work.' })
+  expect(unrelated.ok).toBe(true)
+  const deletion = await reopened.api.previewJobDeletion([f.jobId])
+  if (!deletion.ok || !deletion.token) throw new Error(deletion.message)
+  expect((await reopened.api.executeJobDeletion(deletion.token, [f.jobId])).ok).toBe(true)
+  expect(f.rows('cover_letter_operations')).toHaveLength(0)
+  expect(f.rows('cover_letter_revisions')).toHaveLength(0)
+  expect(f.rows('outbound_consents').find(row => row.run_id === accepted.run_id)).toBeUndefined()
+  expect((await reopened.api.listJobs())).toHaveLength(1)
+  expect((await reopened.api.getProfile()).skills).toHaveLength(1)
+})
+
+for (const tamper of ['stripped-origin', 'stripped-binding', 'forged-parent', 'forged-cv', 'ordinal', 'passage'] as const) test(`new retry ${tamper} cannot downgrade origin validation in restore or live read`, async () => {
+  const f = await fixture('cv')
+  const initial = await f.wb.api.generateRequestedDocuments(f.token)
+  const retry = await acceptRetry(f, initial.cv.draft!.id)
+  expect((await f.wb.api.generateCoverLetter(retry.token)).status).toBe('saved')
+  const backup = JSON.parse(f.wb.backup.createBackup())
+  const operation = JSON.parse(backup.tables.cover_letter_operations.rows[0].data)
+  const letter = JSON.parse(backup.tables.cover_letter_revisions.rows[0].data)
+  if (tamper === 'stripped-origin') delete operation.retryOrigin
+  if (tamper === 'stripped-binding') delete operation.initialBinding
+  if (tamper === 'forged-parent') operation.retryOrigin.parentRunId = randomUUID()
+  if (tamper === 'forged-cv') operation.initialBinding.cvRevisionId = randomUUID()
+  if (tamper === 'ordinal') { letter.bindings.sources[0].ordinal = 42; letter.paragraphs[0].citations[0].ordinal = 42 }
+  if (tamper === 'passage') letter.bindings.sources[0].passage = 'Forged passage.'
+  backup.tables.cover_letter_operations.rows[0].data = JSON.stringify(operation)
+  backup.tables.cover_letter_revisions.rows[0].data = JSON.stringify(letter)
+  expect(() => f.wb.backup.previewRestore(JSON.stringify(backup))).toThrow(/cover_letter_(operations|revisions)/)
+  f.replaceData('cover_letter_operations', operation)
+  f.replaceData('cover_letter_revisions', letter)
+  expect((await f.wb.api.checkCoverLetter(f.jobId)).ok).toBe(false)
+  if (!['ordinal', 'passage'].includes(tamper)) {
+    expect((await f.wb.api.getCoverLetterGenerationStatus(f.jobId)).retryAvailable).toBe(false)
+    expect((await f.wb.api.prepareCoverLetterRetry(f.jobId, initial.cv.draft!.id)).ok).toBe(false)
+  }
+})
+
+test('uncertain letter-only attempt survives reopen and may only be replaced under another fresh warned grant', async () => {
+  let calls = 0
+  const f = await fixture('cv', async () => { if (++calls === 1) throw new Error('Lost response'); return validLetter() })
+  const initial = await f.wb.api.generateRequestedDocuments(f.token)
+  const retry = await acceptRetry(f, initial.cv.draft!.id)
+  expect((await f.wb.api.generateCoverLetter(retry.token)).status).toBe('uncertain')
+  f.wb.close(); opened.splice(opened.indexOf(f.wb), 1)
+  const reopened = createWorkbench(f.dir, undefined, f.transport); opened.push(reopened); f.wb = reopened
+  expect(await reopened.api.getCoverLetterGenerationStatus(f.jobId)).toMatchObject({ status: 'uncertain', originCvRevisionId: initial.cv.draft!.id, retryAvailable: true, warning: expect.stringMatching(/may have completed/) })
+  expect((await reopened.api.generateCoverLetter(retry.token)).status).toBe('not-started')
+  const next = await acceptRetry(f, initial.cv.draft!.id)
+  expect(next.warning).toMatch(/may have completed/)
+  expect((await reopened.api.generateCoverLetter(next.token)).status).toBe('saved')
+  expect(f.prompts).toHaveLength(5)
+  expect(f.rows('draft_revisions')).toHaveLength(1)
+})
+
+for (const change of ['source', 'visible-cv', 'cancel'] as const) test(`fresh retry preview ${change} cannot become stale authority`, async () => {
+  const f = await fixture('cv')
+  const initial = await f.wb.api.generateRequestedDocuments(f.token)
+  const preview = await f.wb.api.prepareCoverLetterRetry(f.jobId, initial.cv.draft!.id)
+  if (!preview.ok) throw new Error(preview.message)
+  if (change === 'source') await f.wb.api.saveSkill({ name: 'Python', category: 'Programming' })
+  if (change === 'visible-cv') expect((await f.wb.api.changeCvTitle({ jobId: f.jobId, draftId: initial.cv.draft!.id, title: null })).ok).toBe(true)
+  if (change === 'cancel') expect((await f.wb.api.cancelOutboundConsent(preview.token)).ok).toBe(true)
+  expect((await f.wb.api.acceptOutboundConsent(preview.token, true, true)).ok).toBe(false)
+  expect((await f.wb.api.generateCoverLetter(preview.token)).status).toBe('not-started')
+  expect(f.prompts).toHaveLength(3)
+  expect(f.rows('cover_letter_operations')).toHaveLength(0)
+})
+
+test('successful Pi letter-only retry keeps the exact original physical model and thinking effort', async () => {
+  const f = await fixture('cv', undefined, { pi: true })
+  const initial = await f.wb.api.generateRequestedDocuments(f.token)
+  const before = f.piCalls.length
+  const retry = await acceptRetry(f, initial.cv.draft!.id)
+  expect((await f.wb.api.generateCoverLetter(retry.token)).status).toBe('saved')
+  expect(f.piCalls.slice(before)).toEqual([{ model, reasoning: 'low' }])
+  expect(f.prompts).toHaveLength(4)
+  expect(f.rows('draft_revisions')).toHaveLength(1)
+})
 
 test('public opt-out preserves real CV pipeline and creates zero letter calls or rows', async () => {
   const f = await fixture('cv')

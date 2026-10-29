@@ -72,6 +72,7 @@ export const coverLetterOperationSchema = z.object({
   consentId: uuidSchema,
   purposeHash: digestSchema,
   initialBinding: z.object({ cvRevisionId: uuidSchema, scopeHash: digestSchema, modelHash: digestSchema, postingUpdatedAt: z.string().datetime() }).strict().optional(),
+  retryOrigin: z.object({ parentRunId: uuidSchema, consentId: uuidSchema }).strict().optional(),
   status: z.enum(['prepared', 'dispatched', 'saved', 'failed', 'cancelled', 'uncertain']),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
@@ -84,6 +85,20 @@ export const coverLetterOutcomeSchema = z.discriminatedUnion('status', [
   z.object({ status: z.literal('saved'), letter: coverLetterRevisionSchema }).strict(),
   z.object({ status: z.enum(['failed', 'cancelled', 'uncertain']), message: z.string().min(1).max(500) }).strict(),
 ])
+export const coverLetterGenerationStatusSchema = z.object({
+  jobId: uuidSchema,
+  status: z.enum(['not-requested', 'not-started', 'generating', 'saved', 'failed', 'cancelled', 'uncertain']),
+  originCvRevisionId: uuidSchema.nullable(),
+  parentRunId: uuidSchema.nullable(),
+  operationId: uuidSchema.nullable(),
+  letterId: uuidSchema.nullable(),
+  retryAvailable: z.boolean(),
+  reason: z.string().min(1).max(500),
+  warning: z.string().min(1).max(500).nullable(),
+  experienceKinds: z.record(uuidSchema, z.enum(['employment', 'training'])),
+}).strict()
+export type CoverLetterGenerationStatus = z.infer<typeof coverLetterGenerationStatusSchema>
+export type CoverLetterOutcome = z.infer<typeof coverLetterOutcomeSchema>
 export const requestedDocumentsResultSchema = z.object({ cv: draftGenerationSchema, letter: coverLetterOutcomeSchema }).strict()
 export type RequestedDocumentsResult = z.infer<typeof requestedDocumentsResultSchema>
 

@@ -14,7 +14,7 @@ import { openRouterModelSchema } from '../shared/openrouter-settings'
 import { piModelSelectionSchema } from '../shared/pi-model'
 import { coverLetterOperationSchema, coverLetterPurposeSchema, coverLetterRevisionSchema } from '../shared/cover-letter'
 import { legacyV3TableSchemas } from './workspace-backup-legacy-v3'
-import { letterOriginProblem, resolveInitialLetterOrigin } from './cover-letter-provenance'
+import { letterOriginProblem, resolveLetterOrigin } from './cover-letter-provenance'
 
 // Keep this explicit: credentials are never serialized; all workspace persistence tables, including
 // migrations and LangGraph checkpoints, are represented in the versioned format.
@@ -269,17 +269,17 @@ export function createWorkspaceBackupEngine(db: Database.Database, maxBackupByte
     const draftOwners = new Map((rows.draft_revisions?.rows ?? []).map(row => [String(row.id), String(row.job_id)]))
     const recoveryRecords = new Map((rows.generation_recovery?.rows ?? []).map(row => [String(row.run_id), row]))
     const draftRecords = new Map((rows.draft_revisions?.rows ?? []).map(row => [String(row.id), parseJson('draft_revisions', String(row.data))]))
-    const origins = new Map<string, ReturnType<typeof resolveInitialLetterOrigin>>()
+    const origins = new Map<string, ReturnType<typeof resolveLetterOrigin>>()
     const initialParents = new Set<string>()
     for (const row of rows.cover_letter_operations?.rows ?? []) {
       const operation = operationRecords.get(String(row.id))!
       const consent = consentRecords.get(operation.consentId)
       if (!consent || consent.run_id !== operation.parentRunId || consent.job_id !== operation.jobId || consent.purpose === 'cv' || consent.purpose_hash !== operation.purposeHash) fail('cover_letter_operations')
-      const origin = resolveInitialLetterOrigin(operation, consent, recoveryRecords.get(operation.parentRunId), id => draftRecords.get(id))
+      const origin = resolveLetterOrigin(operation, consent, id => consentRecords.get(id), id => recoveryRecords.get(id), id => draftRecords.get(id))
       origins.set(operation.id, origin)
       if (origin.status === 'invalid') fail('cover_letter_operations')
       if (operation.initialBinding || origin.status === 'known') {
-        if (consent?.purpose !== 'cv+cover-letter' || operation.initialBinding && (consent.scope_hash !== operation.initialBinding.scopeHash || draftOwners.get(operation.initialBinding.cvRevisionId) !== operation.jobId) || initialParents.has(operation.parentRunId)) fail('cover_letter_operations')
+        if (!['cv+cover-letter', 'cover-letter-only'].includes(String(consent?.purpose)) || operation.initialBinding && (consent?.scope_hash !== operation.initialBinding.scopeHash || draftOwners.get(operation.initialBinding.cvRevisionId) !== operation.jobId) || initialParents.has(operation.parentRunId)) fail('cover_letter_operations')
         initialParents.add(operation.parentRunId)
       }
     }

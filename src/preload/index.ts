@@ -7,7 +7,7 @@ import { experienceSnapshotSchema, experienceMutationResultSchema, type Experien
 import { hasSavedJobApplicationUrlInput, jobRecordSchema, jobSaveResultSchema, jobDeletionSelectionSchema, jobDeletionExecuteSchema, jobDeletionPreviewSchema, jobDeletionResultSchema, type JobSaveInput } from '../shared/jobs'
 import { profileExchangeResultSchema } from '../shared/profile-exchange'
 import { outboundConsentActionSchema, outboundConsentPreviewSchema } from '../shared/outbound-consent-contract'
-import { coverLetterPurposeSchema, requestedDocumentsResultSchema } from '../shared/cover-letter'
+import { coverLetterGenerationStatusSchema, coverLetterOutcomeSchema, coverLetterPurposeSchema, requestedDocumentsResultSchema } from '../shared/cover-letter'
 import { analysisIdSchema, analysisResultSchema, generationRecoverySchema, recoveryChoiceSchema, type AnalysisResult, type RecoveryChoice } from '../shared/posting-analysis'
 import { addDraftItemInputSchema, draftCorrectionInputSchema, draftGenerationSchema, draftRevisionSchema, suggestedSkillDecisionSchema, draftTailoringCorrectionSchema, cvTitleChangeSchema } from '../shared/draft'
 import { factualCheckReportSchema } from '../shared/factual-report'
@@ -136,6 +136,9 @@ const api: WorkbenchAPI = Object.freeze({
   async getAnalysis(jobId: string) { const value = await ipcRenderer.invoke('analysis:get', analysisIdSchema.parse(jobId)); return value === null ? null : analysisResultSchema.parse(value) },
   async generateDraft(consentToken: string, pageTarget: 1 | 2 = 1) { if (pageTarget !== 1 && pageTarget !== 2) throw new Error('Choose a one- or two-page target.'); return draftGenerationSchema.parse(await ipcRenderer.invoke('draft:generate', uuidSchema.parse(consentToken), pageTarget)) },
   async generateRequestedDocuments(consentToken: string, pageTarget: 1 | 2 = 1) { if (pageTarget !== 1 && pageTarget !== 2) throw new Error('Choose a one- or two-page target.'); return requestedDocumentsResultSchema.parse(await ipcRenderer.invoke('documents:generate', uuidSchema.parse(consentToken), pageTarget)) },
+  async prepareCoverLetterRetry(jobId: string, expectedCvRevisionId: string) { return outboundConsentPreviewSchema.parse(await ipcRenderer.invoke('cover-letter:retry:preview', uuidSchema.parse(jobId), uuidSchema.parse(expectedCvRevisionId))) },
+  async generateCoverLetter(consentToken: string) { return coverLetterOutcomeSchema.parse(await ipcRenderer.invoke('cover-letter:generate', uuidSchema.parse(consentToken))) },
+  async getCoverLetterGenerationStatus(jobId: string) { return coverLetterGenerationStatusSchema.parse(await ipcRenderer.invoke('cover-letter:generation:status', uuidSchema.parse(jobId))) },
   async getCoverLetter(jobId: string) { const value = await ipcRenderer.invoke('cover-letter:get', uuidSchema.parse(jobId)); return value === null ? null : coverLetterRevisionSchema.parse(value) },
   async editCoverLetter(input: import('../shared/cover-letter').CoverLetterEdit) { return coverLetterActionResultSchema.parse(await ipcRenderer.invoke('cover-letter:edit', coverLetterEditSchema.parse(input))) },
   async setCoverLetterRecipient(input: import('../shared/cover-letter').CoverLetterRecipient) { return coverLetterActionResultSchema.parse(await ipcRenderer.invoke('cover-letter:recipient', coverLetterRecipientSchema.parse(input))) },
