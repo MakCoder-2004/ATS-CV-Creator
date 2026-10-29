@@ -67,6 +67,9 @@ export const coverLetterRevisionSchema = z.object({
 })
 export type CoverLetterRevision = z.infer<typeof coverLetterRevisionSchema>
 
+export const coverLetterFailureCodeSchema = z.enum(['structured-response', 'unknown-citation', 'uncited-fact', 'private-identifier', 'unsupported-number', 'unsupported-skill', 'wrong-source', 'source-unavailable', 'source-changed', 'provider-output', 'provider-access', 'save-or-state'])
+export type CoverLetterFailureCode = z.infer<typeof coverLetterFailureCodeSchema>
+
 export const coverLetterOperationSchema = z.object({
   id: uuidSchema,
   jobId: uuidSchema,
@@ -76,6 +79,7 @@ export const coverLetterOperationSchema = z.object({
   initialBinding: z.object({ cvRevisionId: uuidSchema, scopeHash: digestSchema, modelHash: digestSchema, postingUpdatedAt: z.string().datetime() }).strict().optional(),
   retryOrigin: z.object({ parentRunId: uuidSchema, consentId: uuidSchema }).strict().optional(),
   status: z.enum(['prepared', 'dispatched', 'saved', 'failed', 'cancelled', 'uncertain']),
+  failureCode: coverLetterFailureCodeSchema.optional(),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
 }).strict()

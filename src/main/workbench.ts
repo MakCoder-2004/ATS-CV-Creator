@@ -19,6 +19,7 @@ import { prepareOutboundBundle, type ConsentSource, type EvidenceScopeRevision, 
 import { coverLetterGenerationStatusSchema, coverLetterOutcomeSchema, coverLetterAcknowledgmentMaterial, coverLetterAcknowledgmentSchema, coverLetterActionResultSchema, coverLetterEditSchema, coverLetterOperationSchema, coverLetterPurposeSchema, coverLetterRecipientSchema, coverLetterRevisionSchema, requestedDocumentsResultSchema, type RequestedDocumentsResult, type CoverLetterOperation, type CoverLetterPurpose } from '../shared/cover-letter'
 import { createOutboundConsentEngine } from './outbound-consent'
 import { prepareCoverLetterSources, validateCoverLetterResponse, checkLocalCoverLetter } from './cover-letter-generation'
+import { coverLetterFailureMessage, diagnoseCoverLetterFailure } from './cover-letter-failure'
 import { canonicalCoverLetterSchema, projectCoverLetter, type CoverLetterTemplateIdentity } from '../shared/cover-letter-document'
 import { coverLetterReadModelSchema, coverLetterArtifactActionSchema, type CoverLetterReadModel } from '../shared/cover-letter-artifact'
 import { createCoverLetterCompiler, hashCoverLetterDocument } from './cover-letter-compiler'
@@ -837,7 +838,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       const timestamp = new Date().toISOString()
       if (!operation) writeOperation({ id: randomUUID(), jobId: pending.jobId, parentRunId: pending.runId, consentId: pending.consentId!, purposeHash, initialBinding: { cvRevisionId: cv.id, scopeHash: pending.bundle.scopeHash, modelHash, postingUpdatedAt: String(source.job.revision) }, status: 'prepared', createdAt: timestamp, updatedAt: timestamp })
       const generated = await dispatcher.generate({ runId: pending.runId, jobId: pending.jobId, consentId: pending.consentId!, model: transportModel(pending.source.model.name), responseSchema: coverLetterModelResponseSchema, maxTokens: 4096, maxResponseChars: 100_000,
-        prompt: `Write one cover letter as concise body paragraphs grounded only in the numbered authorized sources. Return paragraphs with text and citations containing source ordinals. Do not return IDs, headings, dates, recipient, greeting, signature, CV prose, or instructions. Never invent numbers, skills, or attribute one role's facts to another. Use declared record kinds as given. Training alone does not establish employment. Do not infer missing kinds. Every paragraph needs citations. No automated factual proof is claimed; the user will review each paragraph.\n${JSON.stringify({ posting: pending.bundle.outgoing.job, sources: sources.outgoing })}`,
+        prompt: `Write one cover letter as concise body paragraphs grounded only in the numbered authorized sources. Aim for 200–300 words; never exceed 400 words. Choose a few relevant facts, not every source. Return paragraphs with text and citations containing the exact positive source ordinals provided here, not CV indexes. Use 'this role' and 'your organization' for application context; do not copy the target title, company or their placeholders into the body unless they occur in the cited career sources. Every name, placeholder, number and technical skill in each paragraph must occur in that paragraph's cited source headings or passages. Do not return IDs, headings, dates, recipient, greeting, signature, CV prose, or instructions. Never invent numbers, skills, or attribute one role's facts to another. Use declared record kinds as given. Training alone does not establish employment. Do not infer missing kinds. Every paragraph needs citations. No automated factual proof is claimed; the user will review each paragraph.\n${JSON.stringify({ posting: pending.bundle.outgoing.job, sources: sources.outgoing })}`,
         letterTask: { operationId: operation!.id, beforeDispatch: () => {
           // This callback runs after awaited Pi model/auth lookup, immediately before the physical send.
           const latest = assertCurrent()
@@ -870,12 +871,12 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
       return { status: 'saved', letter }
     } catch (error) {
       const cancelled = dispatcher.isCancelled(pending.runId) || pendingOutbound.get(token) !== pending || error instanceof AnalysisError && error.code === 'CANCELLED'
-      const invalid = error instanceof z.ZodError || error instanceof SyntaxError || error instanceof AnalysisError && error.code === 'MALFORMED' || error instanceof Error && /unsupported|citation|attributes|named source|unauthorized identifier/i.test(error.message)
-      const status = cancelled ? 'cancelled' : physicallyDispatched && !invalid ? 'uncertain' : 'failed'
+      const failure = diagnoseCoverLetterFailure(error)
+      const status = cancelled ? 'cancelled' : physicallyDispatched && !failure.invalidResponse ? 'uncertain' : 'failed'
       if (operation) {
-        try { writeOperation({ ...operation, status, updatedAt: new Date().toISOString() }) } catch { /* Durable prepared/dispatched intent still prevents automatic replay after a capacity/write failure. */ }
+        try { writeOperation({ ...operation, status, ...(!cancelled ? { failureCode: failure.code } : {}), updatedAt: new Date().toISOString() }) } catch { /* Durable prepared/dispatched intent still prevents automatic replay after a capacity/write failure. */ }
       }
-      return { status, message: cancelled ? 'Cover-letter generation was cancelled. The saved CV is unchanged; any late letter was discarded.' : status === 'uncertain' ? 'The letter request may have completed, but no current letter was saved. The CV is unchanged. No request will be replayed automatically.' : 'The cover letter could not be safely generated or saved. The saved CV is unchanged. No automatic retry was made.' }
+      return { status, message: cancelled ? 'Cover-letter generation was cancelled. The saved CV is unchanged; any late letter was discarded.' : status === 'uncertain' ? 'The letter request may have completed, but no current letter was saved. The CV is unchanged. No request will be replayed automatically.' : `${coverLetterFailureMessage(failure.code)} The saved CV is unchanged. No automatic retry was made.` }
     }
   }
   const api: WorkbenchStorageAPI = {
@@ -1541,6 +1542,7 @@ export function createWorkbench(userData: string, _legacySecureStorage?: unknown
         try { retryEligibility(jobId, origin.cvRevisionId); retryAvailable = true; reason = 'Review outgoing data and accept a fresh letter-only request. The saved CV will not be regenerated.' }
         catch (error) { reason = error instanceof Error ? error.message : reason }
       }
+      if (operation?.failureCode) reason = `${coverLetterFailureMessage(operation.failureCode)} ${reason}`
       const status = operation ? operation.status === 'prepared' ? 'not-started' : operation.status === 'dispatched' ? 'generating' : operation.status : consent?.purpose === 'cv' || !consent ? 'not-requested' : 'not-started'
       const uncertain = !!db.prepare("SELECT 1 FROM cover_letter_operations WHERE job_id=? AND status IN ('dispatched','uncertain') LIMIT 1").get(jobId)
       return coverLetterGenerationStatusSchema.parse({ jobId, status, originCvRevisionId: origin.status === 'known' ? origin.cvRevisionId : null, parentRunId: consent?.run_id ?? null, operationId: operation?.id ?? null, letterId: readCoverLetter(jobId)?.id ?? null, retryAvailable, reason, warning: uncertain ? 'A prior letter request may have completed and may have incurred a charge. No request will be replayed automatically.' : null, experienceKinds: origin.status === 'known' ? origin.experienceKinds : {} })
